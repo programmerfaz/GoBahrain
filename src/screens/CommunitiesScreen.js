@@ -1,12 +1,14 @@
 import { StyleSheet, Text, View } from 'react-native';
 import ScreenContainer from '../components/ScreenContainer';
+import BottomNavBar from '../components/BottomNavBar';
 
-export default function CommunitiesScreen() {
+export default function CommunitiesScreen({ navigation, route }) {
   return (
     <ScreenContainer>
       <View style={styles.content}>
         <Text style={styles.text}>Communities</Text>
       </View>
+      <BottomNavBar navigation={navigation} activeRouteName={route.name} />
     </ScreenContainer>
   );
 }

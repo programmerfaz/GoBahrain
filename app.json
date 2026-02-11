@@ -10,13 +10,9 @@
       "resizeMode": "contain",
       "backgroundColor": "#ffffff"
     },
-    "ios": {
-      "supportsTablet": true
-    },
+    "ios": { "supportsTablet": true },
     "android": {
-      "adaptiveIcon": {
-        "backgroundColor": "#ffffff"
-      },
+      "adaptiveIcon": { "backgroundColor": "#ffffff" },
       "edgeToEdgeEnabled": true
     }
   }

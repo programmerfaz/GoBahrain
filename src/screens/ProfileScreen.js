@@ -1,12 +1,14 @@
 import { StyleSheet, Text, View } from 'react-native';
 import ScreenContainer from '../components/ScreenContainer';
+import BottomNavBar from '../components/BottomNavBar';
 
-export default function ProfileScreen() {
+export default function ProfileScreen({ navigation, route }) {
   return (
     <ScreenContainer>
       <View style={styles.content}>
         <Text style={styles.text}>Profile page</Text>
       </View>
+      <BottomNavBar navigation={navigation} activeRouteName={route.name} />
     </ScreenContainer>
   );
 }

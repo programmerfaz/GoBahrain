@@ -37,59 +37,14 @@ function AIPlanTabIcon({ color, size, focused }) {
 
 function TabsNavigator() {
   const insets = useSafeAreaInsets();
-  const tabBarHeight =
-    Platform.OS === 'ios'
-      ? TAB_BAR_HEIGHT_IOS
-      : TAB_BAR_HEIGHT_ANDROID + insets.bottom;
 
   return (
     <Tab.Navigator
-      screenOptions={({ route }) => ({
-        tabBarIcon: ({ color, size, focused }) => {
-          if (route.name === 'AI Plan') {
-            return <AIPlanTabIcon color={color} size={size} focused={focused} />;
-          }
-          const iconMap = {
-            Home: 'home',
-            Explore: 'compass',
-            Community: 'people',
-            Profile: 'person-circle-outline',
-          };
-          return (
-            <Ionicons
-              name={iconMap[route.name]}
-              size={size}
-              color={color}
-            />
-          );
-        },
-        tabBarActiveTintColor: '#FF6B35',
-        tabBarInactiveTintColor: '#6c757d',
-        tabBarLabelStyle: {
-          fontSize: 12,
-          fontWeight: '600',
-        },
-        tabBarStyle: {
-          position: 'absolute',
-          bottom: 0,
-          left: 0,
-          right: 0,
-          height: tabBarHeight,
-          backgroundColor: '#FFFFFF',
-          borderTopWidth: 1,
-          borderTopColor: '#E0E0E0',
-          paddingBottom: Platform.OS === 'android' ? insets.bottom : 12,
-          paddingTop: 8,
-          overflow: 'visible',
-          elevation: 8,
-          shadowColor: '#000',
-          shadowOffset: { width: 0, height: -2 },
-          shadowOpacity: 0.06,
-          shadowRadius: 4,
-        },
-        tabBarShowLabel: true,
+      screenOptions={{
+        tabBarStyle: { height: 0, display: 'none' },
+        tabBarShowLabel: false,
         headerShown: false,
-      })}
+      }}
     >
       <Tab.Screen name="Home" component={HomeScreen} />
       <Tab.Screen name="Explore" component={ExploreScreen} />
