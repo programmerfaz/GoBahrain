@@ -1,14 +1,12 @@
 import { StyleSheet, Text, View } from 'react-native';
 import ScreenContainer from '../components/ScreenContainer';
-import BottomNavBar from '../components/BottomNavBar';
 
-export default function ExploreScreen({ navigation, route }) {
+export default function ExploreScreen() {
   return (
     <ScreenContainer>
       <View style={styles.content}>
         <Text style={styles.text}>Explore</Text>
       </View>
-      <BottomNavBar navigation={navigation} activeRouteName={route.name} />
     </ScreenContainer>
   );
 }

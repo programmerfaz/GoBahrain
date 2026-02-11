@@ -9,13 +9,17 @@ import {
   TouchableOpacity,
   Platform,
   ScrollView,
+  Easing,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import MapView, { Marker } from 'react-native-maps';
 import { Ionicons } from '@expo/vector-icons';
-import BottomNavBar from '../components/BottomNavBar';
+import { useRoute } from '@react-navigation/native';
 
 const { height: SCREEN_HEIGHT } = Dimensions.get('window');
+const APP_TAB_BAR_HEIGHT_IOS = 70;
+const getAppTabBarHeight = (insets) =>
+  Platform.OS === 'ios' ? APP_TAB_BAR_HEIGHT_IOS : 60 + (insets?.bottom ?? 0);
 
 // Bottom sheet configuration
 const SHEET_VISIBLE_PEEK = 0.28;
@@ -48,11 +52,16 @@ const MANAMA_COORDS = { latitude: 26.2285, longitude: 50.586, title: 'Manama' };
 const SPOTS_COUNT = 3;
 const TRIPS_COUNT = 6;
 
-export default function AIPlanScreen({ navigation, route }) {
+export default function AIPlanScreen() {
   const insets = useSafeAreaInsets();
+  const route = useRoute();
   const sheetAnim = useRef(new Animated.Value(SNAP_POINTS[INITIAL_SNAP_INDEX])).current;
   const lastSnap = useRef(SNAP_POINTS[INITIAL_SNAP_INDEX]);
   const currentYRef = useRef(SNAP_POINTS[INITIAL_SNAP_INDEX]);
+
+  // Full-page AI impulse overlay
+  const aiOverlay = useRef(new Animated.Value(0)).current;
+  const lastPulse = useRef(null);
 
   // Keep ref in sync with animated value so gesture start uses actual position
   useEffect(() => {
@@ -61,6 +70,39 @@ export default function AIPlanScreen({ navigation, route }) {
     });
     return () => sheetAnim.removeListener(listenerId);
   }, [sheetAnim]);
+
+  // React to AI button presses (from bottom nav)
+  useEffect(() => {
+    const pulseId = route.params?.aiPulse;
+    if (!pulseId || pulseId === lastPulse.current) return;
+    lastPulse.current = pulseId;
+
+    aiOverlay.setValue(0);
+    Animated.sequence([
+      Animated.timing(aiOverlay, {
+        toValue: 1,
+        duration: 550,
+        easing: Easing.out(Easing.circle),
+        useNativeDriver: true,
+      }),
+      Animated.timing(aiOverlay, {
+        toValue: 0,
+        duration: 400,
+        easing: Easing.in(Easing.circle),
+        useNativeDriver: true,
+      }),
+    ]).start();
+  }, [route.params?.aiPulse, aiOverlay]);
+
+  const aiOverlayOpacity = aiOverlay.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0, 0.55],
+  });
+
+  const aiOverlayScale = aiOverlay.interpolate({
+    inputRange: [0, 1],
+    outputRange: [1, 1.04],
+  });
 
   const panResponder = useRef(
     PanResponder.create({
@@ -121,6 +163,23 @@ export default function AIPlanScreen({ navigation, route }) {
         </Marker>
       </MapView>
 
+      {/* AI page-wide impulse overlay + status text */}
+      <Animated.View
+        pointerEvents="none"
+        style={[
+          styles.aiOverlay,
+          {
+            opacity: aiOverlayOpacity,
+            transform: [{ scale: aiOverlayScale }],
+          },
+        ]}
+      >
+        <View style={styles.aiOverlayContent}>
+          <Text style={styles.aiOverlayTitle}>Enhancing using AI</Text>
+          <Text style={styles.aiOverlaySubtitle}>Designing your perfect Bahrain plan</Text>
+        </View>
+      </Animated.View>
+
       {/* Top bar overlay */}
       <View style={[styles.topBar, { paddingTop: insets.top + 8 }]}>
         <View style={styles.topBarRight}>
@@ -145,7 +204,7 @@ export default function AIPlanScreen({ navigation, route }) {
         style={[
           styles.sheet,
           {
-            paddingBottom: 80 + insets.bottom,
+            paddingBottom: 80 + getAppTabBarHeight(insets),
             transform: [{ translateY: sheetAnim }],
           },
         ]}
@@ -160,7 +219,7 @@ export default function AIPlanScreen({ navigation, route }) {
             <Text style={styles.sheetSubtitle}>{SPOTS_COUNT} Spots Saved</Text>
           </View>
           <TouchableOpacity style={styles.importButton} activeOpacity={0.8}>
-            <Ionicons name="navigate-outline" size={18} color="#FF6B35" />
+            <Ionicons name="navigate-outline" size={18} color="#C8102E" />
             <Text style={styles.importLabel}>Import Guide</Text>
           </TouchableOpacity>
         </View>
@@ -169,7 +228,7 @@ export default function AIPlanScreen({ navigation, route }) {
           {[1, 2, 3].map((i) => (
             <View key={i} style={styles.spotCard}>
               <View style={styles.spotIconWrap}>
-                <Ionicons name="location" size={20} color="#FF6B35" />
+                <Ionicons name="location" size={20} color="#C8102E" />
               </View>
               <View style={styles.spotInfo}>
                 <Text style={styles.spotName}>Spot {i}</Text>
@@ -180,8 +239,6 @@ export default function AIPlanScreen({ navigation, route }) {
           ))}
         </View>
       </Animated.View>
-
-      <BottomNavBar navigation={navigation} activeRouteName={route.name} />
     </View>
   );
 }
@@ -189,7 +246,8 @@ export default function AIPlanScreen({ navigation, route }) {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#F3F4F6',
+    // Soft sand tone for Bahraini desert feel
+    backgroundColor: '#FEF8E7',
   },
   topBar: {
     position: 'absolute',
@@ -252,7 +310,8 @@ const styles = StyleSheet.create({
     padding: 0,
   },
   markerWrap: {
-    backgroundColor: '#111',
+    // Bahrain flag red for cluster marker
+    backgroundColor: '#C8102E',
     width: 28,
     height: 28,
     borderRadius: 14,
@@ -265,6 +324,32 @@ const styles = StyleSheet.create({
     color: '#FFF',
     fontSize: 12,
     fontWeight: '700',
+  },
+  aiOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(15,23,42,0.45)',
+  },
+  aiOverlayContent: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 32,
+  },
+  aiOverlayTitle: {
+    fontSize: 20,
+    fontWeight: '700',
+    letterSpacing: 0.2,
+    color: '#F9FAFB',
+    marginBottom: 6,
+  },
+  aiOverlaySubtitle: {
+    fontSize: 14,
+    color: '#E5E7EB',
+    textAlign: 'center',
   },
   sheet: {
     position: 'absolute',
@@ -319,13 +404,13 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     borderRadius: 12,
     borderWidth: 2,
-    borderColor: '#FF6B35',
+    borderColor: '#C8102E',
     gap: 6,
   },
   importLabel: {
     fontSize: 14,
     fontWeight: '600',
-    color: '#FF6B35',
+    color: '#C8102E',
   },
   spotListScroll: {
     flex: 1,
@@ -350,7 +435,8 @@ const styles = StyleSheet.create({
     width: 44,
     height: 44,
     borderRadius: 12,
-    backgroundColor: 'rgba(255,107,53,0.12)',
+    // Subtle red accent behind spot icon
+    backgroundColor: 'rgba(200,16,46,0.12)',
     alignItems: 'center',
     justifyContent: 'center',
     marginRight: 12,
