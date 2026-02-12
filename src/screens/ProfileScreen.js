@@ -3,7 +3,7 @@ import ScreenContainer from '../components/ScreenContainer';
 
 export default function ProfileScreen() {
   return (
-    <ScreenContainer>
+    <ScreenContainer showHeader headerTitle="Profile">
       <View style={styles.content}>
         <Text style={styles.text}>Profile page</Text>
       </View>

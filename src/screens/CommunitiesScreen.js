@@ -3,7 +3,7 @@ import ScreenContainer from '../components/ScreenContainer';
 
 export default function CommunitiesScreen() {
   return (
-    <ScreenContainer>
+    <ScreenContainer showHeader headerTitle="Community">
       <View style={styles.content}>
         <Text style={styles.text}>Communities</Text>
       </View>

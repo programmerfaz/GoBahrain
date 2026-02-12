@@ -15,6 +15,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import MapView, { Marker, Polyline } from 'react-native-maps';
 import { Ionicons } from '@expo/vector-icons';
+import ProfileButton from '../components/ProfileButton';
 import { useRoute } from '@react-navigation/native';
 
 const { height: SCREEN_HEIGHT } = Dimensions.get('window');
@@ -1455,11 +1456,7 @@ export default function AIPlanScreen() {
       {/* Top bar overlay */}
       <View style={[styles.topBar, { paddingTop: insets.top + 8 }]}>
         <View style={styles.topBarRight}>
-          <TouchableOpacity style={styles.avatarButton} activeOpacity={0.8}>
-            <View style={styles.avatarCircle}>
-              <Ionicons name="person" size={20} color="#6B7280" />
-            </View>
-          </TouchableOpacity>
+          <ProfileButton />
         </View>
       </View>
 

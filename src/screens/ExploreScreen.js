@@ -3,7 +3,7 @@ import ScreenContainer from '../components/ScreenContainer';
 
 export default function ExploreScreen() {
   return (
-    <ScreenContainer>
+    <ScreenContainer showHeader headerTitle="Explore">
       <View style={styles.content}>
         <Text style={styles.text}>Explore</Text>
       </View>
