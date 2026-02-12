@@ -1,5 +1,5 @@
 import React, { useEffect, useRef } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Platform, Animated, Easing, Image } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, Platform, Animated, Easing, Image, Vibration } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 
@@ -135,6 +135,11 @@ export default function BottomControlBar({ state, navigation }) {
               style={styles.fab}
               activeOpacity={0.9}
               onPress={() => {
+                // Light haptic feedback when AI is triggered
+                if (Platform.OS !== 'web') {
+                  Vibration.vibrate(40);
+                }
+
                 // Local impulse glow
                 impulse.setValue(0);
                 Animated.sequence([

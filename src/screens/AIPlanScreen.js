@@ -65,28 +65,28 @@ const PLAN_POINTS = [
     id: 'day1',
     day: 1,
     coordinate: { latitude: 26.2285, longitude: 50.586 },
-    title: 'Day 1 · Manama Souq',
+    title: 'Spot 1 · Manama Souq',
     description: 'Explore the souq, museums and Corniche.',
   },
   {
     id: 'day2',
     day: 2,
     coordinate: { latitude: 26.1536, longitude: 50.6065 },
-    title: 'Day 2 · Bahrain Fort',
+    title: 'Spot 2 · Bahrain Fort',
     description: 'History, sunset views and seaside cafes.',
   },
   {
     id: 'day3',
     day: 3,
     coordinate: { latitude: 26.0479, longitude: 50.5100 },
-    title: 'Day 3 · Zallaq Coast',
+    title: 'Spot 3 · Zallaq Coast',
     description: 'Beach clubs, resorts and relaxed dinners.',
   },
   {
     id: 'day4',
     day: 4,
     coordinate: { latitude: 25.9940, longitude: 50.5860 },
-    title: 'Day 4 · Oil Museum & Tree of Life',
+    title: 'Spot 4 · Oil Museum & Tree of Life',
     description: 'Desert drive and iconic natural landmark.',
   },
 ];
@@ -229,8 +229,253 @@ function PillButton({ label, icon, color = '#C8102E', selected = false, onPress 
   );
 }
 
+// Day option card for the 3rd question - modern card layout
+function DayOptionCard({ label, subtitle, icon, color, recommended, onPress, delay = 0 }) {
+  const scale = useRef(new Animated.Value(0.9)).current;
+  const opacity = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    Animated.parallel([
+      Animated.spring(scale, {
+        toValue: 1,
+        useNativeDriver: true,
+        friction: 8,
+        tension: 80,
+        delay,
+      }),
+      Animated.timing(opacity, {
+        toValue: 1,
+        duration: 400,
+        delay,
+        easing: Easing.out(Easing.quad),
+        useNativeDriver: true,
+      }),
+    ]).start();
+  }, [scale, opacity, delay]);
+
+  const pressScale = useRef(new Animated.Value(1)).current;
+  const handlePressIn = () => {
+    Animated.spring(pressScale, {
+      toValue: 0.97,
+      useNativeDriver: true,
+      friction: 6,
+      tension: 120,
+    }).start();
+  };
+  const handlePressOut = () => {
+    Animated.spring(pressScale, {
+      toValue: 1,
+      useNativeDriver: true,
+      friction: 6,
+      tension: 120,
+    }).start();
+  };
+
+  return (
+    <TouchableOpacity
+      activeOpacity={1}
+      onPress={onPress}
+      onPressIn={handlePressIn}
+      onPressOut={handlePressOut}
+    >
+      <Animated.View
+        style={[
+          styles.dayOptionCard,
+          {
+            borderColor: `${color}40`,
+            backgroundColor: `${color}08`,
+            opacity,
+            transform: [{ scale: Animated.multiply(scale, pressScale) }],
+          },
+        ]}
+      >
+        {recommended && (
+          <View style={[styles.dayOptionBadge, { backgroundColor: color }]}>
+            <Ionicons name="star" size={10} color="#FFF" />
+            <Text style={styles.dayOptionBadgeText}>Recommended</Text>
+          </View>
+        )}
+        <View style={[styles.dayOptionIconWrap, { backgroundColor: `${color}20` }]}>
+          <Ionicons name={icon} size={24} color={color} />
+        </View>
+        <Text style={[styles.dayOptionLabel, { color }]}>{label}</Text>
+        <Text style={styles.dayOptionSubtitle}>{subtitle}</Text>
+      </Animated.View>
+    </TouchableOpacity>
+  );
+}
+
+// Generate plan button with press animation
+function GeneratePlanButton({ disabled, onPress }) {
+  const scale = useRef(new Animated.Value(1)).current;
+
+  const handlePressIn = () => {
+    if (disabled) return;
+    Animated.spring(scale, {
+      toValue: 0.97,
+      useNativeDriver: true,
+      friction: 6,
+      tension: 150,
+    }).start();
+  };
+
+  const handlePressOut = () => {
+    Animated.spring(scale, {
+      toValue: 1,
+      useNativeDriver: true,
+      friction: 6,
+      tension: 150,
+    }).start();
+  };
+
+  return (
+    <TouchableOpacity
+      activeOpacity={1}
+      onPress={disabled ? undefined : onPress}
+      onPressIn={handlePressIn}
+      onPressOut={handlePressOut}
+      disabled={disabled}
+    >
+      <Animated.View
+        style={[
+          styles.primaryButton,
+          disabled && styles.primaryButtonDisabled,
+          { transform: [{ scale }] },
+        ]}
+      >
+        <Text
+          style={[
+            styles.primaryButtonText,
+            disabled && styles.primaryButtonTextDisabled,
+          ]}
+        >
+          Generate plan
+        </Text>
+      </Animated.View>
+    </TouchableOpacity>
+  );
+}
+
+// Modern generating animation overlay - shows when Generate Plan is pressed
+function GenerateTransitionView({ compact = false }) {
+  const scale = useRef(new Animated.Value(compact ? 0.95 : 0.85)).current;
+  const opacity = useRef(new Animated.Value(0)).current;
+  const spinAnim = useRef(new Animated.Value(0)).current;
+  const dot1 = useRef(new Animated.Value(0)).current;
+  const dot2 = useRef(new Animated.Value(0)).current;
+  const dot3 = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    Animated.parallel([
+      Animated.spring(scale, {
+        toValue: 1,
+        useNativeDriver: true,
+        friction: 8,
+        tension: 70,
+      }),
+      Animated.timing(opacity, {
+        toValue: 1,
+        duration: 350,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: true,
+      }),
+    ]).start();
+
+    const spinLoop = Animated.loop(
+      Animated.timing(spinAnim, {
+        toValue: 1,
+        duration: 1400,
+        easing: Easing.linear,
+        useNativeDriver: true,
+      }),
+      { iterations: -1 }
+    );
+    spinLoop.start();
+
+    const dotBounce = (dot, delay) =>
+      Animated.loop(
+        Animated.sequence([
+          Animated.delay(delay),
+          Animated.timing(dot, {
+            toValue: 1,
+            duration: 280,
+            easing: Easing.out(Easing.quad),
+            useNativeDriver: true,
+          }),
+          Animated.timing(dot, {
+            toValue: 0,
+            duration: 280,
+            easing: Easing.in(Easing.quad),
+            useNativeDriver: true,
+          }),
+        ]),
+        { iterations: -1 }
+      );
+    dotBounce(dot1, 0).start();
+    dotBounce(dot2, 120).start();
+    dotBounce(dot3, 240).start();
+  }, [scale, opacity, spinAnim, dot1, dot2, dot3]);
+
+  const spinInterpolate = spinAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: ['0deg', '360deg'],
+  });
+
+  const dotTranslate1 = dot1.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0, -8],
+  });
+  const dotTranslate2 = dot2.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0, -8],
+  });
+  const dotTranslate3 = dot3.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0, -8],
+  });
+
+  return (
+    <Animated.View
+      style={[
+        compact ? styles.generateTransitionCardCompact : styles.generateTransitionCard,
+        {
+          opacity,
+          transform: [{ scale }],
+        },
+      ]}
+    >
+      <View style={styles.generateTransitionInner}>
+        <View style={compact ? styles.generateTransitionLoaderWrapCompact : styles.generateTransitionLoaderWrap}>
+          <Animated.View
+            style={[
+              compact ? styles.generateTransitionRingCompact : styles.generateTransitionRing,
+              {
+                transform: [{ rotate: spinInterpolate }],
+              },
+            ]}
+          />
+          <View style={compact ? styles.generateTransitionIconCenterCompact : styles.generateTransitionIconCenter}>
+            <Ionicons name="map" size={compact ? 22 : 28} color="#C8102E" />
+          </View>
+        </View>
+        <Text style={compact ? styles.generateTransitionTitleCompact : styles.generateTransitionTitle}>
+          Crafting your route
+        </Text>
+        <Text style={[styles.generateTransitionSubtitle, compact && { marginBottom: 12 }]}>
+          Mapping the best stops across Bahrain
+        </Text>
+        <View style={styles.generateTransitionDots}>
+          <Animated.View style={[styles.generateDot, { transform: [{ translateY: dotTranslate1 }] }]} />
+          <Animated.View style={[styles.generateDot, { transform: [{ translateY: dotTranslate2 }] }]} />
+          <Animated.View style={[styles.generateDot, { transform: [{ translateY: dotTranslate3 }] }]} />
+        </View>
+      </View>
+    </Animated.View>
+  );
+}
+
 // Plan detail card with fade-in animation
-function PlanDetailCard({ point, cardStyle }) {
+function PlanDetailCard({ point, cardStyle, isFocused = false, onPress }) {
   const fadeAnim = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
@@ -242,12 +487,27 @@ function PlanDetailCard({ point, cardStyle }) {
     }).start();
   }, [fadeAnim]);
 
+  const accentColor = getSpotColorForDay(point.day);
+
   return (
-    <Animated.View key={point.id} style={[cardStyle, { opacity: fadeAnim }]}>
-      <Text style={styles.planDetailDay}>Day {point.day}</Text>
-      <Text style={styles.planDetailTitle}>{point.title}</Text>
-      <Text style={styles.planDetailSubtitle}>{point.description}</Text>
-    </Animated.View>
+    <TouchableOpacity activeOpacity={0.9} onPress={onPress}>
+      <Animated.View
+        key={point.id}
+        style={[
+          cardStyle,
+          {
+            opacity: fadeAnim,
+            borderLeftWidth: 3,
+            borderLeftColor: accentColor,
+            backgroundColor: isFocused ? `${accentColor}05` : '#FFFFFF',
+          },
+        ]}
+      >
+        <Text style={styles.planDetailDay}>Spot {point.day}</Text>
+        <Text style={styles.planDetailTitle}>{point.title}</Text>
+        <Text style={styles.planDetailSubtitle}>{point.description}</Text>
+      </Animated.View>
+    </TouchableOpacity>
   );
 }
 
@@ -279,7 +539,7 @@ export default function AIPlanScreen() {
   const [hasGeneratedPlan, setHasGeneratedPlan] = useState(false);
   const questionAnim = useRef(new Animated.Value(0)).current;
   const [isGeneratingPlan, setIsGeneratingPlan] = useState(false);
-  // Filters for places in normal (non-AI) view
+  const [isGenerateTransitioning, setIsGenerateTransitioning] = useState(false);
   const [generatedMarkers, setGeneratedMarkers] = useState([]);
   const generationTimerRef = useRef(null);
   const [visiblePlanPointsCount, setVisiblePlanPointsCount] = useState(0);
@@ -290,6 +550,7 @@ export default function AIPlanScreen() {
   const arrowPathRef = useRef({ segments: [], totalLength: 0 });
   const [arrowState, setArrowState] = useState(null); // { coordinate, heading }
   const arrowLoopRef = useRef(null);
+  const lastDrawnIndexRef = useRef(-1);
   // Portion of the route polyline that has been "drawn" behind the car
   const [drawnRouteCoords, setDrawnRouteCoords] = useState([]);
   const isAdjustingRegionRef = useRef(false);
@@ -297,6 +558,12 @@ export default function AIPlanScreen() {
   const [glowingSpotId, setGlowingSpotId] = useState(null);
   const spotGlowAnim = useRef(new Animated.Value(0)).current;
   const lastGlowingSpotIdRef = useRef(null);
+  // Which generated day/card is currently focused from the map or list
+  const [focusedPlanPointId, setFocusedPlanPointId] = useState(null);
+  // Whether the current route is using a simple straight-line fallback
+  const [routeUsedFallback, setRouteUsedFallback] = useState(false);
+  // Whether the user has just closed a generated plan (for subtle default-state messaging)
+  const [justClosedPlan, setJustClosedPlan] = useState(false);
 
   // Keep ref in sync with animated value so gesture start uses actual position
   useEffect(() => {
@@ -312,7 +579,20 @@ export default function AIPlanScreen() {
     if (!pulseId || pulseId === lastPulse.current) return;
     lastPulse.current = pulseId;
 
-    // Start question flow and lift the sheet to mid-height
+    // If the question flow is already open, close it when AI is pressed again.
+    if (isQuestionFlowActive) {
+      setIsQuestionFlowActive(false);
+      lastSnap.current = SNAP_POINTS[2];
+      Animated.spring(sheetAnim, {
+        toValue: SNAP_POINTS[2],
+        useNativeDriver: true,
+        tension: 80,
+        friction: 12,
+      }).start();
+      return;
+    }
+
+    // Otherwise, start the question flow and lift the sheet to mid-height
     setIsQuestionFlowActive(true);
     setQuestionStep(0);
     questionAnim.setValue(0);
@@ -340,7 +620,7 @@ export default function AIPlanScreen() {
         useNativeDriver: true,
       }),
     ]).start();
-  }, [route.params?.aiPulse, aiOverlay, sheetAnim, questionAnim]);
+  }, [route.params?.aiPulse, aiOverlay, sheetAnim, questionAnim, isQuestionFlowActive]);
 
   const aiOverlayOpacity = aiOverlay.interpolate({
     inputRange: [0, 1],
@@ -537,13 +817,23 @@ export default function AIPlanScreen() {
             heading: headingDeg,
           });
 
-          // Draw the route only up to the car's current progress
+          // Draw the route only up to the car's current progress (line fills along car)
           if (routeCoords && routeCoords.length > 1 && path.totalLength > 0) {
             const progress = targetDistance / path.totalLength;
             const lastIndex = routeCoords.length - 1;
             const rawIndex = Math.round(progress * lastIndex);
             const clampedIndex = Math.max(1, Math.min(lastIndex, rawIndex));
-            setDrawnRouteCoords(routeCoords.slice(0, clampedIndex + 1));
+            // Throttle: update every ~4 points for smooth fill without excessive re-renders
+            const step = 4;
+            const prev = lastDrawnIndexRef.current;
+            const shouldUpdate =
+              prev < 0 ||
+              clampedIndex - prev >= step ||
+              clampedIndex >= lastIndex;
+            if (shouldUpdate) {
+              lastDrawnIndexRef.current = clampedIndex;
+              setDrawnRouteCoords(routeCoords.slice(0, clampedIndex + 1));
+            }
           }
 
           // Determine which plan spot (if any) the car is closest to,
@@ -589,6 +879,7 @@ export default function AIPlanScreen() {
     }
 
     arrowAnim.setValue(0);
+    lastDrawnIndexRef.current = -1;
     setDrawnRouteCoords([]);
     const animation = Animated.timing(arrowAnim, {
       toValue: 1,
@@ -630,6 +921,22 @@ export default function AIPlanScreen() {
       setDrawnRouteCoords([]);
     }
   }, [routeCoords]);
+
+  // Pan camera to the spot when the car reaches it
+  useEffect(() => {
+    if (!glowingSpotId || !mapRef.current) return;
+    const point = PLAN_POINTS.find((p) => p.id === glowingSpotId);
+    if (!point?.coordinate) return;
+    isAdjustingRegionRef.current = true;
+    mapRef.current.animateToRegion(
+      {
+        ...point.coordinate,
+        latitudeDelta: 0.18,
+        longitudeDelta: 0.18,
+      },
+      600
+    );
+  }, [glowingSpotId]);
 
   // Pulse animation for any spot that is currently "glowing"
   useEffect(() => {
@@ -696,6 +1003,20 @@ export default function AIPlanScreen() {
     outputRange: [0.98, 1],
   });
 
+  const handleStartQuestionFlow = () => {
+    setIsQuestionFlowActive(true);
+    setQuestionStep(0);
+    setJustClosedPlan(false);
+    questionAnim.setValue(0);
+    lastSnap.current = SNAP_POINTS[1];
+    Animated.spring(sheetAnim, {
+      toValue: SNAP_POINTS[1],
+      useNativeDriver: true,
+      tension: 80,
+      friction: 12,
+    }).start();
+  };
+
   const handleAnswerAndAdvance = (key, value) => {
     setAnswers((prev) => ({ ...prev, [key]: value }));
     if (questionStep < 2) {
@@ -713,10 +1034,15 @@ export default function AIPlanScreen() {
     }
   };
 
+  const handleQuestionBack = () => {
+    setQuestionStep((prev) => (prev > 0 ? prev - 1 : 0));
+  };
+
   const handleRestartFlow = () => {
     setIsQuestionFlowActive(true);
     setQuestionStep(0);
     setSelectedPreferences([]);
+    setJustClosedPlan(false);
   };
 
   const togglePreference = (label) => {
@@ -764,6 +1090,29 @@ export default function AIPlanScreen() {
     Linking.openURL(url);
   };
 
+  const handleFocusPlanPoint = (point) => {
+    if (!point || !point.coordinate || !mapRef.current) return;
+    const { latitude, longitude } = point.coordinate;
+    mapRef.current.animateToRegion(
+      {
+        latitude,
+        longitude,
+        latitudeDelta: 0.18,
+        longitudeDelta: 0.18,
+      },
+      800
+    );
+    setFocusedPlanPointId(point.id);
+    // Bring the sheet up to the mid position so details are clearly visible
+    lastSnap.current = SNAP_POINTS[1];
+    Animated.spring(sheetAnim, {
+      toValue: SNAP_POINTS[1],
+      useNativeDriver: true,
+      tension: 80,
+      friction: 12,
+    }).start();
+  };
+
   const handleCloseGeneratedPlan = () => {
     // Reset map overlays and generated state back to the default "My Spots" view
     setHasGeneratedPlan(false);
@@ -774,6 +1123,9 @@ export default function AIPlanScreen() {
     setArrowState(null);
     setGlowingSpotId(null);
     lastGlowingSpotIdRef.current = null;
+    setFocusedPlanPointId(null);
+    setRouteUsedFallback(false);
+    setJustClosedPlan(true);
 
     // Return the sheet to the peek position
     lastSnap.current = SNAP_POINTS[2];
@@ -785,28 +1137,41 @@ export default function AIPlanScreen() {
     }).start();
   };
 
-  const handleGeneratePlan = async () => {
-    // Require at least the trip length (third question) to be selected
-    if (!answers.days || isGeneratingPlan) return;
-    setHasGeneratedPlan(false);
-    setVisiblePlanPointsCount(0);
-    setIsGeneratingPlan(true);
-    setIsQuestionFlowActive(false);
+  const fetchRoadRoute = async (points) => {
+    if (!points || points.length < 2) return points?.map((p) => p.coordinate) || [];
+    const fallback = points.map((p) => p.coordinate);
 
-    // Build a road-following route between all plan points.
-    // If GOOGLE_MAPS_API_KEY is not set, we fall back to straight lines.
-    if (!GOOGLE_MAPS_API_KEY) {
-      setRouteCoords(PLAN_POINTS.map((p) => p.coordinate));
-    } else {
+    // 1. Try OSRM first (free, no API key, uses OpenStreetMap road network)
+    try {
+      const coordStr = points
+        .map((p) => `${p.coordinate.longitude},${p.coordinate.latitude}`)
+        .join(';');
+      const osrmUrl = `https://router.project-osrm.org/route/v1/driving/${coordStr}?overview=full&geometries=geojson`;
+      const osrmRes = await fetch(osrmUrl);
+      const osrmJson = await osrmRes.json();
+
+      if (osrmJson.code === 'Ok' && osrmJson.routes?.[0]?.geometry?.coordinates?.length > 1) {
+        // OSRM returns [lng, lat]; convert to {latitude, longitude} for react-native-maps
+        return osrmJson.routes[0].geometry.coordinates.map(([lng, lat]) => ({
+          latitude: lat,
+          longitude: lng,
+        }));
+      }
+    } catch (_) {
+      /* try Google fallback */
+    }
+
+    // 2. Fallback to Google Directions API if key is set
+    if (GOOGLE_MAPS_API_KEY) {
       try {
-        const origin = PLAN_POINTS[0]?.coordinate;
-        const destination = PLAN_POINTS[PLAN_POINTS.length - 1]?.coordinate;
-        const waypointsRaw = PLAN_POINTS.slice(1, PLAN_POINTS.length - 1)
+        const origin = points[0]?.coordinate;
+        const destination = points[points.length - 1]?.coordinate;
+        const waypointsRaw = points.slice(1, points.length - 1)
           .map((p) => `${p.coordinate.latitude},${p.coordinate.longitude}`)
           .join('|');
 
         if (origin && destination) {
-          let url = `https://maps.googleapis.com/maps/api/directions/json?origin=${origin.latitude},${origin.longitude}&destination=${destination.latitude},${destination.longitude}&mode=driving&key=${GOOGLE_MAPS_API_KEY}`;
+          let url = `https://maps.googleapis.com/maps/api/directions/json?origin=${origin.latitude},${origin.longitude}&destination=${destination.latitude},${destination.longitude}&mode=driving&region=bh&key=${GOOGLE_MAPS_API_KEY}`;
           if (waypointsRaw.length > 0) {
             url += `&waypoints=${encodeURIComponent(waypointsRaw)}`;
           }
@@ -814,25 +1179,80 @@ export default function AIPlanScreen() {
           const response = await fetch(url);
           const json = await response.json();
 
-          if (json.routes && json.routes[0] && json.routes[0].overview_polyline) {
+          if (json.status === 'OK' && json.routes?.[0]?.overview_polyline?.points) {
             const coords = decodePolyline(json.routes[0].overview_polyline.points);
-            if (coords && coords.length > 1) {
-              setRouteCoords(coords);
-            } else {
-              setRouteCoords(PLAN_POINTS.map((p) => p.coordinate));
-            }
-          } else {
-            setRouteCoords(PLAN_POINTS.map((p) => p.coordinate));
+            if (coords?.length > 1) return coords;
           }
-        } else {
-          setRouteCoords(PLAN_POINTS.map((p) => p.coordinate));
         }
-      } catch (error) {
-        // If anything goes wrong, just fall back to straight lines
-        setRouteCoords(PLAN_POINTS.map((p) => p.coordinate));
+      } catch (_) {
+        /* fall through */
       }
     }
-    // Minimize the sheet to the peek height (~25% of the screen) while the car animates
+
+    return fallback;
+  };
+
+  const handleShowPastTrip = async () => {
+    // For now, all past trips reuse the demo plan points
+    setIsQuestionFlowActive(false);
+    setIsGeneratingPlan(false);
+    setHasGeneratedPlan(false);
+    setJustClosedPlan(false);
+    setGeneratedMarkers(PLAN_POINTS);
+    setDrawnRouteCoords([]);
+    setArrowState(null);
+    setGlowingSpotId(null);
+    lastGlowingSpotIdRef.current = null;
+    setFocusedPlanPointId(null);
+    setVisiblePlanPointsCount(0);
+
+    const coords = await fetchRoadRoute(PLAN_POINTS);
+    // Road routes from Google have many polyline points; fallback has only plan-point count
+    setRouteCoords(coords);
+    setRouteUsedFallback(coords.length <= PLAN_POINTS.length + 2);
+
+    // Focus the map on the first day of the trip
+    const firstPoint = PLAN_POINTS[0];
+    if (mapRef.current && firstPoint?.coordinate) {
+      mapRef.current.animateToRegion(
+        {
+          ...firstPoint.coordinate,
+          latitudeDelta: 0.18,
+          longitudeDelta: 0.18,
+        },
+        800
+      );
+    }
+
+    // Keep the sheet at peek while the car animation replays;
+    // when the arrow animation completes, it will lift the sheet
+    // and show the full plan details just like a freshly generated plan.
+    lastSnap.current = SNAP_POINTS[2];
+    Animated.spring(sheetAnim, {
+      toValue: SNAP_POINTS[2],
+      useNativeDriver: true,
+      tension: 80,
+      friction: 12,
+    }).start();
+  };
+
+  const handleGeneratePlan = async () => {
+    if (!answers.days || isGeneratingPlan || isGenerateTransitioning) return;
+    setHasGeneratedPlan(false);
+    setVisiblePlanPointsCount(0);
+    setRouteUsedFallback(false);
+    setJustClosedPlan(false);
+    setIsGenerateTransitioning(true);
+
+    // Show cool animation while fetching road route
+    const coords = await fetchRoadRoute(PLAN_POINTS);
+    setRouteCoords(coords);
+    setRouteUsedFallback(coords.length <= PLAN_POINTS.length + 2);
+
+    setIsGenerateTransitioning(false);
+    setIsGeneratingPlan(true);
+    setIsQuestionFlowActive(false);
+
     lastSnap.current = SNAP_POINTS[2];
     Animated.spring(sheetAnim, {
       toValue: SNAP_POINTS[2],
@@ -916,8 +1336,9 @@ export default function AIPlanScreen() {
             <Marker
               key={`${spot.id}-${index}`}
               coordinate={spot.coordinate}
-              title={spot.title}
+              title={spot.title.replace(/^Day\s+/, 'Spot ')}
               description={spot.description}
+              onPress={() => handleFocusPlanPoint(spot)}
             >
               <View style={[styles.planMarkerWrap, { borderColor: color }]}>
                 {glowingSpotId === spot.id && (
@@ -944,20 +1365,21 @@ export default function AIPlanScreen() {
                     ]}
                   />
                 )}
-                <Text style={[styles.planMarkerDay, { color }]}>{`D${spot.day}`}</Text>
+                <Text style={[styles.planMarkerDay, { color }]}>{`S${spot.day}`}</Text>
               </View>
             </Marker>
           );
         })}
 
-        {/* Animated route line connecting all planned spots, drawn behind the car */}
-        {drawnRouteCoords.length > 1 && (
+        {/* Route line: fills progressively along the car as it travels */}
+        {(drawnRouteCoords.length >= 2 || routeCoords.length >= 2) && (
           <Polyline
-            coordinates={drawnRouteCoords}
+            coordinates={drawnRouteCoords.length >= 2 ? drawnRouteCoords : routeCoords.slice(0, 2)}
             strokeColor="#C8102E"
-            strokeWidth={4}
+            strokeWidth={5}
             lineCap="round"
             lineJoin="round"
+            geodesic
           />
         )}
 
@@ -1053,26 +1475,61 @@ export default function AIPlanScreen() {
       >
         <View style={styles.grabberWrap} {...panResponder.panHandlers}>
           <View style={styles.grabber} />
+          {!isQuestionFlowActive && !hasGeneratedPlan && !isGeneratingPlan && (
+            <Text style={styles.grabberHint}>Drag up for more details</Text>
+          )}
         </View>
 
         <View style={styles.sheetHeader}>
-          <View style={styles.sheetHeaderLeft}>
-            <Text style={styles.sheetTitle}>
-              {isQuestionFlowActive ? 'Tell us about your trip' : 'My Spots'}
-            </Text>
-            <Text style={styles.sheetSubtitle}>
-              {isQuestionFlowActive
-                ? 'We will tune your Bahrain plan in 3 quick steps.'
-                : `${SPOTS_COUNT} Spots Saved`}
-            </Text>
-
-            {isQuestionFlowActive && (
-              <View style={styles.stepRow}>
-                <View style={styles.stepBadge}>
-                  <Text style={styles.stepBadgeText}>
-                    {questionStep < 3 ? `Step ${questionStep + 1}/3` : 'All set'}
-                  </Text>
+          {isQuestionFlowActive ? (
+            <>
+              <View style={styles.sheetHeaderLeft}>
+                {questionStep > 0 && (
+                  <TouchableOpacity
+                    style={styles.backButton}
+                    activeOpacity={0.8}
+                    onPress={handleQuestionBack}
+                  >
+                    <Ionicons name="chevron-back" size={18} color="#6B7280" />
+                  </TouchableOpacity>
+                )}
+                <View style={styles.sheetTitleWrap}>
+                  {questionStep === 0 && (
+                    <>
+                      <Text style={styles.questionTitle}>What kind of budget are you thinking?</Text>
+                      <Text style={styles.questionSubtitle}>
+                        We will match hotels, food and activities to this level.
+                      </Text>
+                    </>
+                  )}
+                  {questionStep === 1 && (
+                    <>
+                      <Text style={styles.questionTitle}>What kind of experiences do you prefer?</Text>
+                      <Text style={styles.questionSubtitle}>
+                        Tap a few words that best describe this Bahrain trip.
+                      </Text>
+                    </>
+                  )}
+                  {questionStep === 2 && (
+                    <>
+                      <Text style={styles.questionTitle}>How many days are you staying?</Text>
+                      <Text style={styles.questionSubtitle}>
+                        We will pace your itinerary so it never feels rushed.
+                      </Text>
+                    </>
+                  )}
+                  {questionStep === 3 && (
+                    <>
+                      <Text style={styles.questionTitle}>Ready to generate your plan</Text>
+                      <Text style={styles.questionSubtitle}>
+                        Review your answers below and generate a Bahrain route.
+                      </Text>
+                    </>
+                  )}
                 </View>
+              </View>
+
+              <View style={styles.sheetHeaderRight}>
                 <TouchableOpacity
                   style={styles.closeButton}
                   activeOpacity={0.8}
@@ -1081,14 +1538,31 @@ export default function AIPlanScreen() {
                   <Ionicons name="close" size={18} color="#6B7280" style={styles.closeIcon} />
                 </TouchableOpacity>
               </View>
-            )}
-          </View>
-
-          {!isQuestionFlowActive && (
-            <TouchableOpacity style={styles.importButton} activeOpacity={0.8}>
-              <Ionicons name="navigate-outline" size={18} color="#C8102E" />
-              <Text style={styles.importLabel}>Import Guide</Text>
-            </TouchableOpacity>
+            </>
+          ) : isGeneratingPlan || isGenerateTransitioning ? (
+            <View style={styles.sheetHeaderLeft}>
+              <View style={styles.sheetTitleWrap}>
+                <Text style={styles.sheetTitle}>Creating your plan</Text>
+                <Text style={styles.sheetSubtitle}>Mapping the best route across Bahrain</Text>
+              </View>
+            </View>
+          ) : (
+            <>
+              <View style={styles.sheetHeaderLeft}>
+                <View style={styles.sheetTitleWrap}>
+                  <Text style={styles.sheetTitle}>Past Plans</Text>
+                  <Text style={styles.sheetSubtitle}>{`${SPOTS_COUNT} Spots Saved`}</Text>
+                </View>
+              </View>
+              <TouchableOpacity
+                style={styles.importButton}
+                activeOpacity={0.8}
+                onPress={handleStartQuestionFlow}
+              >
+                <Ionicons name="sparkles-outline" size={18} color="#C8102E" />
+                <Text style={styles.importLabel}>Start AI trip setup</Text>
+              </TouchableOpacity>
+            </>
           )}
         </View>
 
@@ -1105,258 +1579,221 @@ export default function AIPlanScreen() {
               },
             ]}
           >
-            <View style={styles.stepDotsRow}>
-              {[0, 1, 2].map((step) => (
-                <View
-                  key={step}
-                  style={[
-                    styles.stepDot,
-                    questionStep === step && styles.stepDotActive,
-                    questionStep > step && styles.stepDotCompleted,
-                  ]}
-                />
-              ))}
-            </View>
-
-            {questionStep === 0 && (
-              <View style={styles.questionCard}>
-                <View style={styles.questionLabelRow}>
-                  <View style={styles.questionIconCircle}>
-                    <Ionicons name="cash-outline" size={18} color="#C8102E" />
+            <ScrollView
+              style={styles.questionScroll}
+              contentContainerStyle={styles.questionScrollContent}
+              showsVerticalScrollIndicator={false}
+            >
+              {questionStep === 0 && (
+                <View style={styles.questionCard}>
+                  <View style={styles.pillRow}>
+                    <PillButton
+                      label="Budget-friendly"
+                      icon="cash-outline"
+                      color="#16A34A"
+                      onPress={() => handleAnswerAndAdvance('budget', 'Budget-friendly')}
+                    />
+                    <PillButton
+                      label="Comfort"
+                      icon="cash-outline"
+                      color="#0EA5E9"
+                      onPress={() => handleAnswerAndAdvance('budget', 'Comfort')}
+                    />
+                    <PillButton
+                      label="Luxury"
+                      icon="cash-outline"
+                      color="#F97316"
+                      onPress={() => handleAnswerAndAdvance('budget', 'Luxury')}
+                    />
                   </View>
-                  <Text style={styles.questionLabel}>Budget</Text>
                 </View>
-                <Text style={styles.questionTitle}>What kind of budget are you thinking?</Text>
-                <Text style={styles.questionSubtitle}>
-                  We will match hotels, food and activities to this level.
-                </Text>
-                <View style={styles.pillRow}>
-                  <PillButton
-                    label="Budget-friendly"
-                    icon="cash-outline"
-                    color="#16A34A"
-                    onPress={() => handleAnswerAndAdvance('budget', 'Budget-friendly')}
-                  />
-                  <PillButton
-                    label="Comfort"
-                    icon="cash-outline"
-                    color="#0EA5E9"
-                    onPress={() => handleAnswerAndAdvance('budget', 'Comfort')}
-                  />
-                  <PillButton
-                    label="Luxury"
-                    icon="cash-outline"
-                    color="#F97316"
-                    onPress={() => handleAnswerAndAdvance('budget', 'Luxury')}
-                  />
-                </View>
-                <TouchableOpacity style={styles.secondaryButton} onPress={handleSkip}>
-                  <Text style={styles.secondaryButtonText}>Skip for now</Text>
-                </TouchableOpacity>
-              </View>
-            )}
+              )}
 
-            {questionStep === 1 && (
-              <View style={styles.questionCard}>
-                <Text style={styles.questionTitle}>What kind of experiences do you prefer?</Text>
-                <Text style={styles.questionSubtitle}>
-                  Tap a few words that best describe this Bahrain trip.
-                </Text>
-                <View style={styles.preferenceGrid}>
-                  {[
-                    {
-                      key: 'Culture',
-                      label: 'Culture',
-                      color: '#6366F1',
-                      icon: 'color-palette-outline',
-                    },
-                    {
-                      key: 'History',
-                      label: 'History',
-                      color: '#818CF8',
-                      icon: 'time-outline',
-                    },
-                    {
-                      key: 'Beach',
-                      label: 'Beach',
-                      color: '#F59E0B',
-                      icon: 'sunny-outline',
-                    },
-                    {
-                      key: 'Relax',
-                      label: 'Relax',
-                      color: '#10B981',
-                      icon: 'leaf-outline',
-                    },
-                    {
-                      key: 'Food',
-                      label: 'Food',
-                      color: '#EC4899',
-                      icon: 'restaurant-outline',
-                    },
-                    {
-                      key: 'Nightlife',
-                      label: 'Nightlife',
-                      color: '#A855F7',
-                      icon: 'moon-outline',
-                    },
-                    {
-                      key: 'Shopping',
-                      label: 'Shopping',
-                      color: '#0EA5E9',
-                      icon: 'bag-handle-outline',
-                    },
-                    {
-                      key: 'Nature',
-                      label: 'Nature',
-                      color: '#22C55E',
-                      icon: 'earth-outline',
-                    },
-                    {
-                      key: 'Adventure',
-                      label: 'Adventure',
-                      color: '#F97316',
-                      icon: 'walk-outline',
-                    },
-                  ].map((opt) => {
-                    const isSelected = selectedPreferences.includes(opt.label);
-                    return (
-                      <TouchableOpacity
-                        key={opt.key}
-                        style={[
-                          styles.preferenceGridItem,
-                          isSelected && {
-                            borderColor: opt.color,
-                            backgroundColor: `${opt.color}11`,
-                          },
-                        ]}
-                        activeOpacity={0.9}
-                        onPress={() => togglePreference(opt.label)}
-                      >
-                        <View style={styles.preferenceGridItemInner}>
-                          <View
-                            style={[
-                              styles.preferenceIconCircle,
-                              { backgroundColor: `${opt.color}1A` },
-                            ]}
-                          >
-                            <Ionicons name={opt.icon} size={20} color={opt.color} />
+              {questionStep === 1 && (
+                <View style={styles.questionCard}>
+                  <View style={styles.preferenceGrid}>
+                    {[
+                      {
+                        key: 'Culture',
+                        label: 'Culture',
+                        color: '#6366F1',
+                        icon: 'color-palette-outline',
+                      },
+                      {
+                        key: 'History',
+                        label: 'History',
+                        color: '#818CF8',
+                        icon: 'time-outline',
+                      },
+                      {
+                        key: 'Beach',
+                        label: 'Beach',
+                        color: '#F59E0B',
+                        icon: 'sunny-outline',
+                      },
+                      {
+                        key: 'Relax',
+                        label: 'Relax',
+                        color: '#10B981',
+                        icon: 'leaf-outline',
+                      },
+                      {
+                        key: 'Food',
+                        label: 'Food',
+                        color: '#EC4899',
+                        icon: 'restaurant-outline',
+                      },
+                      {
+                        key: 'Nightlife',
+                        label: 'Nightlife',
+                        color: '#A855F7',
+                        icon: 'moon-outline',
+                      },
+                      {
+                        key: 'Shopping',
+                        label: 'Shopping',
+                        color: '#0EA5E9',
+                        icon: 'bag-handle-outline',
+                      },
+                      {
+                        key: 'Nature',
+                        label: 'Nature',
+                        color: '#22C55E',
+                        icon: 'earth-outline',
+                      },
+                      {
+                        key: 'Adventure',
+                        label: 'Adventure',
+                        color: '#F97316',
+                        icon: 'walk-outline',
+                      },
+                    ].map((opt) => {
+                      const isSelected = selectedPreferences.includes(opt.label);
+                      return (
+                        <TouchableOpacity
+                          key={opt.key}
+                          style={[
+                            styles.preferenceGridItem,
+                            isSelected && {
+                              borderColor: opt.color,
+                              backgroundColor: `${opt.color}11`,
+                            },
+                          ]}
+                          activeOpacity={0.9}
+                          onPress={() => togglePreference(opt.label)}
+                        >
+                          <View style={styles.preferenceGridItemInner}>
+                            <View
+                              style={[
+                                styles.preferenceIconCircle,
+                                { backgroundColor: `${opt.color}1A` },
+                              ]}
+                            >
+                              <Ionicons name={opt.icon} size={20} color={opt.color} />
+                            </View>
+                            <Text
+                              style={[
+                                styles.preferenceLabel,
+                                { color: isSelected ? opt.color : '#111827' },
+                              ]}
+                            >
+                              {opt.label}
+                            </Text>
                           </View>
-                          <Text
-                            style={[
-                              styles.preferenceLabel,
-                              { color: isSelected ? opt.color : '#111827' },
-                            ]}
-                          >
-                            {opt.label}
-                          </Text>
-                        </View>
-                      </TouchableOpacity>
-                    );
-                  })}
-                </View>
-                <TouchableOpacity
-                  style={[
-                    styles.primaryButton,
-                    !selectedPreferences.length && styles.primaryButtonDisabled,
-                  ]}
-                  activeOpacity={selectedPreferences.length ? 0.9 : 1}
-                  onPress={selectedPreferences.length ? handleConfirmPreferences : undefined}
-                  disabled={!selectedPreferences.length}
-                >
-                  <Text
-                    style={[
-                      styles.primaryButtonText,
-                      !selectedPreferences.length && styles.primaryButtonTextDisabled,
-                    ]}
-                  >
-                    Continue
-                  </Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={styles.secondaryButton} onPress={handleSkip}>
-                  <Text style={styles.secondaryButtonText}>Skip for now</Text>
-                </TouchableOpacity>
-              </View>
-            )}
-
-            {questionStep === 2 && (
-              <View style={styles.questionCard}>
-                <View style={styles.questionLabelRow}>
-                  <View style={styles.questionIconCircle}>
-                    <Ionicons name="calendar-outline" size={18} color="#C8102E" />
+                        </TouchableOpacity>
+                      );
+                    })}
                   </View>
-                  <Text style={styles.questionLabel}>Trip length</Text>
+                  <TouchableOpacity
+                    style={[
+                      styles.primaryButton,
+                      !selectedPreferences.length && styles.primaryButtonDisabled,
+                    ]}
+                    activeOpacity={selectedPreferences.length ? 0.9 : 1}
+                    onPress={selectedPreferences.length ? handleConfirmPreferences : undefined}
+                    disabled={!selectedPreferences.length}
+                  >
+                    <Text
+                      style={[
+                        styles.primaryButtonText,
+                        !selectedPreferences.length && styles.primaryButtonTextDisabled,
+                      ]}
+                    >
+                      Continue
+                    </Text>
+                  </TouchableOpacity>
                 </View>
-                <Text style={styles.questionTitle}>How many days are you staying?</Text>
-                <Text style={styles.questionSubtitle}>
-                  We will pace your itinerary so it never feels rushed.
-                </Text>
-                <View style={styles.pillRow}>
-                  <PillButton
+              )}
+
+              {questionStep === 2 && (
+                <View style={styles.dayOptionsContainer}>
+                  <DayOptionCard
                     label="1–2 days"
-                    icon="calendar-outline"
+                    subtitle="Quick getaway"
+                    icon="flash-outline"
                     color="#22C55E"
                     onPress={() => handleAnswerAndAdvance('days', '1-2 days')}
+                    delay={0}
                   />
-                  <PillButton
+                  <DayOptionCard
                     label="3–4 days"
-                    icon="calendar-outline"
+                    subtitle="Sweet spot"
+                    icon="compass-outline"
                     color="#0EA5E9"
+                    recommended
                     onPress={() => handleAnswerAndAdvance('days', '3-4 days')}
+                    delay={80}
                   />
-                  <PillButton
+                  <DayOptionCard
                     label="5+ days"
-                    icon="calendar-outline"
+                    subtitle="Deep dive"
+                    icon="earth-outline"
                     color="#EC4899"
                     onPress={() => handleAnswerAndAdvance('days', '5+ days')}
+                    delay={160}
                   />
                 </View>
-                <TouchableOpacity style={styles.secondaryButton} onPress={handleSkip}>
-                  <Text style={styles.secondaryButtonText}>Skip for now</Text>
-                </TouchableOpacity>
-              </View>
-            )}
+              )}
 
-            {questionStep === 3 && (
-              <View style={styles.summaryCard}>
-                <Text style={styles.summaryTitle}>Perfect, we have what we need.</Text>
-                <Text style={styles.summarySubtitle}>
-                  We will shape a Bahrain plan around
-                  {answers.budget ? ` a ${answers.budget.toLowerCase()} budget` : ' your budget'}
-                  {answers.preferences && answers.preferences.length
-                    ? `, focused on ${answers.preferences
-                        .map((p) => p.toLowerCase())
-                        .join(', ')}`
-                    : ''}
-                  {answers.days ? `, over ${answers.days}` : ''}.
-                </Text>
-                <TouchableOpacity
-                  style={[
-                    styles.primaryButton,
-                    !answers.days && styles.primaryButtonDisabled,
-                  ]}
-                  activeOpacity={answers.days ? 0.9 : 1}
-                  onPress={answers.days ? handleGeneratePlan : undefined}
-                  disabled={!answers.days}
-                >
-                  <Text
-                    style={[
-                      styles.primaryButtonText,
-                      !answers.days && styles.primaryButtonTextDisabled,
-                    ]}
-                  >
-                    Generate plan
-                  </Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={styles.secondaryButtonInline}
-                  activeOpacity={0.8}
-                  onPress={handleRestartFlow}
-                >
-                  <Text style={styles.secondaryButtonInlineText}>Adjust answers</Text>
-                </TouchableOpacity>
-              </View>
-            )}
+              {questionStep === 3 && (
+                isGenerateTransitioning ? (
+                  <GenerateTransitionView />
+                ) : (
+                  <View style={styles.summaryCard}>
+                    <Text style={styles.summaryTitle}>Perfect, we have what we need.</Text>
+                    <Text style={styles.summarySubtitle}>
+                      We will shape a Bahrain plan around
+                      {answers.budget ? ` a ${answers.budget.toLowerCase()} budget` : ' your budget'}
+                      {answers.preferences && answers.preferences.length
+                        ? `, focused on ${answers.preferences
+                            .map((p) => p.toLowerCase())
+                            .join(', ')}`
+                        : ''}
+                      {answers.days ? `, over ${answers.days}` : ''}.
+                    </Text>
+                    <Text style={styles.summaryPreview}>
+                      Expect a balanced mix of key sights and relaxed time, tuned to your answers.
+                    </Text>
+                    {!answers.days && (
+                      <Text style={styles.summaryHelperText}>
+                        Pick how many days you are staying so we can pace your route.
+                      </Text>
+                    )}
+                    <GeneratePlanButton
+                      disabled={!answers.days}
+                      onPress={handleGeneratePlan}
+                    />
+                    <TouchableOpacity
+                      style={styles.secondaryButtonInline}
+                      activeOpacity={0.8}
+                      onPress={handleRestartFlow}
+                    >
+                      <Text style={styles.secondaryButtonInlineText}>Adjust answers</Text>
+                    </TouchableOpacity>
+                  </View>
+                )
+              )}
+            </ScrollView>
           </Animated.View>
         ) : hasGeneratedPlan ? (
           <View style={styles.planDetailsWrapper}>
@@ -1389,8 +1826,26 @@ export default function AIPlanScreen() {
                   color="#FFFFFF"
                   style={{ marginRight: 6 }}
                 />
-                <Text style={styles.navButtonLabel}>Start navigation to Day 1</Text>
+                <Text style={styles.navButtonLabel}>Start navigation to Spot 1</Text>
               </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.navSecondaryButton}
+                activeOpacity={0.9}
+                onPress={handleRestartFlow}
+              >
+                <Ionicons
+                  name="sparkles-outline"
+                  size={18}
+                  color="#C8102E"
+                  style={{ marginRight: 6 }}
+                />
+                <Text style={styles.navSecondaryButtonLabel}>Enhance</Text>
+              </TouchableOpacity>
+              {routeUsedFallback && (
+                <Text style={styles.routeFallbackText}>
+                  Route line is approximate and may not follow every road exactly.
+                </Text>
+              )}
             </View>
 
             <ScrollView
@@ -1399,23 +1854,52 @@ export default function AIPlanScreen() {
               showsVerticalScrollIndicator={false}
             >
               {visiblePlanPoints.map((point) => (
-                <PlanDetailCard key={point.id} point={point} cardStyle={styles.planDetailCard} />
+                <PlanDetailCard
+                  key={point.id}
+                  point={point}
+                  cardStyle={styles.planDetailCard}
+                  isFocused={focusedPlanPointId === point.id}
+                  onPress={() => handleFocusPlanPoint(point)}
+                />
               ))}
             </ScrollView>
+          </View>
+        ) : isGeneratingPlan || isGenerateTransitioning ? (
+          <View style={styles.generatingSheetPlaceholder}>
+            <GenerateTransitionView compact={isGeneratingPlan} />
           </View>
         ) : (
           <View style={styles.spotList}>
             {[1, 2, 3].map((i) => (
-              <View key={i} style={styles.spotCard}>
+              <TouchableOpacity
+                key={i}
+                style={styles.spotCard}
+                activeOpacity={0.9}
+                onPress={handleShowPastTrip}
+              >
                 <View style={styles.spotIconWrap}>
-                  <Ionicons name="location" size={20} color="#C8102E" />
+                  <Ionicons name="map-outline" size={20} color="#C8102E" />
                 </View>
                 <View style={styles.spotInfo}>
-                  <Text style={styles.spotName}>Spot {i}</Text>
-                  <Text style={styles.spotMeta}>Saved for your plan</Text>
+                  <View style={styles.spotTitleRow}>
+                    <Text style={styles.spotName}>{`Bahrain trip #${i}`}</Text>
+                    <View style={styles.spotStatusChip}>
+                      <Text style={styles.spotStatusChipText}>Saved</Text>
+                    </View>
+                  </View>
+                  <View style={styles.spotMetaRow}>
+                    <Ionicons
+                      name="calendar-outline"
+                      size={13}
+                      color="#9CA3AF"
+                      style={{ marginRight: 4 }}
+                    />
+                    <Text style={styles.spotMeta}>3-day itinerary · 5 stops</Text>
+                  </View>
+                  <Text style={styles.spotMetaSecondary}>Last edited recently</Text>
                 </View>
                 <Ionicons name="chevron-forward" size={18} color="#9CA3AF" />
-              </View>
+              </TouchableOpacity>
             ))}
           </View>
         )}
@@ -1538,7 +2022,7 @@ const styles = StyleSheet.create({
     right: 0,
     bottom: 0,
     height: SHEET_HEIGHT,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: '#F9FAFB',
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
     shadowColor: '#000',
@@ -1550,7 +2034,7 @@ const styles = StyleSheet.create({
   grabberWrap: {
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 16,
+    paddingVertical: 12,
     paddingHorizontal: 24,
     marginBottom: 4,
   },
@@ -1560,12 +2044,20 @@ const styles = StyleSheet.create({
     borderRadius: 2.5,
     backgroundColor: '#D1D5DB',
   },
+  grabberHint: {
+    marginTop: 6,
+    fontSize: 11,
+    color: '#9CA3AF',
+  },
   sheetHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'flex-start',
+    alignItems: 'center',
     paddingHorizontal: 20,
     marginBottom: 16,
+  },
+  sheetTitleWrap: {
+    flex: 1,
   },
   sheetTitle: {
     fontSize: 26,
@@ -1577,6 +2069,11 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#6B7280',
     marginTop: 2,
+  },
+  sheetHeaderRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
   },
   headerRightQuestion: {
     flexDirection: 'row',
@@ -1600,6 +2097,9 @@ const styles = StyleSheet.create({
   },
   sheetHeaderLeft: {
     flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
   },
   stepRow: {
     flexDirection: 'row',
@@ -1640,15 +2140,59 @@ const styles = StyleSheet.create({
     paddingBottom: 16,
     gap: 10,
   },
+  defaultCtaCard: {
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    borderRadius: 14,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: 'rgba(209,213,219,0.7)',
+    marginBottom: 10,
+  },
+  defaultCtaTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#111827',
+    marginBottom: 4,
+  },
+  defaultCtaSubtitle: {
+    fontSize: 13,
+    color: '#6B7280',
+    marginBottom: 10,
+  },
+  defaultCtaButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 999,
+    backgroundColor: '#C8102E',
+    marginBottom: 6,
+  },
+  defaultCtaButtonLabel: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#FFFFFF',
+  },
+  defaultInfoText: {
+    fontSize: 11,
+    color: '#9CA3AF',
+  },
   spotCard: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#F9FAFB',
-    paddingVertical: 14,
+    backgroundColor: '#FFFFFF',
+    paddingVertical: 12,
     paddingHorizontal: 14,
-    borderRadius: 5,
+    borderRadius: 14,
     borderWidth: 1,
-    borderColor: '#F3F4F6',
+    borderColor: 'rgba(209,213,219,0.8)',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.04,
+    shadowRadius: 8,
+    elevation: 2,
   },
   spotIconWrap: {
     width: 44,
@@ -1661,6 +2205,12 @@ const styles = StyleSheet.create({
     marginRight: 12,
   },
   spotInfo: { flex: 1 },
+  spotTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 2,
+  },
   spotName: {
     fontSize: 16,
     fontWeight: '600',
@@ -1670,6 +2220,27 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: '#9CA3AF',
     marginTop: 2,
+  },
+  spotMetaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 2,
+  },
+  spotMetaSecondary: {
+    fontSize: 11,
+    color: '#9CA3AF',
+    marginTop: 2,
+  },
+  spotStatusChip: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 999,
+    backgroundColor: 'rgba(16,185,129,0.08)',
+  },
+  spotStatusChipText: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#059669',
   },
   planMarkerWrap: {
     backgroundColor: '#FFFFFF',
@@ -1715,22 +2286,28 @@ const styles = StyleSheet.create({
   },
   questionContainer: {
     paddingHorizontal: 16,
-    paddingBottom: 12,
+    paddingBottom: 0,
     paddingTop: 0,
     backgroundColor: 'rgba(248,250,252,0.9)',
   },
+  questionScroll: {
+    maxHeight: SCREEN_HEIGHT * 0.55,
+  },
+  questionScrollContent: {
+    paddingBottom: 16,
+  },
   questionCard: {
-    backgroundColor: 'rgba(254,242,242,0.98)',
-    borderRadius: 14,
-    paddingHorizontal: 14,
-    paddingVertical: 14,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 18,
+    paddingHorizontal: 16,
+    paddingVertical: 16,
     borderWidth: 1,
-    borderColor: 'rgba(248,113,113,0.45)',
-    shadowColor: '#C8102E',
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.08,
-    shadowRadius: 20,
-    elevation: 6,
+    borderColor: 'rgba(209,213,219,0.8)',
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.06,
+    shadowRadius: 12,
+    elevation: 4,
   },
   questionLabelRow: {
     flexDirection: 'row',
@@ -1744,7 +2321,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     marginRight: 8,
-    backgroundColor: 'rgba(200,16,46,0.08)',
+    backgroundColor: 'rgba(15,23,42,0.04)',
   },
   questionLabel: {
     fontSize: 12,
@@ -1759,24 +2336,78 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#111827',
     marginBottom: 4,
+    textAlign: 'center',
   },
   questionSubtitle: {
     fontSize: 13,
     color: '#6B7280',
-    marginBottom: 16,
+    marginBottom: 12,
+    textAlign: 'center',
   },
   pillRow: {
+    flexDirection: 'column',
+    alignItems: 'stretch',
+    gap: 10,
+    marginBottom: 8,
+  },
+  dayOptionsContainer: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: 10,
+    justifyContent: 'space-between',
+    gap: 12,
+    marginBottom: 8,
+  },
+  dayOptionCard: {
+    flex: 1,
+    minWidth: '30%',
+    borderRadius: 16,
+    borderWidth: 1.5,
+    paddingVertical: 18,
+    paddingHorizontal: 12,
+    alignItems: 'center',
+    position: 'relative',
+    overflow: 'visible',
+  },
+  dayOptionBadge: {
+    position: 'absolute',
+    top: -8,
+    right: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 999,
+  },
+  dayOptionBadgeText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#FFFFFF',
+  },
+  dayOptionIconWrap: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
     marginBottom: 10,
+  },
+  dayOptionLabel: {
+    fontSize: 15,
+    fontWeight: '700',
+    marginBottom: 2,
+  },
+  dayOptionSubtitle: {
+    fontSize: 11,
+    color: '#6B7280',
+    fontWeight: '500',
   },
   preferenceGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     justifyContent: 'space-between',
     marginTop: 4,
-    marginBottom: 4,
+    marginBottom: -70,
   },
   preferenceGridItem: {
     width: '32%',
@@ -1787,7 +2418,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFFFF',
     justifyContent: 'center',
     alignItems: 'center',
-    marginBottom: 8,
+    marginBottom: 6,
   },
   preferenceGridItemInner: {
     alignItems: 'center',
@@ -1820,6 +2451,8 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.06,
     shadowRadius: 10,
     elevation: 3,
+    width: '100%',
+    justifyContent: 'flex-start',
   },
   pillIconCircle: {
     width: 26,
@@ -1828,7 +2461,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     marginRight: 8,
-    backgroundColor: 'rgba(248,113,113,0.08)',
+    backgroundColor: 'rgba(15,23,42,0.04)',
   },
   pillText: {
     fontSize: 13,
@@ -1871,6 +2504,16 @@ const styles = StyleSheet.create({
     color: '#6B7280',
     marginBottom: 16,
   },
+  summaryPreview: {
+    fontSize: 13,
+    color: '#4B5563',
+    marginBottom: 10,
+  },
+  summaryHelperText: {
+    fontSize: 12,
+    color: '#DC2626',
+    marginBottom: 10,
+  },
   primaryButton: {
     borderRadius: 999,
     paddingVertical: 11,
@@ -1899,6 +2542,119 @@ const styles = StyleSheet.create({
     fontWeight: '500',
     color: '#6B7280',
     textDecorationLine: 'underline',
+  },
+  generateTransitionCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 20,
+    paddingVertical: 32,
+    paddingHorizontal: 24,
+    borderWidth: 1,
+    borderColor: 'rgba(200,16,46,0.15)',
+    shadowColor: '#C8102E',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.08,
+    shadowRadius: 24,
+    elevation: 8,
+  },
+  generateTransitionInner: {
+    alignItems: 'center',
+  },
+  generateTransitionLoaderWrap: {
+    width: 80,
+    height: 80,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 20,
+  },
+  generateTransitionRing: {
+    position: 'absolute',
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    borderWidth: 3,
+    borderTopColor: '#C8102E',
+    borderRightColor: 'rgba(200,16,46,0.2)',
+    borderBottomColor: 'rgba(200,16,46,0.1)',
+    borderLeftColor: 'rgba(200,16,46,0.2)',
+  },
+  generateTransitionIconCenter: {
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    backgroundColor: 'rgba(200,16,46,0.08)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  generateTransitionTitle: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: '#111827',
+    marginBottom: 6,
+  },
+  generateTransitionSubtitle: {
+    fontSize: 13,
+    color: '#6B7280',
+    marginBottom: 20,
+  },
+  generateTransitionDots: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  generateDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#C8102E',
+  },
+  generatingSheetPlaceholder: {
+    paddingHorizontal: 20,
+    paddingVertical: 16,
+  },
+  generateTransitionCardCompact: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    paddingVertical: 20,
+    paddingHorizontal: 18,
+    borderWidth: 1,
+    borderColor: 'rgba(200,16,46,0.12)',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.05,
+    shadowRadius: 12,
+    elevation: 4,
+  },
+  generateTransitionLoaderWrapCompact: {
+    width: 56,
+    height: 56,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 12,
+  },
+  generateTransitionRingCompact: {
+    position: 'absolute',
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    borderWidth: 2.5,
+    borderTopColor: '#C8102E',
+    borderRightColor: 'rgba(200,16,46,0.2)',
+    borderBottomColor: 'rgba(200,16,46,0.1)',
+    borderLeftColor: 'rgba(200,16,46,0.2)',
+  },
+  generateTransitionIconCenterCompact: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: 'rgba(200,16,46,0.08)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  generateTransitionTitleCompact: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#111827',
+    marginBottom: 4,
   },
   stepDotsRow: {
     flexDirection: 'row',
@@ -1967,6 +2723,28 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '600',
     color: '#FFFFFF',
+  },
+  navSecondaryButton: {
+    marginTop: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'stretch',
+    borderRadius: 999,
+    paddingVertical: 9,
+    paddingHorizontal: 14,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: 'rgba(209,213,219,0.8)',
+  },
+  navSecondaryButtonLabel: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#C8102E',
+  },
+  routeFallbackText: {
+    marginTop: 6,
+    fontSize: 11,
+    color: '#6B7280',
   },
   planDetailsScroll: {
     flex: 1,
