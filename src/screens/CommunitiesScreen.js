@@ -18,6 +18,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import ScreenContainer from '../components/ScreenContainer';
 import ProfileButton from '../components/ProfileButton';
+import { submitPostToN8n } from '../services/n8nApi';
 
 const COLORS = {
   primary: '#C8102E',
@@ -326,22 +327,119 @@ function PostDetailModal({ post, onClose }) {
 
 const TAB_BAR_HEIGHT = Platform.OS === 'ios' ? 70 : 60;
 
-function CreatePostModal({ visible, onClose }) {
+const RADIAL_MENU_SIZE = 200;
+const RADIAL_HALF = RADIAL_MENU_SIZE / 2;
+
+function RadialPostMenu({ visible, onClose, onWriteReview, onCameraScan }) {
+  const scaleAnim = useRef(new Animated.Value(0)).current;
+  const opacityAnim = useRef(new Animated.Value(0)).current;
+
+  React.useEffect(() => {
+    if (visible) {
+      Animated.parallel([
+        Animated.spring(scaleAnim, {
+          toValue: 1,
+          useNativeDriver: true,
+          friction: 8,
+          tension: 80,
+        }),
+        Animated.timing(opacityAnim, {
+          toValue: 1,
+          duration: 200,
+          useNativeDriver: true,
+        }),
+      ]).start();
+    } else {
+      scaleAnim.setValue(0);
+      opacityAnim.setValue(0);
+    }
+  }, [visible]);
+
+  if (!visible) return null;
+
+  const handleOption = (fn) => {
+    Animated.timing(opacityAnim, {
+      toValue: 0,
+      duration: 150,
+      useNativeDriver: true,
+    }).start(() => {
+      scaleAnim.setValue(0);
+      fn();
+      onClose();
+    });
+  };
+
+  return (
+    <Modal transparent visible={visible} animationType="none" onRequestClose={onClose}>
+      <TouchableOpacity
+        style={styles.radialBackdrop}
+        activeOpacity={1}
+        onPress={onClose}
+      >
+        <Animated.View
+          style={[
+            styles.radialMenuWrap,
+            {
+              opacity: opacityAnim,
+              transform: [{ scale: scaleAnim }],
+            },
+          ]}
+          pointerEvents="box-none"
+        >
+          <View style={styles.radialCircle}>
+            {/* Top half — Write a review */}
+            <TouchableOpacity
+              style={styles.radialSegmentTop}
+              activeOpacity={0.85}
+              onPress={() => handleOption(onWriteReview)}
+            >
+              <View style={styles.radialSegmentInner}>
+                <Ionicons name="pencil" size={32} color="#FFFFFF" />
+                <Text style={styles.radialSegmentLabel}>Write a review</Text>
+              </View>
+            </TouchableOpacity>
+            {/* Bottom half — Camera scan */}
+            <TouchableOpacity
+              style={styles.radialSegmentBottom}
+              activeOpacity={0.85}
+              onPress={() => handleOption(onCameraScan)}
+            >
+              <View style={styles.radialSegmentInner}>
+                <Ionicons name="scan" size={32} color="#FFFFFF" />
+                <Text style={styles.radialSegmentLabel}>Camera scan</Text>
+              </View>
+            </TouchableOpacity>
+          </View>
+        </Animated.View>
+      </TouchableOpacity>
+    </Modal>
+  );
+}
+
+function CreatePostModal({ visible, onClose, onPost }) {
   const insets = useSafeAreaInsets();
   const [body, setBody] = useState('');
   const [selectedTopicId, setSelectedTopicId] = useState('tips');
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const handleClose = () => {
+    if (isSubmitting) return;
     setBody('');
     setSelectedTopicId('tips');
     onClose();
   };
 
-  const handlePost = () => {
-    if (!body.trim()) return;
-    setBody('');
-    setSelectedTopicId('tips');
-    onClose();
+  const handlePost = async () => {
+    if (!body.trim() || isSubmitting) return;
+    setIsSubmitting(true);
+    try {
+      await onPost?.({ body: body.trim(), topicId: selectedTopicId });
+      setBody('');
+      setSelectedTopicId('tips');
+      onClose();
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
@@ -356,8 +454,8 @@ function CreatePostModal({ visible, onClose }) {
             <Text style={styles.createModalCancelText}>Cancel</Text>
           </TouchableOpacity>
           <Text style={styles.createModalTitle}>New post</Text>
-          <TouchableOpacity onPress={handlePost} style={styles.createModalPostBtn} disabled={!body.trim()} activeOpacity={0.7}>
-            <Text style={[styles.createModalPostBtnText, !body.trim() && styles.createModalPostBtnDisabled]}>Post</Text>
+          <TouchableOpacity onPress={handlePost} style={styles.createModalPostBtn} disabled={!body.trim() || isSubmitting} activeOpacity={0.7}>
+            <Text style={[styles.createModalPostBtnText, (!body.trim() || isSubmitting) && styles.createModalPostBtnDisabled]}>{isSubmitting ? 'Posting…' : 'Post'}</Text>
           </TouchableOpacity>
         </View>
         <ScrollView
@@ -414,11 +512,64 @@ function CreatePostModal({ visible, onClose }) {
   );
 }
 
+function CameraScanModal({ visible, onClose }) {
+  return (
+    <Modal visible={visible} animationType="slide" onRequestClose={onClose}>
+      <View style={styles.cameraScanModal}>
+        <View style={styles.cameraScanHeader}>
+          <TouchableOpacity onPress={onClose} style={styles.cameraScanClose}>
+            <Ionicons name="close" size={28} color={COLORS.textPrimary} />
+          </TouchableOpacity>
+          <Text style={styles.cameraScanTitle}>Camera scan</Text>
+          <View style={styles.cameraScanClose} />
+        </View>
+        <View style={styles.cameraScanPlaceholder}>
+          <Ionicons name="scan-outline" size={80} color={COLORS.textMuted} />
+          <Text style={styles.cameraScanPlaceholderText}>Camera scan</Text>
+          <Text style={styles.cameraScanPlaceholderSub}>Scan a place or object to add a review</Text>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
 export default function CommunitiesScreen() {
   const insets = useSafeAreaInsets();
+  const [posts, setPosts] = useState(MOCK_POSTS);
   const [selectedPost, setSelectedPost] = useState(null);
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const [showRadialMenu, setShowRadialMenu] = useState(false);
+  const [showCameraScan, setShowCameraScan] = useState(false);
   const fabBottom = TAB_BAR_HEIGHT + 72 + (Platform.OS === 'android' ? insets.bottom : 0);
+
+  const handleWriteReview = () => {
+    setShowRadialMenu(false);
+    setShowCreateModal(true);
+  };
+
+  const handleCreatePost = async ({ body, topicId }) => {
+    await submitPostToN8n({ body, topicId });
+    const newPost = {
+      id: `new-${Date.now()}`,
+      author: 'You',
+      handle: '@you',
+      avatar: 'https://i.pravatar.cc/100?u=you',
+      time: 'Now',
+      topic: topicId || 'tips',
+      body,
+      image: null,
+      upvotes: 0,
+      comments: 0,
+      reposts: 0,
+      upvoted: false,
+    };
+    setPosts((prev) => [newPost, ...prev]);
+  };
+
+  const handleCameraScan = () => {
+    setShowRadialMenu(false);
+    setShowCameraScan(true);
+  };
 
   return (
     <ScreenContainer style={styles.screen}>
@@ -432,7 +583,7 @@ export default function CommunitiesScreen() {
 
       {/* Feed */}
       <FlatList
-        data={MOCK_POSTS}
+        data={posts}
         keyExtractor={(item) => item.id}
         renderItem={({ item }) => (
           <CommunityPostCard
@@ -459,17 +610,24 @@ export default function CommunitiesScreen() {
         }
       />
 
-      {/* Floating create post button — above bottom tab bar */}
+      {/* Floating create post button — opens radial menu (GTA-style) */}
       <TouchableOpacity
         style={[styles.fab, { bottom: fabBottom }]}
-        onPress={() => setShowCreateModal(true)}
+        onPress={() => setShowRadialMenu(true)}
         activeOpacity={0.85}
       >
         <Ionicons name="create" size={24} color="#FFFFFF" />
       </TouchableOpacity>
 
+      <RadialPostMenu
+        visible={showRadialMenu}
+        onClose={() => setShowRadialMenu(false)}
+        onWriteReview={handleWriteReview}
+        onCameraScan={handleCameraScan}
+      />
       <PostDetailModal post={selectedPost} onClose={() => setSelectedPost(null)} />
-      <CreatePostModal visible={showCreateModal} onClose={() => setShowCreateModal(false)} />
+      <CreatePostModal visible={showCreateModal} onClose={() => setShowCreateModal(false)} onPost={handleCreatePost} />
+      <CameraScanModal visible={showCameraScan} onClose={() => setShowCameraScan(false)} />
     </ScreenContainer>
   );
 }
@@ -514,6 +672,100 @@ const styles = StyleSheet.create({
       ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.2, shadowRadius: 8 },
       android: { elevation: 6 },
     }),
+  },
+  // GTA-style radial menu
+  radialBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  radialMenuWrap: {
+    width: RADIAL_MENU_SIZE,
+    height: RADIAL_MENU_SIZE,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  radialCircle: {
+    width: RADIAL_MENU_SIZE,
+    height: RADIAL_MENU_SIZE,
+    borderRadius: RADIAL_HALF,
+    overflow: 'hidden',
+    ...Platform.select({
+      ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.35, shadowRadius: 12 },
+      android: { elevation: 12 },
+    }),
+  },
+  radialSegmentTop: {
+    width: RADIAL_MENU_SIZE,
+    height: RADIAL_HALF,
+    backgroundColor: COLORS.primary,
+    borderTopLeftRadius: RADIAL_HALF,
+    borderTopRightRadius: RADIAL_HALF,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  radialSegmentBottom: {
+    width: RADIAL_MENU_SIZE,
+    height: RADIAL_HALF,
+    backgroundColor: '#9B0C24',
+    borderBottomLeftRadius: RADIAL_HALF,
+    borderBottomRightRadius: RADIAL_HALF,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  radialSegmentInner: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  radialSegmentLabel: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#FFFFFF',
+    marginTop: 6,
+  },
+  // Camera scan placeholder modal
+  cameraScanModal: {
+    flex: 1,
+    backgroundColor: COLORS.screenBg,
+  },
+  cameraScanHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 8,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: COLORS.border,
+    backgroundColor: COLORS.cardBg,
+  },
+  cameraScanClose: {
+    width: 44,
+    height: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  cameraScanTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: COLORS.textPrimary,
+  },
+  cameraScanPlaceholder: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 24,
+  },
+  cameraScanPlaceholderText: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: COLORS.textPrimary,
+    marginTop: 16,
+  },
+  cameraScanPlaceholderSub: {
+    fontSize: 14,
+    color: COLORS.textMuted,
+    marginTop: 8,
   },
   feedList: {
     flex: 1,

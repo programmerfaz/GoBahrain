@@ -2,14 +2,18 @@ import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { NavigationContainer } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
+import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import HomeScreen from './src/screens/HomeScreen';
 import ExploreScreen from './src/screens/ExploreScreen';
 import AIPlanScreen from './src/screens/AIPlanScreen';
 import CommunitiesScreen from './src/screens/CommunitiesScreen';
 import ProfileScreen from './src/screens/ProfileScreen';
+import SearchScreen from './src/screens/SearchScreen';
+import PlaceDetailScreen from './src/screens/PlaceDetailScreen';
 import BottomControlBar from './src/components/BottomControlBar';
 
 const Tab = createBottomTabNavigator();
+const Stack = createNativeStackNavigator();
 
 function TabsNavigator() {
   return (
@@ -32,7 +36,11 @@ export default function App() {
   return (
     <SafeAreaProvider>
       <NavigationContainer>
-        <TabsNavigator />
+        <Stack.Navigator screenOptions={{ headerShown: false }}>
+          <Stack.Screen name="MainTabs" component={TabsNavigator} />
+          <Stack.Screen name="Search" component={SearchScreen} />
+          <Stack.Screen name="PlaceDetail" component={PlaceDetailScreen} />
+        </Stack.Navigator>
         <StatusBar style="dark" />
       </NavigationContainer>
     </SafeAreaProvider>

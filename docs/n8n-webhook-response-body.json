@@ -1,0 +1,28 @@
+{
+  "places": [
+    {
+      "latitude": 26.2285,
+      "longitude": 50.586,
+      "title": "Manama Souq",
+      "description": "Explore the souq, museums and Corniche."
+    },
+    {
+      "latitude": 26.1536,
+      "longitude": 50.6065,
+      "title": "Bahrain Fort",
+      "description": "History, sunset views and seaside cafes."
+    },
+    {
+      "latitude": 26.0479,
+      "longitude": 50.51,
+      "title": "Zallaq Coast",
+      "description": "Beach clubs, resorts and relaxed dinners."
+    },
+    {
+      "latitude": 25.994,
+      "longitude": 50.586,
+      "title": "Tree of Life",
+      "description": "Iconic tree in the desert, sunset visits."
+    }
+  ]
+}

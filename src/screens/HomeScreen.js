@@ -28,21 +28,25 @@ const DOUBLE_TAP_DELAY = 350;
 const UPVOTE_ARROW_COUNT = 14;
 const UPVOTE_GREEN = '#10B981';
 
-// App theme (match rest of app)
+// Modern app theme — warm neutrals, clear hierarchy
 const COLORS = {
   primary: '#C8102E',
-  screenBg: '#fff',
+  primarySoft: 'rgba(200, 16, 46, 0.08)',
+  screenBg: '#F5F5F7',
   cardBg: '#FFFFFF',
-  cardBgAlt: '#F9FAFB',
-  textPrimary: '#111827',
-  textSecondary: '#6B7280',
-  textMuted: '#9CA3AF',
-  textMutedAlt: '#4B5563',
-  border: 'rgba(209,213,219,0.7)',
-  borderAlt: 'rgba(209,213,219,0.8)',
-  openNow: '#10B981',
+  cardBgAlt: '#FAFAFA',
+  textPrimary: '#1A1A1A',
+  textSecondary: '#5C5C5C',
+  textMuted: '#8E8E93',
+  textMutedAlt: '#3A3A3C',
+  border: 'rgba(0,0,0,0.06)',
+  borderAlt: 'rgba(0,0,0,0.08)',
+  openNow: '#34C759',
+  openNowSoft: 'rgba(52, 199, 89, 0.12)',
   badge: '#C8102E',
-  pillBg: '#F3F4F6',
+  pillBg: '#F2F2F7',
+  shadow: 'rgba(0,0,0,0.06)',
+  shadowStrong: 'rgba(0,0,0,0.1)',
 };
 
 const CATEGORIES = [
@@ -140,9 +144,13 @@ const NOTIFICATION_COUNT = 3;
 const CARD_MARGIN_H = 16;
 const CARD_PADDING = 14;
 
+const FEED_PADDING_H = 16;
+const CARD_IMAGE_MARGIN_H = 12;
+
 function PostCard({ item, isHighlighted = false, onHighlightDone }) {
   const { width } = useWindowDimensions();
-  const imageWidth = width;
+  const cardWidth = width - FEED_PADDING_H * 2;
+  const imageWidth = cardWidth - CARD_IMAGE_MARGIN_H * 2;
   const imageHeight = Math.round(imageWidth * 1.05);
 
   const lastTapRef = useRef(0);
@@ -285,17 +293,14 @@ function PostCard({ item, isHighlighted = false, onHighlightDone }) {
               <Ionicons name="checkmark-circle" size={16} color={COLORS.primary} style={styles.verifiedIcon} />
             )}
           </View>
-          <View style={styles.locationRow}>
-            <Ionicons name="location-outline" size={12} color={COLORS.textSecondary} />
-            <Text style={styles.location} numberOfLines={1}>
-              {item.location}
-            </Text>
-          </View>
+          {item.distance ? (
+            <Text style={styles.distanceText} numberOfLines={1}>{item.distance}</Text>
+          ) : null}
         </View>
         {item.openNow && (
           <View style={styles.openNowPill}>
             <View style={styles.openNowDot} />
-            <Text style={styles.openNowText}>Open Now</Text>
+            <Text style={styles.openNowText}>Open now</Text>
           </View>
         )}
       </View>
@@ -339,7 +344,7 @@ function PostCard({ item, isHighlighted = false, onHighlightDone }) {
         {ACTION_BUTTONS.map((btn) => (
           <TouchableOpacity
             key={btn.id}
-            style={[styles.actionBtn, btn.iconOnly && styles.actionBtnIconOnly, { borderColor: btn.color }]}
+            style={[styles.actionBtn, btn.iconOnly && styles.actionBtnIconOnly]}
             activeOpacity={0.8}
             onPress={btn.id === 'upvote' ? triggerUpvoteAnimation : undefined}
           >
@@ -353,9 +358,11 @@ function PostCard({ item, isHighlighted = false, onHighlightDone }) {
         ))}
       </View>
       {item.description ? (
-        <Text style={styles.description} numberOfLines={3}>
-          {item.description}
-        </Text>
+        <View style={styles.commentSection}>
+          <Text style={styles.description} numberOfLines={3}>
+            {item.description}
+          </Text>
+        </View>
       ) : null}
     </Animated.View>
   );
@@ -752,8 +759,20 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 14,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
     backgroundColor: COLORS.cardBg,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: COLORS.border,
+    ...Platform.select({
+      ios: {
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.04,
+        shadowRadius: 8,
+      },
+      android: { elevation: 2 },
+    }),
   },
   headerRight: {
     flexDirection: 'row',
@@ -765,12 +784,13 @@ const styles = StyleSheet.create({
     height: 44,
     alignItems: 'center',
     justifyContent: 'center',
+    borderRadius: 22,
   },
   instagramLogo: {
-    fontSize: 22,
-    fontWeight: '700',
+    fontSize: 20,
+    fontWeight: '800',
     color: COLORS.textPrimary,
-    letterSpacing: 0.5,
+    letterSpacing: 0.3,
   },
   heartWrap: {
     position: 'relative',
@@ -797,84 +817,78 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
   },
   filtersSection: {
-    borderBottomWidth: 1,
-    borderBottomColor: COLORS.border,
     backgroundColor: COLORS.cardBg,
+    paddingVertical: 12,
+    paddingLeft: 12,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: COLORS.border,
   },
   filtersScrollView: {
     flexGrow: 0,
   },
   filtersScroll: {
-    paddingVertical: 6,
-    paddingHorizontal: 10,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
+    paddingRight: 16,
   },
   filterChip: {
     alignItems: 'center',
-    marginRight: 12,
+    marginRight: 16,
   },
   filterChipSelected: {
     opacity: 1,
   },
   filterCircle: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    borderWidth: 1.5,
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    borderWidth: 2,
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: 4,
+    marginBottom: 6,
   },
   filterLabel: {
-    fontSize: 11,
-    color: COLORS.textPrimary,
+    fontSize: 12,
+    color: COLORS.textSecondary,
     fontWeight: '500',
-    maxWidth: 56,
+    maxWidth: 64,
     textAlign: 'center',
   },
   filterLabelSelected: {
-    fontWeight: '600',
-    color: COLORS.primary,
+    fontWeight: '700',
+    color: COLORS.textPrimary,
   },
   feedList: {
     flex: 1,
   },
   feedContent: {
-    paddingVertical: 8,
-    paddingBottom: 24,
+    paddingHorizontal: 16,
+    paddingTop: 16,
+    paddingBottom: 32,
   },
   card: {
     backgroundColor: COLORS.cardBg,
-    marginHorizontal: 0,
-    marginBottom: 0,
-    borderTopWidth: 1,
-    borderTopColor: COLORS.border,
-    borderLeftWidth: 0,
-    borderRightWidth: 0,
-    borderBottomWidth: 0,
+    marginBottom: 20,
+    borderRadius: 20,
     overflow: 'hidden',
     ...Platform.select({
       ios: {
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 1 },
-        shadowOpacity: 0.06,
-        shadowRadius: 4,
+        shadowColor: COLORS.shadowStrong,
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 1,
+        shadowRadius: 12,
       },
-      android: {
-        elevation: 2,
-      },
+      android: { elevation: 4 },
     }),
   },
   cardHighlightGlow: {
-    borderRadius: 0,
+    borderRadius: 20,
     ...Platform.select({
       ios: {
         shadowColor: COLORS.primary,
         shadowOffset: { width: 0, height: 0 },
-        shadowOpacity: 1,
-        shadowRadius: 16,
+        shadowOpacity: 0.4,
+        shadowRadius: 20,
       },
       android: { elevation: 0 },
     }),
@@ -882,21 +896,24 @@ const styles = StyleSheet.create({
   cardHighlightBorder: {
     borderWidth: 2,
     borderColor: COLORS.primary,
-    borderRadius: 0,
+    borderRadius: 20,
   },
   cardHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    padding: CARD_PADDING,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
   },
   avatarWrap: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
     backgroundColor: COLORS.pillBg,
     alignItems: 'center',
     justifyContent: 'center',
-    marginRight: 10,
+    marginRight: 12,
+    borderWidth: 1,
+    borderColor: COLORS.border,
   },
   cardHeaderCenter: {
     flex: 1,
@@ -908,49 +925,52 @@ const styles = StyleSheet.create({
     marginBottom: 2,
   },
   username: {
-    fontSize: 15,
-    fontWeight: '600',
+    fontSize: 16,
+    fontWeight: '700',
     color: COLORS.textPrimary,
     marginRight: 4,
+  },
+  distanceText: {
+    fontSize: 13,
+    color: COLORS.textMuted,
+    marginTop: 1,
   },
   verifiedIcon: {
     marginLeft: 2,
   },
-  locationRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  location: {
-    fontSize: 12,
-    color: COLORS.textSecondary,
-    marginLeft: 4,
-  },
   openNowPill: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: COLORS.openNow,
-    paddingVertical: 6,
-    paddingHorizontal: 10,
-    borderRadius: 8,
+    backgroundColor: COLORS.openNowSoft,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(52, 199, 89, 0.3)',
   },
   openNowDot: {
     width: 6,
     height: 6,
     borderRadius: 3,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: COLORS.openNow,
     marginRight: 6,
   },
   openNowText: {
     fontSize: 12,
-    fontWeight: '600',
-    color: '#FFFFFF',
+    fontWeight: '700',
+    color: COLORS.openNow,
   },
   imageWrap: {
     position: 'relative',
     backgroundColor: COLORS.pillBg,
+    marginHorizontal: 12,
+    marginBottom: 12,
+    borderRadius: 16,
+    overflow: 'hidden',
   },
   cardImage: {
     backgroundColor: COLORS.pillBg,
+    borderRadius: 16,
   },
   upvoteOverlay: {
     position: 'absolute',
@@ -984,41 +1004,52 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
     alignItems: 'center',
     justifyContent: 'flex-start',
-    paddingHorizontal: CARD_PADDING,
-    paddingVertical: 10,
-    gap: 8,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
   },
   actionBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     flexShrink: 0,
-    paddingVertical: 8,
-    paddingHorizontal: 10,
-    borderRadius: 20,
-    borderWidth: 1.5,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    borderRadius: 14,
+    marginRight: 10,
+    marginBottom: 4,
+    backgroundColor: COLORS.pillBg,
   },
   actionBtnIconOnly: {
-    width: 40,
-    height: 40,
+    width: 44,
+    height: 44,
     padding: 0,
     alignItems: 'center',
     justifyContent: 'center',
-    borderRadius: 10,
+    borderRadius: 14,
+    marginRight: 10,
   },
   actionBtnIcon: {
-    marginRight: 5,
+    marginRight: 6,
   },
   actionBtnText: {
-    fontSize: 12,
-    fontWeight: '600',
+    fontSize: 13,
+    fontWeight: '700',
     flexShrink: 1,
   },
+  commentSection: {
+    marginHorizontal: 16,
+    marginBottom: 16,
+    padding: 14,
+    backgroundColor: COLORS.cardBgAlt,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    borderRadius: 14,
+    borderLeftWidth: 4,
+    borderLeftColor: COLORS.primary,
+  },
   description: {
-    fontSize: 13,
+    fontSize: 14,
     color: COLORS.textSecondary,
-    lineHeight: 19,
-    paddingHorizontal: CARD_PADDING,
-    paddingBottom: CARD_PADDING,
+    lineHeight: 20,
   },
   overlayRoot: {
     flex: 1,

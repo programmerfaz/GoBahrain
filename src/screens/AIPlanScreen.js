@@ -11,12 +11,14 @@ import {
   ScrollView,
   Easing,
   Linking,
+  Alert,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import MapView, { Marker, Polyline } from 'react-native-maps';
+import MapView, { Marker, Callout, Polyline } from 'react-native-maps';
 import { Ionicons } from '@expo/vector-icons';
 import ProfileButton from '../components/ProfileButton';
-import { useRoute } from '@react-navigation/native';
+import { useRoute, useNavigation } from '@react-navigation/native';
+import { requestPlanFromN8n } from '../services/n8nApi';
 
 const { height: SCREEN_HEIGHT } = Dimensions.get('window');
 const APP_TAB_BAR_HEIGHT_IOS = 70;
@@ -27,12 +29,14 @@ const getAppTabBarHeight = (insets) =>
 const SHEET_VISIBLE_PEEK = 0.28;
 const SHEET_VISIBLE_MID = 0.75; // question flow opens with ~75% of the screen visible
 const SHEET_VISIBLE_EXPANDED = 0.9;
+const SHEET_VISIBLE_HALF = 0.5; // Past plans sheet covers at most half the screen
 
 // Height of sheet when fully expanded
 const SHEET_HEIGHT = SCREEN_HEIGHT * SHEET_VISIBLE_EXPANDED;
 const SHEET_TOP_EXPANDED = SCREEN_HEIGHT - SHEET_HEIGHT; // distance from top when expanded
 const SHEET_TOP_MID = SCREEN_HEIGHT * (1 - SHEET_VISIBLE_MID);
 const SHEET_TOP_PEEK = SCREEN_HEIGHT * (1 - SHEET_VISIBLE_PEEK);
+const SHEET_TOP_HALF = SCREEN_HEIGHT * (1 - SHEET_VISIBLE_HALF);
 
 // Snap points are translateY values relative to expanded position
 const SNAP_POINTS = [
@@ -40,6 +44,9 @@ const SNAP_POINTS = [
   SHEET_TOP_MID - SHEET_TOP_EXPANDED,  // mid
   SHEET_TOP_PEEK - SHEET_TOP_EXPANDED, // peek
 ];
+// When showing Past plans only: max half screen (no full expanded)
+const SNAP_POINT_HALF = SHEET_TOP_HALF - SHEET_TOP_EXPANDED;
+const SNAP_POINTS_PAST_PLANS = [SNAP_POINT_HALF, SNAP_POINTS[2]];
 const INITIAL_SNAP_INDEX = 2; // start at peek
 
 const BAHRAIN_REGION = {
@@ -515,6 +522,7 @@ function PlanDetailCard({ point, cardStyle, isFocused = false, onPress }) {
 export default function AIPlanScreen() {
   const insets = useSafeAreaInsets();
   const route = useRoute();
+  const navigation = useNavigation();
   const mapRef = useRef(null);
   const sheetAnim = useRef(new Animated.Value(SNAP_POINTS[INITIAL_SNAP_INDEX])).current;
   const lastSnap = useRef(SNAP_POINTS[INITIAL_SNAP_INDEX]);
@@ -542,6 +550,7 @@ export default function AIPlanScreen() {
   const [isGeneratingPlan, setIsGeneratingPlan] = useState(false);
   const [isGenerateTransitioning, setIsGenerateTransitioning] = useState(false);
   const [generatedMarkers, setGeneratedMarkers] = useState([]);
+  const [currentPlanPoints, setCurrentPlanPoints] = useState(PLAN_POINTS);
   const generationTimerRef = useRef(null);
   const [visiblePlanPointsCount, setVisiblePlanPointsCount] = useState(0);
   const planDetailsTimerRef = useRef(null);
@@ -565,6 +574,28 @@ export default function AIPlanScreen() {
   const [routeUsedFallback, setRouteUsedFallback] = useState(false);
   // Whether the user has just closed a generated plan (for subtle default-state messaging)
   const [justClosedPlan, setJustClosedPlan] = useState(false);
+
+  // When showing Past plans only, sheet is capped at half screen
+  const isPastPlansView = !isQuestionFlowActive && !hasGeneratedPlan && !isGeneratingPlan;
+  const effectiveSnapPointsRef = useRef(SNAP_POINTS);
+  effectiveSnapPointsRef.current = isPastPlansView ? SNAP_POINTS_PAST_PLANS : SNAP_POINTS;
+
+  // When entering Past plans view, if sheet is above half, snap it down to half
+  useEffect(() => {
+    if (!isPastPlansView) return;
+    const id = setTimeout(() => {
+      if (currentYRef.current < SNAP_POINT_HALF) {
+        lastSnap.current = SNAP_POINT_HALF;
+        Animated.spring(sheetAnim, {
+          toValue: SNAP_POINT_HALF,
+          useNativeDriver: true,
+          tension: 80,
+          friction: 12,
+        }).start();
+      }
+    }, 50);
+    return () => clearTimeout(id);
+  }, [isPastPlansView, sheetAnim]);
 
   // Keep ref in sync with animated value so gesture start uses actual position
   useEffect(() => {
@@ -685,10 +716,11 @@ export default function AIPlanScreen() {
 
     setGeneratedMarkers([]);
     setHasGeneratedPlan(false);
+    const points = currentPlanPoints?.length ? currentPlanPoints : PLAN_POINTS;
     let index = 0;
 
     const dropNext = () => {
-      const point = PLAN_POINTS[index];
+      const point = points[index];
       setGeneratedMarkers((prev) => [...prev, point]);
 
       // Zoom and center the camera on each newly added pin (slower and smoother)
@@ -705,7 +737,7 @@ export default function AIPlanScreen() {
 
       index += 1;
 
-      if (index < PLAN_POINTS.length) {
+      if (index < points.length) {
         generationTimerRef.current = setTimeout(dropNext, 650);
       } else {
         generationTimerRef.current = null;
@@ -723,7 +755,7 @@ export default function AIPlanScreen() {
         clearTimeout(generationTimerRef.current);
       }
     };
-  }, [isGeneratingPlan]);
+  }, [isGeneratingPlan, currentPlanPoints]);
 
   // Reveal plan detail cards one by one after the plan has been generated
   useEffect(() => {
@@ -737,15 +769,16 @@ export default function AIPlanScreen() {
     }
 
     setVisiblePlanPointsCount(0);
+    const points = currentPlanPoints?.length ? currentPlanPoints : PLAN_POINTS;
     let index = 0;
 
     const revealNext = () => {
       setVisiblePlanPointsCount((prev) => {
-        const next = Math.min(PLAN_POINTS.length, prev + 1);
+        const next = Math.min(points.length, prev + 1);
         return next;
       });
       index += 1;
-      if (index < PLAN_POINTS.length) {
+      if (index < points.length) {
         planDetailsTimerRef.current = setTimeout(revealNext, 650);
       } else {
         planDetailsTimerRef.current = null;
@@ -760,7 +793,7 @@ export default function AIPlanScreen() {
         planDetailsTimerRef.current = null;
       }
     };
-  }, [hasGeneratedPlan]);
+  }, [hasGeneratedPlan, currentPlanPoints]);
 
   // Build simple line segments for the route so we can interpolate the arrow along it
   useEffect(() => {
@@ -841,7 +874,8 @@ export default function AIPlanScreen() {
           // and trigger a glow when it's within a small distance threshold.
           let closestId = null;
           let closestDist = Infinity;
-          PLAN_POINTS.forEach((p) => {
+          const pointsForGlow = currentPlanPoints?.length ? currentPlanPoints : PLAN_POINTS;
+          pointsForGlow.forEach((p) => {
             const dLat = p.coordinate.latitude - lat;
             const dLng = p.coordinate.longitude - lng;
             const dist = Math.sqrt(dLat * dLat + dLng * dLng);
@@ -867,7 +901,7 @@ export default function AIPlanScreen() {
     return () => {
       arrowAnim.removeListener(listenerId);
     };
-  }, [arrowAnim, routeCoords]);
+  }, [arrowAnim, routeCoords, currentPlanPoints]);
 
   // Run the arrow animation once; when it finishes, show details and keep the line static
   useEffect(() => {
@@ -926,7 +960,8 @@ export default function AIPlanScreen() {
   // Pan camera to the spot when the car reaches it
   useEffect(() => {
     if (!glowingSpotId || !mapRef.current) return;
-    const point = PLAN_POINTS.find((p) => p.id === glowingSpotId);
+    const points = currentPlanPoints?.length ? currentPlanPoints : PLAN_POINTS;
+    const point = points.find((p) => p.id === glowingSpotId);
     if (!point?.coordinate) return;
     isAdjustingRegionRef.current = true;
     mapRef.current.animateToRegion(
@@ -937,7 +972,7 @@ export default function AIPlanScreen() {
       },
       600
     );
-  }, [glowingSpotId]);
+  }, [glowingSpotId, currentPlanPoints]);
 
   // Pulse animation for any spot that is currently "glowing"
   useEffect(() => {
@@ -1104,14 +1139,16 @@ export default function AIPlanScreen() {
       800
     );
     setFocusedPlanPointId(point.id);
-    // Bring the sheet up to the mid position so details are clearly visible
-    lastSnap.current = SNAP_POINTS[1];
-    Animated.spring(sheetAnim, {
-      toValue: SNAP_POINTS[1],
-      useNativeDriver: true,
-      tension: 80,
-      friction: 12,
-    }).start();
+    // Only bring the sheet up when a plan has been generated (so Past plans container does not pop up on spot tap)
+    if (hasGeneratedPlan) {
+      lastSnap.current = SNAP_POINTS[1];
+      Animated.spring(sheetAnim, {
+        toValue: SNAP_POINTS[1],
+        useNativeDriver: true,
+        tension: 80,
+        friction: 12,
+      }).start();
+    }
   };
 
   const handleCloseGeneratedPlan = () => {
@@ -1195,6 +1232,7 @@ export default function AIPlanScreen() {
 
   const handleShowPastTrip = async () => {
     // For now, all past trips reuse the demo plan points
+    setCurrentPlanPoints(PLAN_POINTS);
     setIsQuestionFlowActive(false);
     setIsGeneratingPlan(false);
     setHasGeneratedPlan(false);
@@ -1213,7 +1251,7 @@ export default function AIPlanScreen() {
     setRouteUsedFallback(coords.length <= PLAN_POINTS.length + 2);
 
     // Focus the map on the first day of the trip
-    const firstPoint = PLAN_POINTS[0];
+    const firstPoint = currentPlanPoints?.length ? currentPlanPoints[0] : PLAN_POINTS[0];
     if (mapRef.current && firstPoint?.coordinate) {
       mapRef.current.animateToRegion(
         {
@@ -1245,10 +1283,29 @@ export default function AIPlanScreen() {
     setJustClosedPlan(false);
     setIsGenerateTransitioning(true);
 
-    // Show cool animation while fetching road route
-    const coords = await fetchRoadRoute(PLAN_POINTS);
+    // Plan is generated only by n8n – no mock fallback
+    let pointsToUse = null;
+    try {
+      const planResult = await requestPlanFromN8n(answers);
+      if (planResult.success && planResult.places?.length > 0) {
+        pointsToUse = planResult.places;
+      } else {
+        const msg = planResult?.error || planResult?.output || 'No itinerary returned. Check that your n8n workflow returns a list of places with latitude, longitude, title, and description.';
+        setIsGenerateTransitioning(false);
+        Alert.alert('Couldn’t generate plan', msg);
+        return;
+      }
+    } catch (e) {
+      setIsGenerateTransitioning(false);
+      Alert.alert('Plan failed', e?.message || 'Network or server error. Try again.');
+      return;
+    }
+
+    setCurrentPlanPoints(pointsToUse);
+
+    const coords = await fetchRoadRoute(pointsToUse);
     setRouteCoords(coords);
-    setRouteUsedFallback(coords.length <= PLAN_POINTS.length + 2);
+    setRouteUsedFallback(coords.length <= pointsToUse.length + 2);
 
     setIsGenerateTransitioning(false);
     setIsGeneratingPlan(true);
@@ -1272,25 +1329,27 @@ export default function AIPlanScreen() {
       },
       onPanResponderMove: (_, gestureState) => {
         const newY = lastSnap.current + gestureState.dy;
-        const clamped = Math.max(SNAP_POINTS[0], Math.min(SNAP_POINTS[2], newY));
+        const snaps = effectiveSnapPointsRef.current;
+        const clamped = Math.max(snaps[0], Math.min(snaps[snaps.length - 1], newY));
         sheetAnim.setValue(clamped);
       },
       onPanResponderRelease: (_, gestureState) => {
         const currentY = lastSnap.current + gestureState.dy;
         const velocity = gestureState.vy;
+        const snaps = effectiveSnapPointsRef.current;
         // Find nearest snap point, or use velocity to pick next
         let targetIndex = 0;
-        let minDist = Math.abs(currentY - SNAP_POINTS[0]);
-        for (let i = 1; i < SNAP_POINTS.length; i++) {
-          const d = Math.abs(currentY - SNAP_POINTS[i]);
+        let minDist = Math.abs(currentY - snaps[0]);
+        for (let i = 1; i < snaps.length; i++) {
+          const d = Math.abs(currentY - snaps[i]);
           if (d < minDist) {
             minDist = d;
             targetIndex = i;
           }
         }
-        if (velocity > 0.4) targetIndex = Math.min(2, targetIndex + 1);
+        if (velocity > 0.4) targetIndex = Math.min(snaps.length - 1, targetIndex + 1);
         else if (velocity < -0.4) targetIndex = Math.max(0, targetIndex - 1);
-        const target = SNAP_POINTS[targetIndex];
+        const target = snaps[targetIndex];
         lastSnap.current = target;
         Animated.spring(sheetAnim, {
           toValue: target,
@@ -1301,14 +1360,15 @@ export default function AIPlanScreen() {
 
         // If the user drags the bottom container down to the lowest position
         // while the AI flow is active, discard/close the question flow.
-        if (isQuestionFlowActive && targetIndex === SNAP_POINTS.length - 1) {
+        if (isQuestionFlowActive && targetIndex === snaps.length - 1) {
           setIsQuestionFlowActive(false);
         }
       },
     })
   ).current;
 
-  const visiblePlanPoints = PLAN_POINTS.slice(0, visiblePlanPointsCount);
+  const pointsForDisplay = currentPlanPoints?.length ? currentPlanPoints : PLAN_POINTS;
+  const visiblePlanPoints = pointsForDisplay.slice(0, visiblePlanPointsCount);
 
   return (
     <View style={styles.container}>
@@ -1331,17 +1391,16 @@ export default function AIPlanScreen() {
           </View>
         </Marker>
 
-        {generatedMarkers.map((spot, index) => {
+        {(generatedMarkers.length > 0 ? generatedMarkers : pointsForDisplay).map((spot, index) => {
           const color = getSpotColorForDay(spot.day);
           return (
             <Marker
               key={`${spot.id}-${index}`}
               coordinate={spot.coordinate}
-              title={spot.title.replace(/^Day\s+/, 'Spot ')}
-              description={spot.description}
+              anchor={{ x: 0.5, y: 0.5 }}
               onPress={() => handleFocusPlanPoint(spot)}
             >
-              <View style={[styles.planMarkerWrap, { borderColor: color }]}>
+              <View style={[styles.planMarkerWrap, { backgroundColor: color }]}>
                 {glowingSpotId === spot.id && (
                   <Animated.View
                     pointerEvents="none"
@@ -1349,25 +1408,42 @@ export default function AIPlanScreen() {
                       styles.planMarkerGlowRing,
                       {
                         borderColor: color,
-                        backgroundColor: `${color}33`,
+                        backgroundColor: `${color}22`,
                         transform: [
                           {
                             scale: spotGlowAnim.interpolate({
                               inputRange: [0, 1],
-                              outputRange: [1, 1.6],
+                              outputRange: [1, 1.45],
                             }),
                           },
                         ],
                         opacity: spotGlowAnim.interpolate({
                           inputRange: [0, 1],
-                          outputRange: [0.4, 0],
+                          outputRange: [0.5, 0],
                         }),
                       },
                     ]}
                   />
                 )}
-                <Text style={[styles.planMarkerDay, { color }]}>{`S${spot.day}`}</Text>
+                <Text style={styles.planMarkerDay}>{spot.day}</Text>
               </View>
+              <Callout
+                tooltip
+                onPress={() => navigation.getParent()?.navigate('PlaceDetail', { place: spot })}
+              >
+                <View style={styles.placeCalloutContainer}>
+                  <Text style={styles.placeCalloutTitle} numberOfLines={1}>
+                    {spot.title.replace(/^Day\s+/, 'Spot ')}
+                  </Text>
+                  <Text style={styles.placeCalloutSubtitle} numberOfLines={2}>
+                    {spot.description}
+                  </Text>
+                  <View style={styles.placeCalloutCta}>
+                    <Text style={[styles.placeCalloutCtaText, { color }]}>View profile</Text>
+                    <Ionicons name="chevron-forward" size={14} color={color} />
+                  </View>
+                </View>
+              </Callout>
             </Marker>
           );
         })}
@@ -1455,6 +1531,13 @@ export default function AIPlanScreen() {
 
       {/* Top bar overlay */}
       <View style={[styles.topBar, { paddingTop: insets.top + 8 }]}>
+        <TouchableOpacity
+          style={styles.searchButton}
+          onPress={() => navigation.getParent()?.navigate('Search')}
+          activeOpacity={0.8}
+        >
+          <Ionicons name="search" size={22} color="#374151" />
+        </TouchableOpacity>
         <View style={styles.topBarRight}>
           <ProfileButton />
         </View>
@@ -1815,7 +1898,7 @@ export default function AIPlanScreen() {
               <TouchableOpacity
                 style={styles.navButton}
                 activeOpacity={0.9}
-                onPress={() => handleStartNavigation(PLAN_POINTS[0])}
+                onPress={() => handleStartNavigation(pointsForDisplay[0])}
               >
                 <Ionicons
                   name="navigate-outline"
@@ -1917,9 +2000,23 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     flexDirection: 'row',
-    justifyContent: 'flex-end',
+    justifyContent: 'space-between',
+    alignItems: 'center',
     paddingHorizontal: 16,
     paddingBottom: 8,
+  },
+  searchButton: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: 'rgba(255,255,255,0.95)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.06,
+    shadowRadius: 3,
+    elevation: 2,
   },
   topBarRight: {
     flexDirection: 'row',
@@ -1972,19 +2069,19 @@ const styles = StyleSheet.create({
     padding: 0,
   },
   markerWrap: {
-    // Bahrain flag red for cluster marker
+    // Bahrain flag red for cluster marker – Google Maps–style size
     backgroundColor: '#C8102E',
-    width: 28,
-    height: 28,
-    borderRadius: 14,
+    width: 26,
+    height: 26,
+    borderRadius: 13,
     alignItems: 'center',
     justifyContent: 'center',
-    borderWidth: 2,
+    borderWidth: 1.5,
     borderColor: '#FFF',
   },
   markerText: {
     color: '#FFF',
-    fontSize: 12,
+    fontSize: 10,
     fontWeight: '700',
   },
   aiOverlay: {
@@ -2240,33 +2337,68 @@ const styles = StyleSheet.create({
     color: '#059669',
   },
   planMarkerWrap: {
-    backgroundColor: '#FFFFFF',
-    width: 30,
-    height: 30,
-    borderRadius: 15,
+    width: 28,
+    height: 28,
+    borderRadius: 14,
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 2,
-    borderColor: '#C8102E',
+    borderColor: '#FFFFFF',
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.18,
-    shadowRadius: 6,
-    elevation: 6,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
+    elevation: 5,
   },
   planMarkerGlowRing: {
     position: 'absolute',
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
     borderWidth: 2,
-    borderColor: 'rgba(248,113,113,0.8)',
-    backgroundColor: 'rgba(248,113,113,0.25)',
+    borderColor: 'rgba(255,255,255,0.5)',
+    backgroundColor: 'transparent',
   },
   planMarkerDay: {
-    color: '#C8102E',
+    color: '#FFFFFF',
+    fontWeight: '800',
+    fontSize: 11,
+    letterSpacing: 0.3,
+  },
+  placeCalloutContainer: {
+    width: 200,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(0,0,0,0.08)',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.12,
+    shadowRadius: 8,
+    elevation: 4,
+  },
+  placeCalloutTitle: {
+    fontSize: 14,
     fontWeight: '700',
+    color: '#111827',
+    marginBottom: 4,
+  },
+  placeCalloutSubtitle: {
     fontSize: 12,
+    color: '#6B7280',
+    lineHeight: 16,
+    marginBottom: 8,
+  },
+  placeCalloutCta: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  placeCalloutCtaText: {
+    fontSize: 12,
+    fontWeight: '600',
   },
   arrowMarkerWrap: {
     width: 30,
