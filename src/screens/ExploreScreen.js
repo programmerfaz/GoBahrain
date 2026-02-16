@@ -123,8 +123,9 @@ export default function ExploreScreen() {
             onChangeText={setInputText}
             onSubmitEditing={sendMessage}
             returnKeyType="send"
+            blurOnSubmit={true}
             editable={!loading}
-            multiline
+            multiline={false}
             maxLength={2000}
           />
           <TouchableOpacity

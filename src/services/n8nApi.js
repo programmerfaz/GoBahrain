@@ -136,6 +136,17 @@ export async function sendChatToN8n(message, sessionId) {
     };
   }
 
+  // Itinerary/planning flow returns { success, clients } without "output" – show all places as bullet points
+  if (!text && data.success === true && Array.isArray(data.clients) && data.clients.length > 0) {
+    const bullets = data.clients
+      .map((c) => `• ${c.business_name || c.title || c.name || 'A place'}`)
+      .join('\n');
+    return {
+      success: true,
+      text: `Found ${data.clients.length} place(s) for your itinerary:\n\n${bullets}`,
+    };
+  }
+
   return { success: true, text: text || 'No response from Khalid.' };
 }
 
