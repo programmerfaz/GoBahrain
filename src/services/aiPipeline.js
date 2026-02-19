@@ -1,6 +1,7 @@
-const OPENAI_API_KEY = process.env.EXPO_PUBLIC_OPENAI_API_KEY;
-const PINECONE_API_KEY = process.env.EXPO_PUBLIC_PINECONE_API_KEY;
-const PINECONE_HOST = process.env.EXPO_PUBLIC_PINECONE_HOST || 'https://gobahrain-1pj8txc.svc.aped-4627-b74a.pinecone.io';
+import { OPENAI_KEY, PINECONE_KEY, PINECONE_HOST } from '../config/keys';
+
+const OPENAI_API_KEY = OPENAI_KEY;
+const PINECONE_API_KEY = PINECONE_KEY;
 
 const OPENAI_EMBEDDINGS_URL = 'https://api.openai.com/v1/embeddings';
 const OPENAI_CHAT_URL = 'https://api.openai.com/v1/chat/completions';
