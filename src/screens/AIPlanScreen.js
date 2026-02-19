@@ -12,9 +12,9 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import MapView from 'react-native-maps';
+import MapView, { Marker, Circle, Polyline } from 'react-native-maps';
 import { Ionicons } from '@expo/vector-icons';
-import { fetchPlaces, fetchRestaurants, generateDayPlan } from '../services/aiPipeline';
+import { fetchPlaces, fetchRestaurants, fetchBreakfastSpots, fetchEvents, generateDayPlan } from '../services/aiPipeline';
 
 const { height: SCREEN_HEIGHT, width: SCREEN_WIDTH } = Dimensions.get('window');
 const APP_TAB_BAR_HEIGHT_IOS = 70;
@@ -70,6 +70,7 @@ const PREFERENCES = [
   { id: 'nature', label: 'Nature', icon: 'earth-outline', color: '#22C55E' },
   { id: 'historical', label: 'Historical', icon: 'time-outline', color: '#818CF8' },
   { id: 'cultural', label: 'Cultural', icon: 'color-palette-outline', color: '#6366F1' },
+  { id: 'adventure', label: 'Adventure', icon: 'rocket-outline', color: '#EF4444' },
 ];
 
 const FOOD_CATEGORIES = [
@@ -81,12 +82,48 @@ const FOOD_CATEGORIES = [
   { id: 'asian', label: 'Asian', icon: 'nutrition-outline', color: '#DC2626' },
   { id: 'italian', label: 'Italian', icon: 'pizza-outline', color: '#16A34A' },
   { id: 'south-asian', label: 'South Asian', icon: 'flame-outline', color: '#F59E0B' },
+  { id: 'fast-food', label: 'Fast Food', icon: 'fast-food-outline', color: '#EF4444' },
 ];
 
 const DUMMY_PAST_PLANS = [
   { id: 'plan1', title: 'Weekend in Manama', spots: 4, date: '2 days ago' },
   { id: 'plan2', title: 'Beach & Food Day', spots: 5, date: '1 week ago' },
 ];
+
+function buildMapMarkers(plan) {
+  if (!plan) return [];
+  return plan.map((item, idx) => {
+    const lat = parseFloat(item.lat);
+    const lng = parseFloat(item.lng);
+    if (isNaN(lat) || isNaN(lng) || lat === 0 || lng === 0) return null;
+    return {
+      idx,
+      spot: item.spot,
+      time: item.time,
+      type: item.type,
+      reason: item.reason,
+      lat,
+      lng,
+    };
+  }).filter(Boolean);
+}
+
+async function fetchDrivingRoute(markers) {
+  if (!markers || markers.length < 2) return [];
+  const coords = markers.map(m => `${m.lng},${m.lat}`).join(';');
+  const url = `https://router.project-osrm.org/route/v1/driving/${coords}?overview=full&geometries=geojson`;
+  try {
+    const res = await fetch(url);
+    const json = await res.json();
+    if (json.code === 'Ok' && json.routes?.[0]?.geometry?.coordinates) {
+      return json.routes[0].geometry.coordinates.map(([lng, lat]) => ({
+        latitude: lat,
+        longitude: lng,
+      }));
+    }
+  } catch (_) {}
+  return [];
+}
 
 export default function AIPlanScreen() {
   const insets = useSafeAreaInsets();
@@ -103,6 +140,9 @@ export default function AIPlanScreen() {
   const [loadingStatus, setLoadingStatus] = useState('');
   const [error, setError] = useState(null);
   const [dayPlan, setDayPlan] = useState(null);
+  const [pineconeMatches, setPineconeMatches] = useState([]);
+  const [selectedMarker, setSelectedMarker] = useState(null);
+  const [routeCoords, setRouteCoords] = useState([]);
 
   const togglePreference = (id) => {
     setSelectedPreferences((prev) =>
@@ -120,6 +160,9 @@ export default function AIPlanScreen() {
     setSelectedPreferences([]);
     setSelectedFoodCategories([]);
     setDayPlan(null);
+    setPineconeMatches([]);
+    setSelectedMarker(null);
+    setRouteCoords([]);
     setError(null);
     setDrawerStep(1);
     lastSnap.current = SNAP_POINTS[1];
@@ -143,6 +186,9 @@ export default function AIPlanScreen() {
     setLoadingStatus('Finding places based on your preferences…');
     setError(null);
     setDayPlan(null);
+    setPineconeMatches([]);
+    setSelectedMarker(null);
+    setRouteCoords([]);
     setDrawerStep(3);
 
     lastSnap.current = SNAP_POINTS[0];
@@ -154,19 +200,53 @@ export default function AIPlanScreen() {
     }).start();
 
     try {
-      // Pipeline Step 1 — fetch 6 places based on preferences
+      // Pipeline Step 1 — fetch places based on preferences
       const places = await fetchPlaces(prefLabels);
 
-      // Pipeline Step 2 — fetch 6 restaurants based on food choices
+      // Pipeline Step 2 — fetch restaurants based on food choices
       setLoadingStatus('Finding restaurants for your food cravings…');
       const restaurants = await fetchRestaurants(foodLabels);
 
-      // Pipeline Step 3 — GPT builds a smart day plan from all 12 results
+      // Pipeline Step 3 — fetch breakfast spots
+      setLoadingStatus('Finding the best breakfast spots…');
+      const breakfastSpots = await fetchBreakfastSpots();
+
+      // Pipeline Step 4 — fetch events
+      setLoadingStatus('Checking out events happening in Bahrain…');
+      const events = await fetchEvents(prefLabels);
+
+      const allMatches = [...places, ...restaurants, ...breakfastSpots, ...events];
+      setPineconeMatches(allMatches);
+
+      console.log(`Pinecone: ${places.length} places, ${restaurants.length} restaurants, ${breakfastSpots.length} breakfast, ${events.length} events`);
+
+      // Pipeline Step 5 — GPT builds a smart day plan from all results
       setLoadingStatus('Khalid is crafting your perfect day…');
-      const plan = await generateDayPlan(places, restaurants, prefLabels, foodLabels);
+      const plan = await generateDayPlan(places, restaurants, breakfastSpots, events, prefLabels, foodLabels);
 
       setDayPlan(plan);
       setError(null);
+
+      // Debug markers
+      const markers = buildMapMarkers(plan);
+      console.log(`Map markers: ${markers.length}/${plan.length} spots have coordinates`);
+
+      // Fit map to show all markers
+      const validMarkers = buildMapMarkers(plan).filter(m => m.lat && m.lng);
+      const coords = validMarkers.map(m => ({ latitude: m.lat, longitude: m.lng }));
+      if (coords.length > 0 && mapRef.current) {
+        mapRef.current.fitToCoordinates(coords, {
+          edgePadding: { top: 80, right: 60, bottom: SCREEN_HEIGHT * 0.35, left: 60 },
+          animated: true,
+        });
+      }
+
+      // Fetch actual driving route
+      if (validMarkers.length >= 2) {
+        fetchDrivingRoute(validMarkers).then(rc => {
+          if (rc.length > 0) setRouteCoords(rc);
+        });
+      }
     } catch (err) {
       setError(err.message || 'Something went wrong');
       setDayPlan(null);
@@ -242,7 +322,108 @@ export default function AIPlanScreen() {
         showsUserLocation={false}
         showsMyLocationButton={false}
         onRegionChangeComplete={handleRegionChangeComplete}
-      />
+        onPress={() => setSelectedMarker(null)}
+      >
+        {/* Actual driving route */}
+        {routeCoords.length >= 2 && (
+          <>
+            <Polyline
+              coordinates={routeCoords}
+              strokeColor="rgba(0,0,0,0.10)"
+              strokeWidth={6}
+              lineDashPattern={[0]}
+            />
+            <Polyline
+              coordinates={routeCoords}
+              strokeColor="#C8102E"
+              strokeWidth={3.5}
+              lineDashPattern={[12, 8]}
+              lineJoin="round"
+              lineCap="round"
+            />
+          </>
+        )}
+
+        {/* Markers */}
+        {dayPlan && buildMapMarkers(dayPlan).map((mk) => {
+          const isEat = mk.type === 'restaurant';
+          const isEvent = mk.type === 'event';
+          const timeCols = { Morning: '#D97706', Afternoon: '#0284C7', Evening: '#7C3AED' };
+          const accent = isEat ? '#C8102E' : isEvent ? '#EC4899' : (timeCols[mk.time] || '#6B7280');
+          const pinIcon = isEat ? 'restaurant' : isEvent ? 'calendar' : 'location';
+          return (
+            <React.Fragment key={mk.idx}>
+              <Circle
+                center={{ latitude: mk.lat, longitude: mk.lng }}
+                radius={200}
+                fillColor={`${accent}18`}
+                strokeColor={`${accent}40`}
+                strokeWidth={1.5}
+              />
+              <Marker
+                coordinate={{ latitude: mk.lat, longitude: mk.lng }}
+                onPress={() => setSelectedMarker(mk)}
+              >
+                <View style={[styles.mapPin, { backgroundColor: accent }]}>
+                  <Ionicons name={pinIcon} size={14} color="#FFF" />
+                  <Text style={styles.mapPinNum}>{mk.idx + 1}</Text>
+                </View>
+                <View style={[styles.mapPinArrow, { borderTopColor: accent }]} />
+              </Marker>
+            </React.Fragment>
+          );
+        })}
+      </MapView>
+
+      {/* Spot detail card */}
+      {selectedMarker && (() => {
+        const isEat = selectedMarker.type === 'restaurant';
+        const isEvent = selectedMarker.type === 'event';
+        const timeCols = { Morning: '#D97706', Afternoon: '#0284C7', Evening: '#7C3AED' };
+        const accent = isEat ? '#C8102E' : isEvent ? '#EC4899' : (timeCols[selectedMarker.time] || '#6B7280');
+        const stepNum = selectedMarker.idx + 1;
+        const tagIcon = isEat ? 'restaurant-outline' : isEvent ? 'calendar-outline' : 'compass-outline';
+        const tagLabel = isEat ? 'Dining' : isEvent ? 'Event' : 'Visit';
+        return (
+          <View style={styles.spotDetailWrap}>
+            <View style={styles.spotDetailCard}>
+              <View style={[styles.spotDetailAccent, { backgroundColor: accent }]} />
+
+              <View style={styles.spotDetailBody}>
+                <View style={styles.spotDetailRow1}>
+                  <View style={[styles.spotDetailStep, { backgroundColor: accent }]}>
+                    <Text style={styles.spotDetailStepText}>{stepNum}</Text>
+                  </View>
+                  <View style={styles.spotDetailNameWrap}>
+                    <Text style={styles.spotDetailName} numberOfLines={2}>{selectedMarker.spot}</Text>
+                    <View style={styles.spotDetailTags}>
+                      <View style={[styles.spotDetailTag, { backgroundColor: `${accent}12` }]}>
+                        <Ionicons name={tagIcon} size={11} color={accent} />
+                        <Text style={[styles.spotDetailTagText, { color: accent }]}>{tagLabel}</Text>
+                      </View>
+                      <Text style={styles.spotDetailDot}>·</Text>
+                      <Ionicons name={{ Morning: 'sunny-outline', Afternoon: 'partly-sunny-outline', Evening: 'moon-outline' }[selectedMarker.time] || 'time-outline'} size={12} color="#9CA3AF" />
+                      <Text style={styles.spotDetailTime}>{selectedMarker.time}</Text>
+                    </View>
+                  </View>
+                  <TouchableOpacity onPress={() => setSelectedMarker(null)} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
+                    <Ionicons name="close-circle" size={24} color="#D1D5DB" />
+                  </TouchableOpacity>
+                </View>
+
+                {/* Reason */}
+                <Text style={styles.spotDetailReason} numberOfLines={3}>{selectedMarker.reason}</Text>
+
+                {/* Button */}
+                <TouchableOpacity style={[styles.spotDetailBtn, { backgroundColor: accent }]} activeOpacity={0.8}>
+                  <Text style={styles.spotDetailBtnText}>Explore</Text>
+                  <Ionicons name="arrow-forward" size={15} color="#FFF" />
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        );
+      })()}
 
       <Animated.View
         style={[
@@ -416,82 +597,130 @@ export default function AIPlanScreen() {
               </View>
             ) : (
               <ScrollView style={styles.resultsScroll} contentContainerStyle={styles.resultsContent} showsVerticalScrollIndicator={false}>
-                {/* Hero summary card */}
-                <View style={styles.heroCard}>
-                  <View style={styles.heroIconRow}>
-                    <View style={[styles.heroDot, { backgroundColor: '#F59E0B' }]}><Ionicons name="sunny" size={14} color="#FFF" /></View>
-                    <View style={styles.heroDash} />
-                    <View style={[styles.heroDot, { backgroundColor: '#0EA5E9' }]}><Ionicons name="partly-sunny" size={14} color="#FFF" /></View>
-                    <View style={styles.heroDash} />
-                    <View style={[styles.heroDot, { backgroundColor: '#8B5CF6' }]}><Ionicons name="moon" size={14} color="#FFF" /></View>
+
+                {/* ═══ Boarding-pass hero ═══ */}
+                <View style={styles.boardingPass}>
+                  <View style={styles.bpTop}>
+                    <View>
+                      <Text style={styles.bpLabel}>DESTINATION</Text>
+                      <Text style={styles.bpValue}>Bahrain</Text>
+                    </View>
+                    <View style={styles.bpDivider}>
+                      <Ionicons name="airplane" size={18} color="#C8102E" />
+                    </View>
+                    <View style={{ alignItems: 'flex-end' }}>
+                      <Text style={styles.bpLabel}>ITINERARY</Text>
+                      <Text style={styles.bpValue}>Full Day</Text>
+                    </View>
                   </View>
-                  <Text style={styles.heroTitle}>Full day · {dayPlan.length} stops</Text>
-                  <Text style={styles.heroSub}>Curated by Khalid, your Bahraini friend</Text>
+                  <View style={styles.bpDashedLine} />
+                  <View style={styles.bpBottom}>
+                    <View style={styles.bpStat}>
+                      <Ionicons name="location" size={14} color="#C8102E" />
+                      <Text style={styles.bpStatNum}>{dayPlan.filter(i => i.type !== 'restaurant').length}</Text>
+                      <Text style={styles.bpStatLabel}>Places</Text>
+                    </View>
+                    <View style={styles.bpStat}>
+                      <Ionicons name="restaurant" size={14} color="#C8102E" />
+                      <Text style={styles.bpStatNum}>{dayPlan.filter(i => i.type === 'restaurant').length}</Text>
+                      <Text style={styles.bpStatLabel}>Meals</Text>
+                    </View>
+                    <View style={styles.bpStat}>
+                      <Ionicons name="flag" size={14} color="#C8102E" />
+                      <Text style={styles.bpStatNum}>{dayPlan.length}</Text>
+                      <Text style={styles.bpStatLabel}>Stops</Text>
+                    </View>
+                    <View style={styles.bpGuide}>
+                      <Text style={styles.bpGuideLabel}>YOUR GUIDE</Text>
+                      <Text style={styles.bpGuideName}>Khalid</Text>
+                    </View>
+                  </View>
                 </View>
 
-                {/* Timeline */}
+                {/* ═══ Itinerary sections ═══ */}
                 {(() => {
-                  const timeCfg = {
-                    Morning:   { color: '#F59E0B', icon: 'sunny-outline' },
-                    Afternoon: { color: '#0EA5E9', icon: 'partly-sunny-outline' },
-                    Evening:   { color: '#8B5CF6', icon: 'moon-outline' },
+                  const sections = {
+                    Morning:   { color: '#D97706', bg: '#FEF3C7', icon: 'sunny',         tagline: 'Rise & explore' },
+                    Afternoon: { color: '#0284C7', bg: '#E0F2FE', icon: 'partly-sunny',  tagline: 'Discover & dine' },
+                    Evening:   { color: '#7C3AED', bg: '#EDE9FE', icon: 'moon',           tagline: 'Unwind & savour' },
                   };
-                  let lastTime = '';
-                  return dayPlan.map((item, index) => {
-                    const showSection = item.time !== lastTime;
-                    lastTime = item.time;
-                    const cfg = timeCfg[item.time] || { color: '#6B7280', icon: 'time-outline' };
-                    const isRestaurant = item.type === 'restaurant';
-                    const isLast = index === dayPlan.length - 1;
+                  const order = ['Morning', 'Afternoon', 'Evening'];
+                  const grouped = {};
+                  dayPlan.forEach((item) => { if (!grouped[item.time]) grouped[item.time] = []; grouped[item.time].push(item); });
+                  let stopNum = 0;
 
+                  return order.filter(t => grouped[t]).map((time) => {
+                    const sec = sections[time];
+                    const items = grouped[time];
                     return (
-                      <View key={index}>
-                        {showSection && (
-                          <View style={styles.sectionRow}>
-                            <View style={[styles.sectionDot, { backgroundColor: cfg.color }]}>
-                              <Ionicons name={cfg.icon} size={14} color="#FFF" />
-                            </View>
-                            <Text style={[styles.sectionLabel, { color: cfg.color }]}>{item.time}</Text>
-                            <View style={[styles.sectionLine, { backgroundColor: cfg.color }]} />
+                      <View key={time} style={styles.itinSection}>
+                        {/* Section banner */}
+                        <View style={[styles.secBanner, { backgroundColor: sec.bg }]}>
+                          <View style={[styles.secIconCircle, { backgroundColor: sec.color }]}>
+                            <Ionicons name={sec.icon} size={18} color="#FFF" />
                           </View>
-                        )}
-                        <View style={styles.timelineRow}>
-                          {/* Vertical connector */}
-                          <View style={styles.timelineLeft}>
-                            <View style={[styles.timelineDot, { backgroundColor: isRestaurant ? '#C8102E' : cfg.color }]} />
-                            {!isLast && <View style={[styles.timelineBar, { backgroundColor: '#E5E7EB' }]} />}
+                          <View style={styles.secBannerText}>
+                            <Text style={[styles.secBannerTitle, { color: sec.color }]}>{time}</Text>
+                            <Text style={[styles.secBannerSub, { color: sec.color }]}>{sec.tagline}</Text>
                           </View>
+                          <Text style={[styles.secBannerCount, { color: sec.color }]}>{items.length} stop{items.length > 1 ? 's' : ''}</Text>
+                        </View>
 
-                          {/* Card */}
-                          <View style={styles.tlCard}>
-                            <View style={styles.tlCardTop}>
-                              <View style={[styles.tlIconWrap, { backgroundColor: isRestaurant ? 'rgba(200,16,46,0.10)' : `${cfg.color}15` }]}>
-                                <Ionicons name={isRestaurant ? 'restaurant' : 'location'} size={16} color={isRestaurant ? '#C8102E' : cfg.color} />
+                        {/* Cards */}
+                        {items.map((item, idx) => {
+                          stopNum += 1;
+                          const isEat = item.type === 'restaurant';
+                          const isEvent = item.type === 'event';
+                          const accent = isEat ? '#C8102E' : isEvent ? '#EC4899' : sec.color;
+                          const stripIcon = isEat ? 'restaurant-outline' : isEvent ? 'calendar-outline' : 'compass-outline';
+                          const stripLabel = isEat ? 'DINING' : isEvent ? 'EVENT' : 'SIGHTSEEING';
+                          return (
+                            <View key={idx} style={styles.destRow}>
+                              <View style={styles.destLeft}>
+                                <View style={[styles.destNumCircle, { backgroundColor: accent }]}>
+                                  <Text style={styles.destNum}>{stopNum}</Text>
+                                </View>
+                                {idx < items.length - 1 && <View style={[styles.destConnector, { backgroundColor: `${sec.color}25` }]} />}
                               </View>
-                              <View style={styles.tlCardMeta}>
-                                <Text style={styles.tlCardName} numberOfLines={1}>{item.spot}</Text>
-                                <View style={[styles.tlBadge, { backgroundColor: isRestaurant ? 'rgba(200,16,46,0.08)' : `${cfg.color}12` }]}>
-                                  <Ionicons name={isRestaurant ? 'fast-food-outline' : 'compass-outline'} size={10} color={isRestaurant ? '#C8102E' : cfg.color} />
-                                  <Text style={[styles.tlBadgeText, { color: isRestaurant ? '#C8102E' : cfg.color }]}>{isRestaurant ? 'Eat' : 'Visit'}</Text>
+
+                              <View style={styles.destCard}>
+                                <View style={[styles.destStrip, { backgroundColor: `${accent}0D` }]}>
+                                  <Ionicons name={stripIcon} size={13} color={accent} />
+                                  <Text style={[styles.destStripText, { color: accent }]}>{stripLabel}</Text>
+                                </View>
+
+                                {/* Name + icon */}
+                                <View style={styles.destBody}>
+                                  <View style={[styles.destIconBox, { backgroundColor: `${accent}10` }]}>
+                                    <Ionicons name={isEat ? 'restaurant' : isEvent ? 'calendar' : 'location'} size={20} color={accent} />
+                                  </View>
+                                  <Text style={styles.destName}>{item.spot}</Text>
+                                </View>
+
+                                {/* Khalid's recommendation */}
+                                <View style={styles.destReasonWrap}>
+                                  <View style={styles.destReasonQuote}>
+                                    <Ionicons name="chatbubble-ellipses" size={12} color="#D97706" />
+                                  </View>
+                                  <Text style={styles.destReasonText}>{item.reason}</Text>
                                 </View>
                               </View>
                             </View>
-                            <Text style={styles.tlCardReason}>{item.reason}</Text>
-                          </View>
-                        </View>
+                          );
+                        })}
                       </View>
                     );
                   });
                 })()}
 
-                {/* Footer */}
-                <View style={styles.planFooter}>
-                  <View style={styles.footerLine} />
-                  <View style={styles.footerBadge}>
-                    <Ionicons name="heart" size={12} color="#C8102E" />
-                    <Text style={styles.footerText}>Yalla, enjoy Bahrain!</Text>
+                {/* ═══ Passport stamp footer ═══ */}
+                <View style={styles.stampFooter}>
+                  <View style={styles.stampCircle}>
+                    <Text style={styles.stampTop}>BAHRAIN</Text>
+                    <Ionicons name="heart" size={16} color="#C8102E" />
+                    <Text style={styles.stampBottom}>APPROVED</Text>
                   </View>
-                  <View style={styles.footerLine} />
+                  <Text style={styles.stampTagline}>Yalla habibi, have the best day!</Text>
                 </View>
               </ScrollView>
             )}
@@ -594,7 +823,7 @@ const styles = StyleSheet.create({
 
   // ── Results (step 3) ────────────────────────────────────────────
   resultsScroll: { flex: 1 },
-  resultsContent: { paddingBottom: 30, paddingLeft: 16, paddingRight: 20 },
+  resultsContent: { paddingBottom: 36, paddingHorizontal: 16 },
 
   // Loading
   loadingWrap: {
@@ -609,9 +838,7 @@ const styles = StyleSheet.create({
   loadingSubtext: { fontSize: 13, color: '#6B7280', textAlign: 'center', marginBottom: 28 },
   loadingSteps: { gap: 14, width: '100%', paddingHorizontal: 4 },
   loadingStepRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
-  loadingDot: {
-    width: 28, height: 28, borderRadius: 14, alignItems: 'center', justifyContent: 'center',
-  },
+  loadingDot: { width: 28, height: 28, borderRadius: 14, alignItems: 'center', justifyContent: 'center' },
   loadingStepText: { fontSize: 14, color: '#374151', fontWeight: '500' },
 
   // Error
@@ -622,70 +849,146 @@ const styles = StyleSheet.create({
   errorText: { flex: 1, fontSize: 14, color: '#DC2626', fontWeight: '500', lineHeight: 20 },
   retryButton: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
-    marginTop: 16, paddingVertical: 14, borderRadius: 14,
-    borderWidth: 2, borderColor: '#C8102E',
+    marginTop: 16, paddingVertical: 14, borderRadius: 14, borderWidth: 2, borderColor: '#C8102E',
   },
   retryButtonText: { fontSize: 15, fontWeight: '600', color: '#C8102E' },
   emptyResults: { fontSize: 14, color: '#6B7280', textAlign: 'center', paddingVertical: 24 },
 
-  // Hero summary
-  heroCard: {
-    alignItems: 'center', backgroundColor: '#FFFFFF', borderRadius: 16, paddingVertical: 18,
-    paddingHorizontal: 20, marginBottom: 6, marginLeft: 4, marginRight: 0,
-    borderWidth: 1, borderColor: 'rgba(209,213,219,0.5)',
+  // ── Boarding pass hero ──
+  boardingPass: {
+    backgroundColor: '#FFFFFF', borderRadius: 18, marginBottom: 20, overflow: 'hidden',
+    borderWidth: 1, borderColor: 'rgba(200,16,46,0.12)',
+    shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.08, shadowRadius: 12, elevation: 4,
+  },
+  bpTop: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingHorizontal: 20, paddingTop: 18, paddingBottom: 14,
+  },
+  bpLabel: { fontSize: 10, fontWeight: '700', color: '#9CA3AF', letterSpacing: 1.2 },
+  bpValue: { fontSize: 22, fontWeight: '800', color: '#111827', marginTop: 2, letterSpacing: -0.5 },
+  bpDivider: {
+    width: 42, height: 42, borderRadius: 21, borderWidth: 2, borderColor: 'rgba(200,16,46,0.15)',
+    backgroundColor: 'rgba(200,16,46,0.04)', alignItems: 'center', justifyContent: 'center',
+  },
+  bpDashedLine: {
+    height: 1, marginHorizontal: 16,
+    borderStyle: 'dashed', borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 1,
+  },
+  bpBottom: {
+    flexDirection: 'row', alignItems: 'center', paddingHorizontal: 20, paddingVertical: 14, gap: 16,
+  },
+  bpStat: { alignItems: 'center', gap: 2 },
+  bpStatNum: { fontSize: 18, fontWeight: '800', color: '#111827' },
+  bpStatLabel: { fontSize: 10, fontWeight: '600', color: '#9CA3AF', letterSpacing: 0.5 },
+  bpGuide: {
+    flex: 1, alignItems: 'flex-end',
+  },
+  bpGuideLabel: { fontSize: 10, fontWeight: '700', color: '#9CA3AF', letterSpacing: 1 },
+  bpGuideName: { fontSize: 16, fontWeight: '800', color: '#C8102E', marginTop: 1 },
+
+  // ── Itinerary section ──
+  itinSection: { marginBottom: 8 },
+
+  secBanner: {
+    flexDirection: 'row', alignItems: 'center', borderRadius: 14, paddingVertical: 12,
+    paddingHorizontal: 14, marginBottom: 10,
+  },
+  secIconCircle: {
+    width: 34, height: 34, borderRadius: 17, alignItems: 'center', justifyContent: 'center',
+  },
+  secBannerText: { flex: 1, marginLeft: 12 },
+  secBannerTitle: { fontSize: 17, fontWeight: '800', letterSpacing: -0.2 },
+  secBannerSub: { fontSize: 12, fontWeight: '500', opacity: 0.7, marginTop: 1 },
+  secBannerCount: { fontSize: 12, fontWeight: '700' },
+
+  // ── Destination row (number + card) ──
+  destRow: { flexDirection: 'row', paddingLeft: 2 },
+
+  destLeft: { width: 30, alignItems: 'center', paddingTop: 14 },
+  destNumCircle: {
+    width: 24, height: 24, borderRadius: 12, alignItems: 'center', justifyContent: 'center', zIndex: 2,
+  },
+  destNum: { fontSize: 12, fontWeight: '800', color: '#FFFFFF' },
+  destConnector: { flex: 1, width: 2, borderRadius: 1, marginTop: 4 },
+
+  // Card
+  destCard: {
+    flex: 1, backgroundColor: '#FFFFFF', borderRadius: 16, marginLeft: 12, marginBottom: 10,
+    overflow: 'hidden', borderWidth: 1, borderColor: 'rgba(209,213,219,0.45)',
     shadowColor: '#000', shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.05, shadowRadius: 8, elevation: 3,
   },
-  heroIconRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 10 },
-  heroDot: { width: 30, height: 30, borderRadius: 15, alignItems: 'center', justifyContent: 'center' },
-  heroDash: { width: 28, height: 2, backgroundColor: '#E5E7EB', marginHorizontal: 4, borderRadius: 1 },
-  heroTitle: { fontSize: 16, fontWeight: '800', color: '#111827', letterSpacing: -0.3 },
-  heroSub: { fontSize: 12, color: '#9CA3AF', marginTop: 2 },
+  destStrip: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    paddingHorizontal: 14, paddingVertical: 6,
+  },
+  destStripText: { fontSize: 10, fontWeight: '800', letterSpacing: 1 },
+  destBody: {
+    flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, paddingTop: 10, paddingBottom: 6,
+  },
+  destIconBox: {
+    width: 40, height: 40, borderRadius: 12, alignItems: 'center', justifyContent: 'center', marginRight: 12,
+  },
+  destName: { flex: 1, fontSize: 16, fontWeight: '700', color: '#111827', lineHeight: 21 },
+  destReasonWrap: {
+    flexDirection: 'row', marginHorizontal: 14, marginBottom: 14, marginTop: 4,
+    backgroundColor: '#FEF9EE', borderRadius: 10, padding: 10, gap: 8,
+  },
+  destReasonQuote: { marginTop: 1 },
+  destReasonText: { flex: 1, fontSize: 13, color: '#78350F', lineHeight: 19, fontStyle: 'italic' },
 
-  // Section headers (Morning / Afternoon / Evening)
-  sectionRow: {
-    flexDirection: 'row', alignItems: 'center', marginTop: 18, marginBottom: 4, paddingLeft: 4,
+  // ── Passport stamp footer ──
+  stampFooter: { alignItems: 'center', marginTop: 16, paddingBottom: 4 },
+  stampCircle: {
+    width: 80, height: 80, borderRadius: 40, borderWidth: 2.5, borderColor: '#C8102E',
+    alignItems: 'center', justifyContent: 'center', marginBottom: 10,
+    borderStyle: 'dashed',
   },
-  sectionDot: {
-    width: 26, height: 26, borderRadius: 13, alignItems: 'center', justifyContent: 'center',
-  },
-  sectionLabel: { fontSize: 14, fontWeight: '800', marginLeft: 8, letterSpacing: 0.5, textTransform: 'uppercase' },
-  sectionLine: { flex: 1, height: 1.5, marginLeft: 10, borderRadius: 1, opacity: 0.25 },
+  stampTop: { fontSize: 8, fontWeight: '800', color: '#C8102E', letterSpacing: 2 },
+  stampBottom: { fontSize: 7, fontWeight: '700', color: '#C8102E', letterSpacing: 1.5, marginTop: 1 },
+  stampTagline: { fontSize: 13, fontWeight: '600', color: '#9CA3AF', fontStyle: 'italic' },
 
-  // Timeline rows
-  timelineRow: { flexDirection: 'row', marginLeft: 4 },
-  timelineLeft: { width: 26, alignItems: 'center', paddingTop: 16 },
-  timelineDot: { width: 10, height: 10, borderRadius: 5 },
-  timelineBar: { flex: 1, width: 2, borderRadius: 1, marginTop: 4 },
+  // ── Map pins ──
+  mapPin: {
+    flexDirection: 'row', alignItems: 'center', gap: 3,
+    paddingHorizontal: 8, paddingVertical: 5, borderRadius: 14,
+    shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.25, shadowRadius: 4, elevation: 5,
+  },
+  mapPinNum: { fontSize: 11, fontWeight: '800', color: '#FFFFFF' },
+  mapPinArrow: {
+    alignSelf: 'center', width: 0, height: 0,
+    borderLeftWidth: 6, borderRightWidth: 6, borderTopWidth: 8,
+    borderLeftColor: 'transparent', borderRightColor: 'transparent',
+  },
 
-  // Cards
-  tlCard: {
-    flex: 1, backgroundColor: '#FFFFFF', borderRadius: 14, marginLeft: 12, marginBottom: 10,
-    paddingVertical: 14, paddingHorizontal: 14,
-    borderWidth: 1, borderColor: 'rgba(209,213,219,0.5)',
-    shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.04, shadowRadius: 6, elevation: 2,
+  // ── Spot detail card ──
+  spotDetailWrap: {
+    position: 'absolute', top: 50, left: 14, right: 14, zIndex: 100,
   },
-  tlCardTop: { flexDirection: 'row', alignItems: 'center', marginBottom: 8 },
-  tlIconWrap: {
-    width: 34, height: 34, borderRadius: 10, alignItems: 'center', justifyContent: 'center', marginRight: 10,
+  spotDetailCard: {
+    backgroundColor: '#FFFFFF', borderRadius: 18, overflow: 'hidden',
+    shadowColor: '#000', shadowOffset: { width: 0, height: 10 }, shadowOpacity: 0.15, shadowRadius: 25, elevation: 14,
   },
-  tlCardMeta: { flex: 1 },
-  tlCardName: { fontSize: 15, fontWeight: '700', color: '#111827', marginBottom: 3 },
-  tlBadge: {
-    alignSelf: 'flex-start', flexDirection: 'row', alignItems: 'center', gap: 4,
-    paddingHorizontal: 7, paddingVertical: 2, borderRadius: 6,
+  spotDetailAccent: { height: 4 },
+  spotDetailBody: { padding: 16 },
+  spotDetailRow1: { flexDirection: 'row', alignItems: 'flex-start', marginBottom: 12 },
+  spotDetailStep: {
+    width: 30, height: 30, borderRadius: 10, alignItems: 'center', justifyContent: 'center', marginRight: 12, marginTop: 2,
   },
-  tlBadgeText: { fontSize: 10, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.5 },
-  tlCardReason: { fontSize: 13, color: '#4B5563', lineHeight: 20 },
-
-  // Footer
-  planFooter: {
-    flexDirection: 'row', alignItems: 'center', marginTop: 14, paddingHorizontal: 4,
+  spotDetailStepText: { fontSize: 14, fontWeight: '900', color: '#FFF' },
+  spotDetailNameWrap: { flex: 1, marginRight: 8 },
+  spotDetailName: { fontSize: 17, fontWeight: '800', color: '#111827', lineHeight: 22, marginBottom: 6 },
+  spotDetailTags: { flexDirection: 'row', alignItems: 'center', gap: 5 },
+  spotDetailTag: {
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    paddingHorizontal: 8, paddingVertical: 3, borderRadius: 8,
   },
-  footerLine: { flex: 1, height: 1, backgroundColor: '#E5E7EB', borderRadius: 1 },
-  footerBadge: {
-    flexDirection: 'row', alignItems: 'center', gap: 5,
-    paddingHorizontal: 12, paddingVertical: 6, borderRadius: 999,
-    backgroundColor: 'rgba(200,16,46,0.06)', marginHorizontal: 8,
+  spotDetailTagText: { fontSize: 11, fontWeight: '700' },
+  spotDetailDot: { fontSize: 14, color: '#D1D5DB' },
+  spotDetailTime: { fontSize: 12, fontWeight: '600', color: '#9CA3AF' },
+  spotDetailReason: { fontSize: 14, color: '#4B5563', lineHeight: 21, marginBottom: 14 },
+  spotDetailBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
+    paddingVertical: 13, borderRadius: 14,
   },
-  footerText: { fontSize: 12, fontWeight: '600', color: '#C8102E' },
+  spotDetailBtnText: { fontSize: 15, fontWeight: '700', color: '#FFF' },
 });
