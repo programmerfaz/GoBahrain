@@ -85,6 +85,17 @@ const FOOD_CATEGORIES = [
   { id: 'fast-food', label: 'Fast Food', icon: 'fast-food-outline', color: '#EF4444' },
 ];
 
+const SURPRISE_THEMES = [
+  { label: 'Scenic Day', icon: 'heart', color: '#EC4899', prefs: ['Sightseeing', 'Leisure'], food: ['Italian', 'Seafood'] },
+  { label: 'Adventure', icon: 'rocket', color: '#EF4444', prefs: ['Adventure', 'Nature'], food: ['Fast Food'] },
+  { label: 'Chill Vibes', icon: 'leaf', color: '#10B981', prefs: ['Leisure', 'Nature'], food: ['Cafe'] },
+  { label: 'Foodie Tour', icon: 'restaurant', color: '#F97316', prefs: ['Sightseeing'], food: ['South Asian', 'Seafood', 'Asian'] },
+  { label: 'Culture Buff', icon: 'color-palette', color: '#6366F1', prefs: ['Cultural', 'Historical'], food: ['Cuisine'] },
+  { label: 'Nightlife', icon: 'moon', color: '#7C3AED', prefs: ['Instagram', 'Leisure'], food: ['International'] },
+  { label: 'Family Fun', icon: 'people', color: '#0EA5E9', prefs: ['Sightseeing', 'Leisure'], food: ['American', 'Fast Food'] },
+  { label: 'Hidden Gems', icon: 'diamond', color: '#D97706', prefs: ['Cultural', 'Nature'], food: ['South Asian', 'Cuisine'] },
+];
+
 const DUMMY_PAST_PLANS = [
   { id: 'plan1', title: 'Weekend in Manama', spots: 4, date: '2 days ago' },
   { id: 'plan2', title: 'Beach & Food Day', spots: 5, date: '1 week ago' },
@@ -143,6 +154,10 @@ export default function AIPlanScreen() {
   const [pineconeMatches, setPineconeMatches] = useState([]);
   const [selectedMarker, setSelectedMarker] = useState(null);
   const [routeCoords, setRouteCoords] = useState([]);
+  const [surpriseSpinning, setSurpriseSpinning] = useState(false);
+  const [surpriseIndex, setSurpriseIndex] = useState(0);
+  const [surprisePicked, setSurprisePicked] = useState(null);
+  const spinAnim = useRef(new Animated.Value(0)).current;
 
   const togglePreference = (id) => {
     setSelectedPreferences((prev) =>
@@ -154,6 +169,89 @@ export default function AIPlanScreen() {
     setSelectedFoodCategories((prev) =>
       prev.includes(id) ? prev.filter((f) => f !== id) : [...prev, id]
     );
+  };
+
+  const handleSurpriseMe = () => {
+    if (surpriseSpinning) return;
+    setSurpriseSpinning(true);
+    setSurprisePicked(null);
+
+    let tick = 0;
+    const totalTicks = 20;
+    const finalIdx = Math.floor(Math.random() * SURPRISE_THEMES.length);
+
+    const interval = setInterval(() => {
+      tick += 1;
+      setSurpriseIndex(tick % SURPRISE_THEMES.length);
+      if (tick >= totalTicks) {
+        clearInterval(interval);
+        setSurpriseIndex(finalIdx);
+        setSurprisePicked(SURPRISE_THEMES[finalIdx]);
+        setSurpriseSpinning(false);
+
+        // Auto-generate after a short reveal pause
+        setTimeout(() => {
+          const theme = SURPRISE_THEMES[finalIdx];
+          const prefLabels = theme.prefs;
+          const foodLabels = theme.food;
+
+          setDayPlan(null);
+          setPineconeMatches([]);
+          setSelectedMarker(null);
+          setRouteCoords([]);
+          setError(null);
+          setLoading(true);
+          setLoadingStatus(`Khalid is planning a ${theme.label} day for you…`);
+          setDrawerStep(3);
+
+          lastSnap.current = SNAP_POINTS[0];
+          Animated.spring(sheetAnim, {
+            toValue: SNAP_POINTS[0],
+            useNativeDriver: true,
+            tension: 80,
+            friction: 12,
+          }).start();
+
+          (async () => {
+            try {
+              const places = await fetchPlaces(prefLabels);
+              setLoadingStatus('Finding restaurants…');
+              const restaurants = await fetchRestaurants(foodLabels);
+              setLoadingStatus('Checking breakfast spots…');
+              const breakfastSpots = await fetchBreakfastSpots();
+              setLoadingStatus('Looking for events…');
+              const events = await fetchEvents(prefLabels);
+
+              console.log(`[Surprise ${theme.label}] ${places.length}P ${restaurants.length}R ${breakfastSpots.length}B ${events.length}E`);
+
+              setLoadingStatus(`Khalid is building your ${theme.label} day…`);
+              const plan = await generateDayPlan(places, restaurants, breakfastSpots, events, prefLabels, foodLabels);
+
+              setDayPlan(plan);
+              setError(null);
+
+              const validMarkers = buildMapMarkers(plan).filter(m => m.lat && m.lng);
+              const coords = validMarkers.map(m => ({ latitude: m.lat, longitude: m.lng }));
+              if (coords.length > 0 && mapRef.current) {
+                mapRef.current.fitToCoordinates(coords, {
+                  edgePadding: { top: 80, right: 60, bottom: SCREEN_HEIGHT * 0.35, left: 60 },
+                  animated: true,
+                });
+              }
+              if (validMarkers.length >= 2) {
+                fetchDrivingRoute(validMarkers).then(rc => { if (rc.length > 0) setRouteCoords(rc); });
+              }
+            } catch (err) {
+              setError(err.message || 'Something went wrong');
+              setDayPlan(null);
+            } finally {
+              setLoading(false);
+              setLoadingStatus('');
+            }
+          })();
+        }, 1200);
+      }
+    }, 80 + tick * 8);
   };
 
   const startSetup = () => {
@@ -450,6 +548,50 @@ export default function AIPlanScreen() {
               </TouchableOpacity>
             </View>
             <ScrollView style={styles.pastPlansScroll} contentContainerStyle={styles.pastPlansContent} showsVerticalScrollIndicator={false}>
+              {/* Surprise Me Section */}
+              <View style={styles.surpriseCard}>
+                <View style={styles.surpriseHeader}>
+                  <Ionicons name="dice-outline" size={20} color="#C8102E" />
+                  <Text style={styles.surpriseTitle}>Feeling Lucky?</Text>
+                </View>
+                <Text style={styles.surpriseDesc}>
+                  Let Khalid pick a random theme and plan your entire day — no choices needed!
+                </Text>
+
+                {/* Roulette display */}
+                <View style={styles.rouletteWrap}>
+                  <View style={[styles.rouletteBox, { borderColor: (surprisePicked || SURPRISE_THEMES[surpriseIndex]).color }]}>
+                    <Ionicons
+                      name={(surprisePicked || SURPRISE_THEMES[surpriseIndex]).icon}
+                      size={28}
+                      color={(surprisePicked || SURPRISE_THEMES[surpriseIndex]).color}
+                    />
+                    <Text style={[styles.rouletteLabel, { color: (surprisePicked || SURPRISE_THEMES[surpriseIndex]).color }]}>
+                      {(surprisePicked || SURPRISE_THEMES[surpriseIndex]).label}
+                    </Text>
+                  </View>
+                </View>
+
+                <TouchableOpacity
+                  style={[styles.surpriseBtn, surpriseSpinning && { opacity: 0.6 }]}
+                  activeOpacity={0.8}
+                  onPress={handleSurpriseMe}
+                  disabled={surpriseSpinning}
+                >
+                  <Ionicons name={surpriseSpinning ? 'sync' : 'sparkles'} size={18} color="#FFF" />
+                  <Text style={styles.surpriseBtnText}>
+                    {surpriseSpinning ? 'Spinning…' : surprisePicked ? `Go with ${surprisePicked.label}!` : 'Surprise Me!'}
+                  </Text>
+                </TouchableOpacity>
+              </View>
+
+              {/* Divider */}
+              <View style={styles.surpriseDivider}>
+                <View style={styles.surpriseDividerLine} />
+                <Text style={styles.surpriseDividerText}>or check your past plans</Text>
+                <View style={styles.surpriseDividerLine} />
+              </View>
+
               {DUMMY_PAST_PLANS.map((plan) => (
                 <TouchableOpacity key={plan.id} style={styles.pastPlanCard} activeOpacity={0.8}>
                   <View style={styles.pastPlanIcon}>
@@ -615,25 +757,39 @@ export default function AIPlanScreen() {
                   </View>
                   <View style={styles.bpDashedLine} />
                   <View style={styles.bpBottom}>
-                    <View style={styles.bpStat}>
-                      <Ionicons name="location" size={14} color="#C8102E" />
-                      <Text style={styles.bpStatNum}>{dayPlan.filter(i => i.type !== 'restaurant').length}</Text>
-                      <Text style={styles.bpStatLabel}>Places</Text>
+                    <View style={styles.bpBudgetWrap}>
+                      <View style={styles.bpBudgetRow}>
+                        <Ionicons name="wallet-outline" size={16} color="#C8102E" />
+                        <Text style={styles.bpBudgetTitle}>Estimated Budget</Text>
+                      </View>
+                      <Text style={styles.bpBudgetAmount}>
+                        {(() => {
+                          const meals = dayPlan.filter(i => i.type === 'restaurant').length;
+                          const places = dayPlan.filter(i => i.type !== 'restaurant').length;
+                          const low = meals * 3 + places * 2;
+                          const high = meals * 15 + places * 8;
+                          return `${low} – ${high} BHD`;
+                        })()}
+                      </Text>
+                      <Text style={styles.bpBudgetSub}>for {dayPlan.length} stops · {dayPlan.filter(i => i.type === 'restaurant').length} meals</Text>
                     </View>
-                    <View style={styles.bpStat}>
-                      <Ionicons name="restaurant" size={14} color="#C8102E" />
-                      <Text style={styles.bpStatNum}>{dayPlan.filter(i => i.type === 'restaurant').length}</Text>
-                      <Text style={styles.bpStatLabel}>Meals</Text>
-                    </View>
-                    <View style={styles.bpStat}>
-                      <Ionicons name="flag" size={14} color="#C8102E" />
-                      <Text style={styles.bpStatNum}>{dayPlan.length}</Text>
-                      <Text style={styles.bpStatLabel}>Stops</Text>
-                    </View>
-                    <View style={styles.bpGuide}>
-                      <Text style={styles.bpGuideLabel}>YOUR GUIDE</Text>
-                      <Text style={styles.bpGuideName}>Khalid</Text>
-                    </View>
+                  </View>
+                  <View style={styles.bpAdviceWrap}>
+                    <Ionicons name="bulb-outline" size={15} color="#D97706" />
+                    <Text style={styles.bpAdviceText}>
+                      {(() => {
+                        const tips = [
+                          'Carry cash for local souqs — many small vendors don\'t accept cards!',
+                          'Stay hydrated! Bahrain heat is no joke, keep a water bottle handy.',
+                          'Wear comfortable shoes — you\'ll be walking through history today!',
+                          'Try bargaining at the souq, it\'s part of the experience!',
+                          'Sunset by the coast is magical here — don\'t miss the evening walk.',
+                          'Download offline maps just in case — some areas have patchy signal.',
+                          'Tipping 10% is appreciated at restaurants in Bahrain.',
+                        ];
+                        return tips[Math.floor(Math.random() * tips.length)];
+                      })()}
+                    </Text>
                   </View>
                 </View>
 
@@ -776,6 +932,34 @@ const styles = StyleSheet.create({
   pastPlanMetaRow: { flexDirection: 'row', alignItems: 'center', marginTop: 2 },
   pastPlanMeta: { fontSize: 13, color: '#9CA3AF' },
 
+  // Surprise Me
+  surpriseCard: {
+    backgroundColor: '#FFF', borderRadius: 16, padding: 18, marginBottom: 14,
+    borderWidth: 1.5, borderColor: '#C8102E20',
+    shadowColor: '#C8102E', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.08, shadowRadius: 8, elevation: 4,
+  },
+  surpriseHeader: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 6 },
+  surpriseTitle: { fontSize: 17, fontWeight: '700', color: '#111827' },
+  surpriseDesc: { fontSize: 13, color: '#6B7280', lineHeight: 18, marginBottom: 16 },
+  rouletteWrap: { alignItems: 'center', marginBottom: 16 },
+  rouletteBox: {
+    flexDirection: 'row', alignItems: 'center', gap: 10,
+    paddingVertical: 14, paddingHorizontal: 28,
+    borderRadius: 14, borderWidth: 2, backgroundColor: '#FAFAFA',
+    minWidth: 180, justifyContent: 'center',
+  },
+  rouletteLabel: { fontSize: 18, fontWeight: '800', letterSpacing: 0.5 },
+  surpriseBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+    backgroundColor: '#C8102E', borderRadius: 12, paddingVertical: 13,
+  },
+  surpriseBtnText: { color: '#FFF', fontSize: 15, fontWeight: '700' },
+  surpriseDivider: {
+    flexDirection: 'row', alignItems: 'center', marginVertical: 10, paddingHorizontal: 4,
+  },
+  surpriseDividerLine: { flex: 1, height: 1, backgroundColor: '#E5E7EB' },
+  surpriseDividerText: { fontSize: 12, color: '#9CA3AF', marginHorizontal: 12 },
+
   // Drawer page header
   drawerPageHeader: {
     flexDirection: 'row', alignItems: 'flex-start', paddingHorizontal: 20, marginBottom: 12, gap: 4,
@@ -875,16 +1059,19 @@ const styles = StyleSheet.create({
     borderStyle: 'dashed', borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 1,
   },
   bpBottom: {
-    flexDirection: 'row', alignItems: 'center', paddingHorizontal: 20, paddingVertical: 14, gap: 16,
+    paddingHorizontal: 20, paddingVertical: 14,
   },
-  bpStat: { alignItems: 'center', gap: 2 },
-  bpStatNum: { fontSize: 18, fontWeight: '800', color: '#111827' },
-  bpStatLabel: { fontSize: 10, fontWeight: '600', color: '#9CA3AF', letterSpacing: 0.5 },
-  bpGuide: {
-    flex: 1, alignItems: 'flex-end',
+  bpBudgetWrap: { alignItems: 'center' },
+  bpBudgetRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 4 },
+  bpBudgetTitle: { fontSize: 11, fontWeight: '700', color: '#6B7280', letterSpacing: 0.8, textTransform: 'uppercase' },
+  bpBudgetAmount: { fontSize: 24, fontWeight: '900', color: '#C8102E', letterSpacing: 0.5 },
+  bpBudgetSub: { fontSize: 12, color: '#9CA3AF', marginTop: 2 },
+  bpAdviceWrap: {
+    flexDirection: 'row', alignItems: 'flex-start', gap: 8,
+    backgroundColor: '#FFFBEB', borderTopWidth: 1, borderTopColor: '#FDE68A',
+    paddingHorizontal: 18, paddingVertical: 12, borderBottomLeftRadius: 18, borderBottomRightRadius: 18,
   },
-  bpGuideLabel: { fontSize: 10, fontWeight: '700', color: '#9CA3AF', letterSpacing: 1 },
-  bpGuideName: { fontSize: 16, fontWeight: '800', color: '#C8102E', marginTop: 1 },
+  bpAdviceText: { fontSize: 12.5, color: '#92400E', lineHeight: 17, flex: 1, fontStyle: 'italic' },
 
   // ── Itinerary section ──
   itinSection: { marginBottom: 8 },
