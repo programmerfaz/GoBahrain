@@ -149,19 +149,17 @@ function ReviewCard({ item, onPress, onCommentPress, onUpvote, onRemoveUpvote, a
   };
 
   const topicIds = (item.topic || '').split(',').map((t) => t.trim()).filter(Boolean);
-  const accentColor = getReviewAccentColor(item);
 
   const body = (
     <TouchableOpacity activeOpacity={0.94} onPress={() => onPress?.(item)} style={s.card}>
-      <View style={[s.cardAccent, { backgroundColor: accentColor }]} />
       <View style={s.cardInner}>
         {/* Author row */}
         <View style={s.cardAuthorRow}>
           {item.avatar ? (
-            <Image source={{ uri: item.avatar }} style={[s.av, { borderColor: accentColor }]} />
+            <Image source={{ uri: item.avatar }} style={s.av} />
           ) : (
-            <View style={[s.av, s.avPlaceholder, { borderColor: accentColor }]}>
-              <Text style={[s.avInitial, { color: accentColor }]}>{(item.author || 'U')[0].toUpperCase()}</Text>
+            <View style={[s.av, s.avPlaceholder]}>
+              <Text style={s.avInitial}>{(item.author || 'U')[0].toUpperCase()}</Text>
             </View>
           )}
           <View style={s.cardMeta}>
@@ -886,7 +884,6 @@ export default function CommunitiesScreen() {
                 onPress={() => setActiveTopic(t.id)}
                 activeOpacity={0.75}
               >
-                {on && TOPIC_EMOJIS[t.id] ? <Text style={s.filterChipEmoji}>{TOPIC_EMOJIS[t.id]}</Text> : null}
                 <Text style={[s.filterChipText, on && s.filterChipTextOn]}>{t.label}</Text>
               </TouchableOpacity>
             );
@@ -962,7 +959,7 @@ export default function CommunitiesScreen() {
           data={displayPosts}
           keyExtractor={(item) => item.id}
           ListHeaderComponent={
-            displayPosts.length > 0 ? (
+            false ? (
               <View style={s.feedHeader}>
                 <Text style={s.feedHeaderTitle}>{activeTopic === 'ai' ? 'Khalid’s picks' : 'What people are saying'}</Text>
                 <Text style={s.feedHeaderSub}>{activeTopic === 'ai' ? 'Reviews matching your search' : 'Reviews and tips from the community'}</Text>
@@ -1034,11 +1031,14 @@ const s = StyleSheet.create({
     backgroundColor: C.chip,
   },
   filterChipOn: {
-    backgroundColor: C.redSoft,
+    backgroundColor: C.red,
+    ...Platform.select({
+      ios: { shadowColor: C.red, shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.25, shadowRadius: 4 },
+      android: { elevation: 2 },
+    }),
   },
-  filterChipEmoji: { fontSize: 12 },
   filterChipText: { fontSize: 13, fontWeight: '600', color: C.sub },
-  filterChipTextOn: { color: C.red, fontWeight: '700' },
+  filterChipTextOn: { color: '#FFFFFF', fontWeight: '700' },
   filterChipDisabled: { opacity: 0.5 },
   filterChipTextDisabled: { color: C.muted },
   askKhalidOverlay: {
@@ -1098,20 +1098,16 @@ const s = StyleSheet.create({
   feedHeaderSub: { fontSize: 14, color: C.muted, fontWeight: '500' },
   loadingWrap: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingVertical: 60 },
   card: {
-    flexDirection: 'row', backgroundColor: C.card, borderRadius: 16,
-    marginBottom: 12, overflow: 'hidden',
-    borderWidth: 1, borderColor: C.border,
-    ...Platform.select({
-      ios: { shadowColor: C.warmGlow, shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.1, shadowRadius: 10 },
-      android: { elevation: 3 },
-    }),
+    backgroundColor: C.card,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(0,0,0,0.08)',
   },
-  cardAccent: { width: 4 },
-  cardInner: { flex: 1, padding: 14 },
+  cardInner: { flex: 1, paddingHorizontal: 0, paddingVertical: 0 },
   cardAuthorRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 10 },
-  av: { width: 38, height: 38, borderRadius: 19, backgroundColor: C.chip, marginRight: 10, borderWidth: 2 },
+  av: { width: 38, height: 38, borderRadius: 19, backgroundColor: C.chip, marginRight: 10 },
   avPlaceholder: { alignItems: 'center', justifyContent: 'center', backgroundColor: C.chip },
-  avInitial: { fontSize: 15, fontWeight: '800' },
+  avInitial: { fontSize: 15, fontWeight: '800', color: C.text },
   cardMeta: { flex: 1, minWidth: 0 },
   authorText: { fontSize: 14, fontWeight: '700', color: C.text },
   cardPlaceRow: { flexDirection: 'row', alignItems: 'center', gap: 3, marginTop: 2 },
@@ -1123,13 +1119,13 @@ const s = StyleSheet.create({
   cardRatingNum: { fontSize: 12, fontWeight: '700', marginLeft: 2 },
   bodyText: { fontSize: 14, lineHeight: 21, color: C.text, marginBottom: 10 },
   cardKhalidDashedLine: {
-    height: 1, marginVertical: 10, marginHorizontal: -14,
+    height: 1, marginVertical: 10, marginHorizontal: 0,
     borderStyle: 'dashed', borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 1,
   },
   cardKhalidTipWrap: {
     flexDirection: 'row', alignItems: 'flex-start', gap: 8,
     backgroundColor: '#FFFBEB', borderTopWidth: 1, borderTopColor: '#FDE68A',
-    marginHorizontal: -14, paddingHorizontal: 14, paddingVertical: 12,
+    marginHorizontal: 0, paddingHorizontal: 12, paddingVertical: 12,
     borderBottomLeftRadius: 12, borderBottomRightRadius: 12,
   },
   cardKhalidTipText: { fontSize: 12.5, color: '#92400E', lineHeight: 17, flex: 1, fontStyle: 'italic' },
@@ -1151,7 +1147,7 @@ const s = StyleSheet.create({
     backgroundColor: 'rgba(0,0,0,0.5)', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8,
   },
   ratingOnImgNum: { fontSize: 12, fontWeight: '700', color: '#FFF' },
-  actions: { flexDirection: 'row', alignItems: 'center', gap: 20, paddingTop: 10, borderTopWidth: 1, borderTopColor: C.border },
+  actions: { flexDirection: 'row', alignItems: 'center', gap: 20, marginTop: 10, paddingTop: 10 },
   actionBtn: { flexDirection: 'row', alignItems: 'center', gap: 5 },
   actionNum: { fontSize: 13, fontWeight: '600', color: C.muted },
   fab: {
