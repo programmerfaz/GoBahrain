@@ -85,16 +85,21 @@ export async function fetchClients() {
 }
 
 /**
- * Fetch community posts from Supabase. Optional topic filter (hashtags contains topic id; hashtags can be comma-separated).
+ * Fetch community posts from Supabase.
+ * - all: all posts, newest first
+ * - trending: top 40 by upvotes (descending)
+ * - other topicId: filter by hashtags, newest first
  */
 export async function fetchCommunityPosts(topicId = 'all') {
-  let query = supabase
-    .from('community')
-    .select('*')
-    .order('created_at', { ascending: false });
+  let query = supabase.from('community').select('*');
 
-  if (topicId && topicId !== 'all') {
-    query = query.ilike('hashtags', `%${topicId}%`);
+  if (topicId === 'trending') {
+    query = query.order('num_of_upvote', { ascending: false }).limit(40);
+  } else {
+    query = query.order('created_at', { ascending: false });
+    if (topicId && topicId !== 'all') {
+      query = query.ilike('hashtags', `%${topicId}%`);
+    }
   }
 
   const { data: rows, error } = await query;
@@ -152,16 +157,18 @@ async function fetchCommunityReviewsForAI() {
  * Returns array of { id, suggestion }.
  */
 async function openAIMatchReviews(userQuery, reviewsPayload) {
-  const systemPrompt = `You are Khalid, a friendly local guide in Bahrain. You will receive a user search query and a list of community reviews. Each review has an "id" and "review_text".
+  const systemPrompt = `You are Khalid, a friendly local guide in Bahrain. You will receive a user search query and a list of community reviews. Each review has an "id", "review_text", and "rating" (number out of 5).
+
+Important: Only suggest places that have a good rating (4.0 or above). Do NOT include in your response any review with a rating below 4.0 — we only want Khalid to recommend places that reviewers liked. Never write positive or recommending suggestions for low-rated places.
 
 Your task:
-1. Decide which reviews match the user's intent (e.g. "food" matches burger, paratha, restaurants, cafes, etc.).
-2. For each matching review, write ONE short friendly suggestion (as Khalid) about that place/review — e.g. "Khalid says: You can try this out, it looks yum!" or "Khalid says: Great spot for a coffee — worth a visit!"
+1. From the list, pick only reviews that match the user's intent AND have rating >= 4.0 (e.g. "food" matches burger, paratha, restaurants, cafes).
+2. For each matching review, write ONE short friendly suggestion (as Khalid) — e.g. "You can try this out, it looks yum!" or "Great spot for a coffee — worth a visit!"
 3. Respond with a JSON array only, no other text. Each item: { "id": "<exact id from the list>", "suggestion": "Khalid says: <one line>" }
 4. Use only the ids provided. Keep each suggestion under 100 characters. Be warm and casual.`;
   const userContent = `User search: "${userQuery.replace(/"/g, '\\"')}"
 
-Reviews (id and review_text):
+Reviews (id, review_text, rating):
 ${reviewsPayload}`;
 
   const res = await fetch(OPENAI_CHAT_URL, {
@@ -205,11 +212,19 @@ export async function searchCommunityWithOpenAI(userQuery) {
   const rows = await fetchCommunityReviewsForAI();
   if (rows.length === 0) return [];
 
-  const reviewsPayload = rows
+  // Only send well-rated reviews to AI so Khalid never suggests bad-rated places
+  const minRatingForAI = 3.5;
+  const rowsWithGoodRating = rows.filter((r) => {
+    const rating = r.rating != null ? Number(r.rating) : null;
+    return rating != null && rating >= minRatingForAI;
+  });
+
+  const reviewsPayload = rowsWithGoodRating
     .map((r) => {
       const id = r.community_uuid;
       const text = (r.review_text || '').replace(/\s+/g, ' ').trim().slice(0, AI_REVIEW_SNIPPET_LEN);
-      return `id: ${id}\nreview_text: ${text}`;
+      const rating = r.rating != null ? Number(r.rating) : 'n/a';
+      return `id: ${id}\nreview_text: ${text}\nrating: ${rating}`;
     })
     .join('\n\n');
 

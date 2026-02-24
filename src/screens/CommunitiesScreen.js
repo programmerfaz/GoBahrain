@@ -69,10 +69,9 @@ function getReviewAccentColor(item) {
   return REVIEW_ACCENT_COLORS[n % REVIEW_ACCENT_COLORS.length];
 }
 
-// Community page top filter: All, AI (when results exist), Trending + hashtags
+// Community page top filter: All, Trending + hashtags (no AI chip — AI results show temporarily until another filter is tapped)
 const TOPICS = [
   { id: 'all', label: 'All' },
-  { id: 'ai', label: 'AI' },
   { id: 'trending', label: 'Trending' },
   { id: 'food', label: 'Food' },
   { id: 'places', label: 'Places' },
@@ -85,7 +84,7 @@ const TOPICS = [
 ];
 
 const TOPIC_EMOJIS = {
-  all: '🌴', ai: '✨', trending: '🔥', food: '🍽️', places: '📍', events: '🎉',
+  all: '🌴', trending: '🔥', food: '🍽️', places: '📍', events: '🎉',
   beaches: '🏖️', culture: '🕌', nightlife: '🌙', family: '👨‍👩‍👧‍👦', tips: '💡',
 };
 
@@ -184,13 +183,6 @@ function ReviewCard({ item, onPress, onCommentPress, onUpvote, onRemoveUpvote, a
 
         <Text style={s.bodyText} numberOfLines={3}>{item.body}</Text>
 
-        {aiTip ? (
-          <View style={s.cardAiTipWrap}>
-            <Ionicons name="sparkles" size={12} color="#7C3AED" />
-            <Text style={s.cardAiTipText} numberOfLines={1}>{aiTip}</Text>
-          </View>
-        ) : null}
-
         {/* Topic pills */}
         {topicIds.length > 0 && (
           <View style={s.cardTopicRow}>
@@ -223,6 +215,17 @@ function ReviewCard({ item, onPress, onCommentPress, onUpvote, onRemoveUpvote, a
             )}
           </View>
         )}
+
+        {/* Khalid's tip — dashed line + yellow block (same as itinerary tip) */}
+        {aiTip ? (
+          <>
+            <View style={s.cardKhalidDashedLine} />
+            <View style={s.cardKhalidTipWrap}>
+              <Ionicons name="bulb-outline" size={15} color="#D97706" />
+              <Text style={s.cardKhalidTipText}>{aiTip}</Text>
+            </View>
+          </>
+        ) : null}
 
         {/* Actions: Upvote · Comment only */}
         <View style={s.actions}>
@@ -760,7 +763,9 @@ export default function CommunitiesScreen() {
   const [aiSearchQuery, setAiSearchQuery] = useState('');
   const [aiFilteredPosts, setAiFilteredPosts] = useState([]);
   const [aiSearching, setAiSearching] = useState(false);
-  const aiPanelHeight = useRef(new Animated.Value(0)).current;
+  const askKhalidModalOpacity = useRef(new Animated.Value(0)).current;
+  const askKhalidCardScale = useRef(new Animated.Value(0.9)).current;
+  const lightningPulse = useRef(new Animated.Value(1)).current;
   const fabBottom = TAB_BAR_HEIGHT + 72 + (Platform.OS === 'android' ? insets.bottom : 0);
 
   const loadPosts = useCallback(async (opts = {}) => {
@@ -791,7 +796,6 @@ export default function CommunitiesScreen() {
       setActiveTopic('ai');
       setShowAiFilterPanel(false);
       setAiSearchQuery('');
-      Animated.timing(aiPanelHeight, { toValue: 0, duration: 200, useNativeDriver: false }).start();
     } catch (e) {
       console.error('[Community] AI search failed:', e);
       Alert.alert('Search failed', e?.message || 'Try again.');
@@ -799,19 +803,37 @@ export default function CommunitiesScreen() {
     } finally {
       setAiSearching(false);
     }
-  }, [aiSearchQuery, aiPanelHeight]);
+  }, [aiSearchQuery]);
 
   const openAiFilterPanel = useCallback(() => {
     setShowAiFilterPanel(true);
-    Animated.timing(aiPanelHeight, { toValue: 72, duration: 250, useNativeDriver: false }).start();
-  }, [aiPanelHeight]);
+    askKhalidModalOpacity.setValue(0);
+    askKhalidCardScale.setValue(0.9);
+    Animated.parallel([
+      Animated.timing(askKhalidModalOpacity, { toValue: 1, duration: 280, useNativeDriver: true }),
+      Animated.spring(askKhalidCardScale, { toValue: 1, useNativeDriver: true, damping: 14, stiffness: 120 }),
+    ]).start();
+  }, [askKhalidModalOpacity, askKhalidCardScale]);
 
   const closeAiFilterPanel = useCallback(() => {
-    Animated.timing(aiPanelHeight, { toValue: 0, duration: 200, useNativeDriver: false }).start(() => setShowAiFilterPanel(false));
-  }, [aiPanelHeight]);
+    if (aiSearching) return;
+    Animated.timing(askKhalidModalOpacity, { toValue: 0, duration: 200, useNativeDriver: true }).start(() => setShowAiFilterPanel(false));
+    askKhalidCardScale.setValue(0.9);
+  }, [askKhalidModalOpacity, askKhalidCardScale, aiSearching]);
+
+  useEffect(() => {
+    if (!aiSearching) return;
+    const pulse = Animated.loop(
+      Animated.sequence([
+        Animated.timing(lightningPulse, { toValue: 1.4, duration: 400, useNativeDriver: true }),
+        Animated.timing(lightningPulse, { toValue: 0.8, duration: 400, useNativeDriver: true }),
+      ])
+    );
+    pulse.start();
+    return () => pulse.stop();
+  }, [aiSearching, lightningPulse]);
 
   const displayPosts = activeTopic === 'ai' ? aiFilteredPosts : posts;
-  const isAiTabEnabled = aiFilteredPosts.length > 0;
   const showAiTip = activeTopic === 'ai';
 
   const handleUpvote = useCallback(async (item) => {
@@ -843,7 +865,7 @@ export default function CommunitiesScreen() {
       <View style={[s.topBar, { paddingTop: insets.top + 8 }]}>
         {/* Header row */}
         <View style={s.header}>
-          <Text style={s.headerTitle}>Majlis</Text>
+          <Text style={s.headerTitle}>Community</Text>
           <View style={s.headerRight}>
             <TouchableOpacity style={s.aiFilterBtn} onPress={openAiFilterPanel} activeOpacity={0.75}>
               <Ionicons name="sparkles" size={14} color="#FFF" />
@@ -857,50 +879,81 @@ export default function CommunitiesScreen() {
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.filterScroll}>
           {TOPICS.map((t) => {
             const on = activeTopic === t.id;
-            const isAi = t.id === 'ai';
-            const disabled = isAi && !isAiTabEnabled;
             return (
               <TouchableOpacity
                 key={t.id}
-                style={[s.filterChip, on && s.filterChipOn, disabled && s.filterChipDisabled]}
-                onPress={() => { if (!disabled) setActiveTopic(t.id); }}
+                style={[s.filterChip, on && s.filterChipOn]}
+                onPress={() => setActiveTopic(t.id)}
                 activeOpacity={0.75}
-                disabled={disabled}
               >
                 {on && TOPIC_EMOJIS[t.id] ? <Text style={s.filterChipEmoji}>{TOPIC_EMOJIS[t.id]}</Text> : null}
-                <Text style={[s.filterChipText, on && s.filterChipTextOn, disabled && s.filterChipTextDisabled]}>{t.label}</Text>
+                <Text style={[s.filterChipText, on && s.filterChipTextOn]}>{t.label}</Text>
               </TouchableOpacity>
             );
           })}
         </ScrollView>
-
-        {/* AI Filter panel */}
-        <Animated.View style={[s.aiPanel, { height: aiPanelHeight, overflow: 'hidden' }]}>
-          <View style={s.aiPanelInner}>
-            <TextInput
-              style={s.aiPanelInput}
-              placeholder="Search reviews (e.g. food, burger)..."
-              placeholderTextColor={C.muted}
-              value={aiSearchQuery}
-              onChangeText={(t) => setAiSearchQuery(t.slice(0, AI_SEARCH_MAX_LEN))}
-              maxLength={AI_SEARCH_MAX_LEN}
-              autoCapitalize="none"
-              autoCorrect={false}
-            />
-            <TouchableOpacity
-              style={[s.aiPanelBtn, aiSearching && s.aiPanelBtnDisabled]}
-              onPress={runAiSearch}
-              disabled={aiSearching || !aiSearchQuery.trim()}
-              activeOpacity={0.8}
-            >
-              {aiSearching ? <ActivityIndicator size="small" color="#FFF" /> : <Text style={s.aiPanelBtnText}>Search</Text>}
-            </TouchableOpacity>
-            <TouchableOpacity onPress={closeAiFilterPanel} style={s.aiPanelClose} hitSlop={12}>
-              <Ionicons name="close" size={20} color={C.sub} />
-            </TouchableOpacity>
-          </View>
-        </Animated.View>
       </View>
+
+      {/* Ask Khalid — full-screen blurred modal */}
+      <Modal visible={showAiFilterPanel} transparent animationType="none" onRequestClose={closeAiFilterPanel}>
+        <Animated.View style={[s.askKhalidOverlay, { opacity: askKhalidModalOpacity }]}>
+          {Platform.OS === 'ios' ? (
+            <BlurView intensity={80} tint="dark" style={StyleSheet.absoluteFill} />
+          ) : (
+            <View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(0,0,0,0.6)' }]} />
+          )}
+          <TouchableWithoutFeedback onPress={closeAiFilterPanel}>
+            <View style={StyleSheet.absoluteFill} />
+          </TouchableWithoutFeedback>
+          <Animated.View style={[s.askKhalidCardWrap, { transform: [{ scale: askKhalidCardScale }] }]}>
+            <View style={s.askKhalidCard}>
+              <View style={s.askKhalidHeader}>
+                <View style={s.askKhalidTitleRow}>
+                  <Ionicons name="sparkles" size={24} color={C.red} />
+                  <Text style={s.askKhalidTitle}>Ask Khalid</Text>
+                </View>
+                <Text style={s.askKhalidSub}>AI-powered suggestions from community reviews</Text>
+              </View>
+              {!aiSearching ? (
+                <>
+                  <TextInput
+                    style={s.askKhalidInput}
+                    placeholder="e.g. food, burger, breakfast..."
+                    placeholderTextColor={C.muted}
+                    value={aiSearchQuery}
+                    onChangeText={(t) => setAiSearchQuery(t.slice(0, AI_SEARCH_MAX_LEN))}
+                    maxLength={AI_SEARCH_MAX_LEN}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                  />
+                  <View style={s.askKhalidActions}>
+                    <TouchableOpacity
+                      style={[s.askKhalidSearchBtn, !aiSearchQuery.trim() && s.askKhalidSearchBtnDisabled]}
+                      onPress={runAiSearch}
+                      disabled={!aiSearchQuery.trim()}
+                      activeOpacity={0.85}
+                    >
+                      <Ionicons name="flash" size={18} color="#FFF" />
+                      <Text style={s.askKhalidSearchBtnText}>Search</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity onPress={closeAiFilterPanel} style={s.askKhalidCloseBtn} hitSlop={12}>
+                      <Text style={s.askKhalidCloseText}>Cancel</Text>
+                    </TouchableOpacity>
+                  </View>
+                </>
+              ) : (
+                <View style={s.askKhalidSearching}>
+                  <Animated.View style={{ transform: [{ scale: lightningPulse }] }}>
+                    <Ionicons name="flash" size={48} color="#FBBF24" />
+                  </Animated.View>
+                  <Text style={s.askKhalidSearchingTitle}>Khalid is searching...</Text>
+                  <Text style={s.askKhalidSearchingSub}>Scanning through reviews for you</Text>
+                </View>
+              )}
+            </View>
+          </Animated.View>
+        </Animated.View>
+      </Modal>
 
       {loading && activeTopic !== 'ai' && displayPosts.length === 0 ? (
         <View style={s.loadingWrap}><ActivityIndicator size="large" color={C.red} /></View>
@@ -918,13 +971,13 @@ export default function CommunitiesScreen() {
           }
           renderItem={({ item }) => (
             <ReviewCard
-              item={item}
-              onPress={setSelectedPost}
-              onCommentPress={(it) => { setSelectedPost(it); setFocusReplyWhenOpen(true); }}
-              onUpvote={handleUpvote}
-              onRemoveUpvote={handleRemoveUpvote}
-              aiTip={showAiTip ? item.aiSuggestion : undefined}
-            />
+                item={item}
+                onPress={setSelectedPost}
+                onCommentPress={(it) => { setSelectedPost(it); setFocusReplyWhenOpen(true); }}
+                onUpvote={handleUpvote}
+                onRemoveUpvote={handleRemoveUpvote}
+                aiTip={showAiTip ? item.aiSuggestion : undefined}
+              />
           )}
           contentContainerStyle={s.feed}
           showsVerticalScrollIndicator={false}
@@ -959,51 +1012,86 @@ export default function CommunitiesScreen() {
 const s = StyleSheet.create({
   screen: { backgroundColor: C.bg },
   topBar: {
-    backgroundColor: C.card,
-    paddingBottom: 14,
-    borderBottomWidth: 1, borderBottomColor: C.border,
-    ...Platform.select({
-      ios: { shadowColor: C.warmGlow, shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.08, shadowRadius: 8 },
-      android: { elevation: 3 },
-    }),
+    backgroundColor: C.bg,
+    paddingBottom: 12,
   },
   header: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    paddingHorizontal: 20, paddingBottom: 14,
+    paddingHorizontal: 20, paddingBottom: 12,
   },
-  headerRight: { flexDirection: 'row', alignItems: 'center', gap: 12 },
-  headerTitle: { fontSize: 22, fontWeight: '800', color: C.text, letterSpacing: -0.3 },
+  headerRight: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  headerTitle: { fontSize: 20, fontWeight: '700', color: C.text, letterSpacing: -0.2 },
   aiFilterBtn: {
     flexDirection: 'row', alignItems: 'center', gap: 5,
-    backgroundColor: C.red, paddingHorizontal: 14, paddingVertical: 8,
-    borderRadius: 20,
-    ...Platform.select({
-      ios: { shadowColor: C.red, shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.35, shadowRadius: 6 },
-      android: { elevation: 4 },
-    }),
+    backgroundColor: C.red, paddingHorizontal: 12, paddingVertical: 6,
+    borderRadius: 16,
   },
-  aiFilterText: { fontSize: 13, fontWeight: '700', color: '#FFF', letterSpacing: 0.2 },
-  filterScroll: { paddingHorizontal: 16, gap: 8, flexDirection: 'row', alignItems: 'center' },
+  aiFilterText: { fontSize: 12, fontWeight: '700', color: '#FFF' },
+  filterScroll: { paddingHorizontal: 20, gap: 8, flexDirection: 'row', alignItems: 'center' },
   filterChip: {
     flexDirection: 'row', alignItems: 'center', gap: 4,
-    paddingVertical: 8, paddingHorizontal: 16, borderRadius: 20,
-    backgroundColor: C.chip, borderWidth: 1.5, borderColor: C.border,
+    paddingVertical: 6, paddingHorizontal: 14, borderRadius: 16,
+    backgroundColor: C.chip,
   },
   filterChipOn: {
-    backgroundColor: C.redSoft, borderColor: C.red,
+    backgroundColor: C.redSoft,
   },
-  filterChipEmoji: { fontSize: 13 },
-  filterChipText: { fontSize: 13, fontWeight: '600', color: C.muted },
+  filterChipEmoji: { fontSize: 12 },
+  filterChipText: { fontSize: 13, fontWeight: '600', color: C.sub },
   filterChipTextOn: { color: C.red, fontWeight: '700' },
   filterChipDisabled: { opacity: 0.5 },
   filterChipTextDisabled: { color: C.muted },
-  aiPanel: { borderTopWidth: 1, borderTopColor: C.border, backgroundColor: C.card },
-  aiPanelInner: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 12, gap: 10 },
-  aiPanelInput: { flex: 1, height: 40, backgroundColor: C.chip, borderRadius: 12, paddingHorizontal: 14, fontSize: 15, color: C.text },
-  aiPanelBtn: { backgroundColor: C.red, paddingHorizontal: 18, paddingVertical: 10, borderRadius: 12 },
-  aiPanelBtnDisabled: { opacity: 0.7 },
-  aiPanelBtnText: { fontSize: 14, fontWeight: '700', color: '#FFF' },
-  aiPanelClose: { padding: 4 },
+  askKhalidOverlay: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 24,
+  },
+  askKhalidCardWrap: { width: '100%', maxWidth: 340 },
+  askKhalidCard: {
+    backgroundColor: C.card,
+    borderRadius: 24,
+    padding: 24,
+    ...Platform.select({
+      ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.25, shadowRadius: 24 },
+      android: { elevation: 16 },
+    }),
+  },
+  askKhalidHeader: { marginBottom: 20 },
+  askKhalidTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 6 },
+  askKhalidTitle: { fontSize: 24, fontWeight: '800', color: C.text },
+  askKhalidSub: { fontSize: 14, color: C.muted, lineHeight: 20 },
+  askKhalidInput: {
+    height: 48,
+    backgroundColor: C.chip,
+    borderRadius: 14,
+    paddingHorizontal: 16,
+    fontSize: 16,
+    color: C.text,
+    marginBottom: 16,
+  },
+  askKhalidActions: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  askKhalidSearchBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: C.red,
+    paddingVertical: 14,
+    borderRadius: 14,
+  },
+  askKhalidSearchBtnDisabled: { opacity: 0.5 },
+  askKhalidSearchBtnText: { fontSize: 16, fontWeight: '700', color: '#FFF' },
+  askKhalidCloseBtn: { paddingVertical: 14, paddingHorizontal: 16 },
+  askKhalidCloseText: { fontSize: 16, fontWeight: '600', color: C.sub },
+  askKhalidSearching: {
+    alignItems: 'center',
+    paddingVertical: 24,
+    paddingHorizontal: 16,
+  },
+  askKhalidSearchingTitle: { fontSize: 18, fontWeight: '700', color: C.text, marginTop: 16, marginBottom: 4 },
+  askKhalidSearchingSub: { fontSize: 14, color: C.muted },
   feed: { paddingHorizontal: 16, paddingBottom: 110 },
   feedHeader: { paddingTop: 18, paddingBottom: 14 },
   feedHeaderTitle: { fontSize: 18, fontWeight: '800', color: C.text, marginBottom: 4 },
@@ -1034,8 +1122,17 @@ const s = StyleSheet.create({
   },
   cardRatingNum: { fontSize: 12, fontWeight: '700', marginLeft: 2 },
   bodyText: { fontSize: 14, lineHeight: 21, color: C.text, marginBottom: 10 },
-  cardAiTipWrap: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 10, backgroundColor: '#F5F3FF', paddingHorizontal: 10, paddingVertical: 8, borderRadius: 10 },
-  cardAiTipText: { flex: 1, fontSize: 12, color: '#5B21B6', fontWeight: '600', fontStyle: 'italic' },
+  cardKhalidDashedLine: {
+    height: 1, marginVertical: 10, marginHorizontal: -14,
+    borderStyle: 'dashed', borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 1,
+  },
+  cardKhalidTipWrap: {
+    flexDirection: 'row', alignItems: 'flex-start', gap: 8,
+    backgroundColor: '#FFFBEB', borderTopWidth: 1, borderTopColor: '#FDE68A',
+    marginHorizontal: -14, paddingHorizontal: 14, paddingVertical: 12,
+    borderBottomLeftRadius: 12, borderBottomRightRadius: 12,
+  },
+  cardKhalidTipText: { fontSize: 12.5, color: '#92400E', lineHeight: 17, flex: 1, fontStyle: 'italic' },
   cardTopicRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginBottom: 10 },
   cardTopicPill: { backgroundColor: C.chip, paddingHorizontal: 10, paddingVertical: 4, borderRadius: 10 },
   cardTopicPillText: { fontSize: 12, fontWeight: '600', color: C.sub },
