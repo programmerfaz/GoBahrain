@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useCallback, useEffect } from 'react';
 import {
   StyleSheet,
   Text,
@@ -6,6 +6,7 @@ import {
   ScrollView,
   FlatList,
   TouchableOpacity,
+  TouchableWithoutFeedback,
   Image,
   useWindowDimensions,
   Platform,
@@ -13,402 +14,734 @@ import {
   Modal,
   TextInput,
   KeyboardAvoidingView,
+  ActivityIndicator,
+  RefreshControl,
+  Alert,
 } from 'react-native';
+import { BlurView } from 'expo-blur';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
+import * as ImagePicker from 'expo-image-picker';
 import ScreenContainer from '../components/ScreenContainer';
 import ProfileButton from '../components/ProfileButton';
+import {
+  fetchCommunityPosts,
+  searchCommunityWithOpenAI,
+  createCommunityPost,
+   uploadCommunityImages,
+   upvoteCommunityPost,
+   removeUpvoteCommunityPost,
+   getCommunityUserId,
+   fetchClients,
+ } from '../services/community';
 
-const COLORS = {
-  primary: '#C8102E',
-  screenBg: '#F8FAFC',
-  cardBg: '#FFFFFF',
-  textPrimary: '#0F172A',
-  textSecondary: '#475569',
-  textMuted: '#94A3B8',
-  border: 'rgba(226,232,240,0.9)',
-  upvote: '#E11D48',
-  comment: '#0EA5E9',
-  repost: '#10B981',
-  accent: '#F97316',
-  pillBg: '#F1F5F9',
+const C = {
+  bg: '#FFFFFF',
+  card: '#FFFFFF',
+  text: '#111827',
+  sub: '#6B7280',
+  muted: '#9CA3AF',
+  border: 'rgba(209,213,219,0.7)',
+  red: '#C8102E',
+  redSoft: '#FEF2F2',
+  orange: '#EA580C',
+  orangeSoft: '#FFF7ED',
+  blue: '#0284C7',
+  blueSoft: '#EFF6FF',
+  green: '#059669',
+  upvoteLight: '#22C55E',
+  upvoteDark: '#15803D',
+  chip: '#F3F4F6',
+  chipActive: '#1C1917',
+  accent: '#D4A574',
+  warmGlow: '#9CA3AF',
 };
 
+// Different accent color per review (left strip + avatar border)
+const REVIEW_ACCENT_COLORS = [
+  '#C8102E', '#B45309', '#0D9488', '#7C3AED', '#DC2626',
+  '#CA8A04', '#059669', '#2563EB', '#C2410C', '#9333EA',
+];
+function getReviewAccentColor(item) {
+  const id = (item?.id ?? item?.body ?? '0').toString();
+  let n = 0;
+  for (let i = 0; i < id.length; i++) n = (n * 31 + id.charCodeAt(i)) >>> 0;
+  return REVIEW_ACCENT_COLORS[n % REVIEW_ACCENT_COLORS.length];
+}
+
+// Community page top filter: All, AI (when results exist), Trending + hashtags
 const TOPICS = [
-  { id: 'all', label: 'All', emoji: '🌴' },
-  { id: 'food', label: 'Food', emoji: '🍽️' },
-  { id: 'forts', label: 'Forts & History', emoji: '🏰' },
-  { id: 'beaches', label: 'Beaches', emoji: '🏖️' },
-  { id: 'souq', label: 'Souq', emoji: '🛒' },
-  { id: 'events', label: 'Events', emoji: '🎉' },
-  { id: 'tips', label: 'Tips', emoji: '💡' },
-  { id: 'culture', label: 'Culture', emoji: '🕌' },
+  { id: 'all', label: 'All' },
+  { id: 'ai', label: 'AI' },
+  { id: 'trending', label: 'Trending' },
+  { id: 'food', label: 'Food' },
+  { id: 'places', label: 'Places' },
+  { id: 'events', label: 'Events' },
+  { id: 'beaches', label: 'Beaches' },
+  { id: 'culture', label: 'Culture' },
+  { id: 'nightlife', label: 'Nightlife' },
+  { id: 'family', label: 'Family' },
+  { id: 'tips', label: 'Tips' },
 ];
 
-const MOCK_POSTS = [
-  {
-    id: '1',
-    author: 'Sara AlBaharna',
-    handle: '@sarainbh',
-    avatar: 'https://i.pravatar.cc/100?u=sara',
-    time: '2h',
-    topic: 'food',
-    body: 'Best karak in Manama? Haji’s Cafe near the souq — 500 fils and they don’t skimp on the cardamom. Perfect after a morning at Bahrain Fort. ☕️',
-    image: 'https://images.unsplash.com/photo-1576092768241-dec231879fc3?w=600',
-    upvotes: 124,
-    comments: 18,
-    reposts: 5,
-    upvoted: false,
-  },
-  {
-    id: '2',
-    author: 'Ahmed Travels',
-    handle: '@ahmed_travels',
-    avatar: 'https://i.pravatar.cc/100?u=ahmed',
-    time: '5h',
-    topic: 'forts',
-    body: 'Bahrain Fort at golden hour is unreal. Go around 5pm, bring water and comfy shoes. The museum is small but worth it. 🇧🇭',
-    image: 'https://images.unsplash.com/photo-1555396273-367ea4eb4db5?w=600',
-    upvotes: 312,
-    comments: 42,
-    reposts: 28,
-    upvoted: true,
-  },
-  {
-    id: '3',
-    author: 'Layla Eats',
-    handle: '@laylaeats',
-    avatar: 'https://i.pravatar.cc/100?u=layla',
-    time: '8h',
-    topic: 'souq',
-    body: 'Manama Souq tip: get there before 10am if you want the best sweets and spices without the crowd. Don’t skip the gold souq — even just to look!',
-    image: null,
-    upvotes: 89,
-    comments: 12,
-    reposts: 3,
-    upvoted: false,
-  },
-  {
-    id: '4',
-    author: 'Go Bahrain',
-    handle: '@gobahrain',
-    avatar: 'https://i.pravatar.cc/100?u=gobahrain',
-    time: '1d',
-    topic: 'tips',
-    body: 'First time in Bahrain? Our top 3: 1) Tree of Life at sunset 2) Bahrain National Museum 3) Block 338 for dinner. You’re welcome. 🌴',
-    image: 'https://images.unsplash.com/photo-1544551763-46a013bb70d5?w=600',
-    upvotes: 567,
-    comments: 67,
-    reposts: 91,
-    upvoted: false,
-  },
-  {
-    id: '5',
-    author: 'Omar Explores',
-    handle: '@omar_explores',
-    avatar: 'https://i.pravatar.cc/100?u=omar',
-    time: '1d',
-    topic: 'beaches',
-    body: 'Al Jazayer Beach is underrated. Clear water, less crowded than some spots, and the drive there is scenic. Great for a half-day trip.',
-    image: 'https://images.unsplash.com/photo-1507525428034-b723cf961d3e?w=600',
-    upvotes: 203,
-    comments: 31,
-    reposts: 14,
-    upvoted: false,
-  },
-  {
-    id: '6',
-    author: 'Noor',
-    handle: '@noor_in_bh',
-    avatar: 'https://i.pravatar.cc/100?u=noor',
-    time: '2d',
-    topic: 'culture',
-    body: 'Qur’an manuscript at Beit Al Qur’an — one of the most peaceful places in Bahrain. Free entry, no rush. Perfect for a quiet afternoon.',
-    image: null,
-    upvotes: 156,
-    comments: 9,
-    reposts: 7,
-    upvoted: false,
-  },
+const TOPIC_EMOJIS = {
+  all: '🌴', ai: '✨', trending: '🔥', food: '🍽️', places: '📍', events: '🎉',
+  beaches: '🏖️', culture: '🕌', nightlife: '🌙', family: '👨‍👩‍👧‍👦', tips: '💡',
+};
+
+const AI_SEARCH_MAX_LEN = 50;
+
+// Create post — Select topic: only these 8, multiple select
+const CREATE_POST_TOPICS = [
+  { id: 'food', label: 'Food' },
+  { id: 'places', label: 'Places' },
+  { id: 'events', label: 'Events' },
+  { id: 'beaches', label: 'Beaches' },
+  { id: 'culture', label: 'Culture' },
+  { id: 'nightlife', label: 'Nightlife' },
+  { id: 'family', label: 'Family' },
+  { id: 'tips', label: 'Tips' },
 ];
 
-function CommunityPostCard({ item, onUpvote, onComment, onRepost, onPress }) {
-  const { width } = useWindowDimensions();
-  const imageWidth = width - 32;
-  const imageHeight = Math.round(imageWidth * 0.55);
-  const [upvoted, setUpvoted] = useState(item.upvoted);
-  const [upvoteCount, setUpvoteCount] = useState(item.upvotes);
-  const scaleAnim = useRef(new Animated.Value(1)).current;
+const CREATE_POST_TOPIC_EMOJIS = {
+  food: '🍽️', places: '📍', events: '🎉', beaches: '🏖️',
+  culture: '🕌', nightlife: '🌙', family: '👨‍👩‍👧‍👦', tips: '💡',
+};
 
-  const handleUpvote = () => {
-    const next = !upvoted;
-    setUpvoted(next);
-    setUpvoteCount((c) => (next ? c + 1 : c - 1));
-    Animated.sequence([
-      Animated.timing(scaleAnim, {
-        toValue: 1.3,
-        duration: 120,
-        useNativeDriver: true,
-      }),
-      Animated.timing(scaleAnim, {
-        toValue: 1,
-        duration: 120,
-        useNativeDriver: true,
-      }),
-    ]).start();
-    onUpvote?.(item);
-  };
+const TOTAL_STARS = 5;
 
-  const topicLabel = TOPICS.find((t) => t.id === item.topic)?.label || 'Tip';
-
-  const mainContent = (
-    <>
-      <View style={styles.postHeader}>
-        <Image source={{ uri: item.avatar }} style={styles.avatar} />
-        <View style={styles.postMeta}>
-          <View style={styles.nameRow}>
-            <Text style={styles.authorName} numberOfLines={1}>{item.author}</Text>
-            <View style={styles.topicPill}>
-              <Text style={styles.topicPillText}>{topicLabel}</Text>
-            </View>
-          </View>
-          <Text style={styles.handle}>{item.handle} · {item.time}</Text>
-        </View>
-        <TouchableOpacity style={styles.moreBtn} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
-          <Ionicons name="ellipsis-horizontal" size={18} color={COLORS.textMuted} />
-        </TouchableOpacity>
-      </View>
-      <Text style={styles.body} numberOfLines={onPress ? 3 : undefined}>{item.body}</Text>
-      {item.image ? (
-        <View style={[styles.imageWrap, { width: imageWidth, height: imageHeight }]}>
-          <Image
-            source={{ uri: item.image }}
-            style={[styles.postImage, { width: imageWidth, height: imageHeight }]}
-            resizeMode="cover"
-          />
-          <View style={styles.imageCorner} />
-        </View>
-      ) : null}
-    </>
-  );
-
+function RatingStars({ rating, size = 12, color }) {
+  if (rating == null || rating <= 0) return null;
+  const r = Math.min(5, Math.max(0, Number(rating)));
+  const starColor = color ?? C.orange;
   return (
-    <View style={styles.postCard}>
-      {onPress ? (
-        <TouchableOpacity activeOpacity={0.92} onPress={() => onPress(item)}>
-          {mainContent}
-        </TouchableOpacity>
-      ) : (
-        mainContent
-      )}
-      <View style={[styles.actionRow, onPress && styles.actionRowBorderTop]}>
-        <TouchableOpacity style={styles.actionItem} onPress={handleUpvote} activeOpacity={0.7}>
-          <Animated.View style={{ transform: [{ scale: scaleAnim }] }}>
-            <Ionicons name="chevron-up" size={22} color={upvoted ? COLORS.upvote : COLORS.textMuted} />
-          </Animated.View>
-          <Text style={[styles.actionCount, upvoted && styles.actionCountUpvoted]}>{upvoteCount}</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={styles.actionItem} onPress={() => onComment?.(item)} activeOpacity={0.7}>
-          <Ionicons name="chatbubble-outline" size={20} color={COLORS.textMuted} />
-          <Text style={styles.actionCount}>{item.comments}</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={styles.actionItem} onPress={() => onRepost?.(item)} activeOpacity={0.7}>
-          <Ionicons name="repeat-outline" size={20} color={COLORS.textMuted} />
-          <Text style={styles.actionCount}>{item.reposts}</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={styles.actionItem} activeOpacity={0.7}>
-          <Ionicons name="paper-plane-outline" size={20} color={COLORS.textMuted} />
-        </TouchableOpacity>
-      </View>
+    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 1 }}>
+      {Array.from({ length: TOTAL_STARS }, (_, i) => {
+        const starValue = i + 1;
+        const filled = r >= starValue;
+        const half = !filled && r >= starValue - 0.5;
+        const name = filled ? 'star' : half ? 'star-half' : 'star-outline';
+        return (
+          <Ionicons key={i} name={name} size={size} color={filled || half ? starColor : C.muted} />
+        );
+      })}
     </View>
   );
 }
 
-function PostDetailModal({ post, onClose }) {
-  const insets = useSafeAreaInsets();
+function ReviewCard({ item, onPress, onCommentPress, onUpvote, onRemoveUpvote, aiTip }) {
   const { width } = useWindowDimensions();
-  const imageWidth = width - 32;
-  const imageHeight = Math.round(imageWidth * 0.6);
+  const cardWidth = width - 40;
+  const imgH = Math.round(cardWidth * 0.48);
+  const [upvoted, setUpvoted] = useState(item.upvoted);
+  const scale = useRef(new Animated.Value(1)).current;
+  const count = item.upvotes ?? 0;
+
+  const images = item.images?.length > 0 ? item.images : item.image ? [item.image] : [];
+
+  const doUpvote = () => {
+    const next = !upvoted;
+    setUpvoted(next);
+    Animated.sequence([
+      Animated.timing(scale, { toValue: 1.35, duration: 100, useNativeDriver: true }),
+      Animated.timing(scale, { toValue: 1, duration: 100, useNativeDriver: true }),
+    ]).start();
+    if (next) onUpvote?.(item); else onRemoveUpvote?.(item);
+  };
+
+  const topicIds = (item.topic || '').split(',').map((t) => t.trim()).filter(Boolean);
+  const accentColor = getReviewAccentColor(item);
+
+  const body = (
+    <TouchableOpacity activeOpacity={0.94} onPress={() => onPress?.(item)} style={s.card}>
+      <View style={[s.cardAccent, { backgroundColor: accentColor }]} />
+      <View style={s.cardInner}>
+        {/* Author row */}
+        <View style={s.cardAuthorRow}>
+          {item.avatar ? (
+            <Image source={{ uri: item.avatar }} style={[s.av, { borderColor: accentColor }]} />
+          ) : (
+            <View style={[s.av, s.avPlaceholder, { borderColor: accentColor }]}>
+              <Text style={[s.avInitial, { color: accentColor }]}>{(item.author || 'U')[0].toUpperCase()}</Text>
+            </View>
+          )}
+          <View style={s.cardMeta}>
+            <Text style={s.authorText} numberOfLines={1}>{item.author}</Text>
+            {item.place ? (
+              <View style={s.cardPlaceRow}>
+                <Ionicons name="location-sharp" size={11} color={C.red} />
+                <Text style={s.cardPlaceText} numberOfLines={1}>{item.place}</Text>
+              </View>
+            ) : null}
+          </View>
+          {item.rating != null && item.rating > 0 && (
+            <View style={[s.cardRatingPill, { backgroundColor: C.redSoft }]}>
+              <RatingStars rating={item.rating} size={11} color={C.red} />
+              <Text style={[s.cardRatingNum, { color: C.red }]}>{Number(item.rating).toFixed(1)}</Text>
+            </View>
+          )}
+        </View>
+
+        <Text style={s.bodyText} numberOfLines={3}>{item.body}</Text>
+
+        {aiTip ? (
+          <View style={s.cardAiTipWrap}>
+            <Ionicons name="sparkles" size={12} color="#7C3AED" />
+            <Text style={s.cardAiTipText} numberOfLines={1}>{aiTip}</Text>
+          </View>
+        ) : null}
+
+        {/* Topic pills */}
+        {topicIds.length > 0 && (
+          <View style={s.cardTopicRow}>
+            {topicIds.slice(0, 3).map((tid) => (
+              <View key={tid} style={s.cardTopicPill}>
+                <Text style={s.cardTopicPillText}>#{tid}</Text>
+              </View>
+            ))}
+          </View>
+        )}
+
+        {/* Image */}
+        {images.length > 0 && (
+          <View style={[s.cardImgWrap, { height: imgH, width: '100%' }]}>
+            {images.length === 1 ? (
+              <Image source={{ uri: images[0] }} style={s.cardImg} resizeMode="cover" />
+            ) : images.length === 2 ? (
+              <View style={s.cardImgSplitRow}>
+                <Image source={{ uri: images[0] }} style={s.cardImgHalf} resizeMode="cover" />
+                <View style={s.cardImgGap} />
+                <Image source={{ uri: images[1] }} style={s.cardImgHalf} resizeMode="cover" />
+              </View>
+            ) : (
+              <>
+                <Image source={{ uri: images[0] }} style={s.cardImg} resizeMode="cover" />
+                <View style={s.imgCountBadge}>
+                  <Text style={s.imgCountText}>+{images.length - 1}</Text>
+                </View>
+              </>
+            )}
+          </View>
+        )}
+
+        {/* Actions: Upvote · Comment only */}
+        <View style={s.actions}>
+          <TouchableOpacity style={s.actionBtn} onPress={doUpvote} activeOpacity={0.7}>
+            <Animated.View style={{ transform: [{ scale }] }}>
+              <Ionicons name={upvoted ? 'arrow-up-circle' : 'arrow-up-circle-outline'} size={20} color={upvoted ? C.upvoteDark : C.upvoteLight} />
+            </Animated.View>
+            <Text style={[s.actionNum, { color: upvoted ? C.upvoteDark : C.upvoteLight }]}>{count}</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={s.actionBtn} onPress={() => onCommentPress?.(item)} activeOpacity={0.7}>
+            <Ionicons name="chatbubble-outline" size={17} color={C.blue} />
+            <Text style={[s.actionNum, { color: C.blue }]}>{item.comments}</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    </TouchableOpacity>
+  );
+
+  return body;
+}
+
+function DetailModal({ post, onClose, onUpvote, onRemoveUpvote, focusReplyWhenOpen = false, onClearFocusReply }) {
+  const insets = useSafeAreaInsets();
+  const { width, height } = useWindowDimensions();
+  const cardMargin = 24;
+  const cardW = width - cardMargin * 2;
+  const imgW = cardW;
+  const imgH = Math.round(imgW * 0.5);
+  const popupMaxHeight = height * 0.88;
+  const popupCardHeaderH = 54; // "Review" header row
   const [upvoted, setUpvoted] = useState(post?.upvoted ?? false);
-  const [upvoteCount, setUpvoteCount] = useState(post?.upvotes ?? 0);
-  const scaleAnim = useRef(new Animated.Value(1)).current;
+  const [imageIndex, setImageIndex] = useState(0);
+  const [cardHeight, setCardHeight] = useState(popupMaxHeight);
+  const [replyText, setReplyText] = useState('');
+  const imageScrollRef = useRef(null);
+  const replyInputRef = useRef(null);
+  const scale = useRef(new Animated.Value(1)).current;
+  const count = post?.upvotes ?? 0;
+
+  useEffect(() => {
+    if (post?.upvoted) setUpvoted(true);
+  }, [post?.id, post?.upvoted]);
+  useEffect(() => { setImageIndex(0); setCardHeight(popupMaxHeight); setReplyText(''); }, [post?.id, popupMaxHeight]);
+  useEffect(() => {
+    if (post && focusReplyWhenOpen && replyInputRef.current) {
+      const t = setTimeout(() => {
+        replyInputRef.current?.focus();
+        onClearFocusReply?.();
+      }, 400);
+      return () => clearTimeout(t);
+    }
+  }, [post?.id, focusReplyWhenOpen]);
 
   if (!post) return null;
 
-  const topicLabel = TOPICS.find((t) => t.id === post.topic)?.label || 'Tip';
+  const images = post.images?.length > 0 ? post.images : post.image ? [post.image] : [];
+  const hasMultipleImages = images.length > 1;
 
-  const handleUpvote = () => {
+  const goToImage = (index) => {
+    const i = Math.max(0, Math.min(index, images.length - 1));
+    setImageIndex(i);
+    imageScrollRef.current?.scrollTo({ x: i * imgW, animated: true });
+  };
+  const topicIds = (post.topic || '').split(',').map((s2) => s2.trim()).filter(Boolean);
+  const topicLabels = topicIds.map((id) => TOPICS.find((t) => t.id === id)?.label || CREATE_POST_TOPICS.find((t) => t.id === id)?.label || id);
+
+  const doUpvote = () => {
     const next = !upvoted;
     setUpvoted(next);
-    setUpvoteCount((c) => (next ? c + 1 : c - 1));
     Animated.sequence([
-      Animated.timing(scaleAnim, { toValue: 1.25, duration: 100, useNativeDriver: true }),
-      Animated.timing(scaleAnim, { toValue: 1, duration: 100, useNativeDriver: true }),
+      Animated.timing(scale, { toValue: 1.3, duration: 100, useNativeDriver: true }),
+      Animated.timing(scale, { toValue: 1, duration: 100, useNativeDriver: true }),
     ]).start();
+    if (next) onUpvote?.(post); else onRemoveUpvote?.(post);
   };
 
   return (
-    <Modal visible={!!post} animationType="slide" onRequestClose={onClose}>
-      <View style={[styles.modalContainer, { paddingTop: insets.top }]}>
-        <View style={styles.modalHeader}>
-          <TouchableOpacity style={styles.modalCloseBtn} onPress={onClose} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
-            <Ionicons name="close" size={28} color={COLORS.textPrimary} />
-          </TouchableOpacity>
-          <Text style={styles.modalHeaderTitle}>Post</Text>
-          <View style={styles.modalHeaderRight} />
-        </View>
-        <ScrollView
-          style={styles.modalScroll}
-          contentContainerStyle={[styles.modalScrollContent, { paddingBottom: insets.bottom + 100 }]}
-          showsVerticalScrollIndicator={false}
-        >
-          <View style={styles.detailCard}>
-            <View style={styles.postHeader}>
-              <Image source={{ uri: post.avatar }} style={styles.avatar} />
-              <View style={styles.postMeta}>
-                <View style={styles.nameRow}>
-                  <Text style={styles.authorName} numberOfLines={1}>{post.author}</Text>
-                  <View style={styles.topicPill}>
-                    <Text style={styles.topicPillText}>{topicLabel}</Text>
-                  </View>
-                </View>
-                <Text style={styles.handle}>{post.handle} · {post.time}</Text>
-              </View>
-              <TouchableOpacity style={styles.moreBtn}>
-                <Ionicons name="ellipsis-horizontal" size={18} color={COLORS.textMuted} />
-              </TouchableOpacity>
-            </View>
-            <Text style={styles.detailBody}>{post.body}</Text>
-            {post.image ? (
-              <View style={[styles.imageWrap, { width: imageWidth, height: imageHeight }]}>
-                <Image
-                  source={{ uri: post.image }}
-                  style={[styles.postImage, { width: imageWidth, height: imageHeight }]}
-                  resizeMode="cover"
-                />
-                <View style={styles.imageCorner} />
-              </View>
-            ) : null}
-            <View style={styles.actionRow}>
-              <TouchableOpacity style={styles.actionItem} onPress={handleUpvote} activeOpacity={0.7}>
-                <Animated.View style={{ transform: [{ scale: scaleAnim }] }}>
-                  <Ionicons name="chevron-up" size={24} color={upvoted ? COLORS.upvote : COLORS.textMuted} />
-                </Animated.View>
-                <Text style={[styles.actionCount, upvoted && styles.actionCountUpvoted]}>{upvoteCount}</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.actionItem} activeOpacity={0.7}>
-                <Ionicons name="chatbubble-outline" size={22} color={COLORS.textMuted} />
-                <Text style={styles.actionCount}>{post.comments}</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.actionItem} activeOpacity={0.7}>
-                <Ionicons name="repeat-outline" size={22} color={COLORS.textMuted} />
-                <Text style={styles.actionCount}>{post.reposts}</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.actionItem} activeOpacity={0.7}>
-                <Ionicons name="paper-plane-outline" size={22} color={COLORS.textMuted} />
-              </TouchableOpacity>
-            </View>
+    <Modal visible={!!post} transparent animationType="fade" onRequestClose={onClose}>
+      <KeyboardAvoidingView style={s.popOverlay} behavior={Platform.OS === 'ios' ? 'padding' : undefined} keyboardVerticalOffset={0}>
+      <View style={[s.popOverlay, { flex: 1 }]} collapsable={false}>
+        {/* Blurred / dim backdrop — tap to close */}
+        <TouchableWithoutFeedback onPress={onClose}>
+          <View style={[StyleSheet.absoluteFill, { zIndex: 0 }]}>
+            {Platform.OS === 'ios' ? (
+              <BlurView intensity={70} tint="dark" style={StyleSheet.absoluteFill} />
+            ) : (
+              <View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(0,0,0,0.65)' }]} />
+            )}
           </View>
-          <View style={styles.replySection}>
-            <Text style={styles.replySectionTitle}>Replies</Text>
-            <TouchableOpacity style={styles.replyInputRow} activeOpacity={0.8}>
-              <View style={styles.replyAvatar}>
-                <Ionicons name="person" size={20} color={COLORS.textMuted} />
-              </View>
-              <Text style={styles.replyPlaceholder}>Post your reply...</Text>
+        </TouchableWithoutFeedback>
+
+        {/* Card — height shrinks to content, max popupMaxHeight */}
+        <View style={[s.popCard, { width: cardW, height: cardHeight, maxHeight: popupMaxHeight, zIndex: 10 }]}>
+          <View style={s.popHeader}>
+            <View style={s.popHeaderLeft}>
+              {post.avatar ? (
+                <Image source={{ uri: post.avatar }} style={s.popHeaderAv} />
+              ) : (
+                <View style={[s.popHeaderAv, s.popHeaderAvPlaceholder]}>
+                  <Text style={s.popHeaderAvLetter}>{(post.author || 'U')[0].toUpperCase()}</Text>
+                </View>
+              )}
+              <Text style={s.popHeaderName}>{post.author}</Text>
+            </View>
+            <TouchableOpacity onPress={onClose} hitSlop={14} activeOpacity={0.7}>
+              <Ionicons name="close-circle" size={28} color={C.red} />
             </TouchableOpacity>
           </View>
-        </ScrollView>
+
+          <ScrollView
+            style={{ flex: 1 }}
+            contentContainerStyle={{ paddingTop: 8, paddingBottom: 12, flexGrow: 0 }}
+            showsVerticalScrollIndicator={false}
+            bounces={false}
+            onContentSizeChange={(_, contentH) => {
+              const total = popupCardHeaderH + contentH;
+              setCardHeight(Math.min(total, popupMaxHeight));
+            }}
+          >
+            {/* Images */}
+            {images.length > 0 ? (
+              <View style={[s.popImgWrap, { width: cardW, height: imgH }]}>
+                <ScrollView
+                  ref={imageScrollRef}
+                  horizontal
+                  pagingEnabled
+                  showsHorizontalScrollIndicator={false}
+                  onMomentumScrollEnd={(e) => {
+                    const i = Math.round(e.nativeEvent.contentOffset.x / imgW);
+                    setImageIndex(i);
+                  }}
+                  style={{ width: cardW, height: imgH }}
+                >
+                  {images.map((uri, i) => (
+                    <Image key={i} source={{ uri }} style={{ width: imgW, height: imgH }} resizeMode="cover" />
+                  ))}
+                </ScrollView>
+                {images.length > 1 && (
+                  <View style={s.popImgPills}>
+                    {images.map((_, i) => (
+                      <View key={i} style={[s.popImgPill, i === imageIndex && s.popImgPillActive]} />
+                    ))}
+                  </View>
+                )}
+                <View style={s.popImgBadge}>
+                  <Ionicons name="images-outline" size={13} color="#FFF" />
+                  <Text style={s.popImgBadgeText}>{imageIndex + 1}/{images.length}</Text>
+                </View>
+              </View>
+            ) : null}
+
+            {/* Body content */}
+            <View style={s.popBody}>
+              {/* Location + rating in same row */}
+              <View style={s.popPlaceRatingRow}>
+                {post.place ? (
+                  <View style={s.popPlaceWrap}>
+                    <Ionicons name="location-sharp" size={13} color={C.red} />
+                    <Text style={s.popPlaceText} numberOfLines={1}>{post.place}</Text>
+                  </View>
+                ) : null}
+                {post.rating != null && post.rating > 0 && (
+                  <View style={s.popRatingWrap}>
+                    <RatingStars rating={post.rating} size={13} />
+                    <Text style={s.popRatingNum}>{Number(post.rating).toFixed(1)}</Text>
+                  </View>
+                )}
+              </View>
+
+              {/* Review text */}
+              <Text style={s.popReviewText}>{post.body}</Text>
+
+              {/* Upvote */}
+              <View style={s.popUpvoteRow}>
+                <TouchableOpacity style={s.popUpvoteBtn} onPress={doUpvote} activeOpacity={0.7}>
+                  <Animated.View style={{ transform: [{ scale }] }}>
+                    <Ionicons name={upvoted ? 'arrow-up-circle' : 'arrow-up-circle-outline'} size={20} color={upvoted ? C.upvoteDark : C.upvoteLight} />
+                  </Animated.View>
+                  <Text style={[s.popUpvoteNum, { color: upvoted ? C.upvoteDark : C.upvoteLight }]}>{count}</Text>
+                </TouchableOpacity>
+              </View>
+
+              {/* Replies — always show so user can add reply */}
+              <View style={s.popReplySection}>
+                <Text style={s.popReplyTitle}>Replies</Text>
+                <View style={s.popReplyBox}>
+                  <View style={s.popReplyAv}>
+                    <Ionicons name="person" size={14} color={C.muted} />
+                  </View>
+                  <TextInput
+                    ref={replyInputRef}
+                    style={s.popReplyInput}
+                    placeholder="Add your thoughts..."
+                    placeholderTextColor={C.muted}
+                    value={replyText}
+                    onChangeText={setReplyText}
+                    multiline={false}
+                    returnKeyType="send"
+                    blurOnSubmit
+                  />
+                  <TouchableOpacity onPress={() => replyInputRef.current?.focus()} hitSlop={8}>
+                    <Ionicons name="send" size={16} color={C.red} />
+                  </TouchableOpacity>
+                </View>
+              </View>
+            </View>
+          </ScrollView>
+        </View>
       </View>
+      </KeyboardAvoidingView>
     </Modal>
   );
 }
 
 const TAB_BAR_HEIGHT = Platform.OS === 'ios' ? 70 : 60;
 
-function CreatePostModal({ visible, onClose }) {
+function CreatePostModal({ visible, onClose, onPosted }) {
   const insets = useSafeAreaInsets();
   const [body, setBody] = useState('');
-  const [selectedTopicId, setSelectedTopicId] = useState('tips');
+  const [place, setPlace] = useState('');
+  const [selectedClientUuid, setSelectedClientUuid] = useState(null);
+  const [rating, setRating] = useState(0);
+  const [selectedTopicIds, setSelectedTopicIds] = useState([]);
+  const [customHashtag, setCustomHashtag] = useState('');
+  const [imageEntries, setImageEntries] = useState([]);
+  const [posting, setPosting] = useState(false);
+  const [showClientPicker, setShowClientPicker] = useState(false);
+  const [clientSearch, setClientSearch] = useState('');
+  const [clients, setClients] = useState([]);
+  const [clientsLoading, setClientsLoading] = useState(false);
 
   const handleClose = () => {
-    setBody('');
-    setSelectedTopicId('tips');
+    setBody(''); setPlace(''); setSelectedClientUuid(null);
+    setRating(0); setSelectedTopicIds([]); setCustomHashtag(''); setImageEntries([]);
+    setShowClientPicker(false); setClientSearch('');
     onClose();
   };
 
-  const handlePost = () => {
+  const MAX_CUSTOM_HASHTAG_LEN = 15;
+  const onCustomHashtagChange = (text) => {
+    const withoutHash = text.replace(/^#+/, '').slice(0, MAX_CUSTOM_HASHTAG_LEN);
+    setCustomHashtag(withoutHash);
+  };
+
+  const loadClients = useCallback(async () => {
+    setClientsLoading(true);
+    const list = await fetchClients();
+    setClients(list);
+    setClientsLoading(false);
+  }, []);
+
+  useEffect(() => {
+    if (showClientPicker) loadClients();
+  }, [showClientPicker, loadClients]);
+
+  const filteredClients = (() => {
+    if (!clientSearch.trim()) return clients;
+    const term = clientSearch.trim().toLowerCase();
+    return clients.filter((c) => (c.business_name || '').toLowerCase().includes(term));
+  })();
+
+  const toggleTopic = (id) => {
+    setSelectedTopicIds((prev) =>
+      prev.includes(id) ? prev.filter((t) => t !== id) : [...prev, id]
+    );
+  };
+
+  const pickImage = async () => {
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (status !== 'granted') {
+      Alert.alert('Permission needed', 'Allow access to photos to add images.');
+      return;
+    }
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'],
+      allowsMultipleSelection: true,
+      quality: 0.8,
+      base64: true,
+    });
+    if (!result.canceled && result.assets?.length) {
+      const added = result.assets.slice(0, 2 - imageEntries.length).map((a) => ({
+        uri: a.uri, base64: a.base64, mimeType: a.mimeType || 'image/jpeg',
+      })).filter((a) => a.base64);
+      setImageEntries((prev) => [...prev, ...added].slice(0, 2));
+    }
+  };
+
+  const removeImage = (i) => setImageEntries((prev) => prev.filter((_, idx) => idx !== i));
+
+  const handlePost = async () => {
     if (!body.trim()) return;
-    setBody('');
-    setSelectedTopicId('tips');
-    onClose();
+    setPosting(true);
+    try {
+      const userId = await getCommunityUserId();
+      const imageUrls = imageEntries.length > 0 ? await uploadCommunityImages(imageEntries) : [];
+      const allTags = [...selectedTopicIds];
+      const customTag = customHashtag.trim().replace(/^#+/, '').toLowerCase();
+      if (customTag) allTags.push(customTag);
+      const hashtagsValue = allTags.length > 0 ? allTags.join(',') : null;
+      await createCommunityPost({
+        user_a_uuid: userId,
+        review_text: body.trim(),
+        rating: rating > 0 ? rating : null,
+        hashtags: hashtagsValue,
+        imageUrls,
+        badge: place.trim() || null,
+        client_a_uuid: selectedClientUuid || null,
+      });
+      handleClose();
+      onPosted?.();
+    } catch (e) {
+      console.error('[Community] create post failed:', e);
+      Alert.alert('Could not post', e?.message || 'Something went wrong. Try again.');
+    } finally {
+      setPosting(false);
+    }
+  };
+
+  const hasTopic = selectedTopicIds.length > 0 || customHashtag.trim().replace(/^#+/, '').length > 0;
+  const canPost = body.trim().length > 0 && place.trim().length > 0 && hasTopic && rating > 0;
+
+  const selectClient = (client) => {
+    setPlace(client.business_name);
+    setSelectedClientUuid(client.client_a_uuid);
+    setShowClientPicker(false);
+    setClientSearch('');
   };
 
   return (
     <Modal visible={visible} animationType="slide" onRequestClose={handleClose}>
       <KeyboardAvoidingView
-        style={[styles.createModalRoot, { paddingTop: insets.top }]}
+        style={[s.createRoot, { paddingTop: insets.top }]}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        keyboardVerticalOffset={0}
       >
-        <View style={styles.createModalHeader}>
-          <TouchableOpacity onPress={handleClose} style={styles.createModalCancel}>
-            <Text style={styles.createModalCancelText}>Cancel</Text>
+        <View style={s.createHeader}>
+          <TouchableOpacity onPress={handleClose} disabled={posting} activeOpacity={0.7}>
+            <Text style={s.createCancelText}>Cancel</Text>
           </TouchableOpacity>
-          <Text style={styles.createModalTitle}>New post</Text>
-          <TouchableOpacity onPress={handlePost} style={styles.createModalPostBtn} disabled={!body.trim()} activeOpacity={0.7}>
-            <Text style={[styles.createModalPostBtnText, !body.trim() && styles.createModalPostBtnDisabled]}>Post</Text>
+          <Text style={s.createTitle}>Add a Review</Text>
+          <TouchableOpacity onPress={handlePost} disabled={!canPost || posting} activeOpacity={0.7} style={[s.postBtn, canPost && s.postBtnActive]}>
+            {posting ? <ActivityIndicator size="small" color="#FFF" /> : <Text style={[s.postBtnText, canPost && s.postBtnTextActive]}>Post</Text>}
           </TouchableOpacity>
         </View>
+
         <ScrollView
-          style={styles.createModalScroll}
-          contentContainerStyle={[styles.createModalScrollContent, { paddingBottom: insets.bottom + 24 }]}
+          style={{ flex: 1 }}
+          contentContainerStyle={[s.createScroll, { paddingBottom: insets.bottom + 32, paddingTop: 20 }]}
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
         >
-          <View style={styles.createModalBody}>
-            <View style={styles.createAvatar}>
-              <Ionicons name="person" size={24} color={COLORS.textMuted} />
-            </View>
+          {/* 1. Photos: 0 = one Add button; 1 = left image + right Add; 2 = both images */}
+          <Text style={s.sectionLabel}>Photos</Text>
+          <View style={s.photoRow}>
+            {imageEntries.length === 0 ? (
+              <TouchableOpacity style={s.photoAddSingle} onPress={pickImage} activeOpacity={0.7}>
+                <Ionicons name="camera-outline" size={32} color="#78716C" />
+                <Text style={s.photoAddText}>Add photo</Text>
+              </TouchableOpacity>
+            ) : (
+              <>
+                <View style={s.photoHalf}>
+                  {imageEntries[0] ? (
+                    <View style={s.photoThumb}>
+                      <Image source={{ uri: imageEntries[0].uri }} style={s.photoThumbImg} resizeMode="cover" />
+                      <TouchableOpacity style={s.photoRemove} onPress={() => removeImage(0)}>
+                        <Ionicons name="close" size={16} color="#FFF" />
+                      </TouchableOpacity>
+                    </View>
+                  ) : null}
+                </View>
+                <View style={s.photoGap} />
+                <View style={s.photoHalf}>
+                  {imageEntries[1] ? (
+                    <View style={s.photoThumb}>
+                      <Image source={{ uri: imageEntries[1].uri }} style={s.photoThumbImg} resizeMode="cover" />
+                      <TouchableOpacity style={s.photoRemove} onPress={() => removeImage(1)}>
+                        <Ionicons name="close" size={16} color="#FFF" />
+                      </TouchableOpacity>
+                    </View>
+                  ) : (
+                    <TouchableOpacity style={s.photoAdd} onPress={pickImage} activeOpacity={0.7}>
+                      <Ionicons name="camera-outline" size={26} color="#78716C" />
+                      <Text style={s.photoAddText}>Add</Text>
+                    </TouchableOpacity>
+                  )}
+                </View>
+              </>
+            )}
+          </View>
+          <Text style={s.photoCountHint}>({imageEntries.length}/2)</Text>
+
+          {/* 2. Your post */}
+          <Text style={s.sectionLabel}>Your post</Text>
+          <TextInput
+            style={s.createTextInput}
+            placeholder="What did you discover in Bahrain?"
+            placeholderTextColor="#78716C"
+            value={body}
+            onChangeText={setBody}
+            multiline
+            maxLength={500}
+          />
+          <Text style={s.charCount}>{body.length}/500</Text>
+
+          {/* 3. Rating */}
+          <Text style={s.sectionLabel}>Rating</Text>
+          <View style={s.starsRow}>
+            {[1, 2, 3, 4, 5].map((n) => (
+              <View key={n} style={s.starTouchWrap}>
+                <TouchableOpacity
+                  style={s.starHalf}
+                  activeOpacity={0.8}
+                  onPress={() => { const v = n - 0.5; setRating(rating === v ? 0 : v); }}
+                />
+                <TouchableOpacity
+                  style={s.starHalf}
+                  activeOpacity={0.8}
+                  onPress={() => setRating(rating === n ? 0 : n)}
+                />
+                <View pointerEvents="none" style={s.starIconOverlay}>
+                  <Ionicons
+                    name={rating >= n ? 'star' : rating >= n - 0.5 ? 'star-half' : 'star-outline'}
+                    size={30}
+                    color="#B45309"
+                  />
+                </View>
+              </View>
+            ))}
+            {rating > 0 && <Text style={s.starsLabel}>{rating % 1 === 0 ? `${rating}.0` : rating.toFixed(1)}</Text>}
+          </View>
+
+          {/* 4. Place or venue */}
+          <Text style={s.sectionLabel}>Place or venue</Text>
+          <View style={s.placeInputRow}>
+            <Ionicons name="location-outline" size={18} color="#78716C" style={{ marginLeft: 14 }} />
             <TextInput
-              style={styles.createTextInput}
-              placeholder="Share a tip about Bahrain..."
-              placeholderTextColor={COLORS.textMuted}
-              value={body}
-              onChangeText={setBody}
-              multiline
-              maxLength={500}
+              style={s.placeInput}
+              placeholder="e.g. Local cafe, Manama"
+              placeholderTextColor="#78716C"
+              value={place}
+              onChangeText={(t) => { setPlace(t); setSelectedClientUuid(null); }}
             />
-          </View>
-          <Text style={styles.createCharCount}>{body.length}/500</Text>
-          <View style={styles.createTopicRow}>
-            <Text style={styles.createTopicLabel}>Topic</Text>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.createTopicChips}>
-              {TOPICS.filter((t) => t.id !== 'all').map((t) => {
-                const selected = selectedTopicId === t.id;
-                return (
-                  <TouchableOpacity
-                    key={t.id}
-                    style={[styles.createTopicChip, selected && styles.createTopicChipSelected]}
-                    onPress={() => setSelectedTopicId(t.id)}
-                    activeOpacity={0.8}
-                  >
-                    <Text style={styles.createTopicChipEmoji}>{t.emoji}</Text>
-                    <Text style={[styles.createTopicChipLabel, selected && styles.createTopicChipLabelSelected]}>{t.label}</Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </ScrollView>
-          </View>
-          <View style={styles.createActionsRow}>
-            <TouchableOpacity style={styles.createActionBtn} activeOpacity={0.7}>
-              <Ionicons name="image-outline" size={24} color={COLORS.primary} />
+            <TouchableOpacity style={s.fromAppBtn} onPress={() => setShowClientPicker(true)} activeOpacity={0.8}>
+              <Ionicons name="search" size={16} color="#C8102E" />
+              <Text style={s.fromAppBtnText}>Browse</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={styles.createActionBtn} activeOpacity={0.7}>
-              <Ionicons name="location-outline" size={24} color={COLORS.primary} />
-            </TouchableOpacity>
+          </View>
+
+          {/* 5. Select topic + custom hashtag */}
+          <Text style={s.sectionLabel}>#Hashtags</Text>
+          <View style={s.topicGrid}>
+            {CREATE_POST_TOPICS.map((t) => {
+              const on = selectedTopicIds.includes(t.id);
+              return (
+                <TouchableOpacity key={t.id} style={[s.topicChip, on && s.topicChipOn]} onPress={() => toggleTopic(t.id)} activeOpacity={0.8}>
+                  <Text style={s.topicChipEmoji}>{CREATE_POST_TOPIC_EMOJIS[t.id] || ''}</Text>
+                  <Text style={[s.topicChipLabel, on && s.topicChipLabelOn]}>{t.label}</Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+          <View style={s.customHashtagRow}>
+            <Text style={s.customHashtagPrefix}>#</Text>
+            <TextInput
+              style={s.customHashtagInput}
+              placeholder="Add your own (e.g. paratha)"
+              placeholderTextColor="#9CA3AF"
+              value={customHashtag}
+              onChangeText={onCustomHashtagChange}
+              maxLength={MAX_CUSTOM_HASHTAG_LEN}
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
+            {customHashtag.length > 0 && (
+              <Text style={s.customHashtagCount}>{customHashtag.length}/{MAX_CUSTOM_HASHTAG_LEN}</Text>
+            )}
           </View>
         </ScrollView>
+
+        <Modal visible={showClientPicker} animationType="slide" transparent onRequestClose={() => setShowClientPicker(false)}>
+          <View style={[s.pickerOverlay, { paddingTop: insets.top + 60 }]}>
+            <View style={s.pickerCard}>
+              <View style={s.pickerHeader}>
+                <Text style={s.pickerTitle}>Choose a business</Text>
+                <TouchableOpacity onPress={() => setShowClientPicker(false)} hitSlop={12}>
+                  <Ionicons name="close" size={24} color={C.text} />
+                </TouchableOpacity>
+              </View>
+              <View style={s.pickerSearchWrap}>
+                <Ionicons name="search" size={18} color={C.muted} />
+                <TextInput
+                  style={s.pickerSearchInput}
+                  placeholder="Search..."
+                  placeholderTextColor={C.muted}
+                  value={clientSearch}
+                  onChangeText={setClientSearch}
+                  autoCapitalize="none"
+                />
+              </View>
+              {clientsLoading ? (
+                <View style={s.pickerLoading}><ActivityIndicator size="small" color={C.red} /></View>
+              ) : (
+                <FlatList
+                  data={filteredClients}
+                  keyExtractor={(item) => item.client_a_uuid}
+                  renderItem={({ item }) => (
+                    <TouchableOpacity style={s.pickerItem} onPress={() => selectClient(item)} activeOpacity={0.7}>
+                      <View style={s.pickerItemIcon}><Ionicons name="storefront-outline" size={18} color={C.sub} /></View>
+                      <Text style={s.pickerItemText} numberOfLines={1}>{item.business_name}</Text>
+                      <Ionicons name="chevron-forward" size={16} color={C.muted} />
+                    </TouchableOpacity>
+                  )}
+                  style={{ maxHeight: 300 }}
+                  ListEmptyComponent={<Text style={s.pickerEmpty}>No businesses found</Text>}
+                />
+              )}
+            </View>
+          </View>
+        </Modal>
       </KeyboardAvoidingView>
     </Modal>
   );
@@ -416,452 +749,512 @@ function CreatePostModal({ visible, onClose }) {
 
 export default function CommunitiesScreen() {
   const insets = useSafeAreaInsets();
+  const [posts, setPosts] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [activeTopic, setActiveTopic] = useState('all');
   const [selectedPost, setSelectedPost] = useState(null);
-  const [showCreateModal, setShowCreateModal] = useState(false);
+  const [focusReplyWhenOpen, setFocusReplyWhenOpen] = useState(false);
+  const [showCreate, setShowCreate] = useState(false);
+  const [showAiFilterPanel, setShowAiFilterPanel] = useState(false);
+  const [aiSearchQuery, setAiSearchQuery] = useState('');
+  const [aiFilteredPosts, setAiFilteredPosts] = useState([]);
+  const [aiSearching, setAiSearching] = useState(false);
+  const aiPanelHeight = useRef(new Animated.Value(0)).current;
   const fabBottom = TAB_BAR_HEIGHT + 72 + (Platform.OS === 'android' ? insets.bottom : 0);
 
+  const loadPosts = useCallback(async (opts = {}) => {
+    if (activeTopic === 'ai') return;
+    const { isRefresh = false } = opts;
+    if (isRefresh) setRefreshing(true); else setLoading(true);
+    try {
+      const list = await fetchCommunityPosts(activeTopic);
+      setPosts(list);
+    } catch (e) {
+      console.error('[Community] load posts failed:', e);
+      setPosts([]);
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  }, [activeTopic]);
+
+  useEffect(() => { loadPosts(); }, [loadPosts]);
+
+  const runAiSearch = useCallback(async () => {
+    const term = aiSearchQuery.trim().slice(0, AI_SEARCH_MAX_LEN);
+    if (!term) return;
+    setAiSearching(true);
+    try {
+      const list = await searchCommunityWithOpenAI(term);
+      setAiFilteredPosts(list);
+      setActiveTopic('ai');
+      setShowAiFilterPanel(false);
+      setAiSearchQuery('');
+      Animated.timing(aiPanelHeight, { toValue: 0, duration: 200, useNativeDriver: false }).start();
+    } catch (e) {
+      console.error('[Community] AI search failed:', e);
+      Alert.alert('Search failed', e?.message || 'Try again.');
+      setAiFilteredPosts([]);
+    } finally {
+      setAiSearching(false);
+    }
+  }, [aiSearchQuery, aiPanelHeight]);
+
+  const openAiFilterPanel = useCallback(() => {
+    setShowAiFilterPanel(true);
+    Animated.timing(aiPanelHeight, { toValue: 72, duration: 250, useNativeDriver: false }).start();
+  }, [aiPanelHeight]);
+
+  const closeAiFilterPanel = useCallback(() => {
+    Animated.timing(aiPanelHeight, { toValue: 0, duration: 200, useNativeDriver: false }).start(() => setShowAiFilterPanel(false));
+  }, [aiPanelHeight]);
+
+  const displayPosts = activeTopic === 'ai' ? aiFilteredPosts : posts;
+  const isAiTabEnabled = aiFilteredPosts.length > 0;
+  const showAiTip = activeTopic === 'ai';
+
+  const handleUpvote = useCallback(async (item) => {
+    try {
+      const newCount = await upvoteCommunityPost(item.id);
+      const updater = (p) => (p.id === item.id ? { ...p, upvotes: newCount, upvoted: true } : p);
+      setPosts((prev) => prev.map(updater));
+      setAiFilteredPosts((prev) => prev.map(updater));
+      if (selectedPost?.id === item.id) setSelectedPost((p) => (p?.id === item.id ? { ...p, upvotes: newCount, upvoted: true } : p));
+    } catch (e) {
+      console.warn('[Community] upvote failed:', e);
+    }
+  }, [selectedPost?.id]);
+
+  const handleRemoveUpvote = useCallback(async (item) => {
+    try {
+      const newCount = await removeUpvoteCommunityPost(item.id);
+      const updater = (p) => (p.id === item.id ? { ...p, upvotes: newCount, upvoted: false } : p);
+      setPosts((prev) => prev.map(updater));
+      setAiFilteredPosts((prev) => prev.map(updater));
+      if (selectedPost?.id === item.id) setSelectedPost((p) => (p?.id === item.id ? { ...p, upvotes: newCount, upvoted: false } : p));
+    } catch (e) {
+      console.warn('[Community] remove upvote failed:', e);
+    }
+  }, [selectedPost?.id]);
+
   return (
-    <ScreenContainer style={styles.screen}>
-      <View style={[styles.header, { paddingTop: insets.top + 8 }]}>
-        <View style={styles.headerLeft} />
-        <Text style={styles.headerTitle}>Community</Text>
-        <View style={styles.headerRight}>
-          <ProfileButton iconColor={COLORS.textPrimary} />
+    <ScreenContainer style={s.screen}>
+      <View style={[s.topBar, { paddingTop: insets.top + 8 }]}>
+        {/* Header row */}
+        <View style={s.header}>
+          <Text style={s.headerTitle}>Majlis</Text>
+          <View style={s.headerRight}>
+            <TouchableOpacity style={s.aiFilterBtn} onPress={openAiFilterPanel} activeOpacity={0.75}>
+              <Ionicons name="sparkles" size={14} color="#FFF" />
+              <Text style={s.aiFilterText}>Ask Khalid</Text>
+            </TouchableOpacity>
+            <ProfileButton iconColor={C.text} />
+          </View>
         </View>
+
+        {/* Filter chips */}
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.filterScroll}>
+          {TOPICS.map((t) => {
+            const on = activeTopic === t.id;
+            const isAi = t.id === 'ai';
+            const disabled = isAi && !isAiTabEnabled;
+            return (
+              <TouchableOpacity
+                key={t.id}
+                style={[s.filterChip, on && s.filterChipOn, disabled && s.filterChipDisabled]}
+                onPress={() => { if (!disabled) setActiveTopic(t.id); }}
+                activeOpacity={0.75}
+                disabled={disabled}
+              >
+                {on && TOPIC_EMOJIS[t.id] ? <Text style={s.filterChipEmoji}>{TOPIC_EMOJIS[t.id]}</Text> : null}
+                <Text style={[s.filterChipText, on && s.filterChipTextOn, disabled && s.filterChipTextDisabled]}>{t.label}</Text>
+              </TouchableOpacity>
+            );
+          })}
+        </ScrollView>
+
+        {/* AI Filter panel */}
+        <Animated.View style={[s.aiPanel, { height: aiPanelHeight, overflow: 'hidden' }]}>
+          <View style={s.aiPanelInner}>
+            <TextInput
+              style={s.aiPanelInput}
+              placeholder="Search reviews (e.g. food, burger)..."
+              placeholderTextColor={C.muted}
+              value={aiSearchQuery}
+              onChangeText={(t) => setAiSearchQuery(t.slice(0, AI_SEARCH_MAX_LEN))}
+              maxLength={AI_SEARCH_MAX_LEN}
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
+            <TouchableOpacity
+              style={[s.aiPanelBtn, aiSearching && s.aiPanelBtnDisabled]}
+              onPress={runAiSearch}
+              disabled={aiSearching || !aiSearchQuery.trim()}
+              activeOpacity={0.8}
+            >
+              {aiSearching ? <ActivityIndicator size="small" color="#FFF" /> : <Text style={s.aiPanelBtnText}>Search</Text>}
+            </TouchableOpacity>
+            <TouchableOpacity onPress={closeAiFilterPanel} style={s.aiPanelClose} hitSlop={12}>
+              <Ionicons name="close" size={20} color={C.sub} />
+            </TouchableOpacity>
+          </View>
+        </Animated.View>
       </View>
 
-      {/* Feed */}
-      <FlatList
-        data={MOCK_POSTS}
-        keyExtractor={(item) => item.id}
-        renderItem={({ item }) => (
-          <CommunityPostCard
-            item={item}
-            onPress={setSelectedPost}
-            onUpvote={() => {}}
-            onComment={() => {}}
-            onRepost={() => {}}
-          />
-        )}
-        contentContainerStyle={styles.feedContent}
-        style={styles.feedList}
-        showsVerticalScrollIndicator={false}
-        ListHeaderComponent={
-          <View style={styles.feedHeader}>
-            <Text style={styles.feedHeaderText}>Latest from the community</Text>
-          </View>
-        }
-        ListEmptyComponent={
-          <View style={styles.empty}>
-            <Text style={styles.emptyText}>No posts yet.</Text>
-            <Text style={styles.emptySub}>Be the first to share a tip!</Text>
-          </View>
-        }
-      />
+      {loading && activeTopic !== 'ai' && displayPosts.length === 0 ? (
+        <View style={s.loadingWrap}><ActivityIndicator size="large" color={C.red} /></View>
+      ) : (
+        <FlatList
+          data={displayPosts}
+          keyExtractor={(item) => item.id}
+          ListHeaderComponent={
+            displayPosts.length > 0 ? (
+              <View style={s.feedHeader}>
+                <Text style={s.feedHeaderTitle}>{activeTopic === 'ai' ? 'Khalid’s picks' : 'What people are saying'}</Text>
+                <Text style={s.feedHeaderSub}>{activeTopic === 'ai' ? 'Reviews matching your search' : 'Reviews and tips from the community'}</Text>
+              </View>
+            ) : null
+          }
+          renderItem={({ item }) => (
+            <ReviewCard
+              item={item}
+              onPress={setSelectedPost}
+              onCommentPress={(it) => { setSelectedPost(it); setFocusReplyWhenOpen(true); }}
+              onUpvote={handleUpvote}
+              onRemoveUpvote={handleRemoveUpvote}
+              aiTip={showAiTip ? item.aiSuggestion : undefined}
+            />
+          )}
+          contentContainerStyle={s.feed}
+          showsVerticalScrollIndicator={false}
+          refreshControl={activeTopic !== 'ai' ? <RefreshControl refreshing={refreshing} onRefresh={() => loadPosts({ isRefresh: true })} colors={[C.red]} /> : undefined}
+          ListEmptyComponent={
+            <View style={s.empty}>
+              <View style={s.emptyIcon}><Ionicons name="compass-outline" size={44} color={C.muted} /></View>
+              <Text style={s.emptyTitle}>{activeTopic === 'ai' ? 'No matching reviews' : 'No reviews yet'}</Text>
+              <Text style={s.emptySub}>{activeTopic === 'ai' ? 'Try a different search (e.g. food, burger)' : 'Be the first to share a hidden gem in Bahrain'}</Text>
+            </View>
+          }
+        />
+      )}
 
-      {/* Floating create post button — above bottom tab bar */}
-      <TouchableOpacity
-        style={[styles.fab, { bottom: fabBottom }]}
-        onPress={() => setShowCreateModal(true)}
-        activeOpacity={0.85}
-      >
-        <Ionicons name="create" size={24} color="#FFFFFF" />
+      <TouchableOpacity style={[s.fab, { bottom: fabBottom }]} onPress={() => setShowCreate(true)} activeOpacity={0.85}>
+        <Ionicons name="add" size={28} color="#FFF" />
       </TouchableOpacity>
 
-      <PostDetailModal post={selectedPost} onClose={() => setSelectedPost(null)} />
-      <CreatePostModal visible={showCreateModal} onClose={() => setShowCreateModal(false)} />
+      <DetailModal
+        post={selectedPost}
+        onClose={() => { setSelectedPost(null); setFocusReplyWhenOpen(false); }}
+        onUpvote={handleUpvote}
+        onRemoveUpvote={handleRemoveUpvote}
+        focusReplyWhenOpen={focusReplyWhenOpen}
+        onClearFocusReply={() => setFocusReplyWhenOpen(false)}
+      />
+      <CreatePostModal visible={showCreate} onClose={() => setShowCreate(false)} onPosted={() => loadPosts({ isRefresh: true })} />
     </ScreenContainer>
   );
 }
 
-const styles = StyleSheet.create({
-  screen: {
-    backgroundColor: COLORS.screenBg,
+const s = StyleSheet.create({
+  screen: { backgroundColor: C.bg },
+  topBar: {
+    backgroundColor: C.card,
+    paddingBottom: 14,
+    borderBottomWidth: 1, borderBottomColor: C.border,
+    ...Platform.select({
+      ios: { shadowColor: C.warmGlow, shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.08, shadowRadius: 8 },
+      android: { elevation: 3 },
+    }),
   },
   header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingBottom: 12,
-    backgroundColor: COLORS.cardBg,
-    borderBottomWidth: 1,
-    borderBottomColor: COLORS.border,
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingHorizontal: 20, paddingBottom: 14,
   },
-  headerLeft: { width: 40, height: 40 },
-  headerTitle: {
-    flex: 1,
-    fontSize: 18,
-    fontWeight: '700',
-    color: COLORS.textPrimary,
-    textAlign: 'center',
+  headerRight: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  headerTitle: { fontSize: 22, fontWeight: '800', color: C.text, letterSpacing: -0.3 },
+  aiFilterBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 5,
+    backgroundColor: C.red, paddingHorizontal: 14, paddingVertical: 8,
+    borderRadius: 20,
+    ...Platform.select({
+      ios: { shadowColor: C.red, shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.35, shadowRadius: 6 },
+      android: { elevation: 4 },
+    }),
   },
-  headerRight: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
+  aiFilterText: { fontSize: 13, fontWeight: '700', color: '#FFF', letterSpacing: 0.2 },
+  filterScroll: { paddingHorizontal: 16, gap: 8, flexDirection: 'row', alignItems: 'center' },
+  filterChip: {
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    paddingVertical: 8, paddingHorizontal: 16, borderRadius: 20,
+    backgroundColor: C.chip, borderWidth: 1.5, borderColor: C.border,
   },
+  filterChipOn: {
+    backgroundColor: C.redSoft, borderColor: C.red,
+  },
+  filterChipEmoji: { fontSize: 13 },
+  filterChipText: { fontSize: 13, fontWeight: '600', color: C.muted },
+  filterChipTextOn: { color: C.red, fontWeight: '700' },
+  filterChipDisabled: { opacity: 0.5 },
+  filterChipTextDisabled: { color: C.muted },
+  aiPanel: { borderTopWidth: 1, borderTopColor: C.border, backgroundColor: C.card },
+  aiPanelInner: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 12, gap: 10 },
+  aiPanelInput: { flex: 1, height: 40, backgroundColor: C.chip, borderRadius: 12, paddingHorizontal: 14, fontSize: 15, color: C.text },
+  aiPanelBtn: { backgroundColor: C.red, paddingHorizontal: 18, paddingVertical: 10, borderRadius: 12 },
+  aiPanelBtnDisabled: { opacity: 0.7 },
+  aiPanelBtnText: { fontSize: 14, fontWeight: '700', color: '#FFF' },
+  aiPanelClose: { padding: 4 },
+  feed: { paddingHorizontal: 16, paddingBottom: 110 },
+  feedHeader: { paddingTop: 18, paddingBottom: 14 },
+  feedHeaderTitle: { fontSize: 18, fontWeight: '800', color: C.text, marginBottom: 4 },
+  feedHeaderSub: { fontSize: 14, color: C.muted, fontWeight: '500' },
+  loadingWrap: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingVertical: 60 },
+  card: {
+    flexDirection: 'row', backgroundColor: C.card, borderRadius: 16,
+    marginBottom: 12, overflow: 'hidden',
+    borderWidth: 1, borderColor: C.border,
+    ...Platform.select({
+      ios: { shadowColor: C.warmGlow, shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.1, shadowRadius: 10 },
+      android: { elevation: 3 },
+    }),
+  },
+  cardAccent: { width: 4 },
+  cardInner: { flex: 1, padding: 14 },
+  cardAuthorRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 10 },
+  av: { width: 38, height: 38, borderRadius: 19, backgroundColor: C.chip, marginRight: 10, borderWidth: 2 },
+  avPlaceholder: { alignItems: 'center', justifyContent: 'center', backgroundColor: C.chip },
+  avInitial: { fontSize: 15, fontWeight: '800' },
+  cardMeta: { flex: 1, minWidth: 0 },
+  authorText: { fontSize: 14, fontWeight: '700', color: C.text },
+  cardPlaceRow: { flexDirection: 'row', alignItems: 'center', gap: 3, marginTop: 2 },
+  cardPlaceText: { fontSize: 12, fontWeight: '600', color: C.red },
+  cardRatingPill: {
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    paddingHorizontal: 8, paddingVertical: 4, borderRadius: 10,
+  },
+  cardRatingNum: { fontSize: 12, fontWeight: '700', marginLeft: 2 },
+  bodyText: { fontSize: 14, lineHeight: 21, color: C.text, marginBottom: 10 },
+  cardAiTipWrap: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 10, backgroundColor: '#F5F3FF', paddingHorizontal: 10, paddingVertical: 8, borderRadius: 10 },
+  cardAiTipText: { flex: 1, fontSize: 12, color: '#5B21B6', fontWeight: '600', fontStyle: 'italic' },
+  cardTopicRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginBottom: 10 },
+  cardTopicPill: { backgroundColor: C.chip, paddingHorizontal: 10, paddingVertical: 4, borderRadius: 10 },
+  cardTopicPillText: { fontSize: 12, fontWeight: '600', color: C.sub },
+  cardImgWrap: { overflow: 'hidden', backgroundColor: C.chip, position: 'relative', borderRadius: 12, marginBottom: 10 },
+  cardImg: { width: '100%', height: '100%' },
+  cardImgSplitRow: { flexDirection: 'row', width: '100%', height: '100%' },
+  cardImgHalf: { flex: 1, height: '100%' },
+  cardImgGap: { width: 2, backgroundColor: 'rgba(0,0,0,0.08)' },
+  imgCountBadge: {
+    position: 'absolute', bottom: 8, right: 8,
+    backgroundColor: 'rgba(0,0,0,0.55)', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12,
+  },
+  imgCountText: { color: '#FFF', fontSize: 12, fontWeight: '700' },
+  ratingOnImg: {
+    position: 'absolute', top: 8, right: 8, flexDirection: 'row', alignItems: 'center', gap: 4,
+    backgroundColor: 'rgba(0,0,0,0.5)', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8,
+  },
+  ratingOnImgNum: { fontSize: 12, fontWeight: '700', color: '#FFF' },
+  actions: { flexDirection: 'row', alignItems: 'center', gap: 20, paddingTop: 10, borderTopWidth: 1, borderTopColor: C.border },
+  actionBtn: { flexDirection: 'row', alignItems: 'center', gap: 5 },
+  actionNum: { fontSize: 13, fontWeight: '600', color: C.muted },
   fab: {
-    position: 'absolute',
-    right: 20,
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    backgroundColor: COLORS.primary,
-    alignItems: 'center',
-    justifyContent: 'center',
+    position: 'absolute', right: 20, width: 58, height: 58, borderRadius: 29,
+    backgroundColor: C.red, alignItems: 'center', justifyContent: 'center',
     ...Platform.select({
-      ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.2, shadowRadius: 8 },
-      android: { elevation: 6 },
+      ios: { shadowColor: C.red, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.35, shadowRadius: 10 },
+      android: { elevation: 10 },
     }),
   },
-  feedList: {
+  empty: { paddingVertical: 72, alignItems: 'center', paddingHorizontal: 32 },
+  emptyIcon: {
+    width: 80, height: 80, borderRadius: 40, backgroundColor: C.chip,
+    alignItems: 'center', justifyContent: 'center', marginBottom: 20,
+  },
+  emptyTitle: { fontSize: 18, fontWeight: '700', color: C.text, marginBottom: 6 },
+  emptySub: { fontSize: 15, color: C.sub, textAlign: 'center', lineHeight: 22 },
+  // Popup
+  popOverlay: {
     flex: 1,
-  },
-  feedContent: {
-    paddingHorizontal: 16,
-    paddingTop: 8,
-    paddingBottom: 24,
-  },
-  feedHeader: {
-    marginBottom: 12,
-  },
-  feedHeaderText: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: COLORS.textSecondary,
-  },
-  postCard: {
-    backgroundColor: COLORS.cardBg,
-    borderRadius: 16,
-    padding: 14,
-    marginBottom: 12,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    overflow: 'hidden',
-    ...Platform.select({
-      ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.06, shadowRadius: 8 },
-      android: { elevation: 3 },
-    }),
-  },
-  postHeader: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    marginBottom: 10,
-  },
-  avatar: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: COLORS.pillBg,
-    marginRight: 10,
-  },
-  postMeta: {
-    flex: 1,
-    minWidth: 0,
-  },
-  nameRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    flexWrap: 'wrap',
-    gap: 8,
-    marginBottom: 2,
-  },
-  authorName: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: COLORS.textPrimary,
-    maxWidth: '60%',
-  },
-  topicPill: {
-    paddingVertical: 2,
-    paddingHorizontal: 8,
-    borderRadius: 6,
-    backgroundColor: `${COLORS.primary}18`,
-  },
-  topicPillText: {
-    fontSize: 11,
-    fontWeight: '600',
-    color: COLORS.primary,
-  },
-  handle: {
-    fontSize: 13,
-    color: COLORS.textMuted,
-  },
-  moreBtn: {
-    padding: 4,
-  },
-  body: {
-    fontSize: 15,
-    lineHeight: 22,
-    color: COLORS.textPrimary,
-    marginBottom: 12,
-  },
-  imageWrap: {
-    borderRadius: 12,
-    overflow: 'hidden',
-    marginBottom: 12,
-    backgroundColor: COLORS.pillBg,
-  },
-  postImage: {
-    borderRadius: 12,
-  },
-  imageCorner: {
-    position: 'absolute',
-    bottom: 0,
-    right: 0,
-    width: 24,
-    height: 24,
-    backgroundColor: COLORS.cardBg,
-    borderTopLeftRadius: 12,
-  },
-  actionRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 20,
-    paddingTop: 4,
-  },
-  actionRowBorderTop: {
-    borderTopWidth: 1,
-    borderTopColor: COLORS.border,
-    marginTop: 4,
-    paddingTop: 8,
-  },
-  modalContainer: {
-    flex: 1,
-    backgroundColor: COLORS.screenBg,
-  },
-  modalHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 8,
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: COLORS.border,
-    backgroundColor: COLORS.cardBg,
-  },
-  modalCloseBtn: {
-    width: 44,
-    height: 44,
-    alignItems: 'center',
     justifyContent: 'center',
-  },
-  modalHeaderTitle: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: COLORS.textPrimary,
-  },
-  modalHeaderRight: { width: 44, height: 44 },
-  modalScroll: {
-    flex: 1,
-  },
-  modalScrollContent: {
-    paddingHorizontal: 16,
-    paddingTop: 16,
-  },
-  // Create post modal
-  createModalRoot: {
-    flex: 1,
-    backgroundColor: COLORS.screenBg,
-  },
-  createModalHeader: {
-    flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: COLORS.border,
-    backgroundColor: COLORS.cardBg,
+    paddingHorizontal: 24,
   },
-  createModalCancel: {
-    minWidth: 70,
-    paddingVertical: 8,
+  popCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 18,
+    overflow: 'hidden',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.28,
+    shadowRadius: 20,
+    elevation: 24,
   },
-  createModalCancelText: {
-    fontSize: 16,
-    color: COLORS.textSecondary,
+  popHeader: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingHorizontal: 18, paddingVertical: 12, paddingTop: 14, borderBottomWidth: 1, borderBottomColor: C.border,
   },
-  createModalTitle: {
-    flex: 1,
-    fontSize: 18,
-    fontWeight: '700',
-    color: COLORS.textPrimary,
-    textAlign: 'center',
+  popHeaderLeft: { flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 },
+  popHeaderAv: { width: 36, height: 36, borderRadius: 18, backgroundColor: C.chip },
+  popHeaderAvPlaceholder: { alignItems: 'center', justifyContent: 'center', backgroundColor: C.red + '18' },
+  popHeaderAvLetter: { fontSize: 14, fontWeight: '800', color: C.red },
+  popHeaderName: { fontSize: 15, fontWeight: '700', color: C.text },
+  popPlaceRatingRow: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8, marginBottom: 12,
   },
-  createModalPostBtn: {
-    minWidth: 70,
-    paddingVertical: 8,
-    alignItems: 'flex-end',
+  popPlaceWrap: { flexDirection: 'row', alignItems: 'center', gap: 4, flex: 1, minWidth: 0 },
+  popImgWrap: { position: 'relative', overflow: 'hidden' },
+  popImgPills: {
+    position: 'absolute', bottom: 10, left: 0, right: 0,
+    flexDirection: 'row', justifyContent: 'center', gap: 5,
   },
-  createModalPostBtnText: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: COLORS.primary,
+  popImgPill: { width: 6, height: 6, borderRadius: 3, backgroundColor: 'rgba(255,255,255,0.4)' },
+  popImgPillActive: { backgroundColor: '#FFF', width: 18, borderRadius: 3 },
+  popImgBadge: {
+    position: 'absolute', top: 10, left: 10, flexDirection: 'row', alignItems: 'center', gap: 4,
+    backgroundColor: 'rgba(0,0,0,0.5)', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6,
   },
-  createModalPostBtnDisabled: {
-    color: COLORS.textMuted,
+  popImgBadgeText: { color: '#FFF', fontSize: 12, fontWeight: '700' },
+  popBody: { paddingHorizontal: 18, paddingTop: 16 },
+  popRatingWrap: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  popRatingNum: { fontSize: 13, fontWeight: '700', color: C.text },
+  popPlaceText: { fontSize: 13, fontWeight: '600', color: C.red },
+  popReviewText: {
+    fontSize: 15, lineHeight: 24, color: C.text, marginTop: 14,
   },
-  createModalScroll: {
-    flex: 1,
+  popUpvoteRow: { marginTop: 12 },
+  popUpvoteBtn: { flexDirection: 'row', alignItems: 'center', gap: 5 },
+  popUpvoteNum: { fontSize: 14, fontWeight: '600', color: C.muted },
+  popReplySection: { marginTop: 14, paddingTop: 12, marginBottom: 14, borderTopWidth: 1, borderTopColor: C.border },
+  popReplyTitle: { fontSize: 14, fontWeight: '700', color: C.text, marginBottom: 8 },
+  popReplyBox: {
+    flexDirection: 'row', alignItems: 'center', backgroundColor: C.bg,
+    paddingVertical: 8, paddingHorizontal: 10, borderRadius: 10,
+    borderWidth: 1, borderColor: C.border,
   },
-  createModalScrollContent: {
-    paddingHorizontal: 16,
-    paddingTop: 20,
-    paddingBottom: 24,
+  popReplyAv: {
+    width: 26, height: 26, borderRadius: 13, backgroundColor: C.chip,
+    alignItems: 'center', justifyContent: 'center', marginRight: 8,
   },
-  createModalBody: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    marginBottom: 12,
+  popReplyInput: { flex: 1, fontSize: 13, color: C.text, paddingVertical: 0, minHeight: 20 },
+  popReplyPlaceholder: { flex: 1, fontSize: 13, color: C.muted },
+  // Create — warm color scheme
+  createRoot: { flex: 1, backgroundColor: '#FAF8F5' },
+  createHeader: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingHorizontal: 20, paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: '#E8E4DF',
+    backgroundColor: '#FFF',
   },
-  createAvatar: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: COLORS.pillBg,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 12,
+  createCancelText: { fontSize: 16, color: '#78716C', fontWeight: '600' },
+  createTitle: { fontSize: 18, fontWeight: '800', color: '#1C1917' },
+  postBtn: {
+    paddingVertical: 8, paddingHorizontal: 20, borderRadius: 20,
+    backgroundColor: '#E7E5E4',
   },
+  postBtnActive: { backgroundColor: '#C8102E' },
+  postBtnText: { fontSize: 15, fontWeight: '700', color: '#A8A29E' },
+  postBtnTextActive: { color: '#FFF' },
+  createScroll: { paddingHorizontal: 20, paddingTop: 24 },
   createTextInput: {
-    flex: 1,
-    fontSize: 16,
-    lineHeight: 22,
-    color: COLORS.textPrimary,
-    paddingVertical: 8,
-    minHeight: 100,
-    textAlignVertical: 'top',
+    fontSize: 17, lineHeight: 26, color: '#1C1917',
+    minHeight: 120, textAlignVertical: 'top', paddingTop: 0,
+    backgroundColor: '#FFF', borderRadius: 12, borderWidth: 1, borderColor: '#E8E4DF', paddingHorizontal: 14, paddingVertical: 12,
   },
-  createCharCount: {
-    fontSize: 13,
-    color: COLORS.textMuted,
-    marginBottom: 16,
-    textAlign: 'right',
+  charCount: { fontSize: 12, color: '#78716C', textAlign: 'right', marginTop: 4, marginBottom: 20 },
+  sectionLabel: { fontSize: 14, fontWeight: '700', color: '#44403C', marginBottom: 10, marginTop: 4 },
+  placeInputRow: {
+    flexDirection: 'row', alignItems: 'center', backgroundColor: '#FFF', borderRadius: 14,
+    borderWidth: 1, borderColor: '#E8E4DF', marginBottom: 20, overflow: 'hidden',
   },
-  createTopicRow: {
-    marginBottom: 20,
+  placeInput: { flex: 1, fontSize: 15, color: '#1C1917', paddingVertical: 12, paddingHorizontal: 10 },
+  fromAppBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    paddingVertical: 10, paddingHorizontal: 14, backgroundColor: '#FEF2F2',
+    borderLeftWidth: 1, borderLeftColor: '#E8E4DF',
   },
-  createTopicLabel: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: COLORS.textSecondary,
-    marginBottom: 10,
+  fromAppBtnText: { fontSize: 14, fontWeight: '700', color: '#C8102E' },
+  starsRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 20 },
+  starTouchWrap: { width: 34, height: 34, flexDirection: 'row', position: 'relative' },
+  starHalf: { width: 17, height: 34 },
+  starIconOverlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, alignItems: 'center', justifyContent: 'center' },
+  starsLabel: { fontSize: 16, fontWeight: '700', color: '#B45309', marginLeft: 8 },
+  topicGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginBottom: 20 },
+  topicChip: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    paddingVertical: 10, paddingHorizontal: 16, borderRadius: 14,
+    backgroundColor: '#FFF', borderWidth: 1.5, borderColor: '#E8E4DF',
   },
-  createTopicChips: {
-    flexDirection: 'row',
-    gap: 8,
+  topicChipOn: { backgroundColor: '#FEF2F2', borderColor: '#C8102E' },
+  topicChipEmoji: { fontSize: 15 },
+  topicChipLabel: { fontSize: 13, fontWeight: '600', color: '#57534E' },
+  topicChipLabelOn: { color: '#C8102E', fontWeight: '700' },
+  customHashtagRow: {
+    flexDirection: 'row', alignItems: 'center',
+    backgroundColor: '#FFF', borderRadius: 14, borderWidth: 1.5, borderColor: '#E8E4DF',
+    paddingVertical: 10, paddingHorizontal: 14, marginBottom: 20,
   },
-  createTopicChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 8,
-    paddingHorizontal: 14,
-    borderRadius: 20,
-    backgroundColor: COLORS.pillBg,
-    borderWidth: 1,
-    borderColor: 'transparent',
+  customHashtagPrefix: { fontSize: 15, fontWeight: '600', color: '#9CA3AF', marginRight: 4 },
+  customHashtagInput: { flex: 1, fontSize: 15, color: '#1C1917', paddingVertical: 0, minWidth: 0 },
+  customHashtagCount: { fontSize: 12, color: '#9CA3AF', marginLeft: 8 },
+  photoRow: { flexDirection: 'row', marginBottom: 20, height: 120, alignItems: 'center' },
+  photoAddSingle: {
+    width: '100%', height: 120, borderRadius: 16,
+    borderWidth: 2, borderStyle: 'dashed', borderColor: '#D6D3D1',
+    alignItems: 'center', justifyContent: 'center', gap: 6,
+    backgroundColor: 'rgba(255,255,255,0.8)',
   },
-  createTopicChipSelected: {
-    backgroundColor: `${COLORS.primary}12`,
-    borderColor: `${COLORS.primary}40`,
+  photoHalf: { flex: 1 },
+  photoGap: { width: 10 },
+  photoThumb: {
+    width: '100%', height: '100%', borderRadius: 16, overflow: 'hidden',
+    backgroundColor: '#E7E5E4', position: 'relative',
   },
-  createTopicChipEmoji: {
-    fontSize: 16,
-    marginRight: 6,
+  photoThumbImg: { width: '100%', height: '100%' },
+  photoRemove: {
+    position: 'absolute', top: 6, right: 6,
+    width: 26, height: 26, borderRadius: 13, backgroundColor: 'rgba(0,0,0,0.5)',
+    alignItems: 'center', justifyContent: 'center',
   },
-  createTopicChipLabel: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: COLORS.textSecondary,
+  photoAdd: {
+    width: '100%', height: '100%', borderRadius: 16,
+    borderWidth: 2, borderStyle: 'dashed', borderColor: '#D6D3D1',
+    alignItems: 'center', justifyContent: 'center', gap: 4,
+    backgroundColor: 'rgba(255,255,255,0.8)',
   },
-  createTopicChipLabelSelected: {
-    color: COLORS.primary,
+  photoAddText: { fontSize: 12, fontWeight: '600', color: '#78716C' },
+  photoCountHint: { fontSize: 12, color: '#78716C', marginTop: 4, marginBottom: 4 },
+  // Picker
+  pickerOverlay: {
+    flex: 1, backgroundColor: 'rgba(0,0,0,0.5)',
+    paddingHorizontal: 20, justifyContent: 'flex-start',
   },
-  createActionsRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 16,
-  },
-  createActionBtn: {
-    padding: 8,
-  },
-  detailCard: {
-    backgroundColor: COLORS.cardBg,
-    borderRadius: 16,
-    padding: 14,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    overflow: 'hidden',
+  pickerCard: {
+    backgroundColor: C.card, borderRadius: 22, overflow: 'hidden',
     ...Platform.select({
-      ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.06, shadowRadius: 8 },
-      android: { elevation: 3 },
+      ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.15, shadowRadius: 24 },
+      android: { elevation: 12 },
     }),
   },
-  detailBody: {
-    fontSize: 16,
-    lineHeight: 24,
-    color: COLORS.textPrimary,
-    marginBottom: 12,
+  pickerHeader: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingHorizontal: 20, paddingVertical: 16, borderBottomWidth: 1, borderBottomColor: C.border,
   },
-  replySection: {
-    marginTop: 20,
+  pickerTitle: { fontSize: 18, fontWeight: '800', color: C.text },
+  pickerSearchWrap: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    marginHorizontal: 16, marginVertical: 12, paddingVertical: 10, paddingHorizontal: 14,
+    borderRadius: 14, backgroundColor: C.bg, borderWidth: 1, borderColor: C.border,
   },
-  replySectionTitle: {
-    fontSize: 15,
-    fontWeight: '700',
-    color: COLORS.textPrimary,
-    marginBottom: 10,
+  pickerSearchInput: { flex: 1, fontSize: 15, color: C.text },
+  pickerLoading: { padding: 32, alignItems: 'center' },
+  pickerItem: {
+    flexDirection: 'row', alignItems: 'center', gap: 12,
+    paddingVertical: 14, paddingHorizontal: 20,
+    borderBottomWidth: 1, borderBottomColor: C.border,
   },
-  replyInputRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: COLORS.cardBg,
-    paddingVertical: 14,
-    paddingHorizontal: 14,
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: COLORS.border,
+  pickerItemIcon: {
+    width: 36, height: 36, borderRadius: 12, backgroundColor: C.bg,
+    alignItems: 'center', justifyContent: 'center',
   },
-  replyAvatar: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: COLORS.pillBg,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 12,
-  },
-  replyPlaceholder: {
-    fontSize: 15,
-    color: COLORS.textMuted,
-  },
-  actionItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-  },
-  actionCount: {
-    fontSize: 13,
-    color: COLORS.textMuted,
-    fontWeight: '500',
-  },
-  actionCountUpvoted: {
-    color: COLORS.upvote,
-  },
-  empty: {
-    paddingVertical: 48,
-    alignItems: 'center',
-  },
-  emptyText: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: COLORS.textSecondary,
-    marginBottom: 4,
-  },
-  emptySub: {
-    fontSize: 14,
-    color: COLORS.textMuted,
-  },
+  pickerItemText: { flex: 1, fontSize: 15, fontWeight: '600', color: C.text },
+  pickerEmpty: { padding: 28, fontSize: 15, color: C.muted, textAlign: 'center' },
 });
