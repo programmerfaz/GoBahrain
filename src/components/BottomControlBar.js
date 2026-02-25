@@ -3,14 +3,6 @@ import { View, Text, StyleSheet, TouchableOpacity, Platform, Animated, Easing, I
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 
-// Order: Home, Explore, AI Plan, Community
-const NAV_ITEMS = [
-  { name: 'Home', icon: 'home' },
-  { name: 'Explore', icon: 'compass' },
-  { name: 'AI Plan', icon: 'sparkles' },
-  { name: 'Community', icon: 'people' },
-];
-
 export default function BottomControlBar({ state, navigation }) {
   const insets = useSafeAreaInsets();
   const currentRouteName = state.routes[state.index]?.name;
@@ -68,137 +60,117 @@ export default function BottomControlBar({ state, navigation }) {
     navigation.navigate(screenName);
   };
 
+  const navItems = [
+    { screen: 'Home', icon: 'home', label: 'Home' },
+    { screen: 'Explore', icon: 'compass', label: 'Explore' },
+    null, // center slot for AI FAB
+    { screen: 'AI Plan', icon: 'map-outline', label: 'AI Plan' },
+    { screen: 'Community', icon: 'people', label: 'Community' },
+  ];
+
+  const barContentHeight = 56;
+  const bottomInset = Math.max(insets.bottom, 12);
+  const totalBarHeight = barContentHeight + bottomInset;
+
   return (
-    <View pointerEvents="box-none" style={StyleSheet.absoluteFill}>
+    <View style={styles.wrapper}>
       <View
         style={[
           styles.bar,
           {
-            // Sit closer to the very bottom, similar to Facebook
-            bottom: insets.bottom + 4,
+            height: totalBarHeight,
+            paddingBottom: bottomInset,
           },
         ]}
       >
-        {/* Single row: Home · Explore · + · AI Plan · Community */}
         <View style={styles.navRow}>
-          {/* Home */}
-          <TouchableOpacity
-            style={styles.navItem}
-            activeOpacity={0.8}
-            onPress={() => handleNavigate('Home')}
-          >
-            <Ionicons
-              name="home"
-              size={26}
-              color={currentRouteName === 'Home' ? '#C8102E' : '#9CA3AF'}
-            />
-            {currentRouteName === 'Home' && <View style={styles.navDot} />}
-          </TouchableOpacity>
-
-          {/* Explore */}
-          <TouchableOpacity
-            style={styles.navItem}
-            activeOpacity={0.8}
-            onPress={() => handleNavigate('Explore')}
-          >
-            <Ionicons
-              name="compass"
-              size={26}
-              color={currentRouteName === 'Explore' ? '#0EA5E9' : '#9CA3AF'}
-            />
-            {currentRouteName === 'Explore' && <View style={styles.navDot} />}
-          </TouchableOpacity>
-
-          {/* Center AI button with idle glow + press impulse */}
-          <View style={styles.aiContainer}>
-            <Animated.View
-              pointerEvents="none"
-              style={[
-                styles.aiGlow,
-                {
-                  opacity: glowOpacity,
-                  transform: [{ scale: glowScale }],
-                },
-              ]}
-            />
-            <Animated.View
-              pointerEvents="none"
-              style={[
-                styles.aiImpulseGlow,
-                {
-                  opacity: impulseOpacity,
-                  transform: [{ scale: impulseScale }],
-                },
-              ]}
-            />
-            <TouchableOpacity
-              style={styles.fab}
-              activeOpacity={0.9}
-              onPress={() => {
-                // Light haptic feedback when AI is triggered
-                if (Platform.OS !== 'web') {
-                  Vibration.vibrate(40);
-                }
-
-                // Local impulse glow
-                impulse.setValue(0);
-                Animated.sequence([
-                  Animated.timing(impulse, {
-                    toValue: 1,
-                    duration: 550,
-                    easing: Easing.out(Easing.circle),
-                    useNativeDriver: true,
-                  }),
-                  Animated.timing(impulse, {
-                    toValue: 0,
-                    duration: 350,
-                    easing: Easing.in(Easing.circle),
-                    useNativeDriver: true,
-                  }),
-                ]).start();
-
-                // Trigger AI effect on the CURRENT page only (no navigation)
-                const current = state.routes[state.index]?.name;
-                if (current) {
-                  navigation.navigate(current, { aiPulse: Date.now() });
-                }
-              }}
-            >
-              <Image
-                source={require('../../assets/ai-button-logo.png')}
-                style={styles.aiIcon}
-                resizeMode="contain"
-              />
-            </TouchableOpacity>
-          </View>
-
-          {/* AI Plan */}
-          <TouchableOpacity
-            style={styles.navItem}
-            activeOpacity={0.8}
-            onPress={() => handleNavigate('AI Plan')}
-          >
-            <Ionicons
-              name="map-outline"
-              size={26}
-              color={currentRouteName === 'AI Plan' ? '#C8102E' : '#9CA3AF'}
-            />
-            {currentRouteName === 'AI Plan' && <View style={styles.navDot} />}
-          </TouchableOpacity>
-
-          {/* Community */}
-          <TouchableOpacity
-            style={styles.navItem}
-            activeOpacity={0.8}
-            onPress={() => handleNavigate('Community')}
-          >
-            <Ionicons
-              name="people"
-              size={26}
-              color={currentRouteName === 'Community' ? '#0EA5E9' : '#9CA3AF'}
-            />
-            {currentRouteName === 'Community' && <View style={styles.navDot} />}
-          </TouchableOpacity>
+          {navItems.map((item, index) => {
+            if (item === null) {
+              return (
+                <View key="ai" style={styles.aiContainer}>
+                  <Animated.View
+                    pointerEvents="none"
+                    style={[
+                      styles.aiGlow,
+                      {
+                        opacity: glowOpacity,
+                        transform: [{ scale: glowScale }],
+                      },
+                    ]}
+                  />
+                  <Animated.View
+                    pointerEvents="none"
+                    style={[
+                      styles.aiImpulseGlow,
+                      {
+                        opacity: impulseOpacity,
+                        transform: [{ scale: impulseScale }],
+                      },
+                    ]}
+                  />
+                  <TouchableOpacity
+                    style={styles.fab}
+                    activeOpacity={0.9}
+                    onPress={() => {
+                      if (Platform.OS !== 'web') {
+                        Vibration.vibrate(40);
+                      }
+                      impulse.setValue(0);
+                      Animated.sequence([
+                        Animated.timing(impulse, {
+                          toValue: 1,
+                          duration: 550,
+                          easing: Easing.out(Easing.circle),
+                          useNativeDriver: true,
+                        }),
+                        Animated.timing(impulse, {
+                          toValue: 0,
+                          duration: 350,
+                          easing: Easing.in(Easing.circle),
+                          useNativeDriver: true,
+                        }),
+                      ]).start();
+                      const current = state.routes[state.index]?.name;
+                      if (current) {
+                        navigation.navigate(current, { aiPulse: Date.now() });
+                      }
+                    }}
+                  >
+                    <Image
+                      source={require('../../assets/ai-button-logo.png')}
+                      style={styles.aiIcon}
+                      resizeMode="contain"
+                    />
+                  </TouchableOpacity>
+                  <Text style={styles.fabLabel}>AI</Text>
+                </View>
+              );
+            }
+            const isActive = currentRouteName === item.screen;
+            return (
+              <TouchableOpacity
+                key={item.screen}
+                style={styles.navItem}
+                activeOpacity={0.7}
+                onPress={() => handleNavigate(item.screen)}
+              >
+                <Ionicons
+                  name={item.icon}
+                  size={24}
+                  color={isActive ? '#C8102E' : '#9CA3AF'}
+                />
+                <Text
+                  style={[
+                    styles.navLabel,
+                    isActive && styles.navLabelActive,
+                  ]}
+                  numberOfLines={1}
+                >
+                  {item.label}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
         </View>
       </View>
     </View>
@@ -206,92 +178,103 @@ export default function BottomControlBar({ state, navigation }) {
 }
 
 const styles = StyleSheet.create({
-  bar: {
+  wrapper: {
     position: 'absolute',
-    left: 16,
-    right: 16,
-    borderRadius: 28,
-    paddingHorizontal: 18,
-    paddingVertical: 10,
+    left: 0,
+    right: 0,
+    bottom: 0,
+  },
+  bar: {
+    left: 0,
+    right: 0,
+    bottom: 0,
+    position: 'absolute',
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: '#E5E7EB',
+    paddingHorizontal: 4,
     backgroundColor: '#FFFFFF',
     ...Platform.select({
       ios: {
         shadowColor: '#000',
-        shadowOffset: { width: 0, height: 10 },
-        shadowOpacity: 0.18,
-        shadowRadius: 25,
+        shadowOffset: { width: 0, height: -2 },
+        shadowOpacity: 0.08,
+        shadowRadius: 10,
       },
       android: {
-        elevation: 14,
+        elevation: 16,
       },
     }),
   },
   navRow: {
+    flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    marginTop: 4,
+    justifyContent: 'space-around',
   },
   navItem: {
     alignItems: 'center',
     justifyContent: 'center',
     flex: 1,
   },
+  navLabel: {
+    fontSize: 10,
+    color: '#9CA3AF',
+    marginTop: 2,
+    fontWeight: '500',
+  },
+  navLabelActive: {
+    color: '#C8102E',
+  },
   aiContainer: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    // Nudge AI button up slightly so it floats above the bar
-    marginBottom: 4,
   },
-  navDot: {
-    marginTop: 4,
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    // Bahrain red accent under active icon
-    backgroundColor: '#C8102E',
+  fabLabel: {
+    fontSize: 10,
+    color: '#6B7280',
+    marginTop: 2,
+    fontWeight: '600',
   },
   fab: {
-    width: 60,
-    height: 60,
-    borderRadius: 30,
-    // Bright Bahrain red base so the AI logo pops
-    backgroundColor: '#C8102E',
-    borderWidth: 3,
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    backgroundColor: '#111827',
+    borderWidth: 2,
     borderColor: '#FFFFFF',
     alignItems: 'center',
     justifyContent: 'center',
     overflow: 'hidden',
     ...Platform.select({
       ios: {
-        shadowColor: '#C8102E',
-        shadowOffset: { width: 0, height: 6 },
-        shadowOpacity: 0.4,
-        shadowRadius: 18,
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.16,
+        shadowRadius: 10,
       },
       android: {
-        elevation: 14,
+        elevation: 8,
       },
     }),
   },
   aiGlow: {
     position: 'absolute',
-    width: 86,
-    height: 86,
-    borderRadius: 43,
-    borderWidth: 2,
-    borderColor: '#C8102E',
-    backgroundColor: 'rgba(200,16,46,0.22)',
+    width: 82,
+    height: 82,
+    borderRadius: 41,
+    borderWidth: 1,
+    borderColor: 'rgba(17,24,39,0.3)',
+    backgroundColor: 'rgba(17,24,39,0.08)',
   },
   aiImpulseGlow: {
     position: 'absolute',
-    width: 102,
-    height: 102,
-    borderRadius: 51,
-    borderWidth: 2,
-    borderColor: '#F97373',
-    backgroundColor: 'rgba(248,113,113,0.26)',
+    width: 96,
+    height: 96,
+    borderRadius: 48,
+    borderWidth: 1,
+    borderColor: 'rgba(17,24,39,0.25)',
+    backgroundColor: 'rgba(17,24,39,0.10)',
   },
   aiIcon: {
     width: 44,

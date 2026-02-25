@@ -1,7 +1,8 @@
 import { StatusBar } from 'expo-status-bar';
-import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { NavigationContainer } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
+import { StyleSheet } from 'react-native';
 import HomeScreen from './src/screens/HomeScreen';
 import ExploreScreen from './src/screens/ExploreScreen';
 import AIPlanScreen from './src/screens/AIPlanScreen';
@@ -31,10 +32,16 @@ function TabsNavigator() {
 export default function App() {
   return (
     <SafeAreaProvider>
-      <NavigationContainer>
-        <TabsNavigator />
-        <StatusBar style="dark" />
-      </NavigationContainer>
+      <SafeAreaView style={styles.safeArea} edges={['left', 'right']}>
+        <NavigationContainer>
+          <TabsNavigator />
+          <StatusBar style="dark" />
+        </NavigationContainer>
+      </SafeAreaView>
     </SafeAreaProvider>
   );
 }
+
+const styles = StyleSheet.create({
+  safeArea: { flex: 1 },
+});
