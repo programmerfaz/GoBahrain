@@ -13,6 +13,7 @@ import {
   Modal,
   KeyboardAvoidingView,
   Easing,
+  Image,
 } from 'react-native';
 import { BlurView } from 'expo-blur';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -116,14 +117,79 @@ const PLAN_COLORS = {
   overlayBlockText: '#FFFFFF',
 };
 
-// Animated loading view with tick-done checks
-function PlanModalLoadingView({ loadingStatus, showSuccess }) {
+// Build lightweight preview cards from raw Pinecone matches
+function buildSpotPreviews(places, restaurants, events) {
+  const previews = [];
+  const pushFrom = (items, type) => {
+    (items || []).forEach((m, idx) => {
+      if (previews.length >= 8) return;
+      const meta = m.metadata || {};
+      const name =
+        meta.business_name ||
+        meta.event_name ||
+        meta.name ||
+        `Spot ${previews.length + 1}`;
+      const area = meta.area || meta.location || meta.city || '';
+      const description =
+        meta.short_description ||
+        meta.description ||
+        meta.summary ||
+        '';
+      const cuisine = meta.cuisine || meta.cuisine_type;
+      const typeLabel =
+        type === 'restaurant'
+          ? cuisine
+            ? `${cuisine} dining`
+            : 'Food & drinks'
+          : type === 'event'
+          ? meta.event_type || 'Event'
+          : meta.category || 'Explore';
+      const image =
+        meta.image_url ||
+        meta.thumbnail_url ||
+        meta.cover_image ||
+        meta.image ||
+        null;
+
+      previews.push({
+        id: m.id || `${type}-${idx}`,
+        name,
+        type,
+        typeLabel,
+        area,
+        snippet: description,
+        image,
+      });
+    });
+  };
+
+  pushFrom(places, 'place');
+  pushFrom(restaurants, 'restaurant');
+  pushFrom(events, 'event');
+
+  return previews;
+}
+
+// Fun facts about Bahrain, used while loading
+const BAHRAIN_FACTS = [
+  'Bahrain was once the heart of the ancient Dilmun civilization, a key trading hub for thousands of years.',
+  'Locals love evening walks along the corniche – the skyline and sea breeze are perfect after sunset.',
+  'Traditional Bahraini breakfast often includes balaleet (sweet vermicelli) and khubz (Arabic bread).',
+  'Manama Souq is one of the best places to feel the old-meets-new soul of Bahrain in a single walk.',
+  'Pearling was once Bahrain’s main industry – the Pearling Trail in Muharraq is now a UNESCO site.',
+  'Bahrain has a vibrant cafe culture – from hidden specialty coffee spots to seaside shisha lounges.',
+];
+
+// Animated loading view with tick-done checks + spot previews
+function PlanModalLoadingView({ loadingStatus, showSuccess, spotPreviews }) {
   const pulse = useRef(new Animated.Value(0)).current;
   const fadeIn = useRef(new Animated.Value(0)).current;
   const stepEntrance = useRef([new Animated.Value(0), new Animated.Value(0), new Animated.Value(0)]).current;
   const stepCheck = useRef([new Animated.Value(0), new Animated.Value(0), new Animated.Value(0)]).current;
   const successScale = useRef(new Animated.Value(0)).current;
   const successOpacity = useRef(new Animated.Value(0)).current;
+  const [activePreviewIdx, setActivePreviewIdx] = useState(0);
+  const activePreviewOpacity = useRef(new Animated.Value(1)).current;
 
   const steps = [
     { icon: 'compass-outline', text: 'Matching places to your vibe', key: 'places' },
@@ -139,6 +205,10 @@ function PlanModalLoadingView({ loadingStatus, showSuccess }) {
     return [];
   };
   const completedSteps = getCompletedSteps();
+
+  const hasPreviews = !!spotPreviews && spotPreviews.length > 0;
+  const fact =
+    BAHRAIN_FACTS[Math.floor(Math.random() * BAHRAIN_FACTS.length)];
 
   useEffect(() => {
     if (showSuccess) return;
@@ -213,6 +283,38 @@ function PlanModalLoadingView({ loadingStatus, showSuccess }) {
       ]).start();
     }
   }, [showSuccess]);
+
+  // Auto-loop through preview spots while loading
+  useEffect(() => {
+    if (!hasPreviews || showSuccess) return;
+
+    setActivePreviewIdx(0);
+    activePreviewOpacity.setValue(1);
+
+    const interval = setInterval(() => {
+      Animated.sequence([
+        Animated.timing(activePreviewOpacity, {
+          toValue: 0,
+          duration: 220,
+          useNativeDriver: true,
+        }),
+        Animated.timing(activePreviewOpacity, {
+          toValue: 1,
+          duration: 260,
+          useNativeDriver: true,
+        }),
+      ]).start();
+
+      setActivePreviewIdx((prev) =>
+        spotPreviews.length === 0 ? 0 : (prev + 1) % spotPreviews.length
+      );
+    }, 2600);
+
+    return () => {
+      clearInterval(interval);
+      activePreviewOpacity.setValue(1);
+    };
+  }, [hasPreviews, showSuccess, spotPreviews?.length]);
 
   const pulseScale = pulse.interpolate({
     inputRange: [0, 1],
@@ -310,6 +412,14 @@ function PlanModalLoadingView({ loadingStatus, showSuccess }) {
           );
         })}
       </View>
+
+      {/* Bahrain teaser while generating */}
+      {!showSuccess && (
+        <View style={styles.planModalFactWrap}>
+          <Ionicons name="information-circle-outline" size={16} color="#FACC15" />
+          <Text style={styles.planModalFactText}>{fact}</Text>
+        </View>
+      )}
     </Animated.View>
   );
 }
@@ -517,6 +627,12 @@ export default function AIPlanScreen() {
   const sheetAnim = useRef(new Animated.Value(SNAP_POINTS[INITIAL_SNAP_INDEX])).current;
   const lastSnap = useRef(SNAP_POINTS[INITIAL_SNAP_INDEX]);
   const currentYRef = useRef(SNAP_POINTS[INITIAL_SNAP_INDEX]);
+  const prefetchRef = useRef({
+    prefsKey: null,
+    places: null,
+    breakfastSpots: null,
+    events: null,
+  });
 
   // 0 = past plans, 1 = preferences, 2 = food, 3 = results
   const [drawerStep, setDrawerStep] = useState(0);
@@ -536,6 +652,7 @@ export default function AIPlanScreen() {
   const [showPlanModal, setShowPlanModal] = useState(false);
   const [planModalStep, setPlanModalStep] = useState(1);
   const [planGenerationSuccess, setPlanGenerationSuccess] = useState(false);
+  const [spotPreviews, setSpotPreviews] = useState([]);
   const spinAnim = useRef(new Animated.Value(0)).current;
 
   // Plan modal animations (match Home AI overlay)
@@ -558,6 +675,38 @@ export default function AIPlanScreen() {
     setSelectedFoodCategories((prev) =>
       prev.includes(id) ? prev.filter((f) => f !== id) : [...prev, id]
     );
+  };
+
+  const startBackgroundPrefetch = (prefLabels) => {
+    const key = (prefLabels || []).join('|');
+    if (!key) return;
+    const cached = prefetchRef.current;
+    if (cached.prefsKey === key && cached.places && cached.breakfastSpots && cached.events) {
+      return;
+    }
+    prefetchRef.current = {
+      prefsKey: key,
+      places: null,
+      breakfastSpots: null,
+      events: null,
+    };
+    (async () => {
+      try {
+        const [places, breakfastSpots, events] = await Promise.all([
+          fetchPlaces(prefLabels),
+          fetchBreakfastSpots(),
+          fetchEvents(prefLabels),
+        ]);
+        prefetchRef.current = {
+          prefsKey: key,
+          places,
+          breakfastSpots,
+          events,
+        };
+      } catch {
+        // best-effort prefetch; ignore errors
+      }
+    })();
   };
 
   const handleSurpriseMe = () => {
@@ -589,21 +738,29 @@ export default function AIPlanScreen() {
           setSelectedMarker(null);
           setError(null);
           setLoading(true);
-          setLoadingStatus(`Khalid is planning a ${theme.label} day for you…`);
+          setLoadingStatus(`Finding places and restaurants for your ${theme.label.toLowerCase()} day…`);
           setDrawerStep(3);
 
           (async () => {
             let generatedPlan = null;
             try {
-              const places = await fetchPlaces(prefLabels);
-              setLoadingStatus('Finding restaurants…');
-              const restaurants = await fetchRestaurants(foodLabels);
-              setLoadingStatus('Checking breakfast spots…');
-              const breakfastSpots = await fetchBreakfastSpots();
-              setLoadingStatus('Looking for events…');
-              const events = await fetchEvents(prefLabels);
+              const [
+                places,
+                restaurants,
+                breakfastSpots,
+                events,
+              ] = await Promise.all([
+                fetchPlaces(prefLabels),
+                fetchRestaurants(foodLabels),
+                fetchBreakfastSpots(),
+                fetchEvents(prefLabels),
+              ]);
 
               console.log(`[Surprise ${theme.label}] ${places.length}P ${restaurants.length}R ${breakfastSpots.length}B ${events.length}E`);
+
+              // Build previews so the user sees some of the spots being considered
+              const preview = buildSpotPreviews(places, restaurants, events);
+              setSpotPreviews(preview);
 
               setLoadingStatus(`Khalid is building your ${theme.label} day…`);
               const plan = await generateDayPlan(places, restaurants, breakfastSpots, events, prefLabels, foodLabels);
@@ -657,6 +814,7 @@ export default function AIPlanScreen() {
     setPineconeMatches([]);
     setSelectedMarker(null);
     setError(null);
+    setSpotPreviews([]);
     setPlanModalStep(1);
     setShowPlanModal(true);
   };
@@ -732,7 +890,7 @@ export default function AIPlanScreen() {
 
     setLoading(true);
     setPlanGenerationSuccess(false);
-    setLoadingStatus('Finding places based on your preferences…');
+    setLoadingStatus('Finding places and restaurants based on your preferences…');
     setError(null);
     setDayPlan(null);
     setPineconeMatches([]);
@@ -741,23 +899,51 @@ export default function AIPlanScreen() {
 
     let generatedPlan = null;
     try {
-      // Pipeline Step 1 — fetch places based on preferences
-      const places = await fetchPlaces(prefLabels);
+      const prefsKey = prefLabels.join('|');
+      const cached = prefetchRef.current;
 
-      // Pipeline Step 2 — fetch restaurants based on food choices
-      setLoadingStatus('Finding restaurants for your food cravings…');
-      const restaurants = await fetchRestaurants(foodLabels);
+      let places;
+      let breakfastSpots;
+      let events;
+      let restaurants;
 
-      // Pipeline Step 3 — fetch breakfast spots
-      setLoadingStatus('Finding the best breakfast spots…');
-      const breakfastSpots = await fetchBreakfastSpots();
+      const hasCached =
+        cached.prefsKey === prefsKey &&
+        cached.places &&
+        cached.breakfastSpots &&
+        cached.events;
 
-      // Pipeline Step 4 — fetch events
-      setLoadingStatus('Checking out events happening in Bahrain…');
-      const events = await fetchEvents(prefLabels);
+      if (hasCached) {
+        places = cached.places;
+        breakfastSpots = cached.breakfastSpots;
+        events = cached.events;
+        [restaurants] = await Promise.all([
+          fetchRestaurants(foodLabels),
+        ]);
+      } else {
+        const [
+          placesResult,
+          restaurantsResult,
+          breakfastResult,
+          eventsResult,
+        ] = await Promise.all([
+          fetchPlaces(prefLabels),
+          fetchRestaurants(foodLabels),
+          fetchBreakfastSpots(),
+          fetchEvents(prefLabels),
+        ]);
+        places = placesResult;
+        restaurants = restaurantsResult;
+        breakfastSpots = breakfastResult;
+        events = eventsResult;
+      }
 
       const allMatches = [...places, ...restaurants, ...breakfastSpots, ...events];
       setPineconeMatches(allMatches);
+
+      // Build previews so the user sees some of the spots being considered
+      const preview = buildSpotPreviews(places, restaurants, events);
+      setSpotPreviews(preview);
 
       console.log(`Pinecone: ${places.length} places, ${restaurants.length} restaurants, ${breakfastSpots.length} breakfast, ${events.length} events`);
 
@@ -1376,7 +1562,11 @@ export default function AIPlanScreen() {
           >
             {/* Loading state — animated, smooth */}
             {loading || planGenerationSuccess ? (
-              <PlanModalLoadingView loadingStatus={loadingStatus} showSuccess={planGenerationSuccess} />
+              <PlanModalLoadingView
+                loadingStatus={loadingStatus}
+                showSuccess={planGenerationSuccess}
+                spotPreviews={spotPreviews}
+              />
             ) : (
               <>
                 {/* Question block */}
@@ -1471,7 +1661,13 @@ export default function AIPlanScreen() {
                     <TouchableOpacity
                       style={styles.planModalContinueBtn}
                       activeOpacity={0.8}
-                      onPress={() => setPlanModalStep(2)}
+                      onPress={() => {
+                        const prefLabels = selectedPreferences
+                          .map((id) => PREFERENCES.find((p) => p.id === id)?.label)
+                          .filter(Boolean);
+                        startBackgroundPrefetch(prefLabels);
+                        setPlanModalStep(2);
+                      }}
                     >
                       <Text style={styles.planModalContinueBtnText}>Continue</Text>
                       <Ionicons name="arrow-forward" size={20} color="#FFFFFF" />
@@ -2089,6 +2285,115 @@ const styles = StyleSheet.create({
   },
   planModalLoadingStepTextDone: {
     color: 'rgba(255,255,255,0.85)',
+    fontWeight: '600',
+  },
+  planModalFactWrap: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+    marginTop: 8,
+    paddingHorizontal: 16,
+  },
+  planModalFactText: {
+    flex: 1,
+    fontSize: 14,
+    color: 'rgba(255,255,255,0.9)',
+    lineHeight: 20,
+    fontWeight: '500',
+  },
+  planModalPreviewSection: {
+    marginTop: 16,
+  },
+  planModalPreviewCarousel: {
+    paddingHorizontal: 16,
+  },
+  planModalPreviewTitle: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: 'rgba(255,255,255,0.96)',
+    marginBottom: 10,
+    paddingHorizontal: 16,
+  },
+  planModalPreviewScroll: {
+    paddingLeft: 16,
+    paddingRight: 4,
+  },
+  planModalPreviewCard: {
+    width: 220,
+    borderRadius: 18,
+    marginRight: 12,
+    borderWidth: 1,
+    overflow: 'hidden',
+  },
+  planModalPreviewImage: {
+    width: '100%',
+    height: 96,
+  },
+  planModalPreviewBody: {
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  planModalPreviewTagRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 6,
+    gap: 6,
+  },
+  planModalPreviewTag: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 999,
+  },
+  planModalPreviewTagText: {
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  planModalPreviewArea: {
+    fontSize: 11,
+    color: 'rgba(15,23,42,0.9)',
+    fontWeight: '500',
+  },
+  planModalPreviewName: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#0F172A',
+    marginBottom: 4,
+  },
+  planModalPreviewSnippet: {
+    fontSize: 13,
+    color: '#1F2937',
+    lineHeight: 18,
+  },
+  planModalPreviewPager: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: 10,
+  },
+  planModalPreviewDotRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  planModalPreviewDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: 'rgba(15,23,42,0.18)',
+  },
+  planModalPreviewDotActive: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#0F172A',
+  },
+  planModalPreviewCounter: {
+    fontSize: 11,
+    color: 'rgba(15,23,42,0.65)',
     fontWeight: '600',
   },
   planModalLoadingPulseSuccess: {

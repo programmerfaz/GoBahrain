@@ -348,23 +348,15 @@ function formatMatchForPrompt(match, idx) {
   if (m.end_date) parts.push(`EndDate: ${m.end_date}`);
   if (m.venue) parts.push(`Venue: ${m.venue}`);
   if (m.indoor_outdoor) parts.push(`IndoorOutdoor: ${m.indoor_outdoor}`);
-  const shown = [
-    'business_name', 'name', 'event_name', 'description', 'client_type', 'cuisine_type', 'cuisine',
-    'price_range', 'rating', 'openclosed_state', 'lat', 'long',
-    'latitude', 'longitude', 'lng', 'Lat', 'Long', 'LNG', 'LAT',
-    'record_type', 'location', 'area', 'event_type', 'start_time',
-    'end_time', 'start_date', 'end_date', 'venue', 'indoor_outdoor',
-  ];
-  Object.keys(m).forEach((k) => {
-    if (!shown.includes(k) && m[k] != null && m[k] !== '') parts.push(`${k}: ${m[k]}`);
-  });
   return parts.join(' | ');
 }
 
 export async function generateDayPlan(places, restaurants, breakfastSpots, events, prefLabels, foodLabels) {
   const allMatches = [...places, ...restaurants, ...breakfastSpots, ...events];
+  const MAX_MATCHES_FOR_PLAN = 18;
+  const limitedMatches = allMatches.slice(0, MAX_MATCHES_FOR_PLAN);
 
-  const placesText = allMatches.map((m, i) => formatMatchForPrompt(m, i)).join('\n');
+  const placesText = limitedMatches.map((m, i) => formatMatchForPrompt(m, i)).join('\n');
 
   const hasPref = prefLabels.length > 0;
   const hasFood = foodLabels.length > 0;
@@ -372,7 +364,7 @@ export async function generateDayPlan(places, restaurants, breakfastSpots, event
 
   const systemPrompt = `You are Khalid, a warm and friendly Bahraini local who absolutely loves showing visitors his beautiful island. You speak like a real friend — not a tour guide reading a brochure. Sprinkle in local Bahraini flavor ("habibi", "yalla", "inshallah", "wallah") naturally.
 
-YOU ARE GIVEN ${allMatches.length} real places, restaurants, and events in Bahrain. Your job is to build a FULL-DAY plan.
+YOU ARE GIVEN ${limitedMatches.length} real places, restaurants, and events in Bahrain. Your job is to build a FULL-DAY plan.
 
 ═══ MANDATORY MINIMUM (always include) ═══
 1. BREAKFAST spot (Morning) — a cafe, bakery, or breakfast restaurant
@@ -443,7 +435,7 @@ Reply ONLY with a valid JSON array, NO markdown, NO extra text:
   const userMsg = `${hasPref ? `🎯 The user selected these activity preferences: ${prefLabels.join(', ')} — MUST include places matching these.` : 'No activity preferences selected — surprise me with a diverse mix!'}
 ${hasFood ? `🍽️ The user selected these food types: ${foodLabels.join(', ')} — MUST include restaurants serving these cuisines.` : 'No food preference selected — open to anything.'}
 
-Here are ${allMatches.length} available places, restaurants & events in Bahrain:
+Here are ${limitedMatches.length} available places, restaurants & events in Bahrain:
 ${placesText}
 
 Build Khalid's perfect day. Remember: the user's selected preferences and food types are NON-NEGOTIABLE — include them. Minimum 3 meals (breakfast, lunch, dinner) + 3 places. Also try to include 1-2 events if they fit the timing!`;
@@ -460,8 +452,8 @@ Build Khalid's perfect day. Remember: the user's selected preferences and food t
         { role: 'system', content: systemPrompt },
         { role: 'user', content: userMsg },
       ],
-      temperature: 0.9,
-      max_tokens: 1800,
+      temperature: 0.8,
+      max_tokens: 900,
     }),
   });
 
