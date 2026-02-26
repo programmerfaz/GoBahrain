@@ -195,6 +195,134 @@ export async function fetchEvents(preferenceLabels) {
   return events;
 }
 
+// ─── Landmarks & famous buildings for AR exploration ────────────
+
+const BAHRAIN_LANDMARKS = [
+  { name: 'Bahrain Fort (Qal\'at al-Bahrain)', lat: 26.2333, lng: 50.5206, category: 'UNESCO Heritage', description: 'Ancient Dilmun capital and UNESCO World Heritage Site. Explore 4,000 years of history.' },
+  { name: 'Bahrain National Museum', lat: 26.2286, lng: 50.5865, category: 'Museum', description: 'The country\'s most popular attraction. 6,000 years of Bahrain history with bilingual exhibits.' },
+  { name: 'Al Fateh Grand Mosque', lat: 26.2186, lng: 50.5865, category: 'Landmark', description: 'Bahrain\'s largest mosque. The dome is one of the world\'s largest fibreglass domes.' },
+  { name: 'Bahrain World Trade Center', lat: 26.2394, lng: 50.5778, category: 'Landmark', description: 'Iconic twin towers with integrated wind turbines. First skyscraper to harness wind power.' },
+  { name: 'Tree of Life', lat: 26.0444, lng: 50.5598, category: 'Natural Wonder', description: '400-year-old tree standing alone in the desert. A mysterious natural landmark.' },
+  { name: 'Bab Al Bahrain', lat: 26.2333, lng: 50.5756, category: 'Heritage', description: 'Gateway to Manama Souq. Historic twin-arched entrance to the traditional marketplace.' },
+  { name: 'Bahrain International Circuit', lat: 26.0322, lng: 50.5099, category: 'Sports', description: 'First F1 Grand Prix in the Middle East. Sakhir Tower offers 360° track views.' },
+  { name: 'Beit Al Quran', lat: 26.2233, lng: 50.5833, category: 'Museum', description: 'Houses one of the finest collections of ancient Qurans in the region.' },
+  { name: 'Manama Souq', lat: 26.2283, lng: 50.5783, category: 'Heritage', description: 'Traditional marketplace with narrow streets, local crafts, and authentic Bahraini atmosphere.' },
+  { name: 'Bahrain Pearling Trail', lat: 26.2333, lng: 50.5500, category: 'UNESCO Heritage', description: 'UNESCO World Heritage Site. Historic pearling tradition of the Gulf.' },
+];
+
+export async function fetchLandmarks() {
+  const text = 'Famous landmarks, heritage sites, museums, iconic buildings, and tourist attractions in Bahrain';
+  const embedding = await getEmbedding(text);
+  const places = await queryPinecone(embedding, 10, {
+    record_type: { $eq: 'client' },
+    client_type: { $eq: 'place' },
+  });
+  return places;
+}
+
+// ─── Nearby POIs for AR (distance + bearing) ────────────────────
+
+function getLatLng(m) {
+  const lat = parseFloat(m.lat ?? m.latitude ?? m.Lat ?? '');
+  const lng = parseFloat(m.long ?? m.longitude ?? m.lng ?? m.Long ?? '');
+  return isNaN(lat) || isNaN(lng) ? null : { lat, lng };
+}
+
+function haversineKm(lat1, lon1, lat2, lon2) {
+  const R = 6371;
+  const dLat = ((lat2 - lat1) * Math.PI) / 180;
+  const dLon = ((lon2 - lon1) * Math.PI) / 180;
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos((lat1 * Math.PI) / 180) * Math.cos((lat2 * Math.PI) / 180) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+}
+
+function bearingDeg(lat1, lon1, lat2, lon2) {
+  const dLon = ((lon2 - lon1) * Math.PI) / 180;
+  const y = Math.sin(dLon) * Math.cos((lat2 * Math.PI) / 180);
+  const x =
+    Math.cos((lat1 * Math.PI) / 180) * Math.sin((lat2 * Math.PI) / 180) -
+    Math.sin((lat1 * Math.PI) / 180) * Math.cos((lat2 * Math.PI) / 180) * Math.cos(dLon);
+  return ((Math.atan2(y, x) * 180) / Math.PI + 360) % 360;
+}
+
+export async function fetchNearbyPOIs(userLat, userLng, mode = 'all') {
+  const isLandmarks = mode === 'landmarks';
+  const isFood = mode === 'food';
+
+  const landmarksFromDb = isFood ? [] : await fetchLandmarks().catch(() => []);
+  const fallbackLandmarks = BAHRAIN_LANDMARKS.map((l) => ({
+    ...l,
+    metadata: { place_name: l.name, description: l.description, category: l.category, lat: l.lat, long: l.lng },
+  }));
+  const allLandmarks = [
+    ...landmarksFromDb.map((m) => ({ ...m, _type: 'landmark' })),
+    ...fallbackLandmarks.map((m) => ({ ...m, _type: 'landmark' })),
+  ];
+
+  let places = [];
+  let restaurants = [];
+  let events = [];
+
+  if (!isLandmarks) {
+    [places, restaurants, events] = await Promise.all([
+      isFood ? [] : fetchPlaces([]),
+      fetchRestaurants([]),
+      fetchEvents([]),
+    ]).catch(() => [[], [], []]);
+  }
+
+  const combined = [
+    ...allLandmarks.map((m) => ({ ...m, _type: 'landmark' })),
+    ...places.map((m) => ({ ...m, _type: 'place' })),
+    ...restaurants.map((m) => ({ ...m, _type: 'restaurant' })),
+    ...events.map((m) => ({ ...m, _type: 'event' })),
+  ];
+
+  const seen = new Set();
+  const withCoords = combined
+    .map((item) => {
+      const ll = item.lat != null ? { lat: item.lat, lng: item.lng } : getLatLng(item?.metadata || item);
+      if (!ll) return null;
+      const name =
+        item.metadata?.place_name ||
+        item.metadata?.business_name ||
+        item.metadata?.event_name ||
+        item.metadata?.name ||
+        item?.name ||
+        'Spot';
+      const key = `${name}-${ll.lat.toFixed(4)}`;
+      if (seen.has(key)) return null;
+      seen.add(key);
+      const dist = haversineKm(userLat, userLng, ll.lat, ll.lng);
+      const bear = bearingDeg(userLat, userLng, ll.lat, ll.lng);
+      const type = item._type || (item.metadata?.record_type === 'event' ? 'event' : item.metadata?.client_type === 'restaurant' ? 'restaurant' : 'place');
+      return {
+        ...item,
+        name,
+        lat: ll.lat,
+        lng: ll.lng,
+        distanceKm: dist,
+        bearing: bear,
+        _type: type,
+        _isLandmark: type === 'landmark' || (item.category && ['UNESCO Heritage', 'Landmark', 'Museum', 'Heritage', 'Natural Wonder'].includes(item.category)),
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => {
+      if (mode === 'landmarks') return a.distanceKm - b.distanceKm;
+      if (mode === 'food') return a.distanceKm - b.distanceKm;
+      const landmarkA = a._isLandmark || a._type === 'landmark' ? 1 : 0;
+      const landmarkB = b._isLandmark || b._type === 'landmark' ? 1 : 0;
+      if (landmarkA !== landmarkB) return landmarkB - landmarkA;
+      return a.distanceKm - b.distanceKm;
+    })
+    .slice(0, mode === 'all' ? 16 : 12);
+  return withCoords;
+}
+
 // ─── Step 4: GPT smart day plan from combined records ───────────
 
 function formatMatchForPrompt(match, idx) {

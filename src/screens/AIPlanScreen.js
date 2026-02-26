@@ -10,9 +10,14 @@ import {
   TouchableOpacity,
   ScrollView,
   ActivityIndicator,
+  Modal,
+  KeyboardAvoidingView,
+  Easing,
 } from 'react-native';
+import { BlurView } from 'expo-blur';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import MapView, { Marker, Circle, Polyline } from 'react-native-maps';
+import { useRoute } from '@react-navigation/native';
+import MapView, { Marker, Circle } from 'react-native-maps';
 import { Ionicons } from '@expo/vector-icons';
 import { fetchPlaces, fetchRestaurants, fetchBreakfastSpots, fetchEvents, generateDayPlan } from '../services/aiPipeline';
 
@@ -101,6 +106,392 @@ const DUMMY_PAST_PLANS = [
   { id: 'plan2', title: 'Beach & Food Day', spots: 5, date: '1 week ago' },
 ];
 
+// Match Home page AI overlay design
+const PLAN_COLORS = {
+  primary: '#C8102E',
+  overlayQuestionTitle: '#FFFFFF',
+  overlayQuestionSub: 'rgba(255,255,255,0.88)',
+  overlayBlockBg: 'rgba(255,255,255,0.2)',
+  overlayBlockBorder: 'rgba(255,255,255,0.35)',
+  overlayBlockText: '#FFFFFF',
+};
+
+// Animated loading view with tick-done checks
+function PlanModalLoadingView({ loadingStatus, showSuccess }) {
+  const pulse = useRef(new Animated.Value(0)).current;
+  const fadeIn = useRef(new Animated.Value(0)).current;
+  const stepEntrance = useRef([new Animated.Value(0), new Animated.Value(0), new Animated.Value(0)]).current;
+  const stepCheck = useRef([new Animated.Value(0), new Animated.Value(0), new Animated.Value(0)]).current;
+  const successScale = useRef(new Animated.Value(0)).current;
+  const successOpacity = useRef(new Animated.Value(0)).current;
+
+  const steps = [
+    { icon: 'compass-outline', text: 'Matching places to your vibe', key: 'places' },
+    { icon: 'restaurant-outline', text: 'Hunting perfect food spots', key: 'food' },
+    { icon: 'sparkles-outline', text: 'Khalid is stitching your plan', key: 'plan' },
+  ];
+
+  const getCompletedSteps = () => {
+    if (showSuccess) return [0, 1, 2];
+    const s = (loadingStatus || '').toLowerCase();
+    if (s.includes('crafting') || s.includes('building') || s.includes('stitch')) return [0, 1];
+    if (s.includes('restaurant') || s.includes('food') || s.includes('breakfast') || s.includes('event')) return [0];
+    return [];
+  };
+  const completedSteps = getCompletedSteps();
+
+  useEffect(() => {
+    if (showSuccess) return;
+    const pulseLoop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulse, {
+          toValue: 1,
+          duration: 1800,
+          easing: Easing.inOut(Easing.ease),
+          useNativeDriver: true,
+        }),
+        Animated.timing(pulse, {
+          toValue: 0,
+          duration: 1800,
+          easing: Easing.inOut(Easing.ease),
+          useNativeDriver: true,
+        }),
+      ])
+    );
+    pulseLoop.start();
+    return () => pulseLoop.stop();
+  }, [pulse, showSuccess]);
+
+  useEffect(() => {
+    Animated.parallel([
+      Animated.timing(fadeIn, {
+        toValue: 1,
+        duration: 400,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: true,
+      }),
+      ...stepEntrance.map((anim, i) =>
+        Animated.timing(anim, {
+          toValue: 1,
+          duration: 450,
+          delay: i * 100,
+          easing: Easing.out(Easing.back(1.2)),
+          useNativeDriver: true,
+        })
+      ),
+    ]).start();
+  }, []);
+
+  const animatedChecks = useRef(new Set()).current;
+  useEffect(() => {
+    completedSteps.forEach((idx) => {
+      if (animatedChecks.has(idx)) return;
+      animatedChecks.add(idx);
+      Animated.spring(stepCheck[idx], {
+        toValue: 1,
+        tension: 180,
+        friction: 7,
+        useNativeDriver: true,
+      }).start();
+    });
+  }, [completedSteps.join(',')]);
+
+  useEffect(() => {
+    if (showSuccess) {
+      Animated.parallel([
+        Animated.spring(successScale, {
+          toValue: 1,
+          tension: 120,
+          friction: 10,
+          useNativeDriver: true,
+        }),
+        Animated.timing(successOpacity, {
+          toValue: 1,
+          duration: 400,
+          useNativeDriver: true,
+        }),
+      ]).start();
+    }
+  }, [showSuccess]);
+
+  const pulseScale = pulse.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0.9, 1.12],
+  });
+  const pulseOpacity = pulse.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0.35, 0.8],
+  });
+
+  return (
+    <Animated.View style={[styles.planModalLoadingWrap, { opacity: fadeIn }]}>
+      <View style={styles.planModalLoadingCenter}>
+        {!showSuccess && (
+          <Animated.View
+            style={[
+              styles.planModalLoadingPulseOuter,
+              {
+                opacity: pulseOpacity,
+                transform: [{ scale: pulseScale }],
+              },
+            ]}
+          />
+        )}
+        <View style={[styles.planModalLoadingPulse, showSuccess && styles.planModalLoadingPulseSuccess]}>
+          {showSuccess ? (
+            <Animated.View style={{ transform: [{ scale: successScale }], opacity: successOpacity }}>
+              <Ionicons name="checkmark-circle" size={56} color="#10B981" />
+            </Animated.View>
+          ) : (
+            <ActivityIndicator size="large" color="#FFFFFF" />
+          )}
+        </View>
+      </View>
+      <Animated.View style={showSuccess && { opacity: successOpacity }}>
+        <Text style={styles.planModalLoadingTitle}>
+          {showSuccess ? 'Your plan is ready!' : 'Hang tight, habibi!'}
+        </Text>
+        <Text style={styles.planModalLoadingSub}>
+          {showSuccess ? 'Yalla, let\'s explore Bahrain!' : loadingStatus}
+        </Text>
+      </Animated.View>
+      <View style={styles.planModalLoadingSteps}>
+        {steps.map((s, i) => {
+          const entrance = stepEntrance[i];
+          const check = stepCheck[i];
+          const isDone = completedSteps.includes(i);
+          return (
+            <Animated.View
+              key={s.key}
+              style={[
+                styles.planModalLoadingStepRow,
+                {
+                  opacity: entrance,
+                  transform: [
+                    {
+                      translateX: entrance.interpolate({
+                        inputRange: [0, 1],
+                        outputRange: [-24, 0],
+                      }),
+                    },
+                  ],
+                },
+              ]}
+            >
+              <View style={[styles.planModalLoadingDot, isDone && styles.planModalLoadingDotDone]}>
+                {isDone ? (
+                  <Animated.View
+                    style={{
+                      transform: [
+                        {
+                          scale: check.interpolate({
+                            inputRange: [0, 1],
+                            outputRange: [0.5, 1],
+                          }),
+                        },
+                      ],
+                    }}
+                  >
+                    <Ionicons name="checkmark" size={26} color="#FFFFFF" />
+                  </Animated.View>
+                ) : (
+                  <Ionicons name={s.icon} size={18} color="rgba(255,255,255,0.9)" />
+                )}
+              </View>
+              <Text
+                style={[
+                  styles.planModalLoadingStepText,
+                  isDone && styles.planModalLoadingStepTextDone,
+                ]}
+              >
+                {s.text}
+              </Text>
+            </Animated.View>
+          );
+        })}
+      </View>
+    </Animated.View>
+  );
+}
+
+// Map scanning overlay — improved route tracing + radar sweep during Hang tight
+function MapScanningOverlay({ visible }) {
+  const seg1 = useRef(new Animated.Value(0)).current;
+  const seg2 = useRef(new Animated.Value(0)).current;
+  const seg3 = useRef(new Animated.Value(0)).current;
+  const seg4 = useRef(new Animated.Value(0)).current;
+  const seg5 = useRef(new Animated.Value(0)).current;
+  const dotPos = useRef(new Animated.Value(0)).current;
+  const scanLineY = useRef(new Animated.Value(0)).current;
+  const radarPulse = useRef(new Animated.Value(0)).current;
+  const dotGlow = useRef(new Animated.Value(1)).current;
+
+  useEffect(() => {
+    if (!visible) return;
+    [seg1, seg2, seg3, seg4, seg5, dotPos, scanLineY, radarPulse, dotGlow].forEach((a) => a.setValue(0));
+    dotGlow.setValue(1);
+
+    const scanLineLoop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(scanLineY, { toValue: 1, duration: 2200, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
+        Animated.timing(scanLineY, { toValue: 0, duration: 2200, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
+      ])
+    );
+
+    const radarLoop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(radarPulse, { toValue: 1, duration: 1800, easing: Easing.out(Easing.ease), useNativeDriver: true }),
+        Animated.timing(radarPulse, { toValue: 0, duration: 0, useNativeDriver: true }),
+      ])
+    );
+
+    const dotGlowLoop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(dotGlow, { toValue: 1.4, duration: 400, easing: Easing.out(Easing.ease), useNativeDriver: true }),
+        Animated.timing(dotGlow, { toValue: 1, duration: 400, easing: Easing.in(Easing.ease), useNativeDriver: true }),
+      ])
+    );
+
+    const routeLoop = Animated.loop(
+      Animated.sequence([
+        Animated.parallel([
+          Animated.timing(seg1, { toValue: 1, duration: 480, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
+          Animated.timing(dotPos, { toValue: 0.2, duration: 480, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
+        ]),
+        Animated.parallel([
+          Animated.timing(seg2, { toValue: 1, duration: 420, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
+          Animated.timing(dotPos, { toValue: 0.4, duration: 420, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
+        ]),
+        Animated.parallel([
+          Animated.timing(seg3, { toValue: 1, duration: 450, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
+          Animated.timing(dotPos, { toValue: 0.6, duration: 450, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
+        ]),
+        Animated.parallel([
+          Animated.timing(seg4, { toValue: 1, duration: 420, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
+          Animated.timing(dotPos, { toValue: 0.8, duration: 420, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
+        ]),
+        Animated.parallel([
+          Animated.timing(seg5, { toValue: 1, duration: 420, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
+          Animated.timing(dotPos, { toValue: 1, duration: 420, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
+        ]),
+        Animated.delay(350),
+        Animated.parallel([
+          Animated.timing(seg1, { toValue: 0, duration: 0, useNativeDriver: true }),
+          Animated.timing(seg2, { toValue: 0, duration: 0, useNativeDriver: true }),
+          Animated.timing(seg3, { toValue: 0, duration: 0, useNativeDriver: true }),
+          Animated.timing(seg4, { toValue: 0, duration: 0, useNativeDriver: true }),
+          Animated.timing(seg5, { toValue: 0, duration: 0, useNativeDriver: true }),
+          Animated.timing(dotPos, { toValue: 0, duration: 0, useNativeDriver: true }),
+        ]),
+        Animated.delay(250),
+      ])
+    );
+
+    scanLineLoop.start();
+    radarLoop.start();
+    dotGlowLoop.start();
+    routeLoop.start();
+    return () => {
+      scanLineLoop.stop();
+      radarLoop.stop();
+      dotGlowLoop.stop();
+      routeLoop.stop();
+    };
+  }, [visible, seg1, seg2, seg3, seg4, seg5, dotPos, scanLineY, radarPulse, dotGlow]);
+
+  if (!visible) return null;
+
+  const W1 = SCREEN_WIDTH - 90;
+  const W3 = SCREEN_WIDTH - 90;
+  const W5 = SCREEN_WIDTH - 80;
+  const H2 = 130;
+  const H4 = 130;
+
+  const seg1Transform = [
+    { translateX: seg1.interpolate({ inputRange: [0, 1], outputRange: [W1 / 2, 0] }) },
+    { scaleX: seg1.interpolate({ inputRange: [0, 1], outputRange: [0, 1] }) },
+  ];
+  const seg2Transform = [
+    { translateY: seg2.interpolate({ inputRange: [0, 1], outputRange: [H2 / 2, 0] }) },
+    { scaleY: seg2.interpolate({ inputRange: [0, 1], outputRange: [0, 1] }) },
+  ];
+  const seg3Transform = [
+    { translateX: seg3.interpolate({ inputRange: [0, 1], outputRange: [W3 / 2, 0] }) },
+    { scaleX: seg3.interpolate({ inputRange: [0, 1], outputRange: [0, 1] }) },
+  ];
+  const seg4Transform = [
+    { translateY: seg4.interpolate({ inputRange: [0, 1], outputRange: [H4 / 2, 0] }) },
+    { scaleY: seg4.interpolate({ inputRange: [0, 1], outputRange: [0, 1] }) },
+  ];
+  const seg5Transform = [
+    { translateX: seg5.interpolate({ inputRange: [0, 1], outputRange: [W5 / 2, 0] }) },
+    { scaleX: seg5.interpolate({ inputRange: [0, 1], outputRange: [0, 1] }) },
+  ];
+
+  const dotX = dotPos.interpolate({ inputRange: [0, 0.2, 0.4, 0.6, 0.8, 1], outputRange: [37, SCREEN_WIDTH - 53, SCREEN_WIDTH - 68, 52, 35, SCREEN_WIDTH - 43] });
+  const dotY = dotPos.interpolate({ inputRange: [0, 0.2, 0.4, 0.6, 0.8, 1], outputRange: [77, 77, 205, 205, 327, 327] });
+
+  const scanLineTranslateY = scanLineY.interpolate({ inputRange: [0, 1], outputRange: [0, SCREEN_HEIGHT] });
+  const radarScale = radarPulse.interpolate({ inputRange: [0, 1], outputRange: [0.4, 1.3] });
+  const radarOpacity = radarPulse.interpolate({ inputRange: [0, 0.6, 1], outputRange: [0.5, 0.2, 0] });
+
+  return (
+    <View style={styles.mapScanningOverlay} pointerEvents="none">
+      {/* Radar pulse from center */}
+      <View style={styles.mapScanningRadarCenter}>
+        <Animated.View
+          style={[
+            styles.mapScanningRadarRing,
+            { transform: [{ scale: radarScale }], opacity: radarOpacity },
+          ]}
+        />
+      </View>
+
+      {/* Sweeping scan line */}
+      <Animated.View
+        style={[
+          styles.mapScanningLine,
+          { transform: [{ translateY: scanLineTranslateY }] },
+        ]}
+      />
+
+      {/* Route path segments */}
+      <View style={styles.mapRoutePath}>
+        <View style={styles.mapRouteSegWrap}>
+          <Animated.View style={[styles.mapRouteSeg, styles.mapRouteSeg1, { transform: seg1Transform }]} />
+        </View>
+        <View style={styles.mapRouteSegWrap2}>
+          <Animated.View style={[styles.mapRouteSeg, styles.mapRouteSeg2, { transform: seg2Transform }]} />
+        </View>
+        <View style={styles.mapRouteSegWrap3}>
+          <Animated.View style={[styles.mapRouteSeg, styles.mapRouteSeg3, { transform: seg3Transform }]} />
+        </View>
+        <View style={styles.mapRouteSegWrap4}>
+          <Animated.View style={[styles.mapRouteSeg, styles.mapRouteSeg4, { transform: seg4Transform }]} />
+        </View>
+        <View style={styles.mapRouteSegWrap5}>
+          <Animated.View style={[styles.mapRouteSeg, styles.mapRouteSeg5, { transform: seg5Transform }]} />
+        </View>
+      </View>
+
+      {/* Moving dot with glow */}
+      <Animated.View
+        style={[
+          styles.mapRouteDotGlow,
+          {
+            transform: [
+              { translateX: dotX },
+              { translateY: dotY },
+              { scale: dotGlow },
+            ],
+          },
+        ]}
+      />
+      <Animated.View style={[styles.mapRouteDot, { transform: [{ translateX: dotX }, { translateY: dotY }] }]} />
+    </View>
+  );
+}
+
 function buildMapMarkers(plan) {
   if (!plan) return [];
   return plan.map((item, idx) => {
@@ -119,25 +510,9 @@ function buildMapMarkers(plan) {
   }).filter(Boolean);
 }
 
-async function fetchDrivingRoute(markers) {
-  if (!markers || markers.length < 2) return [];
-  const coords = markers.map(m => `${m.lng},${m.lat}`).join(';');
-  const url = `https://router.project-osrm.org/route/v1/driving/${coords}?overview=full&geometries=geojson`;
-  try {
-    const res = await fetch(url);
-    const json = await res.json();
-    if (json.code === 'Ok' && json.routes?.[0]?.geometry?.coordinates) {
-      return json.routes[0].geometry.coordinates.map(([lng, lat]) => ({
-        latitude: lat,
-        longitude: lng,
-      }));
-    }
-  } catch (_) {}
-  return [];
-}
-
 export default function AIPlanScreen() {
   const insets = useSafeAreaInsets();
+  const route = useRoute();
   const mapRef = useRef(null);
   const sheetAnim = useRef(new Animated.Value(SNAP_POINTS[INITIAL_SNAP_INDEX])).current;
   const lastSnap = useRef(SNAP_POINTS[INITIAL_SNAP_INDEX]);
@@ -153,11 +528,25 @@ export default function AIPlanScreen() {
   const [dayPlan, setDayPlan] = useState(null);
   const [pineconeMatches, setPineconeMatches] = useState([]);
   const [selectedMarker, setSelectedMarker] = useState(null);
-  const [routeCoords, setRouteCoords] = useState([]);
+  const [visiblePinCount, setVisiblePinCount] = useState(0);
+  const [revealingPins, setRevealingPins] = useState(false);
   const [surpriseSpinning, setSurpriseSpinning] = useState(false);
   const [surpriseIndex, setSurpriseIndex] = useState(0);
   const [surprisePicked, setSurprisePicked] = useState(null);
+  const [showPlanModal, setShowPlanModal] = useState(false);
+  const [planModalStep, setPlanModalStep] = useState(1);
+  const [planGenerationSuccess, setPlanGenerationSuccess] = useState(false);
   const spinAnim = useRef(new Animated.Value(0)).current;
+
+  // Plan modal animations (match Home AI overlay)
+  const planModalBackdrop = useRef(new Animated.Value(0)).current;
+  const planModalScale = useRef(new Animated.Value(0.92)).current;
+  const planModalOpacity = useRef(new Animated.Value(0)).current;
+  const planModalTitleOpacity = useRef(new Animated.Value(0)).current;
+  const planModalTitleTranslateY = useRef(new Animated.Value(12)).current;
+  const planModalChipsOpacity = useRef(new Animated.Value(0)).current;
+  const planModalChipsTranslateY = useRef(new Animated.Value(14)).current;
+  const sheetOpacity = useRef(new Animated.Value(1)).current;
 
   const togglePreference = (id) => {
     setSelectedPreferences((prev) =>
@@ -198,21 +587,13 @@ export default function AIPlanScreen() {
           setDayPlan(null);
           setPineconeMatches([]);
           setSelectedMarker(null);
-          setRouteCoords([]);
           setError(null);
           setLoading(true);
           setLoadingStatus(`Khalid is planning a ${theme.label} day for you…`);
           setDrawerStep(3);
 
-          lastSnap.current = SNAP_POINTS[0];
-          Animated.spring(sheetAnim, {
-            toValue: SNAP_POINTS[0],
-            useNativeDriver: true,
-            tension: 80,
-            friction: 12,
-          }).start();
-
           (async () => {
+            let generatedPlan = null;
             try {
               const places = await fetchPlaces(prefLabels);
               setLoadingStatus('Finding restaurants…');
@@ -226,7 +607,7 @@ export default function AIPlanScreen() {
 
               setLoadingStatus(`Khalid is building your ${theme.label} day…`);
               const plan = await generateDayPlan(places, restaurants, breakfastSpots, events, prefLabels, foodLabels);
-
+              generatedPlan = plan;
               setDayPlan(plan);
               setError(null);
 
@@ -238,15 +619,26 @@ export default function AIPlanScreen() {
                   animated: true,
                 });
               }
-              if (validMarkers.length >= 2) {
-                fetchDrivingRoute(validMarkers).then(rc => { if (rc.length > 0) setRouteCoords(rc); });
-              }
             } catch (err) {
               setError(err.message || 'Something went wrong');
               setDayPlan(null);
             } finally {
               setLoading(false);
               setLoadingStatus('');
+              if (generatedPlan && generatedPlan.length > 0) {
+                setRevealingPins(true);
+                setVisiblePinCount(0);
+                sheetOpacity.setValue(0);
+              } else {
+                sheetOpacity.setValue(1);
+                lastSnap.current = SNAP_POINTS[0];
+                Animated.spring(sheetAnim, {
+                  toValue: SNAP_POINTS[0],
+                  useNativeDriver: true,
+                  tension: 80,
+                  friction: 12,
+                }).start();
+              }
             }
           })();
         }, 1200);
@@ -255,24 +647,82 @@ export default function AIPlanScreen() {
   };
 
   const startSetup = () => {
+    setPlanGenerationSuccess(false);
+    setRevealingPins(false);
+    setVisiblePinCount(0);
+    sheetOpacity.setValue(1);
     setSelectedPreferences([]);
     setSelectedFoodCategories([]);
     setDayPlan(null);
     setPineconeMatches([]);
     setSelectedMarker(null);
-    setRouteCoords([]);
     setError(null);
-    setDrawerStep(1);
-    lastSnap.current = SNAP_POINTS[1];
-    Animated.spring(sheetAnim, {
-      toValue: SNAP_POINTS[1],
-      useNativeDriver: true,
-      tension: 80,
-      friction: 12,
-    }).start();
+    setPlanModalStep(1);
+    setShowPlanModal(true);
   };
 
-  const handleGenerate = async () => {
+  useEffect(() => {
+    const openPlanModal = route.params?.openPlanModal;
+    if (openPlanModal) {
+      startSetup();
+    }
+  }, [route.params?.openPlanModal]);
+
+  const closePlanModal = (then) => {
+    Animated.parallel([
+      Animated.timing(planModalBackdrop, {
+        toValue: 0,
+        duration: 300,
+        easing: Easing.in(Easing.quad),
+        useNativeDriver: true,
+      }),
+      Animated.timing(planModalScale, {
+        toValue: 0.95,
+        duration: 300,
+        easing: Easing.in(Easing.quad),
+        useNativeDriver: true,
+      }),
+      Animated.timing(planModalOpacity, {
+        toValue: 0,
+        duration: 250,
+        easing: Easing.in(Easing.quad),
+        useNativeDriver: true,
+      }),
+    ]).start(() => {
+      setShowPlanModal(false);
+      setPlanGenerationSuccess(false);
+      then?.();
+    });
+  };
+
+  const openPlanModalAnim = () => {
+    planModalTitleOpacity.setValue(0);
+    planModalTitleTranslateY.setValue(14);
+    planModalChipsOpacity.setValue(0);
+    planModalChipsTranslateY.setValue(16);
+    Animated.parallel([
+      Animated.timing(planModalBackdrop, {
+        toValue: 1,
+        duration: 350,
+        easing: Easing.out(Easing.quad),
+        useNativeDriver: true,
+      }),
+      Animated.timing(planModalScale, {
+        toValue: 1,
+        duration: 380,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: true,
+      }),
+      Animated.timing(planModalOpacity, {
+        toValue: 1,
+        duration: 320,
+        easing: Easing.out(Easing.quad),
+        useNativeDriver: true,
+      }),
+    ]).start();
+  };
+
+  const handleGenerate = async (onComplete) => {
     const prefLabels = selectedPreferences
       .map((id) => PREFERENCES.find((p) => p.id === id)?.label)
       .filter(Boolean);
@@ -281,22 +731,15 @@ export default function AIPlanScreen() {
       .filter(Boolean);
 
     setLoading(true);
+    setPlanGenerationSuccess(false);
     setLoadingStatus('Finding places based on your preferences…');
     setError(null);
     setDayPlan(null);
     setPineconeMatches([]);
     setSelectedMarker(null);
-    setRouteCoords([]);
     setDrawerStep(3);
 
-    lastSnap.current = SNAP_POINTS[0];
-    Animated.spring(sheetAnim, {
-      toValue: SNAP_POINTS[0],
-      useNativeDriver: true,
-      tension: 80,
-      friction: 12,
-    }).start();
-
+    let generatedPlan = null;
     try {
       // Pipeline Step 1 — fetch places based on preferences
       const places = await fetchPlaces(prefLabels);
@@ -321,12 +764,12 @@ export default function AIPlanScreen() {
       // Pipeline Step 5 — GPT builds a smart day plan from all results
       setLoadingStatus('Khalid is crafting your perfect day…');
       const plan = await generateDayPlan(places, restaurants, breakfastSpots, events, prefLabels, foodLabels);
-
+      generatedPlan = plan;
       setDayPlan(plan);
       setError(null);
 
       // Debug markers
-      const markers = buildMapMarkers(plan);
+      const markers = buildMapMarkers(plan || []);
       console.log(`Map markers: ${markers.length}/${plan.length} spots have coordinates`);
 
       // Fit map to show all markers
@@ -339,18 +782,32 @@ export default function AIPlanScreen() {
         });
       }
 
-      // Fetch actual driving route
-      if (validMarkers.length >= 2) {
-        fetchDrivingRoute(validMarkers).then(rc => {
-          if (rc.length > 0) setRouteCoords(rc);
-        });
-      }
     } catch (err) {
       setError(err.message || 'Something went wrong');
       setDayPlan(null);
     } finally {
       setLoading(false);
       setLoadingStatus('');
+      const succeeded = generatedPlan != null && generatedPlan.length > 0;
+      if (succeeded) {
+        setPlanGenerationSuccess(true);
+        setTimeout(() => {
+          onComplete?.();
+          setRevealingPins(true);
+          setVisiblePinCount(0);
+          sheetOpacity.setValue(0);
+        }, 1400);
+      } else {
+        sheetOpacity.setValue(1);
+        lastSnap.current = SNAP_POINTS[0];
+        Animated.spring(sheetAnim, {
+          toValue: SNAP_POINTS[0],
+          useNativeDriver: true,
+          tension: 80,
+          friction: 12,
+        }).start();
+        onComplete?.();
+      }
     }
   };
 
@@ -358,6 +815,121 @@ export default function AIPlanScreen() {
     const id = sheetAnim.addListener(({ value }) => { currentYRef.current = value; });
     return () => sheetAnim.removeListener(id);
   }, [sheetAnim]);
+
+  useEffect(() => {
+    if (showPlanModal) openPlanModalAnim();
+  }, [showPlanModal]);
+
+  // Question page animations: step transition
+  useEffect(() => {
+    if (!showPlanModal || loading || planGenerationSuccess) return;
+    planModalTitleOpacity.setValue(0);
+    planModalTitleTranslateY.setValue(14);
+    planModalChipsOpacity.setValue(0);
+    planModalChipsTranslateY.setValue(16);
+    Animated.stagger(60, [
+      Animated.parallel([
+        Animated.timing(planModalTitleOpacity, {
+          toValue: 1,
+          duration: 340,
+          easing: Easing.out(Easing.cubic),
+          useNativeDriver: true,
+        }),
+        Animated.timing(planModalTitleTranslateY, {
+          toValue: 0,
+          duration: 340,
+          easing: Easing.out(Easing.cubic),
+          useNativeDriver: true,
+        }),
+      ]),
+      Animated.parallel([
+        Animated.timing(planModalChipsOpacity, {
+          toValue: 1,
+          duration: 320,
+          easing: Easing.out(Easing.cubic),
+          useNativeDriver: true,
+        }),
+        Animated.timing(planModalChipsTranslateY, {
+          toValue: 0,
+          duration: 320,
+          easing: Easing.out(Easing.cubic),
+          useNativeDriver: true,
+        }),
+      ]),
+    ]).start();
+  }, [planModalStep, showPlanModal]);
+
+  // Pin reveal: show pins one by one, pan camera to each, then open sheet with fade
+  useEffect(() => {
+    if (!revealingPins || !dayPlan) return;
+    const markers = buildMapMarkers(dayPlan);
+    if (markers.length === 0) {
+      setRevealingPins(false);
+      sheetOpacity.setValue(1);
+      lastSnap.current = SNAP_POINTS[0];
+      Animated.spring(sheetAnim, {
+        toValue: SNAP_POINTS[0],
+        useNativeDriver: true,
+        tension: 80,
+        friction: 12,
+      }).start();
+      return;
+    }
+    // Initial pan to first place
+    const first = markers[0];
+    if (first && mapRef.current) {
+      mapRef.current.animateToRegion(
+        clampRegionToBahrain({
+          latitude: first.lat,
+          longitude: first.lng,
+          latitudeDelta: 0.025,
+          longitudeDelta: 0.025,
+        }),
+        800
+      );
+    }
+    const interval = setInterval(() => {
+      setVisiblePinCount((prev) => {
+        if (prev >= markers.length) {
+          clearInterval(interval);
+          setTimeout(() => {
+            setRevealingPins(false);
+            lastSnap.current = SNAP_POINTS[0];
+            Animated.parallel([
+              Animated.timing(sheetOpacity, {
+                toValue: 1,
+                duration: 500,
+                easing: Easing.out(Easing.cubic),
+                useNativeDriver: true,
+              }),
+              Animated.spring(sheetAnim, {
+                toValue: SNAP_POINTS[0],
+                useNativeDriver: true,
+                tension: 80,
+                friction: 12,
+              }),
+            ]).start();
+          }, 0);
+          return prev;
+        }
+        // Pan camera to the pin we're about to reveal
+        const mk = markers[prev];
+        if (mk && mapRef.current) {
+          mapRef.current.animateToRegion(
+            clampRegionToBahrain({
+              latitude: mk.lat,
+              longitude: mk.lng,
+              latitudeDelta: 0.025,
+              longitudeDelta: 0.025,
+            }),
+            700
+          );
+        }
+        return prev + 1;
+      });
+    }, 750);
+    return () => clearInterval(interval);
+  }, [revealingPins, dayPlan]);
 
   const handleRegionChangeComplete = (region) => {
     if (!region || !mapRef.current) return;
@@ -393,23 +965,6 @@ export default function AIPlanScreen() {
     })
   ).current;
 
-  // Grid tile for preferences and food
-  const renderGridTile = (item, isSelected, onPress) => (
-    <TouchableOpacity
-      key={item.id}
-      style={[styles.gridTile, isSelected && { borderColor: item.color, backgroundColor: `${item.color}10` }]}
-      activeOpacity={0.8}
-      onPress={onPress}
-    >
-      <View style={[styles.gridTileIcon, { backgroundColor: `${item.color}18` }]}>
-        <Ionicons name={item.icon} size={22} color={item.color} />
-      </View>
-      <Text style={[styles.gridTileLabel, isSelected && { color: item.color, fontWeight: '700' }]}>
-        {item.label}
-      </Text>
-    </TouchableOpacity>
-  );
-
   return (
     <View style={styles.container}>
       <MapView
@@ -422,35 +977,18 @@ export default function AIPlanScreen() {
         onRegionChangeComplete={handleRegionChangeComplete}
         onPress={() => setSelectedMarker(null)}
       >
-        {/* Actual driving route */}
-        {routeCoords.length >= 2 && (
-          <>
-            <Polyline
-              coordinates={routeCoords}
-              strokeColor="rgba(0,0,0,0.10)"
-              strokeWidth={6}
-              lineDashPattern={[0]}
-            />
-            <Polyline
-              coordinates={routeCoords}
-              strokeColor="#C8102E"
-              strokeWidth={3.5}
-              lineDashPattern={[12, 8]}
-              lineJoin="round"
-              lineCap="round"
-            />
-          </>
-        )}
-
-        {/* Markers */}
-        {dayPlan && buildMapMarkers(dayPlan).map((mk) => {
-          const isEat = mk.type === 'restaurant';
-          const isEvent = mk.type === 'event';
-          const timeCols = { Morning: '#D97706', Afternoon: '#0284C7', Evening: '#7C3AED' };
-          const accent = isEat ? '#C8102E' : isEvent ? '#EC4899' : (timeCols[mk.time] || '#6B7280');
-          const pinIcon = isEat ? 'restaurant' : isEvent ? 'calendar' : 'location';
-          return (
-            <React.Fragment key={mk.idx}>
+        {/* Markers — reveal one by one when plan is generated */}
+        {dayPlan && (() => {
+          const markers = buildMapMarkers(dayPlan);
+          const maxVisible = revealingPins ? visiblePinCount : markers.length;
+          return markers.filter((mk) => mk.idx < maxVisible).map((mk) => {
+            const isEat = mk.type === 'restaurant';
+            const isEvent = mk.type === 'event';
+            const timeCols = { Morning: '#D97706', Afternoon: '#0284C7', Evening: '#7C3AED' };
+            const accent = isEat ? '#C8102E' : isEvent ? '#EC4899' : (timeCols[mk.time] || '#6B7280');
+            const pinIcon = isEat ? 'restaurant' : isEvent ? 'calendar' : 'location';
+            return (
+              <React.Fragment key={mk.idx}>
               <Circle
                 center={{ latitude: mk.lat, longitude: mk.lng }}
                 radius={200}
@@ -462,16 +1000,29 @@ export default function AIPlanScreen() {
                 coordinate={{ latitude: mk.lat, longitude: mk.lng }}
                 onPress={() => setSelectedMarker(mk)}
               >
-                <View style={[styles.mapPin, { backgroundColor: accent }]}>
-                  <Ionicons name={pinIcon} size={14} color="#FFF" />
-                  <Text style={styles.mapPinNum}>{mk.idx + 1}</Text>
+                <View style={styles.mapPinWrap}>
+                  <View style={styles.mapPinRow}>
+                    <View style={[styles.mapPin, { backgroundColor: accent }]}>
+                      <Ionicons name={pinIcon} size={14} color="#FFF" />
+                      <Text style={styles.mapPinNum}>{mk.idx + 1}</Text>
+                    </View>
+                    <View style={[styles.mapPinLabel, { borderColor: accent }]}>
+                      <Text style={[styles.mapPinLabelText, { color: accent }]} numberOfLines={1}>
+                        {mk.spot}
+                      </Text>
+                    </View>
+                  </View>
+                  <View style={[styles.mapPinArrow, { borderTopColor: accent }]} />
                 </View>
-                <View style={[styles.mapPinArrow, { borderTopColor: accent }]} />
               </Marker>
-            </React.Fragment>
-          );
-        })}
+              </React.Fragment>
+            );
+          });
+        })()}
       </MapView>
+
+      {/* Scanning overlay during Hang tight */}
+      <MapScanningOverlay visible={showPlanModal && loading && !planGenerationSuccess} />
 
       {/* Spot detail card */}
       {selectedMarker && (() => {
@@ -483,7 +1034,7 @@ export default function AIPlanScreen() {
         const tagIcon = isEat ? 'restaurant-outline' : isEvent ? 'calendar-outline' : 'compass-outline';
         const tagLabel = isEat ? 'Dining' : isEvent ? 'Event' : 'Visit';
         return (
-          <View style={styles.spotDetailWrap}>
+          <View style={[styles.spotDetailWrap, { top: insets.top + 70 }]}>
             <View style={styles.spotDetailCard}>
               <View style={[styles.spotDetailAccent, { backgroundColor: accent }]} />
 
@@ -526,7 +1077,11 @@ export default function AIPlanScreen() {
       <Animated.View
         style={[
           styles.sheet,
-          { paddingBottom: 80 + getAppTabBarHeight(insets), transform: [{ translateY: sheetAnim }] },
+          {
+            paddingBottom: 80 + getAppTabBarHeight(insets),
+            opacity: sheetOpacity,
+            transform: [{ translateY: sheetAnim }],
+          },
         ]}
       >
         <View style={styles.grabberWrap} {...panResponder.panHandlers}>
@@ -543,7 +1098,7 @@ export default function AIPlanScreen() {
                 <Text style={styles.pastPlansSubtitle}>{DUMMY_PAST_PLANS.length} plans saved</Text>
               </View>
               <TouchableOpacity style={styles.startAiButton} activeOpacity={0.8} onPress={startSetup}>
-                <Ionicons name="sparkles-outline" size={16} color="#C8102E" />
+                <Ionicons name="sparkles" size={18} color="#FFFFFF" />
                 <Text style={styles.startAiButtonText}>Start AI trip setup</Text>
               </TouchableOpacity>
             </View>
@@ -614,114 +1169,23 @@ export default function AIPlanScreen() {
           </>
         )}
 
-        {/* Step 1 — Preferences (grid tiles) */}
-        {drawerStep === 1 && (
-          <>
-            <View style={styles.drawerPageHeader}>
-              <TouchableOpacity style={styles.backButton} activeOpacity={0.8} onPress={() => setDrawerStep(0)}>
-                <Ionicons name="chevron-back" size={22} color="#374151" />
-              </TouchableOpacity>
-              <View style={styles.drawerPageTitleWrap}>
-                <Text style={styles.drawerPageTitle}>What kind of experiences do you prefer?</Text>
-                <Text style={styles.drawerPageSubtitle}>Tap a few that describe your Bahrain trip.</Text>
-              </View>
-            </View>
-            <ScrollView style={styles.gridScroll} contentContainerStyle={styles.gridContent} showsVerticalScrollIndicator={false}>
-              <View style={styles.gridRow}>
-                {PREFERENCES.map((item) =>
-                  renderGridTile(item, selectedPreferences.includes(item.id), () => togglePreference(item.id))
-                )}
-              </View>
-            </ScrollView>
-            <View style={styles.fixedButtonWrap}>
-              <TouchableOpacity
-                style={styles.continueButton}
-                activeOpacity={0.8}
-                onPress={() => setDrawerStep(2)}
-              >
-                <Text style={styles.continueButtonText}>Continue</Text>
-              </TouchableOpacity>
-            </View>
-          </>
-        )}
-
-        {/* Step 2 — Food (grid tiles) */}
-        {drawerStep === 2 && (
-          <>
-            <View style={styles.drawerPageHeader}>
-              <TouchableOpacity style={styles.backButton} activeOpacity={0.8} onPress={() => setDrawerStep(1)}>
-                <Ionicons name="chevron-back" size={22} color="#374151" />
-              </TouchableOpacity>
-              <View style={styles.drawerPageTitleWrap}>
-                <Text style={styles.drawerPageTitle}>What do you prefer to eat?</Text>
-                <Text style={styles.drawerPageSubtitle}>Pick your food vibes for this trip.</Text>
-              </View>
-            </View>
-            <ScrollView style={styles.gridScroll} contentContainerStyle={styles.gridContent} showsVerticalScrollIndicator={false}>
-              <View style={styles.gridRow}>
-                {FOOD_CATEGORIES.map((item) =>
-                  renderGridTile(item, selectedFoodCategories.includes(item.id), () => toggleFoodCategory(item.id))
-                )}
-              </View>
-            </ScrollView>
-            <View style={styles.fixedButtonWrap}>
-              <TouchableOpacity
-                style={[styles.generateButton, loading && styles.generateButtonDisabled]}
-                activeOpacity={0.8}
-                onPress={handleGenerate}
-                disabled={loading}
-              >
-                {loading ? (
-                  <>
-                    <ActivityIndicator size="small" color="#FFF" />
-                    <Text style={styles.generateButtonText}>Generating plan…</Text>
-                  </>
-                ) : (
-                  <>
-                    <Text style={styles.generateButtonText}>Generate</Text>
-                    <Ionicons name="sparkles" size={18} color="#FFF" />
-                  </>
-                )}
-              </TouchableOpacity>
-            </View>
-          </>
-        )}
-
-        {/* Step 3 — Day plan results */}
+        {/* Step 3 — Day plan results (steps 1–2 now in modal) */}
         {drawerStep === 3 && (
           <>
-            {/* Header */}
+            {/* Header — no plan/preparation text when loading */}
             <View style={styles.drawerPageHeader}>
-              <TouchableOpacity style={styles.backButton} activeOpacity={0.8} onPress={() => { setDrawerStep(2); setDayPlan(null); setError(null); }}>
+              <TouchableOpacity style={styles.backButton} activeOpacity={0.8} onPress={() => { setDrawerStep(0); setDayPlan(null); setError(null); }}>
                 <Ionicons name="chevron-back" size={22} color="#374151" />
               </TouchableOpacity>
-              <View style={styles.drawerPageTitleWrap}>
-                <Text style={styles.drawerPageTitle}>{loading ? 'Preparing your day…' : 'Your Day in Bahrain'}</Text>
-              </View>
+              {!loading && (
+                <View style={styles.drawerPageTitleWrap}>
+                  <Text style={styles.drawerPageTitle}>Your Day in Bahrain</Text>
+                </View>
+              )}
             </View>
 
             {loading ? (
-              <View style={styles.loadingWrap}>
-                <View style={styles.loadingPulse}>
-                  <ActivityIndicator size="large" color="#C8102E" />
-                </View>
-                <Text style={styles.loadingTitle}>Hang tight, habibi!</Text>
-                <Text style={styles.loadingSubtext}>{loadingStatus}</Text>
-                <View style={styles.loadingSteps}>
-                  {[
-                    { icon: 'compass-outline', color: '#10B981', text: 'Matching 6 places to your vibe' },
-                    { icon: 'restaurant-outline', color: '#F59E0B', text: 'Hunting 6 perfect food spots' },
-                    { icon: 'sparkles-outline', color: '#8B5CF6', text: 'Khalid is stitching your plan' },
-                  ].map((s, i) => (
-                    <View key={i} style={styles.loadingStepRow}>
-                      <View style={[styles.loadingDot, { backgroundColor: s.color }]}>
-                        <Ionicons name={s.icon} size={14} color="#FFF" />
-                      </View>
-                      <Text style={styles.loadingStepText}>{s.text}</Text>
-                    </View>
-                  ))}
-                </View>
-              </View>
+              <View style={styles.loadingWrap} />
             ) : error ? (
               <View style={{ paddingHorizontal: 20, flex: 1, justifyContent: 'center' }}>
                 <View style={styles.errorCard}>
@@ -748,7 +1212,7 @@ export default function AIPlanScreen() {
                       <Text style={styles.bpValue}>Bahrain</Text>
                     </View>
                     <View style={styles.bpDivider}>
-                      <Ionicons name="airplane" size={18} color="#C8102E" />
+                      <Ionicons name="airplane" size={22} color="#C8102E" />
                     </View>
                     <View style={{ alignItems: 'flex-end' }}>
                       <Text style={styles.bpLabel}>ITINERARY</Text>
@@ -883,299 +1347,837 @@ export default function AIPlanScreen() {
           </>
         )}
       </Animated.View>
+
+      {/* Plan modal — Home AI design (blur overlay, question block, glass options) */}
+      <Modal visible={showPlanModal} transparent animationType="none">
+        <KeyboardAvoidingView
+          style={styles.planModalRoot}
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        >
+          <Animated.View style={[styles.planModalBackdropWrap, { opacity: planModalBackdrop }]}>
+            <BlurView intensity={45} tint="dark" style={StyleSheet.absoluteFill} />
+            <View style={styles.planModalBackdropDim} />
+            <TouchableOpacity
+              style={StyleSheet.absoluteFill}
+              activeOpacity={1}
+              onPress={() => closePlanModal()}
+              disabled={loading || planGenerationSuccess}
+            />
+          </Animated.View>
+
+          <Animated.View
+            style={[
+              styles.planModalContentWrap,
+              {
+                opacity: planModalOpacity,
+                transform: [{ scale: planModalScale }],
+              },
+            ]}
+          >
+            {/* Loading state — animated, smooth */}
+            {loading || planGenerationSuccess ? (
+              <PlanModalLoadingView loadingStatus={loadingStatus} showSuccess={planGenerationSuccess} />
+            ) : (
+              <>
+                {/* Question block */}
+                <Animated.View
+                  style={[
+                    styles.planModalQuestionBlock,
+                    {
+                      opacity: planModalTitleOpacity,
+                      transform: [{ translateY: planModalTitleTranslateY }],
+                    },
+                  ]}
+                >
+                  <View style={styles.planModalQuestionInner}>
+                    <Text style={styles.planModalQuestionTitle}>
+                      {planModalStep === 1 ? 'What kind of experiences do you prefer?' : 'What do you prefer to eat?'}
+                    </Text>
+                    <View style={styles.planModalQuestionAccent} />
+                    <Text style={styles.planModalQuestionSub}>
+                      {planModalStep === 1 ? 'Tap a few that describe your Bahrain trip' : 'Pick your food vibes for this trip'}
+                    </Text>
+                  </View>
+                </Animated.View>
+
+                {/* Glass-style options */}
+                <Animated.View
+                  style={[
+                    styles.planModalOptionsWrap,
+                    {
+                      opacity: planModalChipsOpacity,
+                      transform: [{ translateY: planModalChipsTranslateY }],
+                    },
+                  ]}
+                >
+                  <ScrollView
+                style={styles.planModalScroll}
+                contentContainerStyle={styles.planModalScrollContent}
+                showsVerticalScrollIndicator={false}
+              >
+                <View style={styles.planModalOptionsGrid}>
+                  {(() => {
+                    const items = planModalStep === 1 ? PREFERENCES : FOOD_CATEGORIES;
+                    const isSelected = (item) =>
+                      planModalStep === 1
+                        ? selectedPreferences.includes(item.id)
+                        : selectedFoodCategories.includes(item.id);
+                    const onPress = (item) =>
+                      planModalStep === 1 ? togglePreference(item.id) : toggleFoodCategory(item.id);
+                    const rows = [];
+                    for (let i = 0; i < items.length; i += 2) {
+                      rows.push(items.slice(i, i + 2));
+                    }
+                    return rows.map((row, rowIdx) => (
+                      <View key={rowIdx} style={styles.planModalOptionsRow}>
+                        {row.map((item) => {
+                          const sel = isSelected(item);
+                          return (
+                            <TouchableOpacity
+                              key={item.id}
+                              style={[
+                                styles.planModalOptionBlock,
+                                sel && styles.planModalOptionBlockSelected,
+                                sel && { borderColor: item.color, backgroundColor: item.color, borderWidth: 2 },
+                              ]}
+                              activeOpacity={0.8}
+                              onPress={() => onPress(item)}
+                            >
+                              <Ionicons name={item.icon} size={22} color="#FFFFFF" />
+                              <Text style={[styles.planModalOptionText, sel && styles.planModalOptionTextSelected]}>
+                                {item.label}
+                              </Text>
+                            </TouchableOpacity>
+                          );
+                        })}
+                        {row.length === 1 && <View style={styles.planModalOptionSpacer} />}
+                      </View>
+                    ));
+                  })()}
+                </View>
+              </ScrollView>
+
+              {/* Action row */}
+              <View style={styles.planModalActionRow}>
+                {planModalStep === 1 ? (
+                  <>
+                    <TouchableOpacity
+                      style={styles.planModalBackBtn}
+                      activeOpacity={0.8}
+                      onPress={() => closePlanModal()}
+                    >
+                      <Ionicons name="close" size={20} color="#FFFFFF" />
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={styles.planModalContinueBtn}
+                      activeOpacity={0.8}
+                      onPress={() => setPlanModalStep(2)}
+                    >
+                      <Text style={styles.planModalContinueBtnText}>Continue</Text>
+                      <Ionicons name="arrow-forward" size={20} color="#FFFFFF" />
+                    </TouchableOpacity>
+                  </>
+                ) : (
+                  <>
+                    <TouchableOpacity
+                      style={styles.planModalBackBtn}
+                      activeOpacity={0.8}
+                      onPress={() => setPlanModalStep(1)}
+                    >
+                      <Ionicons name="chevron-back" size={22} color="#FFFFFF" />
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={styles.planModalGenerateBtn}
+                      activeOpacity={0.8}
+                      onPress={() => {
+                        handleGenerate(() => closePlanModal());
+                      }}
+                    >
+                      <Ionicons name="sparkles" size={20} color="#FFFFFF" />
+                      <Text style={styles.planModalGenerateBtnText}>Generate</Text>
+                    </TouchableOpacity>
+                  </>
+                )}
+              </View>
+            </Animated.View>
+              </>
+            )}
+          </Animated.View>
+        </KeyboardAvoidingView>
+      </Modal>
     </View>
   );
 }
 
-const TILE_WIDTH = (SCREEN_WIDTH - 40 - 24) / 3;
+const TILE_WIDTH = (SCREEN_WIDTH - 48 - 24) / 3;
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#FEF8E7' },
+  container: { flex: 1, backgroundColor: '#F8FAFC' },
   sheet: {
     position: 'absolute', left: 0, right: 0, bottom: 0, height: SHEET_HEIGHT,
-    backgroundColor: '#F9FAFB', borderTopLeftRadius: 24, borderTopRightRadius: 24,
-    shadowColor: '#000', shadowOffset: { width: 0, height: -4 }, shadowOpacity: 0.08, shadowRadius: 12, elevation: 12,
+    backgroundColor: '#FFFFFF', borderTopLeftRadius: 28, borderTopRightRadius: 28,
+    shadowColor: '#0F172A', shadowOffset: { width: 0, height: -8 }, shadowOpacity: 0.12, shadowRadius: 24, elevation: 16,
+    overflow: 'hidden',
   },
-  grabberWrap: { alignItems: 'center', justifyContent: 'center', paddingVertical: 12, paddingHorizontal: 24, marginBottom: 4 },
-  grabber: { width: 40, height: 5, borderRadius: 2.5, backgroundColor: '#D1D5DB' },
-  grabberHint: { marginTop: 6, fontSize: 11, color: '#9CA3AF' },
+  grabberWrap: { alignItems: 'center', justifyContent: 'center', paddingVertical: 16, paddingHorizontal: 24 },
+  grabber: { width: 36, height: 4, borderRadius: 2, backgroundColor: '#E2E8F0' },
+  grabberHint: { marginTop: 8, fontSize: 12, color: '#94A3B8', fontWeight: '500' },
 
   // Past plans (step 0)
   pastPlansHeader: {
     flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
-    paddingHorizontal: 20, marginBottom: 16,
+    paddingHorizontal: 24, marginBottom: 20,
   },
-  pastPlansTitle: { fontSize: 26, fontWeight: '700', color: '#111827', letterSpacing: -0.5 },
-  pastPlansSubtitle: { fontSize: 14, color: '#6B7280', marginTop: 2 },
+  pastPlansTitle: { fontSize: 28, fontWeight: '800', color: '#0F172A', letterSpacing: -0.6 },
+  pastPlansSubtitle: { fontSize: 15, color: '#64748B', marginTop: 4, fontWeight: '500' },
   startAiButton: {
-    flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, paddingVertical: 10,
-    borderRadius: 12, borderWidth: 2, borderColor: '#C8102E', gap: 6,
+    flexDirection: 'row', alignItems: 'center', paddingHorizontal: 18, paddingVertical: 12,
+    borderRadius: 14, backgroundColor: '#C8102E', gap: 8,
+    ...Platform.select({ ios: { shadowColor: '#C8102E', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 8 }, android: { elevation: 4 } }),
   },
-  startAiButtonText: { fontSize: 14, fontWeight: '600', color: '#C8102E' },
+  startAiButtonText: { fontSize: 15, fontWeight: '700', color: '#FFFFFF' },
   pastPlansScroll: { flex: 1 },
-  pastPlansContent: { paddingHorizontal: 20, paddingBottom: 20, gap: 10 },
+  pastPlansContent: { paddingHorizontal: 24, paddingBottom: 24, gap: 12 },
   pastPlanCard: {
     flexDirection: 'row', alignItems: 'center', backgroundColor: '#FFFFFF',
-    paddingVertical: 12, paddingHorizontal: 14, borderRadius: 14, borderWidth: 1,
-    borderColor: 'rgba(209,213,219,0.8)', shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.04, shadowRadius: 8, elevation: 2,
+    paddingVertical: 16, paddingHorizontal: 18, borderRadius: 18, borderWidth: 0,
+    shadowColor: '#0F172A', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.06, shadowRadius: 12, elevation: 3,
   },
   pastPlanIcon: {
-    width: 44, height: 44, borderRadius: 12, backgroundColor: 'rgba(200,16,46,0.12)',
-    alignItems: 'center', justifyContent: 'center', marginRight: 12,
+    width: 48, height: 48, borderRadius: 14, backgroundColor: 'rgba(200,16,46,0.08)',
+    alignItems: 'center', justifyContent: 'center', marginRight: 14,
   },
   pastPlanInfo: { flex: 1 },
-  pastPlanTitleRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 2 },
-  pastPlanName: { fontSize: 16, fontWeight: '600', color: '#111827' },
-  savedBadge: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 999, backgroundColor: 'rgba(16,185,129,0.08)' },
-  savedBadgeText: { fontSize: 11, fontWeight: '600', color: '#059669' },
+  pastPlanTitleRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 },
+  pastPlanName: { fontSize: 17, fontWeight: '700', color: '#0F172A' },
+  savedBadge: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 999, backgroundColor: 'rgba(16,185,129,0.12)' },
+  savedBadgeText: { fontSize: 11, fontWeight: '700', color: '#059669' },
   pastPlanMetaRow: { flexDirection: 'row', alignItems: 'center', marginTop: 2 },
-  pastPlanMeta: { fontSize: 13, color: '#9CA3AF' },
+  pastPlanMeta: { fontSize: 14, color: '#64748B', fontWeight: '500' },
 
   // Surprise Me
   surpriseCard: {
-    backgroundColor: '#FFF', borderRadius: 16, padding: 18, marginBottom: 14,
-    borderWidth: 1.5, borderColor: '#C8102E20',
-    shadowColor: '#C8102E', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.08, shadowRadius: 8, elevation: 4,
+    backgroundColor: '#FFFFFF', borderRadius: 20, padding: 22, marginBottom: 16,
+    borderWidth: 0,
+    shadowColor: '#0F172A', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.08, shadowRadius: 16, elevation: 4,
   },
-  surpriseHeader: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 6 },
-  surpriseTitle: { fontSize: 17, fontWeight: '700', color: '#111827' },
-  surpriseDesc: { fontSize: 13, color: '#6B7280', lineHeight: 18, marginBottom: 16 },
-  rouletteWrap: { alignItems: 'center', marginBottom: 16 },
+  surpriseHeader: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 8 },
+  surpriseTitle: { fontSize: 19, fontWeight: '800', color: '#0F172A' },
+  surpriseDesc: { fontSize: 15, color: '#64748B', lineHeight: 22, marginBottom: 20 },
+  rouletteWrap: { alignItems: 'center', marginBottom: 20 },
   rouletteBox: {
-    flexDirection: 'row', alignItems: 'center', gap: 10,
-    paddingVertical: 14, paddingHorizontal: 28,
-    borderRadius: 14, borderWidth: 2, backgroundColor: '#FAFAFA',
-    minWidth: 180, justifyContent: 'center',
+    flexDirection: 'row', alignItems: 'center', gap: 12,
+    paddingVertical: 18, paddingHorizontal: 32,
+    borderRadius: 18, borderWidth: 2, backgroundColor: '#F8FAFC',
+    minWidth: 200, justifyContent: 'center',
   },
-  rouletteLabel: { fontSize: 18, fontWeight: '800', letterSpacing: 0.5 },
+  rouletteLabel: { fontSize: 20, fontWeight: '800', letterSpacing: 0.3 },
   surpriseBtn: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
-    backgroundColor: '#C8102E', borderRadius: 12, paddingVertical: 13,
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10,
+    backgroundColor: '#C8102E', borderRadius: 16, paddingVertical: 16,
+    ...Platform.select({ ios: { shadowColor: '#C8102E', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.35, shadowRadius: 12 }, android: { elevation: 6 } }),
   },
-  surpriseBtnText: { color: '#FFF', fontSize: 15, fontWeight: '700' },
+  surpriseBtnText: { color: '#FFF', fontSize: 16, fontWeight: '700' },
   surpriseDivider: {
-    flexDirection: 'row', alignItems: 'center', marginVertical: 10, paddingHorizontal: 4,
+    flexDirection: 'row', alignItems: 'center', marginVertical: 16, paddingHorizontal: 4,
   },
-  surpriseDividerLine: { flex: 1, height: 1, backgroundColor: '#E5E7EB' },
-  surpriseDividerText: { fontSize: 12, color: '#9CA3AF', marginHorizontal: 12 },
+  surpriseDividerLine: { flex: 1, height: 1, backgroundColor: '#E2E8F0' },
+  surpriseDividerText: { fontSize: 13, color: '#94A3B8', marginHorizontal: 14, fontWeight: '500' },
 
   // Drawer page header
   drawerPageHeader: {
-    flexDirection: 'row', alignItems: 'flex-start', paddingHorizontal: 20, marginBottom: 12, gap: 4,
+    flexDirection: 'row', alignItems: 'flex-start', paddingHorizontal: 24, marginBottom: 16, gap: 8,
   },
-  backButton: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center', marginRight: 4 },
+  backButton: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center', marginRight: 4, borderRadius: 12, backgroundColor: '#F1F5F9' },
   drawerPageTitleWrap: { flex: 1 },
-  drawerPageTitle: { fontSize: 18, fontWeight: '700', color: '#111827', marginBottom: 4 },
-  drawerPageTitleSingle: { fontSize: 18, fontWeight: '700', color: '#111827', flex: 1 },
-  drawerPageSubtitle: { fontSize: 13, color: '#6B7280' },
+  drawerPageTitle: { fontSize: 20, fontWeight: '800', color: '#0F172A', marginBottom: 6, letterSpacing: -0.3 },
+  drawerPageTitleSingle: { fontSize: 20, fontWeight: '800', color: '#0F172A', flex: 1 },
+  drawerPageSubtitle: { fontSize: 15, color: '#64748B', lineHeight: 21, fontWeight: '500' },
 
   // Grid tiles for preferences + food
   gridScroll: { flex: 1 },
-  gridContent: { paddingHorizontal: 20, paddingBottom: 40 },
-  gridRow: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', gap: 10 },
+  gridContent: { paddingHorizontal: 24, paddingBottom: 48 },
+  gridRow: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', gap: 12 },
   gridTile: {
-    width: TILE_WIDTH, aspectRatio: 1, borderRadius: 14, borderWidth: 1.5,
-    borderColor: 'rgba(209,213,219,0.7)', backgroundColor: '#FFFFFF',
+    width: TILE_WIDTH, aspectRatio: 1, borderRadius: 18, borderWidth: 2,
+    borderColor: '#E2E8F0', backgroundColor: '#FFFFFF',
     justifyContent: 'center', alignItems: 'center',
+    shadowColor: '#0F172A', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.04, shadowRadius: 8, elevation: 2,
   },
   gridTileIcon: {
-    width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center', marginBottom: 8,
+    width: 44, height: 44, borderRadius: 14, alignItems: 'center', justifyContent: 'center', marginBottom: 10,
   },
-  gridTileLabel: { fontSize: 12, fontWeight: '600', color: '#374151', textAlign: 'center' },
+  gridTileLabel: { fontSize: 13, fontWeight: '600', color: '#334155', textAlign: 'center' },
 
   fixedButtonWrap: {
-    paddingHorizontal: 20,
-    paddingTop: 8,
-    paddingBottom: 8,
+    paddingHorizontal: 24,
+    paddingTop: 12,
+    paddingBottom: 12,
   },
 
   continueButton: {
-    backgroundColor: '#C8102E', paddingVertical: 16, borderRadius: 14,
-    alignItems: 'center', justifyContent: 'center', marginTop: 16,
+    backgroundColor: '#C8102E', paddingVertical: 18, borderRadius: 16,
+    alignItems: 'center', justifyContent: 'center', marginTop: 20,
+    ...Platform.select({ ios: { shadowColor: '#C8102E', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 10 }, android: { elevation: 4 } }),
   },
-  continueButtonDisabled: { backgroundColor: '#E5E7EB' },
-  continueButtonText: { fontSize: 15, fontWeight: '600', color: '#FFFFFF' },
+  continueButtonDisabled: { backgroundColor: '#E2E8F0' },
+  continueButtonText: { fontSize: 16, fontWeight: '700', color: '#FFFFFF' },
 
   // Generate button (food)
   generateButton: {
-    flexDirection: 'row', backgroundColor: '#C8102E', paddingVertical: 16, borderRadius: 14,
-    alignItems: 'center', justifyContent: 'center', marginTop: 16, gap: 8,
+    flexDirection: 'row', backgroundColor: '#C8102E', paddingVertical: 18, borderRadius: 16,
+    alignItems: 'center', justifyContent: 'center', marginTop: 20, gap: 10,
+    ...Platform.select({ ios: { shadowColor: '#C8102E', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 10 }, android: { elevation: 4 } }),
   },
   generateButtonDisabled: { opacity: 0.8 },
-  generateButtonText: { fontSize: 15, fontWeight: '600', color: '#FFFFFF' },
+  generateButtonText: { fontSize: 16, fontWeight: '700', color: '#FFFFFF' },
 
   // ── Results (step 3) ────────────────────────────────────────────
   resultsScroll: { flex: 1 },
-  resultsContent: { paddingBottom: 36, paddingHorizontal: 16 },
+  resultsContent: { paddingBottom: 48, paddingHorizontal: 24 },
 
-  // Loading
+  // Loading (sheet fallback)
   loadingWrap: {
-    flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 30, paddingBottom: 40,
+    flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 36, paddingBottom: 56,
   },
   loadingPulse: {
-    width: 76, height: 76, borderRadius: 38, backgroundColor: 'rgba(200,16,46,0.06)',
-    alignItems: 'center', justifyContent: 'center', marginBottom: 22,
+    width: 96, height: 96, borderRadius: 48, backgroundColor: 'rgba(200,16,46,0.06)',
+    alignItems: 'center', justifyContent: 'center', marginBottom: 28,
     borderWidth: 2, borderColor: 'rgba(200,16,46,0.15)',
   },
-  loadingTitle: { fontSize: 20, fontWeight: '800', color: '#111827', marginBottom: 4, letterSpacing: -0.3 },
-  loadingSubtext: { fontSize: 13, color: '#6B7280', textAlign: 'center', marginBottom: 28 },
-  loadingSteps: { gap: 14, width: '100%', paddingHorizontal: 4 },
-  loadingStepRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
-  loadingDot: { width: 28, height: 28, borderRadius: 14, alignItems: 'center', justifyContent: 'center' },
-  loadingStepText: { fontSize: 14, color: '#374151', fontWeight: '500' },
+  loadingTitle: { fontSize: 24, fontWeight: '800', color: '#0F172A', marginBottom: 8, letterSpacing: -0.4 },
+  loadingSubtext: { fontSize: 16, color: '#475569', textAlign: 'center', marginBottom: 36, fontWeight: '600' },
+  loadingSteps: { gap: 18, width: '100%', paddingHorizontal: 12 },
+  loadingStepRow: { flexDirection: 'row', alignItems: 'center', gap: 16 },
+  loadingDot: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center' },
+  loadingStepText: { fontSize: 16, color: '#334155', fontWeight: '600' },
 
   // Error
   errorCard: {
-    flexDirection: 'row', alignItems: 'flex-start', gap: 10, padding: 16,
-    backgroundColor: 'rgba(220,38,38,0.06)', borderRadius: 14, borderWidth: 1, borderColor: 'rgba(220,38,38,0.25)',
+    flexDirection: 'row', alignItems: 'flex-start', gap: 12, padding: 20,
+    backgroundColor: 'rgba(220,38,38,0.06)', borderRadius: 18, borderWidth: 1, borderColor: 'rgba(220,38,38,0.2)',
   },
-  errorText: { flex: 1, fontSize: 14, color: '#DC2626', fontWeight: '500', lineHeight: 20 },
+  errorText: { flex: 1, fontSize: 15, color: '#DC2626', fontWeight: '600', lineHeight: 22 },
   retryButton: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
-    marginTop: 16, paddingVertical: 14, borderRadius: 14, borderWidth: 2, borderColor: '#C8102E',
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+    marginTop: 20, paddingVertical: 16, borderRadius: 16, borderWidth: 2, borderColor: '#C8102E', backgroundColor: 'rgba(200,16,46,0.04)',
   },
-  retryButtonText: { fontSize: 15, fontWeight: '600', color: '#C8102E' },
-  emptyResults: { fontSize: 14, color: '#6B7280', textAlign: 'center', paddingVertical: 24 },
+  retryButtonText: { fontSize: 16, fontWeight: '700', color: '#C8102E' },
+  emptyResults: { fontSize: 15, color: '#64748B', textAlign: 'center', paddingVertical: 32, fontWeight: '500' },
 
   // ── Boarding pass hero ──
   boardingPass: {
-    backgroundColor: '#FFFFFF', borderRadius: 18, marginBottom: 20, overflow: 'hidden',
-    borderWidth: 1, borderColor: 'rgba(200,16,46,0.12)',
-    shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.08, shadowRadius: 12, elevation: 4,
+    backgroundColor: '#FFFFFF', borderRadius: 24, marginBottom: 28, overflow: 'hidden',
+    borderWidth: 0,
+    shadowColor: '#0F172A', shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.12, shadowRadius: 24, elevation: 8,
   },
   bpTop: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    paddingHorizontal: 20, paddingTop: 18, paddingBottom: 14,
+    paddingHorizontal: 28, paddingTop: 26, paddingBottom: 22,
   },
-  bpLabel: { fontSize: 10, fontWeight: '700', color: '#9CA3AF', letterSpacing: 1.2 },
-  bpValue: { fontSize: 22, fontWeight: '800', color: '#111827', marginTop: 2, letterSpacing: -0.5 },
+  bpLabel: { fontSize: 12, fontWeight: '800', color: '#64748B', letterSpacing: 1.6 },
+  bpValue: { fontSize: 28, fontWeight: '800', color: '#0F172A', marginTop: 6, letterSpacing: -0.5 },
   bpDivider: {
-    width: 42, height: 42, borderRadius: 21, borderWidth: 2, borderColor: 'rgba(200,16,46,0.15)',
-    backgroundColor: 'rgba(200,16,46,0.04)', alignItems: 'center', justifyContent: 'center',
+    width: 52, height: 52, borderRadius: 26, borderWidth: 2, borderColor: 'rgba(200,16,46,0.15)',
+    backgroundColor: 'rgba(200,16,46,0.08)', alignItems: 'center', justifyContent: 'center',
   },
   bpDashedLine: {
-    height: 1, marginHorizontal: 16,
-    borderStyle: 'dashed', borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 1,
+    height: 1, marginHorizontal: 24,
+    borderStyle: 'dashed', borderWidth: 1, borderColor: '#E2E8F0', borderRadius: 1,
   },
   bpBottom: {
-    paddingHorizontal: 20, paddingVertical: 14,
+    paddingHorizontal: 28, paddingVertical: 22,
   },
   bpBudgetWrap: { alignItems: 'center' },
-  bpBudgetRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 4 },
-  bpBudgetTitle: { fontSize: 11, fontWeight: '700', color: '#6B7280', letterSpacing: 0.8, textTransform: 'uppercase' },
-  bpBudgetAmount: { fontSize: 24, fontWeight: '900', color: '#C8102E', letterSpacing: 0.5 },
-  bpBudgetSub: { fontSize: 12, color: '#9CA3AF', marginTop: 2 },
+  bpBudgetRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 8 },
+  bpBudgetTitle: { fontSize: 12, fontWeight: '800', color: '#475569', letterSpacing: 1.2, textTransform: 'uppercase' },
+  bpBudgetAmount: { fontSize: 30, fontWeight: '900', color: '#C8102E', letterSpacing: 0.5 },
+  bpBudgetSub: { fontSize: 14, color: '#64748B', marginTop: 6, fontWeight: '600' },
   bpAdviceWrap: {
-    flexDirection: 'row', alignItems: 'flex-start', gap: 8,
+    flexDirection: 'row', alignItems: 'flex-start', gap: 12,
     backgroundColor: '#FFFBEB', borderTopWidth: 1, borderTopColor: '#FDE68A',
-    paddingHorizontal: 18, paddingVertical: 12, borderBottomLeftRadius: 18, borderBottomRightRadius: 18,
+    paddingHorizontal: 26, paddingVertical: 20, borderBottomLeftRadius: 24, borderBottomRightRadius: 24,
   },
-  bpAdviceText: { fontSize: 12.5, color: '#92400E', lineHeight: 17, flex: 1, fontStyle: 'italic' },
+  bpAdviceText: { fontSize: 15, color: '#92400E', lineHeight: 22, flex: 1, fontStyle: 'italic', fontWeight: '600' },
 
   // ── Itinerary section ──
-  itinSection: { marginBottom: 8 },
+  itinSection: { marginBottom: 16 },
 
   secBanner: {
-    flexDirection: 'row', alignItems: 'center', borderRadius: 14, paddingVertical: 12,
-    paddingHorizontal: 14, marginBottom: 10,
+    flexDirection: 'row', alignItems: 'center', borderRadius: 20, paddingVertical: 16,
+    paddingHorizontal: 20, marginBottom: 16,
   },
   secIconCircle: {
-    width: 34, height: 34, borderRadius: 17, alignItems: 'center', justifyContent: 'center',
+    width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center',
   },
-  secBannerText: { flex: 1, marginLeft: 12 },
-  secBannerTitle: { fontSize: 17, fontWeight: '800', letterSpacing: -0.2 },
-  secBannerSub: { fontSize: 12, fontWeight: '500', opacity: 0.7, marginTop: 1 },
-  secBannerCount: { fontSize: 12, fontWeight: '700' },
+  secBannerText: { flex: 1, marginLeft: 16 },
+  secBannerTitle: { fontSize: 21, fontWeight: '800', letterSpacing: -0.3 },
+  secBannerSub: { fontSize: 14, fontWeight: '600', opacity: 0.85, marginTop: 2 },
+  secBannerCount: { fontSize: 14, fontWeight: '700' },
 
   // ── Destination row (number + card) ──
-  destRow: { flexDirection: 'row', paddingLeft: 2 },
+  destRow: { flexDirection: 'row', paddingLeft: 6 },
 
-  destLeft: { width: 30, alignItems: 'center', paddingTop: 14 },
+  destLeft: { width: 40, alignItems: 'center', paddingTop: 18 },
   destNumCircle: {
-    width: 24, height: 24, borderRadius: 12, alignItems: 'center', justifyContent: 'center', zIndex: 2,
+    width: 32, height: 32, borderRadius: 16, alignItems: 'center', justifyContent: 'center', zIndex: 2,
   },
-  destNum: { fontSize: 12, fontWeight: '800', color: '#FFFFFF' },
-  destConnector: { flex: 1, width: 2, borderRadius: 1, marginTop: 4 },
+  destNum: { fontSize: 14, fontWeight: '800', color: '#FFFFFF' },
+  destConnector: { flex: 1, width: 2, borderRadius: 1, marginTop: 8 },
 
   // Card
   destCard: {
-    flex: 1, backgroundColor: '#FFFFFF', borderRadius: 16, marginLeft: 12, marginBottom: 10,
-    overflow: 'hidden', borderWidth: 1, borderColor: 'rgba(209,213,219,0.45)',
-    shadowColor: '#000', shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.05, shadowRadius: 8, elevation: 3,
+    flex: 1, backgroundColor: '#FFFFFF', borderRadius: 22, marginLeft: 16, marginBottom: 16,
+    overflow: 'hidden', borderWidth: 0,
+    shadowColor: '#0F172A', shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.08, shadowRadius: 16, elevation: 6,
   },
   destStrip: {
-    flexDirection: 'row', alignItems: 'center', gap: 6,
-    paddingHorizontal: 14, paddingVertical: 6,
+    flexDirection: 'row', alignItems: 'center', gap: 10,
+    paddingHorizontal: 16, paddingVertical: 10,
   },
-  destStripText: { fontSize: 10, fontWeight: '800', letterSpacing: 1 },
+  destStripText: { fontSize: 11, fontWeight: '800', letterSpacing: 1.2 },
   destBody: {
-    flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, paddingTop: 10, paddingBottom: 6,
+    flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingTop: 14, paddingBottom: 10,
   },
   destIconBox: {
-    width: 40, height: 40, borderRadius: 12, alignItems: 'center', justifyContent: 'center', marginRight: 12,
+    width: 48, height: 48, borderRadius: 16, alignItems: 'center', justifyContent: 'center', marginRight: 16,
   },
-  destName: { flex: 1, fontSize: 16, fontWeight: '700', color: '#111827', lineHeight: 21 },
+  destName: { flex: 1, fontSize: 18, fontWeight: '700', color: '#0F172A', lineHeight: 24 },
   destReasonWrap: {
-    flexDirection: 'row', marginHorizontal: 14, marginBottom: 14, marginTop: 4,
-    backgroundColor: '#FEF9EE', borderRadius: 10, padding: 10, gap: 8,
+    flexDirection: 'row', marginHorizontal: 16, marginBottom: 18, marginTop: 8,
+    backgroundColor: '#FFFBEB', borderRadius: 16, padding: 16, gap: 12,
   },
-  destReasonQuote: { marginTop: 1 },
-  destReasonText: { flex: 1, fontSize: 13, color: '#78350F', lineHeight: 19, fontStyle: 'italic' },
+  destReasonQuote: { marginTop: 2 },
+  destReasonText: { flex: 1, fontSize: 15, color: '#78350F', lineHeight: 22, fontStyle: 'italic', fontWeight: '600' },
 
   // ── Passport stamp footer ──
-  stampFooter: { alignItems: 'center', marginTop: 16, paddingBottom: 4 },
+  stampFooter: { alignItems: 'center', marginTop: 28, paddingBottom: 12 },
   stampCircle: {
-    width: 80, height: 80, borderRadius: 40, borderWidth: 2.5, borderColor: '#C8102E',
-    alignItems: 'center', justifyContent: 'center', marginBottom: 10,
+    width: 96, height: 96, borderRadius: 48, borderWidth: 2.5, borderColor: '#C8102E',
+    alignItems: 'center', justifyContent: 'center', marginBottom: 16,
     borderStyle: 'dashed',
   },
-  stampTop: { fontSize: 8, fontWeight: '800', color: '#C8102E', letterSpacing: 2 },
-  stampBottom: { fontSize: 7, fontWeight: '700', color: '#C8102E', letterSpacing: 1.5, marginTop: 1 },
-  stampTagline: { fontSize: 13, fontWeight: '600', color: '#9CA3AF', fontStyle: 'italic' },
+  stampTop: { fontSize: 10, fontWeight: '800', color: '#C8102E', letterSpacing: 2 },
+  stampBottom: { fontSize: 9, fontWeight: '700', color: '#C8102E', letterSpacing: 1.5, marginTop: 2 },
+  stampTagline: { fontSize: 16, fontWeight: '600', color: '#475569', fontStyle: 'italic' },
 
   // ── Map pins ──
-  mapPin: {
-    flexDirection: 'row', alignItems: 'center', gap: 3,
-    paddingHorizontal: 8, paddingVertical: 5, borderRadius: 14,
-    shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.25, shadowRadius: 4, elevation: 5,
+  mapPinWrap: {
+    alignItems: 'center',
   },
-  mapPinNum: { fontSize: 11, fontWeight: '800', color: '#FFFFFF' },
+  mapPinRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  mapPin: {
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    paddingHorizontal: 9, paddingVertical: 6, borderRadius: 16,
+    shadowColor: '#0F172A', shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.2, shadowRadius: 6, elevation: 6,
+  },
+  mapPinNum: { fontSize: 12, fontWeight: '800', color: '#FFFFFF' },
+  mapPinLabel: {
+    maxWidth: 120,
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+    borderRadius: 10,
+    borderWidth: 1.5,
+    backgroundColor: '#FFFFFF',
+    shadowColor: '#0F172A', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.15, shadowRadius: 4, elevation: 4,
+  },
+  mapPinLabelText: {
+    fontSize: 12,
+    fontWeight: '700',
+  },
   mapPinArrow: {
     alignSelf: 'center', width: 0, height: 0,
     borderLeftWidth: 6, borderRightWidth: 6, borderTopWidth: 8,
     borderLeftColor: 'transparent', borderRightColor: 'transparent',
   },
 
+  // ── Map scanning overlay (Hang tight) — route tracing + radar ──
+  mapScanningOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 10,
+  },
+  mapScanningRadarCenter: {
+    position: 'absolute',
+    left: SCREEN_WIDTH / 2 - 100,
+    top: SCREEN_HEIGHT / 2 - 100,
+    width: 200,
+    height: 200,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  mapScanningRadarRing: {
+    width: 200,
+    height: 200,
+    borderRadius: 100,
+    borderWidth: 2,
+    borderColor: 'rgba(200,16,46,0.6)',
+    backgroundColor: 'rgba(200,16,46,0.06)',
+  },
+  mapScanningLine: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    height: 4,
+    backgroundColor: 'rgba(200,16,46,0.55)',
+    shadowColor: '#C8102E',
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.7,
+    shadowRadius: 12,
+    elevation: 6,
+  },
+  mapRoutePath: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  mapRouteSegWrap: {
+    position: 'absolute',
+    left: 30,
+    top: 70,
+    width: SCREEN_WIDTH - 90,
+    height: 4,
+    overflow: 'hidden',
+    backgroundColor: 'rgba(200,16,46,0.15)',
+    borderRadius: 2,
+  },
+  mapRouteSegWrap2: {
+    position: 'absolute',
+    right: 50,
+    top: 70,
+    width: 4,
+    height: 130,
+    overflow: 'hidden',
+    backgroundColor: 'rgba(200,16,46,0.15)',
+    borderRadius: 2,
+  },
+  mapRouteSegWrap3: {
+    position: 'absolute',
+    left: 40,
+    top: 195,
+    width: SCREEN_WIDTH - 90,
+    height: 4,
+    overflow: 'hidden',
+    backgroundColor: 'rgba(200,16,46,0.15)',
+    borderRadius: 2,
+  },
+  mapRouteSegWrap4: {
+    position: 'absolute',
+    left: 40,
+    top: 195,
+    width: 4,
+    height: 130,
+    overflow: 'hidden',
+    backgroundColor: 'rgba(200,16,46,0.15)',
+    borderRadius: 2,
+  },
+  mapRouteSegWrap5: {
+    position: 'absolute',
+    left: 30,
+    top: 320,
+    width: SCREEN_WIDTH - 80,
+    height: 4,
+    overflow: 'hidden',
+    backgroundColor: 'rgba(200,16,46,0.15)',
+    borderRadius: 2,
+  },
+  mapRouteSeg: {
+    position: 'absolute',
+    left: 0,
+    top: 0,
+    backgroundColor: 'rgba(200,16,46,0.7)',
+  },
+  mapRouteSeg1: { width: SCREEN_WIDTH - 90, height: 4, borderRadius: 2 },
+  mapRouteSeg2: { width: 4, height: 130, borderRadius: 2 },
+  mapRouteSeg3: { width: SCREEN_WIDTH - 90, height: 4, borderRadius: 2 },
+  mapRouteSeg4: { width: 4, height: 130, borderRadius: 2 },
+  mapRouteSeg5: { width: SCREEN_WIDTH - 80, height: 4, borderRadius: 2 },
+  mapRouteDotGlow: {
+    position: 'absolute',
+    left: 0,
+    top: 0,
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: 'rgba(200,16,46,0.35)',
+  },
+  mapRouteDot: {
+    position: 'absolute',
+    left: 0,
+    top: 0,
+    width: 14,
+    height: 14,
+    borderRadius: 7,
+    backgroundColor: '#C8102E',
+    borderWidth: 3,
+    borderColor: 'rgba(255,255,255,0.95)',
+    shadowColor: '#C8102E',
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.9,
+    shadowRadius: 8,
+    elevation: 10,
+  },
+
   // ── Spot detail card ──
   spotDetailWrap: {
-    position: 'absolute', top: 50, left: 14, right: 14, zIndex: 100,
+    position: 'absolute', left: 20, right: 20, zIndex: 100,
   },
   spotDetailCard: {
-    backgroundColor: '#FFFFFF', borderRadius: 18, overflow: 'hidden',
-    shadowColor: '#000', shadowOffset: { width: 0, height: 10 }, shadowOpacity: 0.15, shadowRadius: 25, elevation: 14,
+    backgroundColor: '#FFFFFF', borderRadius: 22, overflow: 'hidden',
+    shadowColor: '#0F172A', shadowOffset: { width: 0, height: 12 }, shadowOpacity: 0.18, shadowRadius: 28, elevation: 16,
   },
-  spotDetailAccent: { height: 4 },
-  spotDetailBody: { padding: 16 },
-  spotDetailRow1: { flexDirection: 'row', alignItems: 'flex-start', marginBottom: 12 },
+  spotDetailAccent: { height: 5 },
+  spotDetailBody: { padding: 20 },
+  spotDetailRow1: { flexDirection: 'row', alignItems: 'flex-start', marginBottom: 14 },
   spotDetailStep: {
-    width: 30, height: 30, borderRadius: 10, alignItems: 'center', justifyContent: 'center', marginRight: 12, marginTop: 2,
+    width: 34, height: 34, borderRadius: 12, alignItems: 'center', justifyContent: 'center', marginRight: 14, marginTop: 2,
   },
-  spotDetailStepText: { fontSize: 14, fontWeight: '900', color: '#FFF' },
-  spotDetailNameWrap: { flex: 1, marginRight: 8 },
-  spotDetailName: { fontSize: 17, fontWeight: '800', color: '#111827', lineHeight: 22, marginBottom: 6 },
-  spotDetailTags: { flexDirection: 'row', alignItems: 'center', gap: 5 },
+  spotDetailStepText: { fontSize: 15, fontWeight: '900', color: '#FFF' },
+  spotDetailNameWrap: { flex: 1, marginRight: 10 },
+  spotDetailName: { fontSize: 18, fontWeight: '800', color: '#0F172A', lineHeight: 24, marginBottom: 8 },
+  spotDetailTags: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   spotDetailTag: {
-    flexDirection: 'row', alignItems: 'center', gap: 4,
-    paddingHorizontal: 8, paddingVertical: 3, borderRadius: 8,
+    flexDirection: 'row', alignItems: 'center', gap: 5,
+    paddingHorizontal: 10, paddingVertical: 4, borderRadius: 10,
   },
-  spotDetailTagText: { fontSize: 11, fontWeight: '700' },
-  spotDetailDot: { fontSize: 14, color: '#D1D5DB' },
-  spotDetailTime: { fontSize: 12, fontWeight: '600', color: '#9CA3AF' },
-  spotDetailReason: { fontSize: 14, color: '#4B5563', lineHeight: 21, marginBottom: 14 },
+  spotDetailTagText: { fontSize: 12, fontWeight: '700' },
+  spotDetailDot: { fontSize: 14, color: '#E2E8F0' },
+  spotDetailTime: { fontSize: 13, fontWeight: '600', color: '#94A3B8' },
+  spotDetailReason: { fontSize: 15, color: '#475569', lineHeight: 22, marginBottom: 16 },
   spotDetailBtn: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
-    paddingVertical: 13, borderRadius: 14,
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+    paddingVertical: 15, borderRadius: 16,
   },
-  spotDetailBtnText: { fontSize: 15, fontWeight: '700', color: '#FFF' },
+  spotDetailBtnText: { fontSize: 16, fontWeight: '700', color: '#FFF' },
+
+  // ── Plan modal (Home AI design) ──
+  planModalRoot: { flex: 1, backgroundColor: 'transparent' },
+  planModalBackdropWrap: { ...StyleSheet.absoluteFillObject },
+  planModalBackdropDim: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.12)' },
+  planModalContentWrap: {
+    flex: 1,
+    paddingHorizontal: 24,
+    paddingTop: 72,
+    paddingBottom: 32,
+    alignItems: 'stretch',
+  },
+  planModalQuestionBlock: {
+    marginBottom: 28,
+    paddingVertical: 28,
+    paddingHorizontal: 20,
+    alignItems: 'center',
+  },
+  planModalQuestionInner: { alignItems: 'center', maxWidth: 320 },
+  planModalQuestionTitle: {
+    fontSize: 28,
+    fontWeight: '800',
+    color: PLAN_COLORS.overlayQuestionTitle,
+    textAlign: 'center',
+    lineHeight: 36,
+    letterSpacing: 0.5,
+    marginBottom: 14,
+    ...Platform.select({
+      ios: {
+        textShadowColor: 'rgba(0,0,0,0.25)',
+        textShadowOffset: { width: 0, height: 2 },
+        textShadowRadius: 8,
+      },
+      android: { elevation: 2 },
+    }),
+  },
+  planModalQuestionAccent: {
+    width: 56,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: PLAN_COLORS.primary,
+    opacity: 0.95,
+    marginBottom: 16,
+  },
+  planModalQuestionSub: {
+    fontSize: 15,
+    fontWeight: '500',
+    color: PLAN_COLORS.overlayQuestionSub,
+    textAlign: 'center',
+    letterSpacing: 0.4,
+    lineHeight: 22,
+  },
+  planModalLoadingWrap: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 32,
+    paddingBottom: 48,
+  },
+  planModalLoadingCenter: {
+    position: 'relative',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 28,
+  },
+  planModalLoadingPulseOuter: {
+    position: 'absolute',
+    width: 120,
+    height: 120,
+    borderRadius: 60,
+    borderWidth: 3,
+    borderColor: 'rgba(255,255,255,0.5)',
+    backgroundColor: 'transparent',
+  },
+  planModalLoadingPulse: {
+    width: 88,
+    height: 88,
+    borderRadius: 44,
+    backgroundColor: 'rgba(255,255,255,0.18)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: 'rgba(255,255,255,0.4)',
+  },
+  planModalLoadingTitle: {
+    fontSize: 26,
+    fontWeight: '800',
+    color: '#FFFFFF',
+    marginBottom: 10,
+    letterSpacing: -0.4,
+    ...Platform.select({
+      ios: {
+        textShadowColor: 'rgba(0,0,0,0.3)',
+        textShadowOffset: { width: 0, height: 2 },
+        textShadowRadius: 10,
+      },
+    }),
+  },
+  planModalLoadingSub: {
+    fontSize: 16,
+    color: 'rgba(255,255,255,0.95)',
+    textAlign: 'center',
+    marginBottom: 36,
+    fontWeight: '600',
+    lineHeight: 22,
+  },
+  planModalLoadingSteps: { gap: 18, width: '100%', paddingHorizontal: 12 },
+  planModalLoadingStepRow: { flexDirection: 'row', alignItems: 'center', gap: 16 },
+  planModalLoadingDot: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: 'rgba(255,255,255,0.2)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1.5,
+    borderColor: 'rgba(255,255,255,0.35)',
+  },
+  planModalLoadingDotActive: {
+    backgroundColor: 'rgba(200,16,46,0.5)',
+    borderColor: 'rgba(255,255,255,0.6)',
+    borderWidth: 2,
+  },
+  planModalLoadingDotDone: {
+    backgroundColor: '#10B981',
+    borderColor: 'rgba(255,255,255,0.5)',
+    borderWidth: 2,
+  },
+  planModalLoadingStepText: {
+    fontSize: 16,
+    color: 'rgba(255,255,255,0.9)',
+    fontWeight: '600',
+  },
+  planModalLoadingStepTextActive: {
+    color: '#FFFFFF',
+    fontWeight: '700',
+  },
+  planModalLoadingStepTextDone: {
+    color: 'rgba(255,255,255,0.85)',
+    fontWeight: '600',
+  },
+  planModalLoadingPulseSuccess: {
+    backgroundColor: 'rgba(16,185,129,0.2)',
+    borderColor: 'rgba(16,185,129,0.5)',
+  },
+  planModalOptionsWrap: { flex: 1, width: '100%', maxWidth: 400, alignSelf: 'center' },
+  planModalScroll: { flex: 1 },
+  planModalScrollContent: { paddingBottom: 20 },
+  planModalOptionsGrid: {
+    width: '100%',
+  },
+  planModalOptionsRow: {
+    flexDirection: 'row',
+    gap: 12,
+    marginBottom: 12,
+  },
+  planModalOptionSpacer: {
+    flex: 1,
+  },
+  planModalOptionBlock: {
+    flex: 1,
+    minHeight: 56,
+    backgroundColor: PLAN_COLORS.overlayBlockBg,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: PLAN_COLORS.overlayBlockBorder,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+    paddingVertical: 16,
+    paddingHorizontal: 16,
+  },
+  planModalOptionBlockSelected: {
+    borderWidth: 2,
+  },
+  planModalOptionText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: PLAN_COLORS.overlayBlockText,
+  },
+  planModalOptionTextSelected: {
+    color: '#FFFFFF',
+    fontWeight: '700',
+    fontSize: 17,
+  },
+  planModalActionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+    marginTop: 16,
+    paddingTop: 16,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(255,255,255,0.2)',
+  },
+  planModalBackBtn: {
+    width: 52,
+    height: 52,
+    borderRadius: 14,
+    backgroundColor: 'rgba(255,255,255,0.2)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  planModalContinueBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    height: 52,
+    borderRadius: 14,
+    backgroundColor: PLAN_COLORS.primary,
+  },
+  planModalContinueBtnText: { fontSize: 16, fontWeight: '700', color: '#FFFFFF' },
+  planModalGenerateBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    height: 52,
+    borderRadius: 14,
+    backgroundColor: PLAN_COLORS.primary,
+    ...Platform.select({
+      ios: { shadowColor: PLAN_COLORS.primary, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.35, shadowRadius: 8 },
+      android: { elevation: 6 },
+    }),
+  },
+  planModalGenerateBtnText: { fontSize: 16, fontWeight: '700', color: '#FFFFFF' },
 });

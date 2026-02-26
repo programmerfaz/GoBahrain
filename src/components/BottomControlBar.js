@@ -130,10 +130,7 @@ export default function BottomControlBar({ state, navigation }) {
                           useNativeDriver: true,
                         }),
                       ]).start();
-                      const current = state.routes[state.index]?.name;
-                      if (current) {
-                        navigation.navigate(current, { aiPulse: Date.now() });
-                      }
+                      navigation.navigate('AI Plan', { openPlanModal: Date.now() });
                     }}
                   >
                     <Image
