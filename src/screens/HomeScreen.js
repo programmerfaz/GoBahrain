@@ -430,6 +430,7 @@ export default function HomeScreen() {
   const [posts, setPosts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [fetchError, setFetchError] = useState(null);
   const [showScrollToTop, setShowScrollToTop] = useState(false);
   const [upvoteParticlesVisible, setUpvoteParticlesVisible] = useState(false);
   const [upvoteParticlePosition, setUpvoteParticlePosition] = useState({ x: 0, y: 0 });
@@ -447,6 +448,7 @@ export default function HomeScreen() {
   const fetchPosts = useCallback(async (opts = {}) => {
     const { skipGlobalLoading = false, onDone } = opts;
     try {
+      setFetchError(null);
       if (!skipGlobalLoading) setLoading(true);
       console.log('[Home] Fetching posts from Supabase...');
       const { data: postRows, error } = await supabase
@@ -458,6 +460,9 @@ export default function HomeScreen() {
 
       if (error) {
         console.error('[Home] Error fetching posts:', error.message, error);
+        const errMsg = String(error?.message ?? error ?? '');
+        const isNetworkError = /network request failed|failed to fetch|network error/i.test(errMsg);
+        setFetchError(isNetworkError ? 'network' : errMsg || 'unknown');
         setPosts([]);
         if (!skipGlobalLoading) setLoading(false);
         onDone?.();
@@ -554,6 +559,9 @@ export default function HomeScreen() {
       setPosts(shufflePosts(list));
     } catch (err) {
       console.error('[Home] Failed to fetch posts:', err);
+      const errMsg = String(err?.message ?? err ?? '');
+      const isNetworkError = /network request failed|failed to fetch|network error/i.test(errMsg);
+      setFetchError(isNetworkError ? 'network' : errMsg || 'unknown');
       setPosts([]);
     } finally {
       if (!skipGlobalLoading) setLoading(false);
@@ -936,8 +944,28 @@ export default function HomeScreen() {
         </View>
       ) : posts.length === 0 ? (
         <View style={styles.loadingWrap}>
-          <Ionicons name="images-outline" size={48} color={COLORS.textMuted} />
-          <Text style={styles.emptyText}>No posts yet</Text>
+          <Ionicons
+            name={fetchError ? 'cloud-offline-outline' : 'images-outline'}
+            size={48}
+            color={COLORS.textMuted}
+          />
+          <Text style={styles.emptyText}>
+            {fetchError === 'network'
+              ? 'Check your connection and try again'
+              : fetchError
+                ? 'Something went wrong'
+                : 'No posts yet'}
+          </Text>
+          {fetchError ? (
+            <TouchableOpacity
+              style={styles.retryBtn}
+              onPress={() => fetchPosts()}
+              activeOpacity={0.8}
+            >
+              <Ionicons name="refresh-outline" size={18} color="#fff" />
+              <Text style={styles.retryBtnText}>Retry</Text>
+            </TouchableOpacity>
+          ) : null}
         </View>
       ) : (
         <FlatList
@@ -1585,5 +1613,20 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: COLORS.textMuted,
     fontWeight: '500',
+  },
+  retryBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: 16,
+    paddingVertical: 10,
+    paddingHorizontal: 20,
+    backgroundColor: COLORS.primary,
+    borderRadius: 10,
+  },
+  retryBtnText: {
+    fontSize: 15,
+    color: '#fff',
+    fontWeight: '600',
   },
 });

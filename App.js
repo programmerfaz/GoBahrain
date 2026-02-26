@@ -1,15 +1,19 @@
 import { StatusBar } from 'expo-status-bar';
-import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { NavigationContainer } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
+import { createNativeStackNavigator } from '@react-navigation/native-stack';
+import { StyleSheet } from 'react-native';
 import HomeScreen from './src/screens/HomeScreen';
 import ExploreScreen from './src/screens/ExploreScreen';
 import AIPlanScreen from './src/screens/AIPlanScreen';
 import CommunitiesScreen from './src/screens/CommunitiesScreen';
 import ProfileScreen from './src/screens/ProfileScreen';
+import ARScreen from './src/screens/ARScreen';
 import BottomControlBar from './src/components/BottomControlBar';
 
 const Tab = createBottomTabNavigator();
+const Stack = createNativeStackNavigator();
 
 function TabsNavigator() {
   return (
@@ -31,10 +35,19 @@ function TabsNavigator() {
 export default function App() {
   return (
     <SafeAreaProvider>
-      <NavigationContainer>
-        <TabsNavigator />
-        <StatusBar style="dark" />
-      </NavigationContainer>
+      <SafeAreaView style={styles.safeArea} edges={['left', 'right']}>
+        <NavigationContainer>
+          <Stack.Navigator screenOptions={{ headerShown: false }}>
+            <Stack.Screen name="Tabs" component={TabsNavigator} />
+            <Stack.Screen name="AR" component={ARScreen} options={{ presentation: 'fullScreenModal' }} />
+          </Stack.Navigator>
+          <StatusBar style="dark" />
+        </NavigationContainer>
+      </SafeAreaView>
     </SafeAreaProvider>
   );
 }
+
+const styles = StyleSheet.create({
+  safeArea: { flex: 1 },
+});
