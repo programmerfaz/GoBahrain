@@ -21,12 +21,14 @@ import {
   RefreshControl,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useRoute } from '@react-navigation/native';
+import { useNavigation, useRoute } from '@react-navigation/native';
 import { BlurView } from 'expo-blur';
+import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import ScreenContainer from '../components/ScreenContainer';
 import ProfileButton from '../components/ProfileButton';
+import ClientProfileModal from '../components/ClientProfileModal';
 import { supabase } from '../config/supabase';
 
 const VOTER_ID_KEY = '@gobahrain_voter_id';
@@ -201,7 +203,7 @@ const NOTIFICATION_COUNT = 3;
 const CARD_MARGIN_H = 16;
 const CARD_PADDING = 14;
 
-function PostCard({ item, isHighlighted = false, onHighlightDone, onUpvoteToggle, upvoteScaleAnim }) {
+function PostCard({ item, isHighlighted = false, onHighlightDone, onUpvoteToggle, onClientPress, upvoteScaleAnim }) {
   const { width } = useWindowDimensions();
   const imageWidth = width;
   const imageHeight = Math.round(imageWidth * 1.05);
@@ -291,7 +293,11 @@ function PostCard({ item, isHighlighted = false, onHighlightDone, onUpvoteToggle
           { opacity: glowOpacity },
         ]}
       />
-      <View style={styles.cardHeader}>
+      <TouchableOpacity
+        style={styles.cardHeader}
+        activeOpacity={0.8}
+        onPress={() => onClientPress?.(item)}
+      >
         <View style={styles.cardAvatar}>
           <Ionicons name="storefront" size={20} color={COLORS.primary} />
         </View>
@@ -317,7 +323,8 @@ function PostCard({ item, isHighlighted = false, onHighlightDone, onUpvoteToggle
             <Text style={styles.openNowText}>Open</Text>
           </View>
         )}
-      </View>
+        <Ionicons name="chevron-forward" size={18} color={COLORS.textMuted} />
+      </TouchableOpacity>
       <TouchableWithoutFeedback onPress={handleImagePress}>
         <View style={[styles.imageWrap, { width: imageWidth, height: imageHeight }]}>
           <Image
@@ -423,6 +430,7 @@ function PlaneLoader({ label = 'Refreshing…' }) {
 export default function HomeScreen() {
   const insets = useSafeAreaInsets();
   const route = useRoute();
+  const navigation = useNavigation();
   const [selectedCategory, setSelectedCategory] = useState('nearby');
   const [showAIOverlay, setShowAIOverlay] = useState(false);
   const [customQuery, setCustomQuery] = useState('');
@@ -434,6 +442,7 @@ export default function HomeScreen() {
   const [showScrollToTop, setShowScrollToTop] = useState(false);
   const [upvoteParticlesVisible, setUpvoteParticlesVisible] = useState(false);
   const [upvoteParticlePosition, setUpvoteParticlePosition] = useState({ x: 0, y: 0 });
+  const [selectedClientId, setSelectedClientId] = useState(null);
   const lastPulseRef = useRef(0);
   const flatListRef = useRef(null);
   const scrollOffsetRef = useRef(0);
@@ -444,6 +453,8 @@ export default function HomeScreen() {
   const headerTranslateY = useRef(new Animated.Value(0)).current;
   const headerVisibleRef = useRef(true);
   const headerBarHeight = insets.top + 6 + 52 + 58;
+  const khalidCommandRef = useRef(null);
+  const [khalidContextBanner, setKhalidContextBanner] = useState(null);
 
   const fetchPosts = useCallback(async (opts = {}) => {
     const { skipGlobalLoading = false, onDone } = opts;
@@ -669,6 +680,48 @@ export default function HomeScreen() {
       setCustomQuery('');
     }
   }, [route.params?.aiPulse]);
+
+  // When Khalid assistant asks to highlight a post, store the command and act once posts are available
+  useEffect(() => {
+    const fromKhalid = route.params?.fromKhalid;
+    if (!fromKhalid || fromKhalid.type !== 'highlight_post') return;
+    khalidCommandRef.current = fromKhalid;
+  }, [route.params?.fromKhalid]);
+
+  // Open client profile when navigating from AR "View profile"
+  useEffect(() => {
+    const openClientId = route.params?.openClientId;
+    if (!openClientId) return;
+    setSelectedClientId(openClientId);
+    navigation.setParams({ openClientId: undefined });
+  }, [route.params?.openClientId, navigation]);
+
+  useEffect(() => {
+    if (!khalidCommandRef.current || posts.length === 0) return;
+    const cmd = khalidCommandRef.current;
+    khalidCommandRef.current = null;
+    const resolved = (cmd.query || '').trim();
+    if (!resolved) return;
+    const postId = choiceToPostId(resolved, posts);
+    if (!postId) return;
+
+    setKhalidContextBanner(resolved);
+    const bannerTimeout = setTimeout(() => setKhalidContextBanner(null), 5000);
+
+    InteractionManager.runAfterInteractions(() => {
+      setTimeout(() => {
+        const idx = posts.findIndex((p) => p.id === postId);
+        if (flatListRef.current && idx >= 0) {
+          smoothScrollToIndex(idx, () => setHighlightedPostId(postId));
+        } else {
+          setHighlightedPostId(postId);
+        }
+      }, 120);
+    });
+
+    navigation.setParams({ fromKhalid: undefined });
+    return () => clearTimeout(bannerTimeout);
+  }, [posts, navigation, flatListRef, smoothScrollToIndex, setHighlightedPostId]);
 
   useEffect(() => {
     if (!showAIOverlay) {
@@ -972,6 +1025,19 @@ export default function HomeScreen() {
           ref={flatListRef}
           data={posts}
           keyExtractor={(item) => item.id}
+          ListHeaderComponent={
+            khalidContextBanner ? (
+              <View style={styles.khalidContextBanner}>
+                <Ionicons name="sparkles" size={16} color={COLORS.primary} />
+                <Text style={styles.khalidContextBannerText} numberOfLines={1}>
+                  Khalid showed you: {khalidContextBanner}
+                </Text>
+                <TouchableOpacity onPress={() => setKhalidContextBanner(null)} hitSlop={8}>
+                  <Ionicons name="close-circle" size={20} color={COLORS.textMuted} />
+                </TouchableOpacity>
+              </View>
+            ) : null
+          }
           renderItem={({ item }) => {
             if (!upvoteAnimations[item.id]) upvoteAnimations[item.id] = { scale: new Animated.Value(1) };
             return (
@@ -980,6 +1046,7 @@ export default function HomeScreen() {
                 isHighlighted={item.id === highlightedPostId}
                 onHighlightDone={() => setHighlightedPostId(null)}
                 onUpvoteToggle={handleUpvoteToggle}
+                onClientPress={(post) => post?.clientId && setSelectedClientId(post.clientId)}
                 upvoteScaleAnim={upvoteAnimations[item.id].scale}
               />
             );
@@ -1001,6 +1068,13 @@ export default function HomeScreen() {
           ListHeaderComponent={refreshing ? <PlaneLoader label="Refreshing…" /> : null}
         />
       )}
+
+      <ClientProfileModal
+        visible={!!selectedClientId}
+        clientId={selectedClientId}
+        onClose={() => setSelectedClientId(null)}
+        insets={insets}
+      />
 
       {/* AI overlay: glass, question + block options */}
       <Modal visible={showAIOverlay} transparent animationType="none">
@@ -1486,6 +1560,25 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     paddingTop: 4,
     paddingBottom: 12,
+  },
+  khalidContextBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    marginBottom: 8,
+    backgroundColor: '#FEF2F2',
+    borderLeftWidth: 4,
+    borderLeftColor: COLORS.primary,
+    borderRadius: 12,
+    marginHorizontal: 0,
+  },
+  khalidContextBannerText: {
+    flex: 1,
+    fontSize: 14,
+    fontWeight: '600',
+    color: COLORS.textPrimary,
   },
   overlayRoot: {
     flex: 1,
