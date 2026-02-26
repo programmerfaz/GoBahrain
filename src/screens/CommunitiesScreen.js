@@ -24,16 +24,18 @@ import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import ScreenContainer from '../components/ScreenContainer';
 import ProfileButton from '../components/ProfileButton';
+import { CameraView, useCameraPermissions } from 'expo-camera';
 import {
   fetchCommunityPosts,
   searchCommunityWithOpenAI,
   createCommunityPost,
-   uploadCommunityImages,
-   upvoteCommunityPost,
-   removeUpvoteCommunityPost,
-   getCommunityUserId,
-   fetchClients,
- } from '../services/community';
+  uploadCommunityImages,
+  upvoteCommunityPost,
+  removeUpvoteCommunityPost,
+  getCommunityUserId,
+  fetchClients,
+  fetchClientByQrPayload,
+} from '../services/community';
 
 const C = {
   bg: '#FFFFFF',
@@ -102,9 +104,15 @@ const CREATE_POST_TOPICS = [
   { id: 'tips', label: 'Tips' },
 ];
 
-const CREATE_POST_TOPIC_EMOJIS = {
-  food: '🍽️', places: '📍', events: '🎉', beaches: '🏖️',
-  culture: '🕌', nightlife: '🌙', family: '👨‍👩‍👧‍👦', tips: '💡',
+const CREATE_POST_TOPIC_ICONS = {
+  food: 'restaurant-outline',
+  places: 'location-outline',
+  events: 'calendar-outline',
+  beaches: 'water-outline',
+  culture: 'library-outline',
+  nightlife: 'moon-outline',
+  family: 'people-outline',
+  tips: 'bulb-outline',
 };
 
 const TOTAL_STARS = 5;
@@ -440,7 +448,95 @@ function DetailModal({ post, onClose, onUpvote, onRemoveUpvote, focusReplyWhenOp
 
 const TAB_BAR_HEIGHT = Platform.OS === 'ios' ? 70 : 60;
 
-function CreatePostModal({ visible, onClose, onPosted }) {
+const SCAN_BOX_SIZE = 240;
+
+function QRScannerModal({ visible, onClose, onScanned }) {
+  const [permission, requestPermission] = useCameraPermissions();
+  const lastScanned = useRef(null);
+  const insets = useSafeAreaInsets();
+
+  const handleBarcodeScanned = useCallback(
+    async ({ data }) => {
+      if (!data || typeof data !== 'string') return;
+      const raw = data.trim();
+      if (!raw) return;
+      const now = Date.now();
+      if (lastScanned.current && now - lastScanned.current < 2500) return;
+      lastScanned.current = now;
+      const client = await fetchClientByQrPayload(raw);
+      if (client) {
+        onScanned?.(client);
+        onClose?.();
+      } else {
+        Alert.alert('Unknown code', 'This QR code is not linked to a venue in Go Bahrain.');
+      }
+    },
+    [onScanned, onClose]
+  );
+
+  if (!visible) return null;
+  if (!permission) {
+    return (
+      <Modal visible transparent>
+        <View style={s.scannerPlaceholder}><ActivityIndicator size="large" color={C.red} /></View>
+      </Modal>
+    );
+  }
+  if (!permission.granted) {
+    return (
+      <Modal visible transparent animationType="slide">
+        <View style={[s.scannerPlaceholder, { paddingTop: insets.top + 40 }]}>
+          <Text style={s.scannerPermissionText}>Camera access is needed to scan venue QR codes.</Text>
+          <TouchableOpacity style={s.scannerPermissionBtn} onPress={requestPermission} activeOpacity={0.8}>
+            <Text style={s.scannerPermissionBtnText}>Allow camera</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={s.scannerCloseBtn} onPress={onClose} activeOpacity={0.8}>
+            <Text style={s.scannerCloseText}>Cancel</Text>
+          </TouchableOpacity>
+        </View>
+      </Modal>
+    );
+  }
+
+  return (
+    <Modal visible animationType="slide" onRequestClose={onClose}>
+      <View style={StyleSheet.absoluteFill}>
+        <CameraView
+          style={StyleSheet.absoluteFill}
+          facing="back"
+          barcodeScannerSettings={{ barcodeTypes: ['qr'] }}
+          onBarcodeScanned={handleBarcodeScanned}
+        />
+        {/* Dark overlay with transparent center box (viewfinder) */}
+        <View style={s.scannerOverlay} pointerEvents="none">
+          <View style={[s.scannerMask, { paddingTop: insets.top }]}>
+            <View style={s.scannerMaskRow} />
+            <View style={s.scannerMaskCenter}>
+              <View style={s.scannerMaskSide} />
+              <View style={[s.scannerBox, { width: SCAN_BOX_SIZE, height: SCAN_BOX_SIZE }]}>
+                <View style={[s.scannerBoxCorner, s.scannerBoxCornerTL]} />
+                <View style={[s.scannerBoxCorner, s.scannerBoxCornerTR]} />
+                <View style={[s.scannerBoxCorner, s.scannerBoxCornerBL]} />
+                <View style={[s.scannerBoxCorner, s.scannerBoxCornerBR]} />
+              </View>
+              <View style={s.scannerMaskSide} />
+            </View>
+            <View style={s.scannerMaskRow} />
+          </View>
+        </View>
+        <View style={[s.scannerHeader, { paddingTop: insets.top + 12, paddingBottom: 16 }]} pointerEvents="box-none">
+          <TouchableOpacity style={s.scannerCloseBtn} onPress={onClose} activeOpacity={0.8}>
+            <Ionicons name="close" size={28} color="#FFF" />
+          </TouchableOpacity>
+          <Text style={s.scannerHint}>Position the venue's QR code inside the box</Text>
+          <View style={{ width: 28 }} />
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
+function CreatePostModal({ visible, onClose, onPosted, initialPlace, initialClientUuid }) {
   const insets = useSafeAreaInsets();
   const [body, setBody] = useState('');
   const [place, setPlace] = useState('');
@@ -454,6 +550,13 @@ function CreatePostModal({ visible, onClose, onPosted }) {
   const [clientSearch, setClientSearch] = useState('');
   const [clients, setClients] = useState([]);
   const [clientsLoading, setClientsLoading] = useState(false);
+
+  useEffect(() => {
+    if (visible && (initialPlace != null || initialClientUuid != null)) {
+      if (initialPlace != null) setPlace(initialPlace);
+      if (initialClientUuid != null) setSelectedClientUuid(initialClientUuid);
+    }
+  }, [visible, initialPlace, initialClientUuid]);
 
   const handleClose = () => {
     setBody(''); setPlace(''); setSelectedClientUuid(null);
@@ -559,148 +662,169 @@ function CreatePostModal({ visible, onClose, onPosted }) {
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
         <View style={s.createHeader}>
-          <TouchableOpacity onPress={handleClose} disabled={posting} activeOpacity={0.7}>
-            <Text style={s.createCancelText}>Cancel</Text>
+          <TouchableOpacity onPress={handleClose} disabled={posting} style={s.createHeaderBtn} activeOpacity={0.7}>
+            <Ionicons name="close" size={24} color={C.text} />
           </TouchableOpacity>
-          <Text style={s.createTitle}>Add a Review</Text>
-          <TouchableOpacity onPress={handlePost} disabled={!canPost || posting} activeOpacity={0.7} style={[s.postBtn, canPost && s.postBtnActive]}>
+          <View style={s.createHeaderCenter}>
+            <Text style={s.createTitle}>Add a Review</Text>
+            <Text style={s.createSubtitle}>Share your experience in Bahrain</Text>
+          </View>
+          <TouchableOpacity onPress={handlePost} disabled={!canPost || posting} activeOpacity={0.8} style={[s.postBtn, canPost && s.postBtnActive]}>
             {posting ? <ActivityIndicator size="small" color="#FFF" /> : <Text style={[s.postBtnText, canPost && s.postBtnTextActive]}>Post</Text>}
           </TouchableOpacity>
         </View>
 
         <ScrollView
           style={{ flex: 1 }}
-          contentContainerStyle={[s.createScroll, { paddingBottom: insets.bottom + 32, paddingTop: 20 }]}
+          contentContainerStyle={[s.createScroll, { paddingBottom: insets.bottom + 28 }]}
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
         >
-          {/* 1. Photos: 0 = one Add button; 1 = left image + right Add; 2 = both images */}
-          <Text style={s.sectionLabel}>Photos</Text>
-          <View style={s.photoRow}>
-            {imageEntries.length === 0 ? (
-              <TouchableOpacity style={s.photoAddSingle} onPress={pickImage} activeOpacity={0.7}>
-                <Ionicons name="camera-outline" size={32} color="#78716C" />
-                <Text style={s.photoAddText}>Add photo</Text>
+          {/* 1. Place or venue */}
+          <View style={s.createCard}>
+            <View style={s.createCardHeader}>
+              <Ionicons name="location" size={20} color={C.red} />
+              <Text style={s.createCardTitle}>Where did you go?</Text>
+            </View>
+            <View style={s.placeInputRow}>
+              <TextInput
+                style={s.placeInput}
+                placeholder="Restaurant, cafe, or venue name"
+                placeholderTextColor={C.muted}
+                value={place}
+                onChangeText={(t) => { setPlace(t); setSelectedClientUuid(null); }}
+              />
+              <TouchableOpacity style={s.fromAppBtn} onPress={() => setShowClientPicker(true)} activeOpacity={0.8}>
+                <Ionicons name="search" size={18} color={C.red} />
+                <Text style={s.fromAppBtnText}>Browse</Text>
               </TouchableOpacity>
-            ) : (
-              <>
-                <View style={s.photoHalf}>
-                  {imageEntries[0] ? (
-                    <View style={s.photoThumb}>
-                      <Image source={{ uri: imageEntries[0].uri }} style={s.photoThumbImg} resizeMode="cover" />
-                      <TouchableOpacity style={s.photoRemove} onPress={() => removeImage(0)}>
-                        <Ionicons name="close" size={16} color="#FFF" />
-                      </TouchableOpacity>
-                    </View>
-                  ) : null}
-                </View>
-                <View style={s.photoGap} />
-                <View style={s.photoHalf}>
-                  {imageEntries[1] ? (
-                    <View style={s.photoThumb}>
-                      <Image source={{ uri: imageEntries[1].uri }} style={s.photoThumbImg} resizeMode="cover" />
-                      <TouchableOpacity style={s.photoRemove} onPress={() => removeImage(1)}>
-                        <Ionicons name="close" size={16} color="#FFF" />
-                      </TouchableOpacity>
-                    </View>
-                  ) : (
-                    <TouchableOpacity style={s.photoAdd} onPress={pickImage} activeOpacity={0.7}>
-                      <Ionicons name="camera-outline" size={26} color="#78716C" />
-                      <Text style={s.photoAddText}>Add</Text>
-                    </TouchableOpacity>
-                  )}
-                </View>
-              </>
-            )}
-          </View>
-          <Text style={s.photoCountHint}>({imageEntries.length}/2)</Text>
-
-          {/* 2. Your post */}
-          <Text style={s.sectionLabel}>Your post</Text>
-          <TextInput
-            style={s.createTextInput}
-            placeholder="What did you discover in Bahrain?"
-            placeholderTextColor="#78716C"
-            value={body}
-            onChangeText={setBody}
-            multiline
-            maxLength={500}
-          />
-          <Text style={s.charCount}>{body.length}/500</Text>
-
-          {/* 3. Rating */}
-          <Text style={s.sectionLabel}>Rating</Text>
-          <View style={s.starsRow}>
-            {[1, 2, 3, 4, 5].map((n) => (
-              <View key={n} style={s.starTouchWrap}>
-                <TouchableOpacity
-                  style={s.starHalf}
-                  activeOpacity={0.8}
-                  onPress={() => { const v = n - 0.5; setRating(rating === v ? 0 : v); }}
-                />
-                <TouchableOpacity
-                  style={s.starHalf}
-                  activeOpacity={0.8}
-                  onPress={() => setRating(rating === n ? 0 : n)}
-                />
-                <View pointerEvents="none" style={s.starIconOverlay}>
-                  <Ionicons
-                    name={rating >= n ? 'star' : rating >= n - 0.5 ? 'star-half' : 'star-outline'}
-                    size={30}
-                    color="#B45309"
-                  />
-                </View>
-              </View>
-            ))}
-            {rating > 0 && <Text style={s.starsLabel}>{rating % 1 === 0 ? `${rating}.0` : rating.toFixed(1)}</Text>}
+            </View>
           </View>
 
-          {/* 4. Place or venue */}
-          <Text style={s.sectionLabel}>Place or venue</Text>
-          <View style={s.placeInputRow}>
-            <Ionicons name="location-outline" size={18} color="#78716C" style={{ marginLeft: 14 }} />
+          {/* 2. Rating */}
+          <View style={s.createCard}>
+            <View style={s.createCardHeader}>
+              <Ionicons name="star" size={20} color="#B45309" />
+              <Text style={s.createCardTitle}>How was it?</Text>
+            </View>
+            <View style={s.starsRow}>
+              {[1, 2, 3, 4, 5].map((n) => (
+                <View key={n} style={s.starTouchWrap}>
+                  <TouchableOpacity style={s.starHalf} activeOpacity={0.8} onPress={() => { const v = n - 0.5; setRating(rating === v ? 0 : v); }} />
+                  <TouchableOpacity style={s.starHalf} activeOpacity={0.8} onPress={() => setRating(rating === n ? 0 : n)} />
+                  <View pointerEvents="none" style={s.starIconOverlay}>
+                    <Ionicons name={rating >= n ? 'star' : rating >= n - 0.5 ? 'star-half' : 'star-outline'} size={36} color="#B45309" />
+                  </View>
+                </View>
+              ))}
+              {rating > 0 && <Text style={s.starsLabel}>{rating % 1 === 0 ? `${rating}.0` : rating.toFixed(1)}</Text>}
+            </View>
+          </View>
+
+          {/* 3. Your post */}
+          <View style={s.createCard}>
+            <View style={s.createCardHeader}>
+              <Ionicons name="chatbubble-ellipses" size={20} color={C.red} />
+              <Text style={s.createCardTitle}>Your review</Text>
+            </View>
             <TextInput
-              style={s.placeInput}
-              placeholder="e.g. Local cafe, Manama"
-              placeholderTextColor="#78716C"
-              value={place}
-              onChangeText={(t) => { setPlace(t); setSelectedClientUuid(null); }}
+              style={s.createTextInput}
+              placeholder="What did you discover? Share tips, highlights, or must-trys..."
+              placeholderTextColor={C.muted}
+              value={body}
+              onChangeText={setBody}
+              multiline
+              maxLength={500}
             />
-            <TouchableOpacity style={s.fromAppBtn} onPress={() => setShowClientPicker(true)} activeOpacity={0.8}>
-              <Ionicons name="search" size={16} color="#C8102E" />
-              <Text style={s.fromAppBtnText}>Browse</Text>
-            </TouchableOpacity>
+            <View style={s.charCountRow}><Text style={s.charCount}>{body.length}/500</Text></View>
           </View>
 
-          {/* 5. Select topic + custom hashtag */}
-          <Text style={s.sectionLabel}>#Hashtags</Text>
-          <View style={s.topicGrid}>
-            {CREATE_POST_TOPICS.map((t) => {
-              const on = selectedTopicIds.includes(t.id);
-              return (
-                <TouchableOpacity key={t.id} style={[s.topicChip, on && s.topicChipOn]} onPress={() => toggleTopic(t.id)} activeOpacity={0.8}>
-                  <Text style={s.topicChipEmoji}>{CREATE_POST_TOPIC_EMOJIS[t.id] || ''}</Text>
-                  <Text style={[s.topicChipLabel, on && s.topicChipLabelOn]}>{t.label}</Text>
+          {/* 4. Photos */}
+          <View style={s.createCard}>
+            <View style={s.createCardHeader}>
+              <Ionicons name="images" size={20} color={C.red} />
+              <Text style={s.createCardTitle}>Photos</Text>
+              <Text style={s.photoCountBadge}>{imageEntries.length}/2</Text>
+            </View>
+            <View style={s.photoRow}>
+              {imageEntries.length === 0 ? (
+                <TouchableOpacity style={s.photoAddSingle} onPress={pickImage} activeOpacity={0.7}>
+                  <View style={s.photoAddIconWrap}>
+                    <Ionicons name="add" size={28} color={C.red} />
+                  </View>
+                  <Text style={s.photoAddText}>Add up to 2 photos</Text>
+                  <Text style={s.photoAddHint}>Tap to choose from library</Text>
                 </TouchableOpacity>
-              );
-            })}
+              ) : (
+                <>
+                  <View style={s.photoHalf}>
+                    {imageEntries[0] ? (
+                      <View style={s.photoThumb}>
+                        <Image source={{ uri: imageEntries[0].uri }} style={s.photoThumbImg} resizeMode="cover" />
+                        <TouchableOpacity style={s.photoRemove} onPress={() => removeImage(0)}>
+                          <Ionicons name="close" size={18} color="#FFF" />
+                        </TouchableOpacity>
+                      </View>
+                    ) : null}
+                  </View>
+                  <View style={s.photoGap} />
+                  <View style={s.photoHalf}>
+                    {imageEntries[1] ? (
+                      <View style={s.photoThumb}>
+                        <Image source={{ uri: imageEntries[1].uri }} style={s.photoThumbImg} resizeMode="cover" />
+                        <TouchableOpacity style={s.photoRemove} onPress={() => removeImage(1)}>
+                          <Ionicons name="close" size={18} color="#FFF" />
+                        </TouchableOpacity>
+                      </View>
+                    ) : (
+                      <TouchableOpacity style={s.photoAdd} onPress={pickImage} activeOpacity={0.7}>
+                        <Ionicons name="add" size={24} color={C.red} />
+                        <Text style={s.photoAddText}>Add</Text>
+                      </TouchableOpacity>
+                    )}
+                  </View>
+                </>
+              )}
+            </View>
           </View>
-          <View style={s.customHashtagRow}>
-            <Text style={s.customHashtagPrefix}>#</Text>
-            <TextInput
-              style={s.customHashtagInput}
-              placeholder="Add your own (e.g. paratha)"
-              placeholderTextColor="#9CA3AF"
-              value={customHashtag}
-              onChangeText={onCustomHashtagChange}
-              maxLength={MAX_CUSTOM_HASHTAG_LEN}
-              autoCapitalize="none"
-              autoCorrect={false}
-            />
-            {customHashtag.length > 0 && (
-              <Text style={s.customHashtagCount}>{customHashtag.length}/{MAX_CUSTOM_HASHTAG_LEN}</Text>
-            )}
+
+          {/* 5. Hashtags */}
+          <View style={s.createCard}>
+            <View style={s.createCardHeader}>
+              <Ionicons name="pricetags" size={20} color={C.red} />
+              <Text style={s.createCardTitle}>Tags</Text>
+            </View>
+            <Text style={s.createCardDesc}>Help others find your review</Text>
+            <View style={s.topicGrid}>
+              {CREATE_POST_TOPICS.map((t) => {
+                const on = selectedTopicIds.includes(t.id);
+                return (
+                  <TouchableOpacity key={t.id} style={[s.topicChip, on && s.topicChipOn]} onPress={() => toggleTopic(t.id)} activeOpacity={0.8}>
+                    <Ionicons name={CREATE_POST_TOPIC_ICONS[t.id] || 'pricetag-outline'} size={18} color={on ? C.red : C.sub} />
+                    <Text style={[s.topicChipLabel, on && s.topicChipLabelOn]}>{t.label}</Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+            <View style={s.customHashtagRow}>
+              <Text style={s.customHashtagPrefix}>#</Text>
+              <TextInput
+                style={s.customHashtagInput}
+                placeholder="Add your own tag"
+                placeholderTextColor={C.muted}
+                value={customHashtag}
+                onChangeText={onCustomHashtagChange}
+                maxLength={MAX_CUSTOM_HASHTAG_LEN}
+                autoCapitalize="none"
+                autoCorrect={false}
+              />
+              {customHashtag.length > 0 && <Text style={s.customHashtagCount}>{customHashtag.length}/{MAX_CUSTOM_HASHTAG_LEN}</Text>}
+            </View>
           </View>
+
+          {!canPost && (body.length > 0 || place.length > 0 || selectedTopicIds.length > 0) && (
+            <Text style={s.createHint}>Fill in place, rating, review text, and at least one tag to post.</Text>
+          )}
         </ScrollView>
 
         <Modal visible={showClientPicker} animationType="slide" transparent onRequestClose={() => setShowClientPicker(false)}>
@@ -757,6 +881,10 @@ export default function CommunitiesScreen() {
   const [selectedPost, setSelectedPost] = useState(null);
   const [focusReplyWhenOpen, setFocusReplyWhenOpen] = useState(false);
   const [showCreate, setShowCreate] = useState(false);
+  const [showScanner, setShowScanner] = useState(false);
+  const [scanInitialPlace, setScanInitialPlace] = useState(null);
+  const [scanInitialClientUuid, setScanInitialClientUuid] = useState(null);
+  const [fabExpanded, setFabExpanded] = useState(false);
   const [showAiFilterPanel, setShowAiFilterPanel] = useState(false);
   const [aiSearchQuery, setAiSearchQuery] = useState('');
   const [aiFilteredPosts, setAiFilteredPosts] = useState([]);
@@ -989,10 +1117,50 @@ export default function CommunitiesScreen() {
         />
       )}
 
-      <TouchableOpacity style={[s.fab, { bottom: fabBottom }]} onPress={() => setShowCreate(true)} activeOpacity={0.85}>
-        <Ionicons name="add" size={28} color="#FFF" />
-      </TouchableOpacity>
+      {fabExpanded && (
+        <TouchableWithoutFeedback onPress={() => setFabExpanded(false)}>
+          <View style={s.fabOverlay} />
+        </TouchableWithoutFeedback>
+      )}
+      <View style={[s.fabContainer, { bottom: fabBottom }]} pointerEvents="box-none">
+        {fabExpanded && (
+          <View style={s.fabMenu}>
+            <TouchableOpacity
+              style={s.fabMenuBtn}
+              onPress={() => { setFabExpanded(false); setShowCreate(true); }}
+              activeOpacity={0.85}
+            >
+              <Ionicons name="create-outline" size={20} color="#FFF" />
+              <Text style={s.fabMenuBtnText}>Post</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={s.fabMenuBtn}
+              onPress={() => { setFabExpanded(false); setShowScanner(true); }}
+              activeOpacity={0.85}
+            >
+              <Ionicons name="scan-outline" size={20} color="#FFF" />
+              <Text style={s.fabMenuBtnText}>Scan</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+        <TouchableOpacity
+          style={[s.fab, fabExpanded && s.fabRotate]}
+          onPress={() => setFabExpanded((v) => !v)}
+          activeOpacity={0.85}
+        >
+          <Ionicons name="add" size={28} color="#FFF" />
+        </TouchableOpacity>
+      </View>
 
+      <QRScannerModal
+        visible={showScanner}
+        onClose={() => setShowScanner(false)}
+        onScanned={(client) => {
+          setScanInitialPlace(client.business_name);
+          setScanInitialClientUuid(client.client_a_uuid);
+          setShowCreate(true);
+        }}
+      />
       <DetailModal
         post={selectedPost}
         onClose={() => { setSelectedPost(null); setFocusReplyWhenOpen(false); }}
@@ -1001,7 +1169,13 @@ export default function CommunitiesScreen() {
         focusReplyWhenOpen={focusReplyWhenOpen}
         onClearFocusReply={() => setFocusReplyWhenOpen(false)}
       />
-      <CreatePostModal visible={showCreate} onClose={() => setShowCreate(false)} onPosted={() => loadPosts({ isRefresh: true })} />
+      <CreatePostModal
+        visible={showCreate}
+        onClose={() => { setShowCreate(false); setScanInitialPlace(null); setScanInitialClientUuid(null); }}
+        onPosted={() => loadPosts({ isRefresh: true })}
+        initialPlace={scanInitialPlace}
+        initialClientUuid={scanInitialClientUuid}
+      />
     </ScreenContainer>
   );
 }
@@ -1150,14 +1324,65 @@ const s = StyleSheet.create({
   actions: { flexDirection: 'row', alignItems: 'center', gap: 20, marginTop: 10, paddingTop: 10 },
   actionBtn: { flexDirection: 'row', alignItems: 'center', gap: 5 },
   actionNum: { fontSize: 13, fontWeight: '600', color: C.muted },
+  fabOverlay: {
+    position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 0,
+  },
+  fabContainer: {
+    position: 'absolute', right: 20, alignItems: 'flex-end', zIndex: 1,
+  },
+  fabMenu: {
+    flexDirection: 'column-reverse', alignItems: 'flex-end', marginBottom: 12, gap: 10,
+  },
+  fabMenuBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    backgroundColor: C.red, paddingVertical: 10, paddingHorizontal: 14, borderRadius: 24,
+    ...Platform.select({
+      ios: { shadowColor: C.red, shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.3, shadowRadius: 6 },
+      android: { elevation: 6 },
+    }),
+  },
+  fabMenuBtnText: { fontSize: 14, fontWeight: '700', color: '#FFF' },
+  fabRotate: { transform: [{ rotate: '45deg' }] },
   fab: {
-    position: 'absolute', right: 20, width: 58, height: 58, borderRadius: 29,
+    width: 58, height: 58, borderRadius: 29,
     backgroundColor: C.red, alignItems: 'center', justifyContent: 'center',
     ...Platform.select({
       ios: { shadowColor: C.red, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.35, shadowRadius: 10 },
       android: { elevation: 10 },
     }),
   },
+  scannerPlaceholder: {
+    flex: 1, backgroundColor: C.bg, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 24,
+  },
+  scannerPermissionText: { fontSize: 16, color: C.text, textAlign: 'center', marginBottom: 24 },
+  scannerPermissionBtn: {
+    backgroundColor: C.red, paddingVertical: 14, paddingHorizontal: 24, borderRadius: 14, marginBottom: 12,
+  },
+  scannerPermissionBtnText: { fontSize: 16, fontWeight: '700', color: '#FFF' },
+  scannerCloseBtn: { padding: 12 },
+  scannerCloseText: { fontSize: 16, fontWeight: '600', color: C.sub },
+  scannerOverlay: {
+    position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, flex: 1,
+  },
+  scannerMask: { flex: 1, flexDirection: 'column' },
+  scannerMaskRow: { flex: 1, backgroundColor: 'rgba(0,0,0,0.55)' },
+  scannerMaskCenter: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center' },
+  scannerMaskSide: { flex: 1, backgroundColor: 'rgba(0,0,0,0.55)', alignSelf: 'stretch' },
+  scannerBox: {
+    alignItems: 'center', justifyContent: 'center', backgroundColor: 'transparent', position: 'relative',
+  },
+  scannerBoxCorner: {
+    position: 'absolute', width: 24, height: 24, borderColor: '#FFF',
+  },
+  scannerBoxCornerTL: { top: 0, left: 0, borderTopWidth: 4, borderLeftWidth: 4, borderTopLeftRadius: 8 },
+  scannerBoxCornerTR: { top: 0, right: 0, borderTopWidth: 4, borderRightWidth: 4, borderTopRightRadius: 8 },
+  scannerBoxCornerBL: { bottom: 0, left: 0, borderBottomWidth: 4, borderLeftWidth: 4, borderBottomLeftRadius: 8 },
+  scannerBoxCornerBR: { bottom: 0, right: 0, borderBottomWidth: 4, borderRightWidth: 4, borderBottomRightRadius: 8 },
+  scannerHeader: {
+    position: 'absolute', left: 0, right: 0, top: 0,
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 8,
+  },
+  scannerHint: { fontSize: 14, color: 'rgba(255,255,255,0.95)', fontWeight: '600', flex: 1, textAlign: 'center' },
   empty: { paddingVertical: 72, alignItems: 'center', paddingHorizontal: 32 },
   emptyIcon: {
     width: 80, height: 80, borderRadius: 40, backgroundColor: C.chip,
@@ -1231,90 +1456,109 @@ const s = StyleSheet.create({
   popReplyInput: { flex: 1, fontSize: 13, color: C.text, paddingVertical: 0, minHeight: 20 },
   popReplyPlaceholder: { flex: 1, fontSize: 13, color: C.muted },
   // Create — warm color scheme
-  createRoot: { flex: 1, backgroundColor: '#FAF8F5' },
+  createRoot: { flex: 1, backgroundColor: '#F5F5F4' },
   createHeader: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    paddingHorizontal: 20, paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: '#E8E4DF',
+    paddingHorizontal: 16, paddingVertical: 12, paddingTop: 14,
     backgroundColor: '#FFF',
+    ...Platform.select({
+      ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.06, shadowRadius: 4 },
+      android: { elevation: 3 },
+    }),
   },
-  createCancelText: { fontSize: 16, color: '#78716C', fontWeight: '600' },
-  createTitle: { fontSize: 18, fontWeight: '800', color: '#1C1917' },
+  createHeaderBtn: { padding: 8, marginLeft: -8 },
+  createHeaderCenter: { flex: 1, alignItems: 'center', justifyContent: 'center', marginHorizontal: 8 },
+  createTitle: { fontSize: 18, fontWeight: '800', color: '#1C1917', letterSpacing: -0.3 },
+  createSubtitle: { fontSize: 12, color: '#78716C', marginTop: 2, fontWeight: '500' },
   postBtn: {
-    paddingVertical: 8, paddingHorizontal: 20, borderRadius: 20,
-    backgroundColor: '#E7E5E4',
+    paddingVertical: 10, paddingHorizontal: 22, borderRadius: 22,
+    backgroundColor: '#E7E5E4', minWidth: 72, alignItems: 'center',
   },
-  postBtnActive: { backgroundColor: '#C8102E' },
+  postBtnActive: { backgroundColor: C.red },
   postBtnText: { fontSize: 15, fontWeight: '700', color: '#A8A29E' },
   postBtnTextActive: { color: '#FFF' },
-  createScroll: { paddingHorizontal: 20, paddingTop: 24 },
+  createScroll: { paddingHorizontal: 16, paddingTop: 20 },
+  createCard: {
+    backgroundColor: '#FFF', borderRadius: 16, padding: 20, marginBottom: 16,
+    ...Platform.select({
+      ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.06, shadowRadius: 8 },
+      android: { elevation: 2 },
+    }),
+  },
+  createCardHeader: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 14 },
+  createCardTitle: { fontSize: 16, fontWeight: '700', color: '#1C1917', flex: 1 },
+  createCardDesc: { fontSize: 13, color: '#78716C', marginBottom: 12, lineHeight: 18 },
   createTextInput: {
-    fontSize: 17, lineHeight: 26, color: '#1C1917',
-    minHeight: 120, textAlignVertical: 'top', paddingTop: 0,
-    backgroundColor: '#FFF', borderRadius: 12, borderWidth: 1, borderColor: '#E8E4DF', paddingHorizontal: 14, paddingVertical: 12,
+    fontSize: 16, lineHeight: 24, color: '#1C1917',
+    minHeight: 100, textAlignVertical: 'top', paddingTop: 14, paddingBottom: 14,
+    backgroundColor: '#FAFAF9', borderRadius: 12, borderWidth: 1, borderColor: '#E7E5E4',
+    paddingHorizontal: 14,
   },
-  charCount: { fontSize: 12, color: '#78716C', textAlign: 'right', marginTop: 4, marginBottom: 20 },
-  sectionLabel: { fontSize: 14, fontWeight: '700', color: '#44403C', marginBottom: 10, marginTop: 4 },
+  charCountRow: { flexDirection: 'row', justifyContent: 'flex-end', marginTop: 6 },
+  charCount: { fontSize: 12, color: '#78716C' },
+  createHint: { fontSize: 13, color: '#78716C', textAlign: 'center', marginBottom: 24, paddingHorizontal: 16, lineHeight: 18 },
   placeInputRow: {
-    flexDirection: 'row', alignItems: 'center', backgroundColor: '#FFF', borderRadius: 14,
-    borderWidth: 1, borderColor: '#E8E4DF', marginBottom: 20, overflow: 'hidden',
+    flexDirection: 'row', alignItems: 'center',
+    backgroundColor: '#FAFAF9', borderRadius: 12, borderWidth: 1, borderColor: '#E7E5E4', overflow: 'hidden',
   },
-  placeInput: { flex: 1, fontSize: 15, color: '#1C1917', paddingVertical: 12, paddingHorizontal: 10 },
+  placeInput: { flex: 1, fontSize: 16, color: '#1C1917', paddingVertical: 14, paddingHorizontal: 14 },
   fromAppBtn: {
     flexDirection: 'row', alignItems: 'center', gap: 6,
-    paddingVertical: 10, paddingHorizontal: 14, backgroundColor: '#FEF2F2',
-    borderLeftWidth: 1, borderLeftColor: '#E8E4DF',
+    paddingVertical: 12, paddingHorizontal: 16, backgroundColor: '#FEF2F2', borderLeftWidth: 1, borderLeftColor: '#E7E5E4',
   },
-  fromAppBtnText: { fontSize: 14, fontWeight: '700', color: '#C8102E' },
-  starsRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 20 },
-  starTouchWrap: { width: 34, height: 34, flexDirection: 'row', position: 'relative' },
-  starHalf: { width: 17, height: 34 },
+  fromAppBtnText: { fontSize: 14, fontWeight: '700', color: C.red },
+  starsRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  starTouchWrap: { width: 40, height: 40, flexDirection: 'row', position: 'relative' },
+  starHalf: { width: 20, height: 40 },
   starIconOverlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, alignItems: 'center', justifyContent: 'center' },
-  starsLabel: { fontSize: 16, fontWeight: '700', color: '#B45309', marginLeft: 8 },
-  topicGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginBottom: 20 },
+  starsLabel: { fontSize: 17, fontWeight: '800', color: '#B45309', marginLeft: 10 },
+  topicGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginBottom: 14 },
   topicChip: {
     flexDirection: 'row', alignItems: 'center', gap: 6,
-    paddingVertical: 10, paddingHorizontal: 16, borderRadius: 14,
-    backgroundColor: '#FFF', borderWidth: 1.5, borderColor: '#E8E4DF',
+    paddingVertical: 10, paddingHorizontal: 14, borderRadius: 12,
+    backgroundColor: '#FAFAF9', borderWidth: 1.5, borderColor: '#E7E5E4',
   },
-  topicChipOn: { backgroundColor: '#FEF2F2', borderColor: '#C8102E' },
-  topicChipEmoji: { fontSize: 15 },
+  topicChipOn: { backgroundColor: '#FEF2F2', borderColor: C.red },
   topicChipLabel: { fontSize: 13, fontWeight: '600', color: '#57534E' },
-  topicChipLabelOn: { color: '#C8102E', fontWeight: '700' },
+  topicChipLabelOn: { color: C.red, fontWeight: '700' },
   customHashtagRow: {
     flexDirection: 'row', alignItems: 'center',
-    backgroundColor: '#FFF', borderRadius: 14, borderWidth: 1.5, borderColor: '#E8E4DF',
-    paddingVertical: 10, paddingHorizontal: 14, marginBottom: 20,
+    backgroundColor: '#FAFAF9', borderRadius: 12, borderWidth: 1.5, borderColor: '#E7E5E4',
+    paddingVertical: 12, paddingHorizontal: 14,
   },
-  customHashtagPrefix: { fontSize: 15, fontWeight: '600', color: '#9CA3AF', marginRight: 4 },
+  customHashtagPrefix: { fontSize: 15, fontWeight: '600', color: C.muted, marginRight: 4 },
   customHashtagInput: { flex: 1, fontSize: 15, color: '#1C1917', paddingVertical: 0, minWidth: 0 },
-  customHashtagCount: { fontSize: 12, color: '#9CA3AF', marginLeft: 8 },
-  photoRow: { flexDirection: 'row', marginBottom: 20, height: 120, alignItems: 'center' },
+  customHashtagCount: { fontSize: 12, color: C.muted, marginLeft: 8 },
+  photoRow: { flexDirection: 'row', height: 128, alignItems: 'stretch' },
   photoAddSingle: {
-    width: '100%', height: 120, borderRadius: 16,
+    width: '100%', height: 128, borderRadius: 14,
     borderWidth: 2, borderStyle: 'dashed', borderColor: '#D6D3D1',
-    alignItems: 'center', justifyContent: 'center', gap: 6,
-    backgroundColor: 'rgba(255,255,255,0.8)',
+    alignItems: 'center', justifyContent: 'center', gap: 8,
+    backgroundColor: '#FAFAF9',
   },
+  photoAddIconWrap: {
+    width: 52, height: 52, borderRadius: 26, backgroundColor: '#FEF2F2', alignItems: 'center', justifyContent: 'center',
+  },
+  photoAddText: { fontSize: 14, fontWeight: '600', color: '#57534E' },
+  photoAddHint: { fontSize: 12, color: '#78716C' },
+  photoCountBadge: { fontSize: 12, fontWeight: '700', color: C.muted, marginLeft: 'auto' },
   photoHalf: { flex: 1 },
-  photoGap: { width: 10 },
+  photoGap: { width: 12 },
   photoThumb: {
-    width: '100%', height: '100%', borderRadius: 16, overflow: 'hidden',
-    backgroundColor: '#E7E5E4', position: 'relative',
+    width: '100%', height: '100%', borderRadius: 14, overflow: 'hidden', backgroundColor: '#E7E5E4', position: 'relative',
   },
   photoThumbImg: { width: '100%', height: '100%' },
   photoRemove: {
-    position: 'absolute', top: 6, right: 6,
-    width: 26, height: 26, borderRadius: 13, backgroundColor: 'rgba(0,0,0,0.5)',
+    position: 'absolute', top: 8, right: 8,
+    width: 28, height: 28, borderRadius: 14, backgroundColor: 'rgba(0,0,0,0.55)',
     alignItems: 'center', justifyContent: 'center',
   },
   photoAdd: {
-    width: '100%', height: '100%', borderRadius: 16,
+    width: '100%', height: '100%', borderRadius: 14,
     borderWidth: 2, borderStyle: 'dashed', borderColor: '#D6D3D1',
     alignItems: 'center', justifyContent: 'center', gap: 4,
-    backgroundColor: 'rgba(255,255,255,0.8)',
+    backgroundColor: '#FAFAF9',
   },
-  photoAddText: { fontSize: 12, fontWeight: '600', color: '#78716C' },
-  photoCountHint: { fontSize: 12, color: '#78716C', marginTop: 4, marginBottom: 4 },
   // Picker
   pickerOverlay: {
     flex: 1, backgroundColor: 'rgba(0,0,0,0.5)',

@@ -85,6 +85,31 @@ export async function fetchClients() {
 }
 
 /**
+ * Find a client by scanned QR payload (client UUID).
+ * Returns { client_a_uuid, business_name } or null.
+ */
+export async function fetchClientByQrPayload(payload) {
+  const raw = (payload || '').trim();
+  if (!raw) return null;
+  const { data: rows, error } = await supabase
+    .from('client')
+    .select('client_a_uuid, business_name')
+    .eq('client_a_uuid', raw)
+    .limit(1);
+
+  if (error) {
+    console.error('[Community] fetchClientByQrPayload error:', error);
+    return null;
+  }
+  const r = rows?.[0];
+  if (!r) return null;
+  return {
+    client_a_uuid: r.client_a_uuid,
+    business_name: (r.business_name || 'Unnamed').trim(),
+  };
+}
+
+/**
  * Fetch community posts from Supabase.
  * - all: all posts, newest first
  * - trending: top 40 by upvotes (descending)
