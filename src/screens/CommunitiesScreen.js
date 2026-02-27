@@ -1,3 +1,4 @@
+// communities screen
 import React, { useState, useRef, useCallback, useEffect } from 'react';
 import {
   StyleSheet,
