@@ -21,6 +21,7 @@ import { useRoute } from '@react-navigation/native';
 import MapView, { Marker, Circle } from 'react-native-maps';
 import { Ionicons } from '@expo/vector-icons';
 import { fetchPlaces, fetchRestaurants, fetchBreakfastSpots, fetchEvents, generateDayPlan } from '../services/aiPipeline';
+import { useUserPreferences } from '../context/UserPreferencesContext';
 
 const { height: SCREEN_HEIGHT, width: SCREEN_WIDTH } = Dimensions.get('window');
 const APP_TAB_BAR_HEIGHT_IOS = 70;
@@ -69,27 +70,7 @@ function clampRegionToBahrain(region) {
   };
 }
 
-const PREFERENCES = [
-  { id: 'sightseeing', label: 'Sightseeing', icon: 'eye-outline', color: '#0EA5E9' },
-  { id: 'instagram', label: 'Instagram', icon: 'camera-outline', color: '#EC4899' },
-  { id: 'leisure', label: 'Leisure', icon: 'leaf-outline', color: '#10B981' },
-  { id: 'nature', label: 'Nature', icon: 'earth-outline', color: '#22C55E' },
-  { id: 'historical', label: 'Historical', icon: 'time-outline', color: '#818CF8' },
-  { id: 'cultural', label: 'Cultural', icon: 'color-palette-outline', color: '#6366F1' },
-  { id: 'adventure', label: 'Adventure', icon: 'rocket-outline', color: '#EF4444' },
-];
-
-const FOOD_CATEGORIES = [
-  { id: 'cuisine', label: 'Cuisine', icon: 'restaurant-outline', color: '#C8102E' },
-  { id: 'seafood', label: 'Seafood', icon: 'fish-outline', color: '#0EA5E9' },
-  { id: 'american', label: 'American', icon: 'fast-food-outline', color: '#F97316' },
-  { id: 'international', label: 'International', icon: 'globe-outline', color: '#6366F1' },
-  { id: 'cafe', label: 'Cafe', icon: 'cafe-outline', color: '#A16207' },
-  { id: 'asian', label: 'Asian', icon: 'nutrition-outline', color: '#DC2626' },
-  { id: 'italian', label: 'Italian', icon: 'pizza-outline', color: '#16A34A' },
-  { id: 'south-asian', label: 'South Asian', icon: 'flame-outline', color: '#F59E0B' },
-  { id: 'fast-food', label: 'Fast Food', icon: 'fast-food-outline', color: '#EF4444' },
-];
+import { PREFERENCES, FOOD_CATEGORIES } from '../constants/preferences';
 
 const SURPRISE_THEMES = [
   { label: 'Scenic Day', icon: 'heart', color: '#EC4899', prefs: ['Sightseeing', 'Leisure'], food: ['Italian', 'Seafood'] },
@@ -623,6 +604,7 @@ function buildMapMarkers(plan) {
 export default function AIPlanScreen() {
   const insets = useSafeAreaInsets();
   const route = useRoute();
+  const { preferences } = useUserPreferences();
   const mapRef = useRef(null);
   const sheetAnim = useRef(new Animated.Value(SNAP_POINTS[INITIAL_SNAP_INDEX])).current;
   const lastSnap = useRef(SNAP_POINTS[INITIAL_SNAP_INDEX]);
@@ -808,8 +790,8 @@ export default function AIPlanScreen() {
     setRevealingPins(false);
     setVisiblePinCount(0);
     sheetOpacity.setValue(1);
-    setSelectedPreferences([]);
-    setSelectedFoodCategories([]);
+    setSelectedPreferences(Array.isArray(preferences?.activityIds) ? preferences.activityIds : []);
+    setSelectedFoodCategories(Array.isArray(preferences?.foodIds) ? preferences.foodIds : []);
     setDayPlan(null);
     setPineconeMatches([]);
     setSelectedMarker(null);
@@ -1207,8 +1189,8 @@ export default function AIPlanScreen() {
         })()}
       </MapView>
 
-      {/* Scanning overlay during Hang tight */}
-      <MapScanningOverlay visible={showPlanModal && loading && !planGenerationSuccess} />
+      {/* Scanning overlay during Hang tight removed (no radar effect) */}
+      <MapScanningOverlay visible={false} />
 
       {/* Spot detail card */}
       {selectedMarker && (() => {

@@ -4,20 +4,23 @@ import {
   Text,
   View,
   TouchableOpacity,
-  TouchableWithoutFeedback,
   useWindowDimensions,
   ActivityIndicator,
   Platform,
   Modal,
   ScrollView,
   Linking,
+  Animated,
+  Pressable,
 } from 'react-native';
 import Slider from '@react-native-community/slider';
 import { CameraView, useCameraPermissions } from 'expo-camera';
+import { BlurView } from 'expo-blur';
 import * as Location from 'expo-location';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { fetchNearbyPOIs } from '../services/aiPipeline';
+import ClientProfileModal from '../components/ClientProfileModal';
 
 const C = {
   accent: '#C8102E',
@@ -25,6 +28,7 @@ const C = {
   sub: 'rgba(255,255,255,0.85)',
   card: 'rgba(0,0,0,0.75)',
   cardBorder: 'rgba(255,255,255,0.3)',
+  glow: 'rgba(200, 16, 46, 0.4)',
 };
 
 const MODES = [
@@ -35,7 +39,41 @@ const MODES = [
 
 const CAMERA_FOV_DEG = 55;
 
-function POIMarker({ poi, x, y, onPress }) {
+function POIMarker({ poi, x, y, onPress, isNearest, index }) {
+  const fadeAnim = useRef(new Animated.Value(0)).current;
+  const scaleAnim = useRef(new Animated.Value(0.85)).current;
+  const pulseAnim = useRef(new Animated.Value(1)).current;
+
+  useEffect(() => {
+    Animated.parallel([
+      Animated.timing(fadeAnim, {
+        toValue: 1,
+        duration: 280,
+        delay: index * 40,
+        useNativeDriver: true,
+      }),
+      Animated.spring(scaleAnim, {
+        toValue: 1,
+        friction: 8,
+        tension: 80,
+        delay: index * 40,
+        useNativeDriver: true,
+      }),
+    ]).start();
+  }, [fadeAnim, scaleAnim, index]);
+
+  useEffect(() => {
+    if (!isNearest) return;
+    const pulse = Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulseAnim, { toValue: 1.06, duration: 1200, useNativeDriver: true }),
+        Animated.timing(pulseAnim, { toValue: 1, duration: 1200, useNativeDriver: true }),
+      ])
+    );
+    pulse.start();
+    return () => pulse.stop();
+  }, [isNearest, pulseAnim]);
+
   const distText = poi.distanceKm < 1
     ? `${Math.round(poi.distanceKm * 1000)}m`
     : `${poi.distanceKm.toFixed(1)}km`;
@@ -43,23 +81,203 @@ function POIMarker({ poi, x, y, onPress }) {
   const icon = poi._type === 'event' ? 'calendar' : poi._type === 'restaurant' ? 'restaurant' : isLandmark ? 'business' : 'location';
 
   return (
-    <TouchableOpacity
+    <Animated.View
       style={[
-        styles.marker,
-        { left: x, top: y },
-        isLandmark && styles.markerLandmark,
+        styles.markerWrap,
+        { left: x, top: y, opacity: fadeAnim, transform: [{ scale: isNearest ? pulseAnim : scaleAnim }] },
       ]}
-      onPress={() => onPress?.(poi)}
-      activeOpacity={0.9}
     >
-      <View style={styles.markerRow}>
-        <View style={[styles.markerIcon, isLandmark && styles.markerIconLandmark]}>
-          <Ionicons name={icon} size={isLandmark ? 14 : 12} color={C.accent} />
+      {isNearest && <View style={styles.markerGlow} />}
+      <TouchableOpacity
+        style={[
+          styles.marker,
+          isLandmark && styles.markerLandmark,
+          isNearest && styles.markerNearest,
+        ]}
+        onPress={() => onPress?.(poi)}
+        activeOpacity={0.9}
+      >
+        {isNearest && (
+          <View style={styles.nearestBadge}>
+            <Ionicons name="navigate" size={10} color="#FFF" />
+            <Text style={styles.nearestBadgeText}>Nearest</Text>
+          </View>
+        )}
+        <View style={styles.markerRow}>
+          <View style={[styles.markerIcon, isLandmark && styles.markerIconLandmark]}>
+            <Ionicons name={icon} size={isLandmark ? 14 : 12} color={C.accent} />
+          </View>
+          <Text style={[styles.markerName, isLandmark && styles.markerNameLandmark]} numberOfLines={1}>{poi.name}</Text>
         </View>
-        <Text style={[styles.markerName, isLandmark && styles.markerNameLandmark]} numberOfLines={1}>{poi.name}</Text>
+        <Text style={styles.markerDist}>{distText}</Text>
+      </TouchableOpacity>
+    </Animated.View>
+  );
+}
+
+function CompassRing({ heading, nearestOutOfView, centerY }) {
+  const size = 72;
+  const radius = size / 2;
+  const needleRotate = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    Animated.timing(needleRotate, {
+      toValue: heading,
+      duration: 220,
+      useNativeDriver: true,
+    }).start();
+  }, [heading, needleRotate]);
+
+  const needleRotateInterpolate = needleRotate.interpolate({
+    inputRange: [0, 360],
+    outputRange: ['0deg', '360deg'],
+  });
+
+  return (
+    <View style={[styles.compassWrap, { left: 16, top: centerY - radius - 80 }]}>
+      <BlurView intensity={60} tint="dark" style={styles.compassBlur}>
+        <View style={[styles.compassCircle, { width: size, height: size, borderRadius: radius }]}>
+          <View style={[styles.compassN, { top: 4 }]}>
+            <Text style={styles.compassNText}>N</Text>
+          </View>
+          <Animated.View style={[styles.compassNeedle, { transform: [{ rotate: needleRotateInterpolate }] }]}>
+            <Ionicons name="navigate" size={22} color={C.accent} />
+          </Animated.View>
+        </View>
+      </BlurView>
+      {nearestOutOfView && (
+        <View style={styles.compassHint}>
+          <Ionicons name="arrow-redo" size={12} color={C.sub} />
+          <Text style={styles.compassHintText} numberOfLines={1}>Turn to see {nearestOutOfView.name}</Text>
+        </View>
+      )}
+    </View>
+  );
+}
+
+function POIDetailModal({ visible, poi, onClose, onRequestClose, insets, openDirections, getWalkingTime, onViewProfile }) {
+  if (!poi) return null;
+  const dismiss = onRequestClose || onClose;
+  const clientId = poi.client_a_uuid || poi.id;
+  const hasProfile = Boolean(clientId);
+  const m = poi.metadata || poi;
+  const isLandmark = poi._isLandmark || poi._type === 'landmark' || poi.category;
+  const typeLabel = poi._type === 'event' ? 'Event' : poi._type === 'restaurant' ? 'Restaurant' : isLandmark ? (m.category || poi.category || 'Landmark') : 'Place';
+  const typeIcon = poi._type === 'event' ? 'calendar' : poi._type === 'restaurant' ? 'restaurant' : isLandmark ? 'business' : 'compass';
+  const distText = poi.distanceKm < 1
+    ? `${Math.round(poi.distanceKm * 1000)}m away`
+    : `${poi.distanceKm.toFixed(1)} km away`;
+  const venue = m.venue || m.location || m.area || poi.location || '';
+  const desc = m.description || poi.description || '';
+  const cuisine = m.cuisine || m.cuisine_type || '';
+  const priceRange = m.price_range || '';
+  const rating = m.rating != null && m.rating !== '' ? Number(m.rating) : null;
+  const eventType = m.event_type || '';
+  const time = [m.start_time, m.end_time].filter(Boolean).join(' – ');
+  const date = m.start_date || m.end_date || '';
+
+  const RatingStars = () => {
+    if (rating == null || rating <= 0) return null;
+    const r = Math.min(5, Math.max(0, rating));
+    return (
+      <View style={styles.ratingRow}>
+        {[1, 2, 3, 4, 5].map((i) => (
+          <Ionicons
+            key={i}
+            name={r >= i ? 'star' : r >= i - 0.5 ? 'star-half' : 'star-outline'}
+            size={14}
+            color="#FBBF24"
+          />
+        ))}
+        <Text style={styles.ratingNum}>{rating.toFixed(1)}</Text>
       </View>
-      <Text style={styles.markerDist}>{distText}</Text>
-    </TouchableOpacity>
+    );
+  };
+
+  return (
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={dismiss}>
+      <View style={styles.detailOverlay}>
+        <Pressable style={StyleSheet.absoluteFill} onPress={onClose} />
+        <View style={[styles.detailCard, { paddingBottom: (insets?.bottom ?? 0) + 24 }]}>
+          <View style={styles.detailHandle} />
+          <TouchableOpacity
+            style={styles.detailClose}
+            onPress={dismiss}
+            hitSlop={12}
+          >
+            <Ionicons name="close-circle" size={28} color="rgba(255,255,255,0.8)" />
+          </TouchableOpacity>
+          <View style={styles.detailHeader}>
+            <View style={styles.detailTypeBadge}>
+              <Ionicons name={typeIcon} size={12} color="#FFF" />
+              <Text style={styles.detailTypeText}>{typeLabel}</Text>
+            </View>
+            <Text style={styles.detailTitle}>{poi.name}</Text>
+            <View style={styles.detailMetaRow}>
+              <View style={styles.detailMetaItem}>
+                <Ionicons name="navigate" size={14} color={C.accent} />
+                <Text style={styles.detailMetaText}>{distText}</Text>
+              </View>
+              {rating != null && rating > 0 && (
+                <View style={styles.detailMetaItem}>
+                  <RatingStars />
+                </View>
+              )}
+            </View>
+          </View>
+          {(venue || cuisine || priceRange || eventType || date || time) ? (
+            <View style={styles.detailSection}>
+              {venue ? (
+                <View style={styles.detailRow}>
+                  <Ionicons name="location" size={16} color={C.accent} />
+                  <Text style={styles.detailText}>{venue}</Text>
+                </View>
+              ) : null}
+              {(cuisine || priceRange) ? (
+                <View style={styles.detailRow}>
+                  <Ionicons name="restaurant" size={16} color={C.accent} />
+                  <Text style={styles.detailText}>{[cuisine, priceRange].filter(Boolean).join(' · ')}</Text>
+                </View>
+              ) : null}
+              {(eventType || date || time) ? (
+                <View style={styles.detailRow}>
+                  <Ionicons name="calendar" size={16} color={C.accent} />
+                  <Text style={styles.detailText}>{[eventType, date, time].filter(Boolean).join(' · ')}</Text>
+                </View>
+              ) : null}
+            </View>
+          ) : null}
+          {desc ? (
+            <View style={styles.detailSection}>
+              <Text style={styles.detailSectionTitle}>{isLandmark ? 'Why visit' : 'About'}</Text>
+              <ScrollView style={styles.detailDescScroll} showsVerticalScrollIndicator={false}>
+                <Text style={styles.detailDesc}>{desc}</Text>
+              </ScrollView>
+            </View>
+          ) : null}
+          <View style={styles.detailActions}>
+            <TouchableOpacity
+              style={styles.directionsBtn}
+              onPress={() => openDirections(poi)}
+              activeOpacity={0.8}
+            >
+              <Ionicons name="navigate" size={18} color="#FFF" />
+              <Text style={styles.directionsBtnText}>Get directions</Text>
+              <Text style={styles.directionsBtnSub}>{getWalkingTime(poi.distanceKm)}</Text>
+            </TouchableOpacity>
+            {hasProfile ? (
+              <TouchableOpacity
+                style={styles.viewProfileBtn}
+                onPress={() => onViewProfile?.(clientId)}
+                activeOpacity={0.8}
+              >
+                <Ionicons name="person" size={18} color="#FFF" />
+                <Text style={styles.viewProfileBtnText}>View profile</Text>
+              </TouchableOpacity>
+            ) : null}
+          </View>
+        </View>
+      </View>
+    </Modal>
   );
 }
 
@@ -73,6 +291,7 @@ export default function ARScreen({ navigation }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [selectedPoi, setSelectedPoi] = useState(null);
+  const [profileClientId, setProfileClientId] = useState(null);
   const [mode, setMode] = useState('landmarks');
   const [maxDistanceKm, setMaxDistanceKm] = useState(10);
   const headingSub = useRef(null);
@@ -83,6 +302,12 @@ export default function ARScreen({ navigation }) {
     const angleFromCenter = Math.min(relBearing, 360 - relBearing);
     return angleFromCenter <= CAMERA_FOV_DEG / 2;
   });
+
+  const nearestInView = filteredPois.length > 0 ? filteredPois.reduce((a, b) => a.distanceKm <= b.distanceKm ? a : b) : null;
+  const inViewIds = new Set((filteredPois || []).map((p) => p.name + p.lat));
+  const nearestOutOfView = pois
+    .filter((p) => p.distanceKm <= maxDistanceKm && !inViewIds.has(p.name + p.lat))
+    .sort((a, b) => a.distanceKm - b.distanceKm)[0] || null;
 
   const centerX = width / 2;
   const centerY = height / 2 - 40;
@@ -153,9 +378,6 @@ export default function ARScreen({ navigation }) {
     };
   }, [location]);
 
-  const handlePOIPress = useCallback((poi) => {
-    setSelectedPoi(poi);
-  }, []);
 
   const openDirections = useCallback((poi) => {
     const url = Platform.select({
@@ -173,120 +395,21 @@ export default function ARScreen({ navigation }) {
     return `~${Math.floor(mins / 60)} hr walk`;
   };
 
-  const DetailModal = () => {
-    if (!selectedPoi) return null;
-    const m = selectedPoi.metadata || selectedPoi;
-    const isLandmark = selectedPoi._isLandmark || selectedPoi._type === 'landmark' || selectedPoi.category;
-    const typeLabel = selectedPoi._type === 'event' ? 'Event' : selectedPoi._type === 'restaurant' ? 'Restaurant' : isLandmark ? (m.category || selectedPoi.category || 'Landmark') : 'Place';
-    const typeIcon = selectedPoi._type === 'event' ? 'calendar' : selectedPoi._type === 'restaurant' ? 'restaurant' : isLandmark ? 'business' : 'compass';
-    const distText = selectedPoi.distanceKm < 1
-      ? `${Math.round(selectedPoi.distanceKm * 1000)}m away`
-      : `${selectedPoi.distanceKm.toFixed(1)} km away`;
-    const venue = m.venue || m.location || m.area || selectedPoi.location || '';
-    const desc = m.description || selectedPoi.description || '';
-    const cuisine = m.cuisine || m.cuisine_type || '';
-    const priceRange = m.price_range || '';
-    const rating = m.rating != null && m.rating !== '' ? Number(m.rating) : null;
-    const eventType = m.event_type || '';
-    const time = [m.start_time, m.end_time].filter(Boolean).join(' – ');
-    const date = m.start_date || m.end_date || '';
+  const modalJustOpenedRef = useRef(false);
+  const closeModal = useCallback(() => {
+    if (modalJustOpenedRef.current) return;
+    setSelectedPoi(null);
+  }, []);
+  const handleOpenPOI = useCallback((poi) => {
+    setSelectedPoi(poi);
+    modalJustOpenedRef.current = true;
+    setTimeout(() => { modalJustOpenedRef.current = false; }, 400);
+  }, []);
 
-    const RatingStars = () => {
-      if (rating == null || rating <= 0) return null;
-      const r = Math.min(5, Math.max(0, rating));
-      return (
-        <View style={styles.ratingRow}>
-          {[1, 2, 3, 4, 5].map((i) => (
-            <Ionicons
-              key={i}
-              name={r >= i ? 'star' : r >= i - 0.5 ? 'star-half' : 'star-outline'}
-              size={14}
-              color="#FBBF24"
-            />
-          ))}
-          <Text style={styles.ratingNum}>{rating.toFixed(1)}</Text>
-        </View>
-      );
-    };
-
-    return (
-      <Modal visible={!!selectedPoi} transparent animationType="slide">
-        <TouchableWithoutFeedback onPress={() => setSelectedPoi(null)}>
-          <View style={styles.detailOverlay}>
-            <TouchableWithoutFeedback onPress={() => {}}>
-              <View style={[styles.detailCard, { paddingBottom: insets.bottom + 24 }]}>
-                <View style={styles.detailHandle} />
-                <TouchableOpacity
-                  style={styles.detailClose}
-                  onPress={() => setSelectedPoi(null)}
-                  hitSlop={12}
-                >
-                  <Ionicons name="close-circle" size={28} color="rgba(255,255,255,0.8)" />
-                </TouchableOpacity>
-                <View style={styles.detailHeader}>
-                  <View style={styles.detailTypeBadge}>
-                    <Ionicons name={typeIcon} size={12} color="#FFF" />
-                    <Text style={styles.detailTypeText}>{typeLabel}</Text>
-                  </View>
-                  <Text style={styles.detailTitle}>{selectedPoi.name}</Text>
-                  <View style={styles.detailMetaRow}>
-                    <View style={styles.detailMetaItem}>
-                      <Ionicons name="navigate" size={14} color={C.accent} />
-                      <Text style={styles.detailMetaText}>{distText}</Text>
-                    </View>
-                    {rating != null && rating > 0 && (
-                      <View style={styles.detailMetaItem}>
-                        <RatingStars />
-                      </View>
-                    )}
-                  </View>
-                </View>
-                {(venue || cuisine || priceRange || eventType || date || time) ? (
-                  <View style={styles.detailSection}>
-                    {venue ? (
-                      <View style={styles.detailRow}>
-                        <Ionicons name="location" size={16} color={C.accent} />
-                        <Text style={styles.detailText}>{venue}</Text>
-                      </View>
-                    ) : null}
-                    {(cuisine || priceRange) ? (
-                      <View style={styles.detailRow}>
-                        <Ionicons name="restaurant" size={16} color={C.accent} />
-                        <Text style={styles.detailText}>{[cuisine, priceRange].filter(Boolean).join(' · ')}</Text>
-                      </View>
-                    ) : null}
-                    {(eventType || date || time) ? (
-                      <View style={styles.detailRow}>
-                        <Ionicons name="calendar" size={16} color={C.accent} />
-                        <Text style={styles.detailText}>{[eventType, date, time].filter(Boolean).join(' · ')}</Text>
-                      </View>
-                    ) : null}
-                  </View>
-                ) : null}
-                {desc ? (
-                  <View style={styles.detailSection}>
-                    <Text style={styles.detailSectionTitle}>{isLandmark ? 'Why visit' : 'About'}</Text>
-                    <ScrollView style={styles.detailDescScroll} showsVerticalScrollIndicator={false}>
-                      <Text style={styles.detailDesc}>{desc}</Text>
-                    </ScrollView>
-                  </View>
-                ) : null}
-                <TouchableOpacity
-                  style={styles.directionsBtn}
-                  onPress={() => openDirections(selectedPoi)}
-                  activeOpacity={0.8}
-                >
-                  <Ionicons name="navigate" size={18} color="#FFF" />
-                  <Text style={styles.directionsBtnText}>Get directions</Text>
-                  <Text style={styles.directionsBtnSub}>{getWalkingTime(selectedPoi.distanceKm)}</Text>
-                </TouchableOpacity>
-              </View>
-            </TouchableWithoutFeedback>
-          </View>
-        </TouchableWithoutFeedback>
-      </Modal>
-    );
-  };
+  const handleViewProfile = useCallback((clientId) => {
+    setSelectedPoi(null);
+    setProfileClientId(clientId);
+  }, []);
 
   const getMarkerPosition = (poi) => {
     const relBearing = ((poi.bearing - heading + 360) % 360) * (Math.PI / 180);
@@ -335,65 +458,104 @@ export default function ARScreen({ navigation }) {
         <>
           {filteredPois.map((poi, i) => {
             const { x, y } = getMarkerPosition(poi);
-            return <POIMarker key={i} poi={poi} x={x} y={y} onPress={handlePOIPress} />;
+            return (
+              <POIMarker
+                key={`${poi.name}-${poi.lat}-${i}`}
+                poi={poi}
+                x={x}
+                y={y}
+                onPress={handleOpenPOI}
+                isNearest={nearestInView && nearestInView.name === poi.name && nearestInView.lat === poi.lat}
+                index={i}
+              />
+            );
           })}
+          <CompassRing heading={heading} nearestOutOfView={filteredPois.length === 0 ? nearestOutOfView : null} centerY={centerY} />
         </>
       )}
-      <View style={[styles.header, { paddingTop: insets.top + 8 }]}>
-        <TouchableOpacity style={styles.closeBtn} onPress={() => navigation?.goBack()} hitSlop={12}>
-          <Ionicons name="close" size={28} color="#FFF" />
-        </TouchableOpacity>
-        <View style={styles.titleWrap}>
-          <Ionicons name="business" size={18} color={C.accent} />
-          <Text style={styles.title}>Explore Bahrain</Text>
-        </View>
-        <View style={styles.placeholder} />
-      </View>
-      <View style={[styles.modeTabs, { paddingHorizontal: 16, paddingBottom: 8 }]}>
-        {MODES.map((m) => (
+      <BlurView intensity={70} tint="dark" style={[styles.headerBlur, { paddingTop: insets.top + 8, paddingBottom: 12 }]}>
+        <View style={styles.header}>
           <TouchableOpacity
-            key={m.id}
-            style={[styles.modeTab, mode === m.id && styles.modeTabActive]}
-            onPress={() => setMode(m.id)}
+            style={styles.headerBackBtn}
+            onPress={() => navigation?.goBack()}
             activeOpacity={0.8}
           >
-            <Ionicons name={m.icon} size={16} color={mode === m.id ? '#FFF' : 'rgba(255,255,255,0.6)'} />
-            <Text style={[styles.modeTabText, mode === m.id && styles.modeTabTextActive]}>{m.label}</Text>
+            <Ionicons name="arrow-back" size={22} color="#FFF" />
+            <Text style={styles.headerBackBtnText}>Back</Text>
           </TouchableOpacity>
-        ))}
-      </View>
-      <View style={[styles.sliderWrap, { paddingHorizontal: 20 }]}>
-        <View style={styles.sliderRow}>
-          <Ionicons name="resize" size={16} color="rgba(255,255,255,0.7)" />
-          <Text style={styles.sliderLabel}>View distance</Text>
-          <Text style={styles.sliderValue}>
-            {maxDistanceKm < 1 ? `${Math.round(maxDistanceKm * 1000)}m` : `${maxDistanceKm}km`}
+          <View style={styles.titleWrap}>
+            <Ionicons name="globe-outline" size={20} color={C.accent} />
+            <Text style={styles.title}>AR Explore</Text>
+          </View>
+          <View style={styles.placeholder} />
+        </View>
+      </BlurView>
+      <BlurView intensity={55} tint="dark" style={styles.controlsBlur}>
+        <View style={[styles.modeTabs, { paddingHorizontal: 16, paddingBottom: 8 }]}>
+          {MODES.map((m) => (
+            <TouchableOpacity
+              key={m.id}
+              style={[styles.modeTab, mode === m.id && styles.modeTabActive]}
+              onPress={() => setMode(m.id)}
+              activeOpacity={0.8}
+            >
+              <Ionicons name={m.icon} size={16} color={mode === m.id ? '#FFF' : 'rgba(255,255,255,0.6)'} />
+              <Text style={[styles.modeTabText, mode === m.id && styles.modeTabTextActive]}>{m.label}</Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+        <View style={[styles.sliderWrap, { paddingHorizontal: 20 }]}>
+          <View style={styles.sliderRow}>
+            <Ionicons name="resize" size={16} color="rgba(255,255,255,0.7)" />
+            <Text style={styles.sliderLabel}>View distance</Text>
+            <Text style={styles.sliderValue}>
+              {maxDistanceKm < 1 ? `${Math.round(maxDistanceKm * 1000)}m` : `${maxDistanceKm}km`}
+            </Text>
+          </View>
+          <Slider
+            style={styles.slider}
+            minimumValue={0.5}
+            maximumValue={25}
+            step={0.5}
+            value={maxDistanceKm}
+            onValueChange={setMaxDistanceKm}
+            minimumTrackTintColor={C.accent}
+            maximumTrackTintColor="rgba(255,255,255,0.3)"
+            thumbTintColor={C.accent}
+          />
+        </View>
+        <View style={[styles.footer, { paddingBottom: insets.bottom + 12 }]}>
+          <Text style={styles.hint}>
+            {filteredPois.length === 0 && nearestOutOfView
+              ? `Turn to see ${nearestOutOfView.name} (${nearestOutOfView.distanceKm < 1 ? Math.round(nearestOutOfView.distanceKm * 1000) + 'm' : nearestOutOfView.distanceKm.toFixed(1) + 'km'})`
+              : filteredPois.length === 0 && pois.length > 0
+                ? 'Point your camera toward places to see them'
+                : filteredPois.length > 0 && nearestInView
+                  ? `${filteredPois.length} in view · Nearest: ${nearestInView.name}`
+                  : mode === 'landmarks'
+                    ? 'Discover famous buildings & heritage sites'
+                    : mode === 'food'
+                      ? 'Find restaurants & events nearby'
+                      : 'Explore landmarks, food & events'}
           </Text>
         </View>
-        <Slider
-          style={styles.slider}
-          minimumValue={0.5}
-          maximumValue={25}
-          step={0.5}
-          value={maxDistanceKm}
-          onValueChange={setMaxDistanceKm}
-          minimumTrackTintColor={C.accent}
-          maximumTrackTintColor="rgba(255,255,255,0.3)"
-          thumbTintColor={C.accent}
-        />
-      </View>
-      <View style={[styles.footer, { paddingBottom: insets.bottom + 12 }]}>
-        <Text style={styles.hint}>
-          {filteredPois.length === 0 && pois.length > 0
-            ? 'Point your camera toward places to see them'
-            : mode === 'landmarks'
-              ? 'Discover famous buildings & heritage sites'
-              : mode === 'food'
-                ? 'Find restaurants & events nearby'
-                : 'Explore landmarks, food & events'}
-        </Text>
-      </View>
-      <DetailModal />
+      </BlurView>
+      <POIDetailModal
+        visible={!!selectedPoi}
+        poi={selectedPoi}
+        onClose={closeModal}
+        onRequestClose={() => setSelectedPoi(null)}
+        insets={insets}
+        openDirections={openDirections}
+        getWalkingTime={getWalkingTime}
+        onViewProfile={handleViewProfile}
+      />
+      <ClientProfileModal
+        visible={!!profileClientId}
+        clientId={profileClientId}
+        onClose={() => setProfileClientId(null)}
+        insets={insets}
+      />
     </View>
   );
 }
@@ -442,20 +604,25 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   header: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: 16,
   },
-  closeBtn: {
-    width: 44,
-    height: 44,
+  headerBackBtn: {
+    flexDirection: 'row',
     alignItems: 'center',
+    gap: 6,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    marginLeft: -4,
+    minHeight: 44,
     justifyContent: 'center',
+  },
+  headerBackBtnText: {
+    color: '#FFF',
+    fontSize: 17,
+    fontWeight: '600',
   },
   titleWrap: {
     flexDirection: 'row',
@@ -467,7 +634,7 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: '700',
   },
-  placeholder: { width: 44 },
+  placeholder: { width: 80 },
   footer: {
     position: 'absolute',
     bottom: 0,
@@ -479,8 +646,35 @@ const styles = StyleSheet.create({
     color: C.sub,
     fontSize: 13,
   },
-  marker: {
+  headerBlur: {
     position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(255,255,255,0.08)',
+  },
+  controlsBlur: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    overflow: 'hidden',
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(255,255,255,0.08)',
+  },
+  markerWrap: {
+    position: 'absolute',
+    width: 120,
+  },
+  markerGlow: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: C.glow,
+    borderRadius: 16,
+    margin: -6,
+    opacity: 0.8,
+  },
+  marker: {
     width: 110,
     paddingVertical: 8,
     paddingHorizontal: 10,
@@ -488,6 +682,28 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     borderWidth: 1,
     borderColor: C.cardBorder,
+  },
+  markerNearest: {
+    borderColor: C.accent,
+    borderWidth: 2,
+    minWidth: 120,
+  },
+  nearestBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    alignSelf: 'flex-start',
+    backgroundColor: C.accent,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 6,
+    marginBottom: 6,
+  },
+  nearestBadgeText: {
+    color: '#FFF',
+    fontSize: 9,
+    fontWeight: '800',
+    letterSpacing: 0.3,
   },
   markerRow: {
     flexDirection: 'row',
@@ -582,11 +798,58 @@ const styles = StyleSheet.create({
   modeTabTextActive: {
     color: '#FFF',
   },
+  compassWrap: {
+    position: 'absolute',
+    alignItems: 'flex-start',
+  },
+  compassBlur: {
+    borderRadius: 36,
+    overflow: 'hidden',
+  },
+  compassCircle: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.2)',
+  },
+  compassN: {
+    position: 'absolute',
+  },
+  compassNText: {
+    color: 'rgba(255,255,255,0.9)',
+    fontSize: 10,
+    fontWeight: '800',
+  },
+  compassNeedle: {
+    position: 'absolute',
+    left: 25,
+    top: 25,
+  },
+  compassHint: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: 8,
+    maxWidth: 140,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    borderRadius: 10,
+  },
+  compassHintText: {
+    color: C.sub,
+    fontSize: 11,
+    fontWeight: '600',
+    flex: 1,
+  },
+  detailActions: {
+    gap: 12,
+    marginTop: 16,
+  },
   directionsBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
-    marginTop: 16,
     paddingVertical: 14,
     paddingHorizontal: 18,
     backgroundColor: C.accent,
@@ -601,6 +864,23 @@ const styles = StyleSheet.create({
   directionsBtnSub: {
     color: 'rgba(255,255,255,0.9)',
     fontSize: 13,
+  },
+  viewProfileBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+    paddingVertical: 14,
+    paddingHorizontal: 18,
+    backgroundColor: 'rgba(255,255,255,0.18)',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.3)',
+  },
+  viewProfileBtnText: {
+    color: '#FFF',
+    fontSize: 16,
+    fontWeight: '700',
   },
   detailOverlay: {
     flex: 1,

@@ -20,6 +20,7 @@ import {
 } from 'react-native';
 import { BlurView } from 'expo-blur';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useNavigation, useRoute } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import ScreenContainer from '../components/ScreenContainer';
@@ -750,6 +751,8 @@ function CreatePostModal({ visible, onClose, onPosted }) {
 
 export default function CommunitiesScreen() {
   const insets = useSafeAreaInsets();
+  const route = useRoute();
+  const navigation = useNavigation();
   const [posts, setPosts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -761,6 +764,7 @@ export default function CommunitiesScreen() {
   const [aiSearchQuery, setAiSearchQuery] = useState('');
   const [aiFilteredPosts, setAiFilteredPosts] = useState([]);
   const [aiSearching, setAiSearching] = useState(false);
+  const [khalidFilterBanner, setKhalidFilterBanner] = useState(null);
   const askKhalidModalOpacity = useRef(new Animated.Value(0)).current;
   const askKhalidCardScale = useRef(new Animated.Value(0.9)).current;
   const lightningPulse = useRef(new Animated.Value(1)).current;
@@ -784,6 +788,10 @@ export default function CommunitiesScreen() {
 
   useEffect(() => { loadPosts(); }, [loadPosts]);
 
+  useEffect(() => {
+    if (activeTopic !== 'ai') setKhalidFilterBanner(null);
+  }, [activeTopic]);
+
   const runAiSearch = useCallback(async () => {
     const term = aiSearchQuery.trim().slice(0, AI_SEARCH_MAX_LEN);
     if (!term) return;
@@ -802,6 +810,33 @@ export default function CommunitiesScreen() {
       setAiSearching(false);
     }
   }, [aiSearchQuery]);
+
+  // Allow Khalid assistant to jump here and filter reviews for a specific place
+  useEffect(() => {
+    const fromKhalid = route.params?.fromKhalid;
+    if (!fromKhalid || fromKhalid.type !== 'filter_reviews') return;
+    const term = (fromKhalid.place || '').trim().slice(0, AI_SEARCH_MAX_LEN);
+    if (!term) return;
+
+    (async () => {
+      setAiSearching(true);
+      setKhalidFilterBanner(term);
+      try {
+        const list = await searchCommunityWithOpenAI(term);
+        setAiFilteredPosts(list);
+        setActiveTopic('ai');
+      } catch (e) {
+        console.error('[Community] AI search (from Khalid) failed:', e);
+        Alert.alert('Search failed', e?.message || 'Try again.');
+        setKhalidFilterBanner(null);
+      } finally {
+        setAiSearching(false);
+        navigation.setParams({ fromKhalid: undefined });
+      }
+    })();
+    const t = setTimeout(() => setKhalidFilterBanner(null), 6000);
+    return () => clearTimeout(t);
+  }, [route.params?.fromKhalid, navigation]);
 
   const openAiFilterPanel = useCallback(() => {
     setShowAiFilterPanel(true);
@@ -959,10 +994,15 @@ export default function CommunitiesScreen() {
           data={displayPosts}
           keyExtractor={(item) => item.id}
           ListHeaderComponent={
-            false ? (
-              <View style={s.feedHeader}>
-                <Text style={s.feedHeaderTitle}>{activeTopic === 'ai' ? 'Khalid’s picks' : 'What people are saying'}</Text>
-                <Text style={s.feedHeaderSub}>{activeTopic === 'ai' ? 'Reviews matching your search' : 'Reviews and tips from the community'}</Text>
+            khalidFilterBanner ? (
+              <View style={s.khalidFilterBanner}>
+                <Ionicons name="sparkles" size={16} color={C.red} />
+                <Text style={s.khalidFilterBannerText} numberOfLines={1}>
+                  Reviews for: {khalidFilterBanner}
+                </Text>
+                <TouchableOpacity onPress={() => setKhalidFilterBanner(null)} hitSlop={8}>
+                  <Ionicons name="close-circle" size={20} color={C.muted} />
+                </TouchableOpacity>
               </View>
             ) : null
           }
@@ -1092,6 +1132,24 @@ const s = StyleSheet.create({
   },
   askKhalidSearchingTitle: { fontSize: 18, fontWeight: '700', color: C.text, marginTop: 16, marginBottom: 4 },
   askKhalidSearchingSub: { fontSize: 14, color: C.muted },
+  khalidFilterBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    marginBottom: 12,
+    backgroundColor: '#FEF2F2',
+    borderLeftWidth: 4,
+    borderLeftColor: C.red,
+    borderRadius: 12,
+  },
+  khalidFilterBannerText: {
+    flex: 1,
+    fontSize: 14,
+    fontWeight: '600',
+    color: C.text,
+  },
   feed: { paddingHorizontal: 16, paddingBottom: 110 },
   feedHeader: { paddingTop: 18, paddingBottom: 14 },
   feedHeaderTitle: { fontSize: 18, fontWeight: '800', color: C.text, marginBottom: 4 },

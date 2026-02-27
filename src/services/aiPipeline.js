@@ -1,4 +1,5 @@
 import { OPENAI_KEY, PINECONE_KEY, PINECONE_HOST } from '../config/keys';
+import { supabase } from '../config/supabase';
 
 const OPENAI_API_KEY = OPENAI_KEY;
 const PINECONE_API_KEY = PINECONE_KEY;
@@ -195,6 +196,66 @@ export async function fetchEvents(preferenceLabels) {
   return events;
 }
 
+// ─── Pinecone places for Khalid chat (only recommend these) ─────
+
+/**
+ * Fetches places, restaurants, and events from Pinecone relevant to the user message.
+ * Optional user preferences bias the query (prioritize) but do not filter — we still return a mix.
+ * Returns a string to inject into the chatbot system prompt so Khalid only talks about these.
+ */
+export async function fetchPineconePlacesForChat(userMessage, options = {}) {
+  if (!userMessage || typeof userMessage !== 'string' || !userMessage.trim()) {
+    return '';
+  }
+  const text = userMessage.trim();
+  const generalLabels = options.generalLabels || [];
+  const activityLabels = options.activityLabels || [];
+  const foodLabels = options.foodLabels || [];
+  const preferenceParts = [];
+  if (generalLabels.length) preferenceParts.push(`About them: ${generalLabels.join(', ')}`);
+  if (activityLabels.length) preferenceParts.push(`Activities they like: ${activityLabels.join(', ')}`);
+  if (foodLabels.length) preferenceParts.push(`Food they like: ${foodLabels.join(', ')}`);
+  const queryText = preferenceParts.length
+    ? `${text}. ${preferenceParts.join('. ')}`
+    : text;
+  let embedding;
+  try {
+    embedding = await getEmbedding(queryText);
+  } catch (e) {
+    console.warn('[Khalid] Embedding failed:', e?.message);
+    return '';
+  }
+  let places = [];
+  let restaurants = [];
+  let events = [];
+  try {
+    [places, restaurants, events] = await Promise.all([
+      queryPinecone(embedding, 10, { record_type: { $eq: 'client' }, client_type: { $eq: 'place' } }),
+      queryPinecone(embedding, 10, { record_type: { $eq: 'client' }, client_type: { $eq: 'restaurant' } }),
+      queryPinecone(embedding, 6, { record_type: { $eq: 'event' } }),
+    ]);
+  } catch (e) {
+    console.warn('[Khalid] Pinecone query failed:', e?.message);
+    return '';
+  }
+  const seen = new Set();
+  const lines = [];
+  const add = (match, typeLabel) => {
+    const m = match.metadata || {};
+    const name = m.place_name || m.business_name || m.event_name || m.name || '';
+    if (!name || seen.has(name)) return;
+    seen.add(name);
+    const desc = m.description ? ` — ${String(m.description).slice(0, 80)}` : '';
+    const extra = m.cuisine || m.cuisine_type ? ` (${m.cuisine || m.cuisine_type})` : m.venue ? ` at ${m.venue}` : '';
+    lines.push(`- ${name}${extra}${desc}`);
+  };
+  places.forEach((m) => add(m, 'place'));
+  restaurants.forEach((m) => add(m, 'restaurant'));
+  events.forEach((m) => add(m, 'event'));
+  if (lines.length === 0) return '';
+  return `ALLOWED PLACES (you may ONLY recommend, mention, or talk about these — do not suggest any other place, restaurant, or event):\n${lines.join('\n')}\n\nIf the user asks about somewhere not in this list, say you only have info on the places above and suggest one of them if relevant.`;
+}
+
 // ─── Landmarks & famous buildings for AR exploration ────────────
 
 const BAHRAIN_LANDMARKS = [
@@ -220,12 +281,33 @@ export async function fetchLandmarks() {
   return places;
 }
 
-// ─── Nearby POIs for AR (distance + bearing) ────────────────────
+// ─── Nearby POIs for AR (from clients table) ────────────────────
 
 function getLatLng(m) {
   const lat = parseFloat(m.lat ?? m.latitude ?? m.Lat ?? '');
   const lng = parseFloat(m.long ?? m.longitude ?? m.lng ?? m.Long ?? '');
   return isNaN(lat) || isNaN(lng) ? null : { lat, lng };
+}
+
+/** Fetch all clients from Supabase that have valid lat/long for AR. DB columns: lat, long. */
+export async function fetchClientsWithLocation() {
+  const { data: rows, error } = await supabase
+    .from('client')
+    .select('*');
+  if (error) {
+    console.warn('[AR] Supabase client fetch failed:', error.message);
+    return [];
+  }
+  if (!rows || !rows.length) return [];
+  const withCoords = rows
+    .map((row) => {
+      const lat = parseFloat(row.lat ?? row.latitude ?? '');
+      const long = parseFloat(row.long ?? row.longitude ?? row.lng ?? '');
+      if (isNaN(lat) || isNaN(long)) return null;
+      return { ...row, lat, lng: long, long };
+    })
+    .filter(Boolean);
+  return withCoords;
 }
 
 function haversineKm(lat1, lon1, lat2, lon2) {
@@ -252,45 +334,69 @@ export async function fetchNearbyPOIs(userLat, userLng, mode = 'all') {
   const isLandmarks = mode === 'landmarks';
   const isFood = mode === 'food';
 
-  const landmarksFromDb = isFood ? [] : await fetchLandmarks().catch(() => []);
-  const fallbackLandmarks = BAHRAIN_LANDMARKS.map((l) => ({
-    ...l,
-    metadata: { place_name: l.name, description: l.description, category: l.category, lat: l.lat, long: l.lng },
-  }));
-  const allLandmarks = [
-    ...landmarksFromDb.map((m) => ({ ...m, _type: 'landmark' })),
-    ...fallbackLandmarks.map((m) => ({ ...m, _type: 'landmark' })),
-  ];
+  let clients = await fetchClientsWithLocation().catch(() => []);
 
-  let places = [];
-  let restaurants = [];
-  let events = [];
+  const toItem = (row) => {
+    const clientType = (row.client_type || row.clientType || '').toLowerCase();
+    let _type = 'place';
+    if (clientType === 'restaurant') _type = 'restaurant';
+    else if (clientType === 'place' || clientType === 'landmark') _type = isLandmarks ? 'landmark' : 'place';
+    return {
+      ...row,
+      metadata: {
+        place_name: row.business_name || row.name || row.business_name_ar || 'Spot',
+        business_name: row.business_name || row.name,
+        name: row.business_name || row.name,
+        description: row.description || '',
+        category: row.category || '',
+        client_type: row.client_type || row.clientType,
+        lat: row.lat,
+        long: row.lng,
+        lng: row.lng,
+        venue: row.location || row.address || '',
+        location: row.location || row.address,
+        rating: row.rating,
+        price_range: row.price_range,
+        cuisine: row.cuisine || row.cuisine_type,
+        cuisine_type: row.cuisine_type || row.cuisine,
+      },
+      _type,
+      _isLandmark: _type === 'landmark' || (row.category && ['UNESCO Heritage', 'Landmark', 'Museum', 'Heritage', 'Natural Wonder'].includes(row.category)),
+    };
+  };
 
-  if (!isLandmarks) {
-    [places, restaurants, events] = await Promise.all([
-      isFood ? [] : fetchPlaces([]),
-      fetchRestaurants([]),
-      fetchEvents([]),
-    ]).catch(() => [[], [], []]);
+  let combined = clients.map(toItem);
+
+  if (combined.length === 0 && !isFood) {
+    const fallback = BAHRAIN_LANDMARKS.map((l) => ({
+      ...l,
+      lat: l.lat,
+      lng: l.lng,
+      metadata: { place_name: l.name, description: l.description, category: l.category, lat: l.lat, long: l.lng },
+      _type: 'landmark',
+      _isLandmark: true,
+    }));
+    combined = fallback;
   }
 
-  const combined = [
-    ...allLandmarks.map((m) => ({ ...m, _type: 'landmark' })),
-    ...places.map((m) => ({ ...m, _type: 'place' })),
-    ...restaurants.map((m) => ({ ...m, _type: 'restaurant' })),
-    ...events.map((m) => ({ ...m, _type: 'event' })),
-  ];
+  if (combined.length > 0 && clients.length > 0) {
+    if (isLandmarks) {
+      combined = combined.filter((c) => (c.metadata?.client_type || '').toLowerCase() === 'place' || c._isLandmark);
+    } else if (isFood) {
+      combined = combined.filter((c) => (c.metadata?.client_type || '').toLowerCase() === 'restaurant');
+    }
+  }
 
   const seen = new Set();
   const withCoords = combined
     .map((item) => {
-      const ll = item.lat != null ? { lat: item.lat, lng: item.lng } : getLatLng(item?.metadata || item);
+      const ll = item.lat != null && item.lng != null ? { lat: item.lat, lng: item.lng } : getLatLng(item?.metadata || item);
       if (!ll) return null;
       const name =
         item.metadata?.place_name ||
         item.metadata?.business_name ||
-        item.metadata?.event_name ||
         item.metadata?.name ||
+        item?.business_name ||
         item?.name ||
         'Spot';
       const key = `${name}-${ll.lat.toFixed(4)}`;
@@ -298,7 +404,7 @@ export async function fetchNearbyPOIs(userLat, userLng, mode = 'all') {
       seen.add(key);
       const dist = haversineKm(userLat, userLng, ll.lat, ll.lng);
       const bear = bearingDeg(userLat, userLng, ll.lat, ll.lng);
-      const type = item._type || (item.metadata?.record_type === 'event' ? 'event' : item.metadata?.client_type === 'restaurant' ? 'restaurant' : 'place');
+      const type = item._type || ((item.metadata?.client_type || '').toLowerCase() === 'restaurant' ? 'restaurant' : 'place');
       return {
         ...item,
         name,
@@ -307,18 +413,11 @@ export async function fetchNearbyPOIs(userLat, userLng, mode = 'all') {
         distanceKm: dist,
         bearing: bear,
         _type: type,
-        _isLandmark: type === 'landmark' || (item.category && ['UNESCO Heritage', 'Landmark', 'Museum', 'Heritage', 'Natural Wonder'].includes(item.category)),
+        _isLandmark: item._isLandmark || (type === 'landmark') || (item.category && ['UNESCO Heritage', 'Landmark', 'Museum', 'Heritage', 'Natural Wonder'].includes(item.category)),
       };
     })
     .filter(Boolean)
-    .sort((a, b) => {
-      if (mode === 'landmarks') return a.distanceKm - b.distanceKm;
-      if (mode === 'food') return a.distanceKm - b.distanceKm;
-      const landmarkA = a._isLandmark || a._type === 'landmark' ? 1 : 0;
-      const landmarkB = b._isLandmark || b._type === 'landmark' ? 1 : 0;
-      if (landmarkA !== landmarkB) return landmarkB - landmarkA;
-      return a.distanceKm - b.distanceKm;
-    })
+    .sort((a, b) => a.distanceKm - b.distanceKm)
     .slice(0, mode === 'all' ? 16 : 12);
   return withCoords;
 }
