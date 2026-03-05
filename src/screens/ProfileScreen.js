@@ -13,6 +13,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import ScreenContainer from '../components/ScreenContainer';
 import { useUserPreferences } from '../context/UserPreferencesContext';
+import { useAuth } from '../context/AuthContext';
 import { GENERAL_GROUPS } from '../constants/preferences';
 
 // Match app theme (HomeScreen, CommunitiesScreen, ScreenContainer)
@@ -74,6 +75,7 @@ export default function ProfileScreen() {
     PREFERENCES,
     FOOD_CATEGORIES,
   } = useUserPreferences();
+  const { profile, user: authUser, signOut } = useAuth();
   const [preferencesModalVisible, setPreferencesModalVisible] = useState(false);
   const [editGeneralIds, setEditGeneralIds] = useState([]);
   const [editActivityIds, setEditActivityIds] = useState([]);
@@ -118,11 +120,17 @@ export default function ProfileScreen() {
         <View style={styles.headerBlock}>
           <View style={styles.avatarWrap}>
             <View style={styles.avatar}>
-              <Text style={styles.avatarInitial}>U</Text>
+              <Text style={styles.avatarInitial}>
+                {(profile?.account?.user_name || authUser?.email || 'U').charAt(0).toUpperCase()}
+              </Text>
             </View>
           </View>
-          <Text style={styles.userName}>Guest</Text>
-          <Text style={styles.userSub}>Sign in to sync across devices</Text>
+          <Text style={styles.userName}>
+            {profile?.account?.user_name || authUser?.email?.split('@')[0] || 'User'}
+          </Text>
+          <Text style={styles.userSub}>
+            {authUser?.email ?? 'Signed in'}
+          </Text>
         </View>
 
         {/* Account */}
@@ -172,10 +180,10 @@ export default function ProfileScreen() {
           />
         </Section>
 
-        {/* Sign in CTA */}
+        {/* Sign out */}
         <View style={styles.ctaSection}>
-          <TouchableOpacity style={styles.primaryButton} activeOpacity={0.85}>
-            <Text style={styles.primaryButtonText}>Sign in</Text>
+          <TouchableOpacity style={styles.primaryButton} onPress={() => signOut()} activeOpacity={0.85}>
+            <Text style={styles.primaryButtonText}>Sign out</Text>
           </TouchableOpacity>
         </View>
       </ScrollView>

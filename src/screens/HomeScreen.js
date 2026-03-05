@@ -19,7 +19,9 @@ import {
   ActivityIndicator,
   Dimensions,
   RefreshControl,
+  Alert,
 } from 'react-native';
+import * as Location from 'expo-location';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import { BlurView } from 'expo-blur';
@@ -29,6 +31,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import ScreenContainer from '../components/ScreenContainer';
 import ProfileButton from '../components/ProfileButton';
 import ClientProfileModal from '../components/ClientProfileModal';
+import { useAuth } from '../context/AuthContext';
 import { supabase } from '../config/supabase';
 
 const VOTER_ID_KEY = '@gobahrain_voter_id';
@@ -431,6 +434,8 @@ export default function HomeScreen() {
   const insets = useSafeAreaInsets();
   const route = useRoute();
   const navigation = useNavigation();
+  const { profile } = useAuth();
+  const [locationUpdating, setLocationUpdating] = useState(false);
   const [selectedCategory, setSelectedCategory] = useState('nearby');
   const [showAIOverlay, setShowAIOverlay] = useState(false);
   const [customQuery, setCustomQuery] = useState('');
@@ -934,6 +939,48 @@ export default function HomeScreen() {
     setShowScrollToTop(false);
   }, [headerTranslateY]);
 
+  const handleUpdateLocation = useCallback(async () => {
+    const userRow = profile?.user;
+    const userUuid = userRow?.user_a_uuid;
+    if (!userUuid) {
+      Alert.alert('Location', 'Sign in as a user to save your location.');
+      return;
+    }
+    setLocationUpdating(true);
+    try {
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Location', 'Permission denied. Enable location in Settings to save your position.');
+        return;
+      }
+      const { coords } = await Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.Balanced,
+      });
+      const { latitude, longitude } = coords;
+      let areaLabel = '';
+      try {
+        const [rev] = await Location.reverseGeocodeAsync({ latitude, longitude });
+        if (rev?.city || rev?.district || rev?.street) {
+          areaLabel = [rev.district, rev.city, rev.street].filter(Boolean).join(', ') || '';
+        }
+      } catch (_) {}
+      const { error } = await supabase
+        .from('user')
+        .update({ lat: latitude, long: longitude })
+        .eq('user_a_uuid', userUuid);
+      if (error) throw error;
+      if (areaLabel) {
+        Alert.alert('Location saved', `You're in ${areaLabel}. Coordinates saved.`);
+      } else {
+        Alert.alert('Location saved', `Lat ${latitude.toFixed(4)}, Long ${longitude.toFixed(4)} saved.`);
+      }
+    } catch (e) {
+      Alert.alert('Location', e?.message ?? 'Could not get or save location.');
+    } finally {
+      setLocationUpdating(false);
+    }
+  }, [profile?.user?.user_a_uuid]);
+
   return (
     <ScreenContainer style={styles.screen}>
       <Animated.View
@@ -944,8 +991,17 @@ export default function HomeScreen() {
         pointerEvents="box-none"
       >
         <View style={styles.instagramHeader}>
-          <TouchableOpacity style={styles.headerIconBtn} activeOpacity={0.7}>
-            <Ionicons name="add" size={28} color={COLORS.textPrimary} />
+          <TouchableOpacity
+            style={styles.headerIconBtn}
+            onPress={handleUpdateLocation}
+            disabled={locationUpdating}
+            activeOpacity={0.7}
+          >
+            {locationUpdating ? (
+              <ActivityIndicator size="small" color={COLORS.textPrimary} />
+            ) : (
+              <Ionicons name="location" size={26} color={COLORS.textPrimary} />
+            )}
           </TouchableOpacity>
           <Text style={styles.instagramLogo}>Go Bahrain</Text>
           <View style={styles.headerRight}>
