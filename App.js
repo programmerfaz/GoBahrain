@@ -13,6 +13,8 @@ import ARScreen from './src/screens/ARScreen';
 import OnboardingScreen from './src/screens/OnboardingScreen';
 import BottomControlBar from './src/components/BottomControlBar';
 import { UserPreferencesProvider, useUserPreferences } from './src/context/UserPreferencesContext';
+import { AuthProvider, useAuth } from './src/context/AuthContext';
+import AuthScreen from './src/screens/AuthScreen';
 
 const Tab = createBottomTabNavigator();
 const Stack = createNativeStackNavigator();
@@ -35,15 +37,20 @@ function TabsNavigator() {
 }
 
 function AppContent() {
+  const { isAuthenticated, authLoading } = useAuth();
   const { isOnboardingComplete, isLoading } = useUserPreferences();
 
-  if (isLoading) {
+  if (authLoading || isLoading) {
     return (
       <View style={styles.loadingWrap}>
         <ActivityIndicator size="large" color="#C8102E" />
         <Text style={styles.loadingText}>Loading…</Text>
       </View>
     );
+  }
+
+  if (!isAuthenticated) {
+    return <AuthScreen />;
   }
 
   if (!isOnboardingComplete) {
@@ -61,14 +68,16 @@ function AppContent() {
 export default function App() {
   return (
     <SafeAreaProvider>
-      <UserPreferencesProvider>
-        <SafeAreaView style={styles.safeArea} edges={['left', 'right']}>
-          <NavigationContainer>
-            <AppContent />
-          </NavigationContainer>
-          <StatusBar style="dark" />
-        </SafeAreaView>
-      </UserPreferencesProvider>
+      <AuthProvider>
+        <UserPreferencesProvider>
+          <SafeAreaView style={styles.safeArea} edges={['left', 'right']}>
+            <NavigationContainer>
+              <AppContent />
+            </NavigationContainer>
+            <StatusBar style="dark" />
+          </SafeAreaView>
+        </UserPreferencesProvider>
+      </AuthProvider>
     </SafeAreaProvider>
   );
 }
