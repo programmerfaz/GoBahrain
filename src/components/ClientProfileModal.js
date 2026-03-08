@@ -105,12 +105,18 @@ export default function ClientProfileModal({ visible, clientId, onClose, insets 
     let cancelled = false;
     (async () => {
       const [postsRes, reviewsRes] = await Promise.all([
-        supabase.from('post').select('post_uuid, post_image, description, created_at').eq('client_a_uuid', clientId).order('created_at', { ascending: false }).limit(30),
+        supabase.from('posts').select('*').eq('client_a_uuid', clientId).order('created_at', { ascending: false }).limit(30),
         supabase.from('community').select('community_uuid, review_text, rating, badge, image, created_at').eq('client_a_uuid', clientId).order('created_at', { ascending: false }).limit(20),
       ]);
       if (cancelled) return;
       const name = client.business_name || client.name || client.business_name_ar || '';
-      if (postsRes.data) setClientPosts(postsRes.data.map((r) => ({ id: r.post_uuid, imageUri: r.post_image || null, description: r.description || '' })));
+      if (postsRes.data) {
+        setClientPosts(postsRes.data.map((r) => ({
+          id: r.post_uuid ?? r.id,
+          imageUri: r.post_image ?? r.image ?? r.post_image_url ?? null,
+          description: r.description ?? r.caption ?? '',
+        })));
+      }
       let reviews = (reviewsRes.data || []).map((r) => ({
         id: r.community_uuid,
         body: (r.review_text || '').trim(),

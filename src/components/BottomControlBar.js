@@ -41,7 +41,7 @@ async function fetchPostsByQuery(query) {
   const q = (query && String(query).trim()) ? query.trim().toLowerCase() : '';
   const isGenericPicsRequest = PICS_LIKE_QUERIES.some((k) => q === k || q.includes(k));
   const { data: rows, error } = await supabase
-    .from('post')
+    .from('posts')
     .select('*')
     .order('created_at', { ascending: false })
     .limit(50);

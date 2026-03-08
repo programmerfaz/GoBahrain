@@ -35,6 +35,7 @@ import { useAuth } from '../context/AuthContext';
 import { supabase } from '../config/supabase';
 
 const VOTER_ID_KEY = '@gobahrain_voter_id';
+const POST_TABLE_NAMES = ['posts', 'post'];
 
 async function getVoterId() {
   try {
@@ -206,7 +207,12 @@ const NOTIFICATION_COUNT = 3;
 const CARD_MARGIN_H = 16;
 const CARD_PADDING = 14;
 
-function PostCard({ item, isHighlighted = false, onHighlightDone, onUpvoteToggle, onClientPress, upvoteScaleAnim }) {
+const DESCRIPTION_LINES_COLLAPSED = 2;
+const DESCRIPTION_LONG_THRESHOLD = 80;
+
+function PostCard({ item, isHighlighted = false, onHighlightDone, onUpvoteToggle, onClientPress, upvoteScaleAnim, descriptionExpanded = false, onReadMorePress }) {
+  const desc = item.description || '';
+  const isDescriptionLong = desc.length > DESCRIPTION_LONG_THRESHOLD;
   const { width } = useWindowDimensions();
   const imageWidth = width;
   const imageHeight = Math.round(imageWidth * 1.05);
@@ -377,18 +383,26 @@ function PostCard({ item, isHighlighted = false, onHighlightDone, onUpvoteToggle
           );
         })}
       </View>
-      {item.description ? (
-        <Text style={styles.description} numberOfLines={3}>
-          {item.description}
-        </Text>
-      ) : null}
-      {Array.isArray(item.tags) && item.tags.length > 0 ? (
-        <View style={styles.tagsRow}>
-          {item.tags.slice(0, 4).map((tag, idx) => (
-            <View key={idx} style={styles.tagPill}>
-              <Text style={styles.tagText} numberOfLines={1}>{tag}</Text>
-            </View>
-          ))}
+      {desc ? (
+        <View style={styles.descriptionWrap}>
+          <Text
+            style={styles.description}
+            numberOfLines={isDescriptionLong && !descriptionExpanded ? DESCRIPTION_LINES_COLLAPSED : undefined}
+          >
+            {desc}
+          </Text>
+          {isDescriptionLong ? (
+            <TouchableOpacity
+              activeOpacity={0.7}
+              onPress={() => onReadMorePress?.()}
+              style={styles.readMoreBtn}
+              hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}
+            >
+              <Text style={styles.readMoreText}>
+                {descriptionExpanded ? 'Show less' : 'Read more'}
+              </Text>
+            </TouchableOpacity>
+          ) : null}
         </View>
       ) : null}
     </Animated.View>
@@ -448,6 +462,7 @@ export default function HomeScreen() {
   const [upvoteParticlesVisible, setUpvoteParticlesVisible] = useState(false);
   const [upvoteParticlePosition, setUpvoteParticlePosition] = useState({ x: 0, y: 0 });
   const [selectedClientId, setSelectedClientId] = useState(null);
+  const [expandedDescriptionIds, setExpandedDescriptionIds] = useState({});
   const lastPulseRef = useRef(0);
   const flatListRef = useRef(null);
   const scrollOffsetRef = useRef(0);
@@ -467,14 +482,46 @@ export default function HomeScreen() {
       setFetchError(null);
       if (!skipGlobalLoading) setLoading(true);
       console.log('[Home] Fetching posts from Supabase...');
-      const { data: postRows, error } = await supabase
-        .from('post')
-        .select('*')
-        .order('created_at', { ascending: false });
+
+      let postRows = null;
+      let error = null;
+      for (const tableName of POST_TABLE_NAMES) {
+        const res = await supabase.from(tableName).select('*').order('created_at', { ascending: false });
+        if (res.data && res.data.length > 0) {
+          postRows = res.data;
+          console.log('[Home] Fetched from table "' + tableName + '", rows:', postRows.length);
+          break;
+        }
+        if (res.data && Array.isArray(res.data)) {
+          postRows = res.data;
+          error = res.error || null;
+          if (postRows.length === 0) {
+            console.log('[Home] Table "' + tableName + '" returned 0 rows (table empty or RLS hiding rows)');
+          }
+        }
+        if (res.error && !/relation.*does not exist|does not exist/i.test(String(res.error?.message || ''))) {
+          error = res.error;
+          if (!postRows) postRows = [];
+          break;
+        }
+        if (!postRows && res.data) postRows = res.data;
+        if (!postRows) postRows = [];
+      }
+      if ((!postRows || postRows.length === 0) && !error) {
+        for (const tableName of POST_TABLE_NAMES) {
+          const resNoOrder = await supabase.from(tableName).select('*');
+          if (resNoOrder.data && resNoOrder.data.length > 0) {
+            postRows = resNoOrder.data;
+            console.log('[Home] Fetched from table "' + tableName + '" (no order), rows:', postRows.length);
+            break;
+          }
+          if (resNoOrder.data) postRows = resNoOrder.data;
+        }
+      }
 
       console.log('[Home] Supabase response:', { rowCount: postRows?.length ?? 0, error: error?.message ?? null });
 
-      if (error) {
+      if (error && (!postRows || postRows.length === 0)) {
         console.error('[Home] Error fetching posts:', error.message, error);
         const errMsg = String(error?.message ?? error ?? '');
         const isNetworkError = /network request failed|failed to fetch|network error/i.test(errMsg);
@@ -486,7 +533,12 @@ export default function HomeScreen() {
       }
 
       const rows = postRows || [];
-      const clientIds = [...new Set(rows.map((r) => r.client_a_uuid).filter(Boolean))];
+      // Support both post_uuid/client_a_uuid and id/client_id column naming
+      const getPostId = (r) => r.post_uuid ?? r.id;
+      const getClientUuid = (r) => r.client_a_uuid ?? r.client_id ?? null;
+      const getPostImage = (r) => r.post_image ?? r.image ?? r.post_image_url ?? null;
+
+      const clientIds = [...new Set(rows.map((r) => getClientUuid(r)).filter(Boolean))];
       let clientMap = {};
 
       if (clientIds.length > 0) {
@@ -513,8 +565,9 @@ export default function HomeScreen() {
         }
       }
 
-      const mapped = rows.map((row) => {
-        const client = clientMap[row.client_a_uuid] || null;
+      const mapped = rows.map((row, index) => {
+        const clientUuid = getClientUuid(row);
+        const client = clientMap[clientUuid] || null;
         const tags = client?.tags != null
           ? (Array.isArray(client.tags) ? client.tags : String(client.tags).split(',').map((t) => t.trim()).filter(Boolean))
           : [];
@@ -523,22 +576,28 @@ export default function HomeScreen() {
         const postPrice = row.price_range != null && row.price_range !== '' ? row.price_range : null;
         const priceRange = postPrice ?? clientPrice;
         const businessName = client?.business_name ?? client?.name ?? client?.business_name_ar ?? null;
+        const postId = getPostId(row) ?? row?.id ?? `post-${index}`;
+        const formatPrice = (p) => {
+          if (p == null || p === '') return '';
+          const s = String(p).trim();
+          return /bhd/i.test(s) ? s : `${s} BHD`;
+        };
         return {
-          id: row.post_uuid,
-          clientId: row.client_a_uuid,
-          username: row.client_a_uuid?.slice(0, 8) ?? 'client',
+          id: postId,
+          clientId: clientUuid,
+          username: clientUuid?.slice(0, 8) ?? 'client',
           businessName: businessName ? String(businessName).trim() : null,
           tags,
           rating,
-          priceRange: priceRange != null ? `${priceRange} BHD` : '',
+          priceRange: formatPrice(priceRange),
           verified: false,
           location: client?.location || client?.address || '',
           distance: '',
-          imageUri: row.post_image,
+          imageUri: getPostImage(row),
           openNow: false,
           upvotes: 0,
           hasUpvoted: false,
-          description: row.description || '',
+          description: row.description ?? row.caption ?? '',
         };
       });
 
@@ -566,13 +625,7 @@ export default function HomeScreen() {
       });
 
       console.log('[Home] Mapped posts:', mapped.length, mapped.map((p) => p.id));
-      const fallbackPosts = [
-        { id: '28e92d6c-b228-47d0-ac58-7481af618f45', clientId: 'e2885f06-b664-4d00-81b9-650828c2ed6f', username: 'e2885f06', businessName: null, tags: [], rating: null, priceRange: '0.100 BHD', verified: false, location: '', distance: '', imageUri: 'https://zonhaprelkjyjugpqfdn.supabase.co/storage/v1/object/public/gobahrain-post-images/e2885f06-b664-4d00-81b9-650828c2ed6f/a2c53cb8-a5cd-4299-bf01-e2760faf47c2.jpeg', openNow: false, upvotes: 0, hasUpvoted: false, description: 'karak' },
-        { id: 'a11f9c80-a5dc-490d-807d-5ae4bb84ded6', clientId: '40e1cc11-034f-41c8-bc3b-267e705d72d9', username: '40e1cc11', businessName: null, tags: [], rating: null, priceRange: '3.5 BHD', verified: false, location: '', distance: '', imageUri: 'https://zonhaprelkjyjugpqfdn.supabase.co/storage/v1/object/public/gobahrain-post-images/40e1cc11-034f-41c8-bc3b-267e705d72d9/9550a0f4-aa62-43bd-b765-7c1cb1ca0489.webp', openNow: false, upvotes: 0, hasUpvoted: false, description: 'chessy cheesy burger' },
-        { id: 'c86ef509-9f55-4134-8e1e-e20b6821b97e', clientId: '40e1cc11-034f-41c8-bc3b-267e705d72d9', username: '40e1cc11', businessName: null, tags: [], rating: null, priceRange: '2 BHD', verified: false, location: '', distance: '', imageUri: 'https://zonhaprelkjyjugpqfdn.supabase.co/storage/v1/object/public/gobahrain-post-images/40e1cc11-034f-41c8-bc3b-267e705d72d9/a5f2d5dd-2260-4c7e-b3ea-bda3d7755501.jpeg', openNow: false, upvotes: 0, hasUpvoted: false, description: 'try new sizzling burger' },
-      ];
-      const list = mapped.length > 0 ? mapped : fallbackPosts;
-      setPosts(shufflePosts(list));
+      setPosts(shufflePosts(mapped));
     } catch (err) {
       console.error('[Home] Failed to fetch posts:', err);
       const errMsg = String(err?.message ?? err ?? '');
@@ -1102,8 +1155,12 @@ export default function HomeScreen() {
                 isHighlighted={item.id === highlightedPostId}
                 onHighlightDone={() => setHighlightedPostId(null)}
                 onUpvoteToggle={handleUpvoteToggle}
-                onClientPress={(post) => post?.clientId && setSelectedClientId(post.clientId)}
+                onClientPress={(post) => {
+                  if (post?.clientId) setSelectedClientId(post.clientId);
+                }}
                 upvoteScaleAnim={upvoteAnimations[item.id].scale}
+                descriptionExpanded={!!expandedDescriptionIds[item.id]}
+                onReadMorePress={() => setExpandedDescriptionIds((prev) => ({ ...prev, [item.id]: !prev[item.id] }))}
               />
             );
           }}
@@ -1609,13 +1666,24 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     flexShrink: 1,
   },
+  descriptionWrap: {
+    paddingHorizontal: 14,
+    paddingTop: 4,
+    paddingBottom: 12,
+  },
   description: {
     fontSize: 14,
     color: '#4B5563',
     lineHeight: 20,
-    paddingHorizontal: 14,
-    paddingTop: 4,
-    paddingBottom: 12,
+  },
+  readMoreBtn: {
+    alignSelf: 'flex-start',
+    marginTop: 2,
+  },
+  readMoreText: {
+    fontSize: 14,
+    color: COLORS.textMuted,
+    fontWeight: '600',
   },
   khalidContextBanner: {
     flexDirection: 'row',
