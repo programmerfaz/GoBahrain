@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   View,
   Text,
@@ -13,17 +13,11 @@ import {
   Alert,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useAuth } from '../context/AuthContext';
+import { useTheme } from '../context/ThemeContext';
 
-const COLORS = {
-  bg: '#0F172A',
-  card: 'rgba(30,41,59,0.6)',
-  border: 'rgba(148,163,184,0.3)',
-  text: '#F8FAFC',
-  textMuted: 'rgba(203,213,225,0.9)',
-  label: '#94A3B8',
-  primary: '#C8102E',
-};
+const REMEMBER_ME_KEY = '@gobahrain_remember_email';
 
 const CLIENT_TYPES = [
   { id: 'place', label: 'Place' },
@@ -31,8 +25,72 @@ const CLIENT_TYPES = [
   { id: 'cafe', label: 'Cafe' },
 ];
 
+function getAuthStyles(C) {
+  return {
+    safe: { flex: 1, backgroundColor: C.bg },
+    container: { flex: 1, backgroundColor: C.bg },
+    header: { paddingHorizontal: 24, paddingTop: 20, paddingBottom: 28, alignItems: 'center' },
+    logoBadge: { width: 56, height: 56, borderRadius: 16, backgroundColor: C.primary + '22', alignItems: 'center', justifyContent: 'center', marginBottom: 20, borderWidth: 1, borderColor: C.primary + '44' },
+    title: { fontSize: 28, fontWeight: '800', color: C.text, marginBottom: 10, letterSpacing: -0.5, textAlign: 'center' },
+    subtitle: { fontSize: 15, color: C.textMuted, lineHeight: 22, textAlign: 'center', paddingHorizontal: 8, maxWidth: 320 },
+    scroll: { flex: 1 },
+    scrollContent: { paddingHorizontal: 20, paddingBottom: 48 },
+    formCard: { backgroundColor: C.card, borderRadius: 24, borderWidth: 1, borderColor: C.cardBorder, paddingHorizontal: 20, paddingVertical: 24, ...Platform.select({ ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.25, shadowRadius: 24 }, android: { elevation: 8 } }) },
+    toggleRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', marginBottom: 24 },
+    toggleText: { fontSize: 15, color: C.textMuted },
+    toggleLink: { fontSize: 15, fontWeight: '700', color: C.primary },
+    inputWrap: { marginBottom: 18 },
+    label: { fontSize: 12, fontWeight: '600', color: C.label, marginBottom: 8, textTransform: 'uppercase', letterSpacing: 1 },
+    input: { backgroundColor: C.cardBorder || C.border, borderWidth: 1, borderColor: C.border, borderRadius: 14, paddingVertical: 15, paddingHorizontal: 18, fontSize: 16, color: C.text },
+    passwordRow: { position: 'relative' },
+    passwordInput: { paddingRight: 48 },
+    eyeBtn: { position: 'absolute', right: 14, top: 0, bottom: 0, justifyContent: 'center' },
+    rememberRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 20, marginTop: 4 },
+    checkbox: { width: 22, height: 22, borderRadius: 6, borderWidth: 2, borderColor: C.border, backgroundColor: 'transparent', alignItems: 'center', justifyContent: 'center', marginRight: 12 },
+    checkboxChecked: { backgroundColor: C.primary, borderColor: C.primary },
+    rememberLabel: { fontSize: 15, color: C.textMuted, fontWeight: '500' },
+    textArea: { minHeight: 72, textAlignVertical: 'top' },
+    sectionLabel: { fontSize: 12, fontWeight: '600', color: C.label, marginBottom: 10, marginTop: 10, textTransform: 'uppercase', letterSpacing: 1 },
+    chipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginBottom: 10 },
+    chip: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 12, paddingHorizontal: 16, borderRadius: 12, borderWidth: 1, borderColor: C.border, backgroundColor: C.card },
+    chipSelected: { borderColor: C.primary, borderWidth: 2, backgroundColor: C.primary + '22' },
+    chipLabel: { fontSize: 15, color: C.label, fontWeight: '500' },
+    chipLabelSelected: { color: C.primary, fontWeight: '700' },
+    submitBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10, paddingVertical: 17, borderRadius: 14, backgroundColor: C.primary, marginTop: 28, overflow: 'hidden', ...Platform.select({ ios: { shadowColor: C.primary, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.35, shadowRadius: 12 }, android: { elevation: 6 } }) },
+    submitBtnDisabled: { opacity: 0.55 },
+    submitBtnText: { fontSize: 17, fontWeight: '700', color: '#FFF' },
+    successBanner: { flexDirection: 'row', alignItems: 'center', gap: 12, padding: 16, borderRadius: 14, backgroundColor: C.primary + '22', borderWidth: 1, borderColor: C.primary, marginTop: 20 },
+    successBannerText: { flex: 1, fontSize: 14, color: C.text, lineHeight: 20 },
+  };
+}
+
 export default function AuthScreen() {
+  const { colors, isDark } = useTheme();
   const { signIn, signUp, ensureProfileAfterSignUp } = useAuth();
+  const COLORS = useMemo(() => (isDark ? {
+    bg: '#0B1120',
+    bgGradientTop: '#0F172A',
+    card: 'rgba(30,41,59,0.5)',
+    cardBorder: 'rgba(148,163,184,0.15)',
+    border: 'rgba(148,163,184,0.25)',
+    text: '#F8FAFC',
+    textMuted: 'rgba(203,213,225,0.85)',
+    label: '#94A3B8',
+    primary: colors.primary,
+    primaryGlow: colors.primary + '40',
+  } : {
+    bg: colors.background,
+    bgGradientTop: colors.surface,
+    card: colors.surface,
+    cardBorder: colors.border,
+    border: colors.border,
+    text: colors.textPrimary,
+    textMuted: colors.textSecondary,
+    label: colors.textMuted,
+    primary: colors.primary,
+    primaryGlow: colors.primary + '40',
+  }), [colors, isDark]);
+  const styles = useMemo(() => StyleSheet.create(getAuthStyles(COLORS)), [COLORS]);
   const [mode, setMode] = useState('login'); // 'login' | 'signup'
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -46,6 +104,16 @@ export default function AuthScreen() {
   const [loading, setLoading] = useState(false);
   const [securePassword, setSecurePassword] = useState(true);
   const [signUpSuccessMessage, setSignUpSuccessMessage] = useState(null);
+  const [rememberMe, setRememberMe] = useState(true);
+
+  // Load remembered email on mount
+  useEffect(() => {
+    let cancelled = false;
+    AsyncStorage.getItem(REMEMBER_ME_KEY).then((saved) => {
+      if (!cancelled && saved) setEmail(saved.trim());
+    });
+    return () => { cancelled = true; };
+  }, []);
 
   const isSignUp = mode === 'signup';
   const canSubmit =
@@ -65,6 +133,11 @@ export default function AuthScreen() {
     setLoading(true);
     try {
       await signIn(email.trim(), password);
+      if (rememberMe) {
+        await AsyncStorage.setItem(REMEMBER_ME_KEY, email.trim());
+      } else {
+        await AsyncStorage.removeItem(REMEMBER_ME_KEY);
+      }
     } catch (e) {
       Alert.alert('Login failed', e?.message ?? 'Invalid email or password.');
     } finally {
@@ -152,11 +225,14 @@ export default function AuthScreen() {
         keyboardVerticalOffset={Platform.OS === 'ios' ? 16 : 0}
       >
         <View style={styles.header}>
+          <View style={styles.logoBadge}>
+            <Ionicons name="compass" size={28} color={COLORS.primary} />
+          </View>
           <Text style={styles.title}>{isSignUp ? 'Create account' : 'Welcome back'}</Text>
           <Text style={styles.subtitle}>
             {isSignUp
-              ? 'Sign up as a user (local/tourist) or as a business client.'
-              : 'Sign in with your email and password.'}
+              ? 'Join as a local, tourist, or business — one account for all.'
+              : 'Sign in to continue exploring Bahrain.'}
           </Text>
         </View>
 
@@ -166,6 +242,7 @@ export default function AuthScreen() {
           showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
         >
+          <View style={styles.formCard}>
           <TouchableOpacity
             style={styles.toggleRow}
             onPress={() => { setMode(mode === 'login' ? 'signup' : 'login'); setSignUpSuccessMessage(null); }}
@@ -212,6 +289,19 @@ export default function AuthScreen() {
               </TouchableOpacity>
             </View>
           </View>
+
+          {!isSignUp && (
+            <TouchableOpacity
+              style={styles.rememberRow}
+              onPress={() => setRememberMe((r) => !r)}
+              activeOpacity={0.8}
+            >
+              <View style={[styles.checkbox, rememberMe && styles.checkboxChecked]}>
+                {rememberMe && <Ionicons name="checkmark" size={14} color="#FFF" />}
+              </View>
+              <Text style={styles.rememberLabel}>Remember me</Text>
+            </TouchableOpacity>
+          )}
 
           {isSignUp && (
             <>
@@ -347,89 +437,10 @@ export default function AuthScreen() {
               </>
             )}
           </TouchableOpacity>
+          </View>
         </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }
 
-const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: COLORS.bg },
-  container: { flex: 1, backgroundColor: COLORS.bg },
-  header: { paddingHorizontal: 20, paddingTop: 24, paddingBottom: 16 },
-  title: { fontSize: 24, fontWeight: '800', color: COLORS.text, marginBottom: 8 },
-  subtitle: { fontSize: 15, color: COLORS.textMuted, lineHeight: 22 },
-  toggleRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 20, marginBottom: 20 },
-  toggleText: { fontSize: 15, color: COLORS.textMuted },
-  toggleLink: { fontSize: 15, fontWeight: '700', color: COLORS.primary },
-  scroll: { flex: 1 },
-  scrollContent: { paddingHorizontal: 20, paddingBottom: 40 },
-  inputWrap: { marginBottom: 16 },
-  label: { fontSize: 13, fontWeight: '600', color: COLORS.label, marginBottom: 8, textTransform: 'uppercase', letterSpacing: 0.5 },
-  input: {
-    backgroundColor: COLORS.card,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    borderRadius: 14,
-    paddingVertical: 14,
-    paddingHorizontal: 16,
-    fontSize: 16,
-    color: COLORS.text,
-  },
-  passwordRow: { position: 'relative' },
-  passwordInput: { paddingRight: 48 },
-  eyeBtn: { position: 'absolute', right: 12, top: 0, bottom: 0, justifyContent: 'center' },
-  textArea: { minHeight: 72, textAlignVertical: 'top' },
-  sectionLabel: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: COLORS.label,
-    marginBottom: 10,
-    marginTop: 8,
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-  },
-  chipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 12, marginBottom: 8 },
-  chip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    paddingVertical: 12,
-    paddingHorizontal: 16,
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    backgroundColor: COLORS.card,
-  },
-  chipSelected: { borderColor: COLORS.primary, borderWidth: 2, backgroundColor: COLORS.primary + '22' },
-  chipLabel: { fontSize: 15, color: COLORS.label, fontWeight: '500' },
-  chipLabelSelected: { color: COLORS.primary, fontWeight: '700' },
-  submitBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    paddingVertical: 16,
-    borderRadius: 14,
-    backgroundColor: COLORS.primary,
-    marginTop: 24,
-    ...Platform.select({
-      ios: { shadowColor: COLORS.primary, shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.3, shadowRadius: 6 },
-      android: { elevation: 4 },
-    }),
-  },
-  submitBtnDisabled: { opacity: 0.6 },
-  submitBtnText: { fontSize: 16, fontWeight: '700', color: '#FFF' },
-  successBanner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    padding: 16,
-    borderRadius: 14,
-    backgroundColor: COLORS.primary + '22',
-    borderWidth: 1,
-    borderColor: COLORS.primary,
-    marginTop: 16,
-  },
-  successBannerText: { flex: 1, fontSize: 14, color: COLORS.text, lineHeight: 20 },
-});

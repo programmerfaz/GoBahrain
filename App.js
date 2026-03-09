@@ -12,8 +12,10 @@ import ProfileScreen from './src/screens/ProfileScreen';
 import ARScreen from './src/screens/ARScreen';
 import OnboardingScreen from './src/screens/OnboardingScreen';
 import BottomControlBar from './src/components/BottomControlBar';
+import { ThemeProvider, useTheme } from './src/context/ThemeContext';
 import { UserPreferencesProvider, useUserPreferences } from './src/context/UserPreferencesContext';
 import { AuthProvider, useAuth } from './src/context/AuthContext';
+import { SavedPlacesProvider } from './src/context/SavedPlacesContext';
 import AuthScreen from './src/screens/AuthScreen';
 
 const Tab = createBottomTabNavigator();
@@ -39,45 +41,65 @@ function TabsNavigator() {
 function AppContent() {
   const { isAuthenticated, authLoading } = useAuth();
   const { isOnboardingComplete, isLoading } = useUserPreferences();
+  const { isDark, colors } = useTheme();
 
   if (authLoading || isLoading) {
     return (
-      <View style={styles.loadingWrap}>
-        <ActivityIndicator size="large" color="#C8102E" />
-        <Text style={styles.loadingText}>Loading…</Text>
-      </View>
+      <>
+        <StatusBar style={isDark ? 'light' : 'dark'} />
+        <View style={[styles.loadingWrap, { backgroundColor: colors.background }]}>
+          <ActivityIndicator size="large" color={colors.primary} />
+          <Text style={[styles.loadingText, { color: colors.textSecondary }]}>Loading…</Text>
+        </View>
+      </>
     );
   }
 
   if (!isAuthenticated) {
-    return <AuthScreen />;
+    return (
+      <>
+        <StatusBar style={isDark ? 'light' : 'dark'} />
+        <AuthScreen />
+      </>
+    );
   }
 
   if (!isOnboardingComplete) {
-    return <OnboardingScreen />;
+    return (
+      <>
+        <StatusBar style={isDark ? 'light' : 'dark'} />
+        <OnboardingScreen />
+      </>
+    );
   }
 
   return (
-    <Stack.Navigator screenOptions={{ headerShown: false }}>
-      <Stack.Screen name="Tabs" component={TabsNavigator} />
-      <Stack.Screen name="AR" component={ARScreen} options={{ presentation: 'fullScreenModal' }} />
-    </Stack.Navigator>
+    <>
+      <StatusBar style={isDark ? 'light' : 'dark'} />
+      <Stack.Navigator screenOptions={{ headerShown: false }}>
+        <Stack.Screen name="Tabs" component={TabsNavigator} />
+        <Stack.Screen name="AR" component={ARScreen} options={{ presentation: 'fullScreenModal' }} />
+      </Stack.Navigator>
+    </>
   );
 }
 
 export default function App() {
   return (
     <SafeAreaProvider>
-      <AuthProvider>
-        <UserPreferencesProvider>
-          <SafeAreaView style={styles.safeArea} edges={['left', 'right']}>
-            <NavigationContainer>
-              <AppContent />
-            </NavigationContainer>
-            <StatusBar style="dark" />
-          </SafeAreaView>
-        </UserPreferencesProvider>
-      </AuthProvider>
+      <ThemeProvider>
+        <AuthProvider>
+          <SavedPlacesProvider>
+            <UserPreferencesProvider>
+              <SafeAreaView style={styles.safeArea} edges={['left', 'right']}>
+                <NavigationContainer>
+                  <AppContent />
+                </NavigationContainer>
+              </SafeAreaView>
+            </UserPreferencesProvider>
+          </SavedPlacesProvider>
+        </AuthProvider>
+      </ThemeProvider>
     </SafeAreaProvider>
   );
 }
@@ -88,11 +110,9 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: '#0F172A',
     gap: 12,
   },
   loadingText: {
     fontSize: 15,
-    color: 'rgba(203,213,225,0.8)',
   },
 });

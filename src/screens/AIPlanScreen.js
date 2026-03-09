@@ -17,11 +17,13 @@ import {
 } from 'react-native';
 import { BlurView } from 'expo-blur';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useRoute } from '@react-navigation/native';
-import MapView, { Marker, Circle } from 'react-native-maps';
+import { useRoute, useNavigation } from '@react-navigation/native';
+import MapView, { Marker, Circle, Polyline } from 'react-native-maps';
 import { Ionicons } from '@expo/vector-icons';
 import { fetchPlaces, fetchRestaurants, fetchBreakfastSpots, fetchEvents, generateDayPlan } from '../services/aiPipeline';
 import { useUserPreferences } from '../context/UserPreferencesContext';
+import { colors as themeColors } from '../theme/designTokens';
+import { useTheme } from '../context/ThemeContext';
 
 const { height: SCREEN_HEIGHT, width: SCREEN_WIDTH } = Dimensions.get('window');
 const APP_TAB_BAR_HEIGHT_IOS = 70;
@@ -72,15 +74,22 @@ function clampRegionToBahrain(region) {
 
 import { PREFERENCES, FOOD_CATEGORIES } from '../constants/preferences';
 
+// Bump-style transport modes (modern muted palette)
+const TRANSPORT_MODES = [
+  { id: 'walk', icon: 'walk', label: 'Walk', color: themeColors.textSecondary },
+  { id: 'car', icon: 'car', label: 'Drive', color: themeColors.primary },
+  { id: 'bike', icon: 'bicycle', label: 'Bike', color: themeColors.success },
+];
+
 const SURPRISE_THEMES = [
-  { label: 'Scenic Day', icon: 'heart', color: '#EC4899', prefs: ['Sightseeing', 'Leisure'], food: ['Italian', 'Seafood'] },
-  { label: 'Adventure', icon: 'rocket', color: '#EF4444', prefs: ['Adventure', 'Nature'], food: ['Fast Food'] },
-  { label: 'Chill Vibes', icon: 'leaf', color: '#10B981', prefs: ['Leisure', 'Nature'], food: ['Cafe'] },
-  { label: 'Foodie Tour', icon: 'restaurant', color: '#F97316', prefs: ['Sightseeing'], food: ['South Asian', 'Seafood', 'Asian'] },
-  { label: 'Culture Buff', icon: 'color-palette', color: '#6366F1', prefs: ['Cultural', 'Historical'], food: ['Cuisine'] },
-  { label: 'Nightlife', icon: 'moon', color: '#7C3AED', prefs: ['Instagram', 'Leisure'], food: ['International'] },
-  { label: 'Family Fun', icon: 'people', color: '#0EA5E9', prefs: ['Sightseeing', 'Leisure'], food: ['American', 'Fast Food'] },
-  { label: 'Hidden Gems', icon: 'diamond', color: '#D97706', prefs: ['Cultural', 'Nature'], food: ['South Asian', 'Cuisine'] },
+  { label: 'Scenic Day', icon: 'heart', color: themeColors.evening, prefs: ['Sightseeing', 'Leisure'], food: ['Italian', 'Seafood'] },
+  { label: 'Adventure', icon: 'rocket', color: themeColors.error, prefs: ['Adventure', 'Nature'], food: ['Fast Food'] },
+  { label: 'Chill Vibes', icon: 'leaf', color: themeColors.success, prefs: ['Leisure', 'Nature'], food: ['Cafe'] },
+  { label: 'Foodie Tour', icon: 'restaurant', color: themeColors.dining, prefs: ['Sightseeing'], food: ['South Asian', 'Seafood', 'Asian'] },
+  { label: 'Culture Buff', icon: 'color-palette', color: themeColors.primary, prefs: ['Cultural', 'Historical'], food: ['Cuisine'] },
+  { label: 'Nightlife', icon: 'moon', color: themeColors.evening, prefs: ['Instagram', 'Leisure'], food: ['International'] },
+  { label: 'Family Fun', icon: 'people', color: themeColors.afternoon, prefs: ['Sightseeing', 'Leisure'], food: ['American', 'Fast Food'] },
+  { label: 'Hidden Gems', icon: 'diamond', color: themeColors.morning, prefs: ['Cultural', 'Nature'], food: ['South Asian', 'Cuisine'] },
 ];
 
 const DUMMY_PAST_PLANS = [
@@ -88,9 +97,9 @@ const DUMMY_PAST_PLANS = [
   { id: 'plan2', title: 'Beach & Food Day', spots: 5, date: '1 week ago' },
 ];
 
-// Match Home page AI overlay design
+// Plan modal overlay (modern primary)
 const PLAN_COLORS = {
-  primary: '#C8102E',
+  primary: themeColors.primary,
   overlayQuestionTitle: '#FFFFFF',
   overlayQuestionSub: 'rgba(255,255,255,0.88)',
   overlayBlockBg: 'rgba(255,255,255,0.2)',
@@ -323,7 +332,7 @@ function PlanModalLoadingView({ loadingStatus, showSuccess, spotPreviews }) {
         <View style={[styles.planModalLoadingPulse, showSuccess && styles.planModalLoadingPulseSuccess]}>
           {showSuccess ? (
             <Animated.View style={{ transform: [{ scale: successScale }], opacity: successOpacity }}>
-              <Ionicons name="checkmark-circle" size={56} color="#10B981" />
+              <Ionicons name="checkmark-circle" size={56} color={colors.success} />
             </Animated.View>
           ) : (
             <ActivityIndicator size="large" color="#FFFFFF" />
@@ -602,8 +611,10 @@ function buildMapMarkers(plan) {
 }
 
 export default function AIPlanScreen() {
+  const { colors } = useTheme();
   const insets = useSafeAreaInsets();
   const route = useRoute();
+  const navigation = useNavigation();
   const { preferences } = useUserPreferences();
   const mapRef = useRef(null);
   const sheetAnim = useRef(new Animated.Value(SNAP_POINTS[INITIAL_SNAP_INDEX])).current;
@@ -635,6 +646,7 @@ export default function AIPlanScreen() {
   const [planModalStep, setPlanModalStep] = useState(1);
   const [planGenerationSuccess, setPlanGenerationSuccess] = useState(false);
   const [spotPreviews, setSpotPreviews] = useState([]);
+  const [transportMode, setTransportMode] = useState('car');
   const spinAnim = useRef(new Animated.Value(0)).current;
 
   // Plan modal animations (match Home AI overlay)
@@ -1145,6 +1157,24 @@ export default function AIPlanScreen() {
         onRegionChangeComplete={handleRegionChangeComplete}
         onPress={() => setSelectedMarker(null)}
       >
+        {/* Bump-style route path */}
+        {dayPlan && (() => {
+          const markers = buildMapMarkers(dayPlan);
+          const maxVisible = revealingPins ? visiblePinCount : markers.length;
+          const coords = markers
+            .filter((m) => m.idx < maxVisible && m.lat && m.lng)
+            .map((m) => ({ latitude: m.lat, longitude: m.lng }));
+          if (coords.length < 2) return null;
+          return (
+            <Polyline
+              coordinates={coords}
+              strokeColor={colors.route}
+              strokeWidth={4}
+              lineCap="round"
+              lineJoin="round"
+            />
+          );
+        })()}
         {/* Markers — reveal one by one when plan is generated */}
         {dayPlan && (() => {
           const markers = buildMapMarkers(dayPlan);
@@ -1152,8 +1182,8 @@ export default function AIPlanScreen() {
           return markers.filter((mk) => mk.idx < maxVisible).map((mk) => {
             const isEat = mk.type === 'restaurant';
             const isEvent = mk.type === 'event';
-            const timeCols = { Morning: '#D97706', Afternoon: '#0284C7', Evening: '#7C3AED' };
-            const accent = isEat ? '#C8102E' : isEvent ? '#EC4899' : (timeCols[mk.time] || '#6B7280');
+            const timeCols = { Morning: colors.morning, Afternoon: colors.afternoon, Evening: colors.evening };
+            const accent = isEat ? colors.dining : isEvent ? colors.event : (timeCols[mk.time] || colors.textSecondary);
             const pinIcon = isEat ? 'restaurant' : isEvent ? 'calendar' : 'location';
             return (
               <React.Fragment key={mk.idx}>
@@ -1192,52 +1222,88 @@ export default function AIPlanScreen() {
       {/* Scanning overlay during Hang tight removed (no radar effect) */}
       <MapScanningOverlay visible={false} />
 
-      {/* Spot detail card */}
+      {/* Bump-style floating header — when plan is active */}
+      {dayPlan && dayPlan.length > 0 && !loading && (
+        <View style={[styles.bumpHeaderWrap, { top: insets.top + 12 }]}>
+          <View style={styles.bumpHeaderCard}>
+            <Ionicons name="location" size={20} color={colors.primary} />
+            <View style={styles.bumpHeaderTextWrap}>
+              <Text style={styles.bumpHeaderTitle}>
+                {selectedMarker ? selectedMarker.spot : 'Your Day in Bahrain'}
+              </Text>
+              <Text style={styles.bumpHeaderAddress} numberOfLines={1}>
+                {selectedMarker
+                  ? `${selectedMarker.time} · Stop ${(selectedMarker.idx || 0) + 1}`
+                  : `${dayPlan.length} stops · Full day itinerary`}
+              </Text>
+            </View>
+          </View>
+          {/* Transport mode chips — Bump style */}
+          <View style={styles.bumpTransportWrap}>
+            {TRANSPORT_MODES.map((m) => (
+              <TouchableOpacity
+                key={m.id}
+                style={[
+                  styles.bumpTransportChip,
+                  transportMode === m.id && { backgroundColor: m.color },
+                ]}
+                onPress={() => setTransportMode(m.id)}
+                activeOpacity={0.8}
+              >
+                <Ionicons
+                  name={m.icon}
+                  size={18}
+                  color={transportMode === m.id ? '#FFF' : '#64748B'}
+                />
+              </TouchableOpacity>
+            ))}
+          </View>
+        </View>
+      )}
+
+      {/* Spot detail — Bump-style compact bottom card */}
       {selectedMarker && (() => {
         const isEat = selectedMarker.type === 'restaurant';
         const isEvent = selectedMarker.type === 'event';
-        const timeCols = { Morning: '#D97706', Afternoon: '#0284C7', Evening: '#7C3AED' };
-        const accent = isEat ? '#C8102E' : isEvent ? '#EC4899' : (timeCols[selectedMarker.time] || '#6B7280');
+        const timeCols = { Morning: colors.morning, Afternoon: colors.afternoon, Evening: colors.evening };
+        const accent = isEat ? colors.dining : isEvent ? colors.event : (timeCols[selectedMarker.time] || colors.textSecondary);
         const stepNum = selectedMarker.idx + 1;
-        const tagIcon = isEat ? 'restaurant-outline' : isEvent ? 'calendar-outline' : 'compass-outline';
-        const tagLabel = isEat ? 'Dining' : isEvent ? 'Event' : 'Visit';
+        const transportLabels = { walk: '~12 min', car: '~5 min', bike: '~8 min' };
+        const etaLabel = transportLabels[transportMode] || '~5 min';
         return (
-          <View style={[styles.spotDetailWrap, { top: insets.top + 70 }]}>
-            <View style={styles.spotDetailCard}>
-              <View style={[styles.spotDetailAccent, { backgroundColor: accent }]} />
-
-              <View style={styles.spotDetailBody}>
-                <View style={styles.spotDetailRow1}>
-                  <View style={[styles.spotDetailStep, { backgroundColor: accent }]}>
-                    <Text style={styles.spotDetailStepText}>{stepNum}</Text>
-                  </View>
-                  <View style={styles.spotDetailNameWrap}>
-                    <Text style={styles.spotDetailName} numberOfLines={2}>{selectedMarker.spot}</Text>
-                    <View style={styles.spotDetailTags}>
-                      <View style={[styles.spotDetailTag, { backgroundColor: `${accent}12` }]}>
-                        <Ionicons name={tagIcon} size={11} color={accent} />
-                        <Text style={[styles.spotDetailTagText, { color: accent }]}>{tagLabel}</Text>
-                      </View>
-                      <Text style={styles.spotDetailDot}>·</Text>
-                      <Ionicons name={{ Morning: 'sunny-outline', Afternoon: 'partly-sunny-outline', Evening: 'moon-outline' }[selectedMarker.time] || 'time-outline'} size={12} color="#9CA3AF" />
-                      <Text style={styles.spotDetailTime}>{selectedMarker.time}</Text>
-                    </View>
-                  </View>
-                  <TouchableOpacity onPress={() => setSelectedMarker(null)} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
-                    <Ionicons name="close-circle" size={24} color="#D1D5DB" />
-                  </TouchableOpacity>
-                </View>
-
-                {/* Reason */}
-                <Text style={styles.spotDetailReason} numberOfLines={3}>{selectedMarker.reason}</Text>
-
-                {/* Button */}
-                <TouchableOpacity style={[styles.spotDetailBtn, { backgroundColor: accent }]} activeOpacity={0.8}>
-                  <Text style={styles.spotDetailBtnText}>Explore</Text>
-                  <Ionicons name="arrow-forward" size={15} color="#FFF" />
-                </TouchableOpacity>
+          <View style={[styles.bumpBottomCardWrap, { bottom: SCREEN_HEIGHT * SHEET_VISIBLE_PEEK + getAppTabBarHeight(insets) + 20 }]}>
+            <View style={styles.bumpBottomCard}>
+              <View style={styles.bumpBottomCardLeft}>
+                <Text style={styles.bumpBottomCardEta}>{etaLabel} by {transportMode}</Text>
+                <Text style={styles.bumpBottomCardSub}>
+                  Stop {stepNum} · {selectedMarker.time}
+                </Text>
               </View>
+              <TouchableOpacity
+                style={[styles.bumpBottomCardStop, { backgroundColor: accent }]}
+                onPress={() => setSelectedMarker(null)}
+                activeOpacity={0.8}
+              >
+                <Text style={styles.bumpBottomCardStopText}>Close</Text>
+              </TouchableOpacity>
             </View>
+            <TouchableOpacity
+              style={styles.bumpBottomCardExpand}
+              onPress={() => {
+                setSelectedMarker(null);
+                lastSnap.current = SNAP_POINTS[0];
+                Animated.spring(sheetAnim, {
+                  toValue: SNAP_POINTS[0],
+                  useNativeDriver: true,
+                  tension: 80,
+                  friction: 12,
+                }).start();
+              }}
+              activeOpacity={0.8}
+            >
+              <Text style={styles.bumpBottomCardExpandText}>{selectedMarker.spot}</Text>
+              <Ionicons name="chevron-up" size={18} color="#64748B" />
+            </TouchableOpacity>
           </View>
         );
       })()}
@@ -1274,7 +1340,7 @@ export default function AIPlanScreen() {
               {/* Surprise Me Section */}
               <View style={styles.surpriseCard}>
                 <View style={styles.surpriseHeader}>
-                  <Ionicons name="dice-outline" size={20} color="#C8102E" />
+                  <Ionicons name="dice-outline" size={20} color={colors.primary} />
                   <Text style={styles.surpriseTitle}>Feeling Lucky?</Text>
                 </View>
                 <Text style={styles.surpriseDesc}>
@@ -1318,7 +1384,7 @@ export default function AIPlanScreen() {
               {DUMMY_PAST_PLANS.map((plan) => (
                 <TouchableOpacity key={plan.id} style={styles.pastPlanCard} activeOpacity={0.8}>
                   <View style={styles.pastPlanIcon}>
-                    <Ionicons name="map-outline" size={22} color="#C8102E" />
+                    <Ionicons name="map-outline" size={22} color={colors.primary} />
                   </View>
                   <View style={styles.pastPlanInfo}>
                     <View style={styles.pastPlanTitleRow}>
@@ -1361,7 +1427,7 @@ export default function AIPlanScreen() {
                   <Text style={styles.errorText}>{error}</Text>
                 </View>
                 <TouchableOpacity style={styles.retryButton} activeOpacity={0.8} onPress={handleGenerate}>
-                  <Ionicons name="refresh-outline" size={18} color="#C8102E" />
+                  <Ionicons name="refresh-outline" size={18} color={colors.primary} />
                   <Text style={styles.retryButtonText}>Try again</Text>
                 </TouchableOpacity>
               </View>
@@ -1372,65 +1438,37 @@ export default function AIPlanScreen() {
             ) : (
               <ScrollView style={styles.resultsScroll} contentContainerStyle={styles.resultsContent} showsVerticalScrollIndicator={false}>
 
-                {/* ═══ Boarding-pass hero ═══ */}
-                <View style={styles.boardingPass}>
-                  <View style={styles.bpTop}>
-                    <View>
-                      <Text style={styles.bpLabel}>DESTINATION</Text>
-                      <Text style={styles.bpValue}>Bahrain</Text>
+                {/* ═══ Bump-style compact summary ═══ */}
+                <View style={styles.bumpSummaryCard}>
+                  <View style={styles.bumpSummaryRow}>
+                    <Ionicons name="location" size={20} color={colors.primary} />
+                    <View style={styles.bumpSummaryText}>
+                      <Text style={styles.bumpSummaryTitle}>Bahrain · Full Day</Text>
+                      <Text style={styles.bumpSummarySub}>
+                        {dayPlan.length} stops · {dayPlan.filter(i => i.type === 'restaurant').length} meals
+                      </Text>
                     </View>
-                    <View style={styles.bpDivider}>
-                      <Ionicons name="airplane" size={22} color="#C8102E" />
-                    </View>
-                    <View style={{ alignItems: 'flex-end' }}>
-                      <Text style={styles.bpLabel}>ITINERARY</Text>
-                      <Text style={styles.bpValue}>Full Day</Text>
-                    </View>
-                  </View>
-                  <View style={styles.bpDashedLine} />
-                  <View style={styles.bpBottom}>
-                    <View style={styles.bpBudgetWrap}>
-                      <View style={styles.bpBudgetRow}>
-                        <Ionicons name="wallet-outline" size={16} color="#C8102E" />
-                        <Text style={styles.bpBudgetTitle}>Estimated Budget</Text>
-                      </View>
-                      <Text style={styles.bpBudgetAmount}>
+                    <View style={styles.bumpSummaryBudget}>
+                      <Text style={styles.bumpSummaryAmount}>
                         {(() => {
                           const meals = dayPlan.filter(i => i.type === 'restaurant').length;
                           const places = dayPlan.filter(i => i.type !== 'restaurant').length;
                           const low = meals * 3 + places * 2;
                           const high = meals * 15 + places * 8;
-                          return `${low} – ${high} BHD`;
+                          return `${low}–${high} BHD`;
                         })()}
                       </Text>
-                      <Text style={styles.bpBudgetSub}>for {dayPlan.length} stops · {dayPlan.filter(i => i.type === 'restaurant').length} meals</Text>
+                      <Text style={styles.bumpSummaryLabel}>Est. budget</Text>
                     </View>
-                  </View>
-                  <View style={styles.bpAdviceWrap}>
-                    <Ionicons name="bulb-outline" size={15} color="#D97706" />
-                    <Text style={styles.bpAdviceText}>
-                      {(() => {
-                        const tips = [
-                          'Carry cash for local souqs — many small vendors don\'t accept cards!',
-                          'Stay hydrated! Bahrain heat is no joke, keep a water bottle handy.',
-                          'Wear comfortable shoes — you\'ll be walking through history today!',
-                          'Try bargaining at the souq, it\'s part of the experience!',
-                          'Sunset by the coast is magical here — don\'t miss the evening walk.',
-                          'Download offline maps just in case — some areas have patchy signal.',
-                          'Tipping 10% is appreciated at restaurants in Bahrain.',
-                        ];
-                        return tips[Math.floor(Math.random() * tips.length)];
-                      })()}
-                    </Text>
                   </View>
                 </View>
 
-                {/* ═══ Itinerary sections ═══ */}
+                {/* ═══ Bump-style minimal itinerary list ═══ */}
                 {(() => {
                   const sections = {
-                    Morning:   { color: '#D97706', bg: '#FEF3C7', icon: 'sunny',         tagline: 'Rise & explore' },
-                    Afternoon: { color: '#0284C7', bg: '#E0F2FE', icon: 'partly-sunny',  tagline: 'Discover & dine' },
-                    Evening:   { color: '#7C3AED', bg: '#EDE9FE', icon: 'moon',           tagline: 'Unwind & savour' },
+                    Morning:   { color: colors.morning, icon: 'sunny-outline' },
+                    Afternoon: { color: colors.afternoon, icon: 'partly-sunny-outline' },
+                    Evening:   { color: colors.evening, icon: 'moon-outline' },
                   };
                   const order = ['Morning', 'Afternoon', 'Evening'];
                   const grouped = {};
@@ -1441,59 +1479,47 @@ export default function AIPlanScreen() {
                     const sec = sections[time];
                     const items = grouped[time];
                     return (
-                      <View key={time} style={styles.itinSection}>
-                        {/* Section banner */}
-                        <View style={[styles.secBanner, { backgroundColor: sec.bg }]}>
-                          <View style={[styles.secIconCircle, { backgroundColor: sec.color }]}>
-                            <Ionicons name={sec.icon} size={18} color="#FFF" />
-                          </View>
-                          <View style={styles.secBannerText}>
-                            <Text style={[styles.secBannerTitle, { color: sec.color }]}>{time}</Text>
-                            <Text style={[styles.secBannerSub, { color: sec.color }]}>{sec.tagline}</Text>
-                          </View>
-                          <Text style={[styles.secBannerCount, { color: sec.color }]}>{items.length} stop{items.length > 1 ? 's' : ''}</Text>
+                      <View key={time} style={styles.bumpItinSection}>
+                        <View style={styles.bumpItinSectionHeader}>
+                          <Ionicons name={sec.icon} size={18} color={sec.color} />
+                          <Text style={[styles.bumpItinSectionTitle, { color: sec.color }]}>{time}</Text>
+                          <Text style={styles.bumpItinSectionCount}>{items.length}</Text>
                         </View>
-
-                        {/* Cards */}
                         {items.map((item, idx) => {
                           stopNum += 1;
                           const isEat = item.type === 'restaurant';
                           const isEvent = item.type === 'event';
-                          const accent = isEat ? '#C8102E' : isEvent ? '#EC4899' : sec.color;
-                          const stripIcon = isEat ? 'restaurant-outline' : isEvent ? 'calendar-outline' : 'compass-outline';
-                          const stripLabel = isEat ? 'DINING' : isEvent ? 'EVENT' : 'SIGHTSEEING';
+                          const accent = isEat ? themeColors.dining : isEvent ? themeColors.event : sec.color;
                           return (
-                            <View key={idx} style={styles.destRow}>
-                              <View style={styles.destLeft}>
-                                <View style={[styles.destNumCircle, { backgroundColor: accent }]}>
-                                  <Text style={styles.destNum}>{stopNum}</Text>
-                                </View>
-                                {idx < items.length - 1 && <View style={[styles.destConnector, { backgroundColor: `${sec.color}25` }]} />}
+                            <TouchableOpacity
+                              key={idx}
+                              style={styles.bumpItinCard}
+                              activeOpacity={0.8}
+                              onPress={() => {
+                                const markers = buildMapMarkers(dayPlan);
+                                const mk = markers[stopNum - 1];
+                                if (mk) setSelectedMarker(mk);
+                              }}
+                            >
+                              <View style={[styles.bumpItinNum, { backgroundColor: accent }]}>
+                                <Text style={styles.bumpItinNumText}>{stopNum}</Text>
                               </View>
-
-                              <View style={styles.destCard}>
-                                <View style={[styles.destStrip, { backgroundColor: `${accent}0D` }]}>
-                                  <Ionicons name={stripIcon} size={13} color={accent} />
-                                  <Text style={[styles.destStripText, { color: accent }]}>{stripLabel}</Text>
-                                </View>
-
-                                {/* Name + icon */}
-                                <View style={styles.destBody}>
-                                  <View style={[styles.destIconBox, { backgroundColor: `${accent}10` }]}>
-                                    <Ionicons name={isEat ? 'restaurant' : isEvent ? 'calendar' : 'location'} size={20} color={accent} />
-                                  </View>
-                                  <Text style={styles.destName}>{item.spot}</Text>
-                                </View>
-
-                                {/* Khalid's recommendation */}
-                                <View style={styles.destReasonWrap}>
-                                  <View style={styles.destReasonQuote}>
-                                    <Ionicons name="chatbubble-ellipses" size={12} color="#D97706" />
-                                  </View>
-                                  <Text style={styles.destReasonText}>{item.reason}</Text>
-                                </View>
+                              <View style={styles.bumpItinContent}>
+                                <Text style={styles.bumpItinName}>{item.spot}</Text>
+                                <Text style={styles.bumpItinReason} numberOfLines={2}>{item.reason}</Text>
+                                {item.lat != null && item.lng != null && (
+                                  <TouchableOpacity
+                                    style={styles.bumpItinNavBtn}
+                                    onPress={() => navigation.navigate('AR', { navigateTo: { lat: item.lat, lng: item.lng, name: item.spot } })}
+                                    activeOpacity={0.8}
+                                  >
+                                    <Ionicons name="navigate" size={14} color={colors.primary} />
+                                    <Text style={styles.bumpItinNavBtnText}>Open in AR</Text>
+                                  </TouchableOpacity>
+                                )}
                               </View>
-                            </View>
+                              <Ionicons name="chevron-forward" size={18} color="#94A3B8" />
+                            </TouchableOpacity>
                           );
                         })}
                       </View>
@@ -1501,14 +1527,10 @@ export default function AIPlanScreen() {
                   });
                 })()}
 
-                {/* ═══ Passport stamp footer ═══ */}
-                <View style={styles.stampFooter}>
-                  <View style={styles.stampCircle}>
-                    <Text style={styles.stampTop}>BAHRAIN</Text>
-                    <Ionicons name="heart" size={16} color="#C8102E" />
-                    <Text style={styles.stampBottom}>APPROVED</Text>
-                  </View>
-                  <Text style={styles.stampTagline}>Yalla habibi, have the best day!</Text>
+                {/* ═══ Bump-style footer ═══ */}
+                <View style={styles.bumpFooter}>
+                  <Ionicons name="heart" size={20} color={colors.primary} />
+                  <Text style={styles.bumpFooterText}>Yalla habibi, have the best day!</Text>
                 </View>
               </ScrollView>
             )}
@@ -1710,8 +1732,8 @@ const styles = StyleSheet.create({
   pastPlansSubtitle: { fontSize: 15, color: '#64748B', marginTop: 4, fontWeight: '500' },
   startAiButton: {
     flexDirection: 'row', alignItems: 'center', paddingHorizontal: 18, paddingVertical: 12,
-    borderRadius: 14, backgroundColor: '#C8102E', gap: 8,
-    ...Platform.select({ ios: { shadowColor: '#C8102E', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 8 }, android: { elevation: 4 } }),
+    borderRadius: 14, backgroundColor: themeColors.primary, gap: 8,
+    ...Platform.select({ ios: { shadowColor: themeColors.primary, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.2, shadowRadius: 8 }, android: { elevation: 4 } }),
   },
   startAiButtonText: { fontSize: 15, fontWeight: '700', color: '#FFFFFF' },
   pastPlansScroll: { flex: 1 },
@@ -1722,14 +1744,14 @@ const styles = StyleSheet.create({
     shadowColor: '#0F172A', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.06, shadowRadius: 12, elevation: 3,
   },
   pastPlanIcon: {
-    width: 48, height: 48, borderRadius: 14, backgroundColor: 'rgba(200,16,46,0.08)',
+    width: 48, height: 48, borderRadius: 14, backgroundColor: themeColors.primaryMuted,
     alignItems: 'center', justifyContent: 'center', marginRight: 14,
   },
   pastPlanInfo: { flex: 1 },
   pastPlanTitleRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 },
   pastPlanName: { fontSize: 17, fontWeight: '700', color: '#0F172A' },
-  savedBadge: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 999, backgroundColor: 'rgba(16,185,129,0.12)' },
-  savedBadgeText: { fontSize: 11, fontWeight: '700', color: '#059669' },
+  savedBadge: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 999, backgroundColor: themeColors.successMuted },
+  savedBadgeText: { fontSize: 11, fontWeight: '700', color: themeColors.success },
   pastPlanMetaRow: { flexDirection: 'row', alignItems: 'center', marginTop: 2 },
   pastPlanMeta: { fontSize: 14, color: '#64748B', fontWeight: '500' },
 
@@ -1752,8 +1774,8 @@ const styles = StyleSheet.create({
   rouletteLabel: { fontSize: 20, fontWeight: '800', letterSpacing: 0.3 },
   surpriseBtn: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10,
-    backgroundColor: '#C8102E', borderRadius: 16, paddingVertical: 16,
-    ...Platform.select({ ios: { shadowColor: '#C8102E', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.35, shadowRadius: 12 }, android: { elevation: 6 } }),
+    backgroundColor: themeColors.primary, borderRadius: 16, paddingVertical: 16,
+    ...Platform.select({ ios: { shadowColor: themeColors.primary, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.2, shadowRadius: 12 }, android: { elevation: 6 } }),
   },
   surpriseBtnText: { color: '#FFF', fontSize: 16, fontWeight: '700' },
   surpriseDivider: {
@@ -1794,18 +1816,18 @@ const styles = StyleSheet.create({
   },
 
   continueButton: {
-    backgroundColor: '#C8102E', paddingVertical: 18, borderRadius: 16,
+    backgroundColor: themeColors.primary, paddingVertical: 18, borderRadius: 16,
     alignItems: 'center', justifyContent: 'center', marginTop: 20,
-    ...Platform.select({ ios: { shadowColor: '#C8102E', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 10 }, android: { elevation: 4 } }),
+    ...Platform.select({ ios: { shadowColor: themeColors.primary, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.2, shadowRadius: 10 }, android: { elevation: 4 } }),
   },
   continueButtonDisabled: { backgroundColor: '#E2E8F0' },
   continueButtonText: { fontSize: 16, fontWeight: '700', color: '#FFFFFF' },
 
   // Generate button (food)
   generateButton: {
-    flexDirection: 'row', backgroundColor: '#C8102E', paddingVertical: 18, borderRadius: 16,
+    flexDirection: 'row', backgroundColor: themeColors.primary, paddingVertical: 18, borderRadius: 16,
     alignItems: 'center', justifyContent: 'center', marginTop: 20, gap: 10,
-    ...Platform.select({ ios: { shadowColor: '#C8102E', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 10 }, android: { elevation: 4 } }),
+    ...Platform.select({ ios: { shadowColor: themeColors.primary, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.2, shadowRadius: 10 }, android: { elevation: 4 } }),
   },
   generateButtonDisabled: { opacity: 0.8 },
   generateButtonText: { fontSize: 16, fontWeight: '700', color: '#FFFFFF' },
@@ -1819,9 +1841,9 @@ const styles = StyleSheet.create({
     flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 36, paddingBottom: 56,
   },
   loadingPulse: {
-    width: 96, height: 96, borderRadius: 48, backgroundColor: 'rgba(200,16,46,0.06)',
+    width: 96, height: 96, borderRadius: 48, backgroundColor: themeColors.primaryMuted,
     alignItems: 'center', justifyContent: 'center', marginBottom: 28,
-    borderWidth: 2, borderColor: 'rgba(200,16,46,0.15)',
+    borderWidth: 2, borderColor: themeColors.primaryMuted,
   },
   loadingTitle: { fontSize: 24, fontWeight: '800', color: '#0F172A', marginBottom: 8, letterSpacing: -0.4 },
   loadingSubtext: { fontSize: 16, color: '#475569', textAlign: 'center', marginBottom: 36, fontWeight: '600' },
@@ -1838,12 +1860,35 @@ const styles = StyleSheet.create({
   errorText: { flex: 1, fontSize: 15, color: '#DC2626', fontWeight: '600', lineHeight: 22 },
   retryButton: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
-    marginTop: 20, paddingVertical: 16, borderRadius: 16, borderWidth: 2, borderColor: '#C8102E', backgroundColor: 'rgba(200,16,46,0.04)',
+    marginTop: 20, paddingVertical: 16, borderRadius: 16, borderWidth: 2, borderColor: themeColors.primary, backgroundColor: themeColors.primaryMuted,
   },
-  retryButtonText: { fontSize: 16, fontWeight: '700', color: '#C8102E' },
+  retryButtonText: { fontSize: 16, fontWeight: '700', color: themeColors.primary },
   emptyResults: { fontSize: 15, color: '#64748B', textAlign: 'center', paddingVertical: 32, fontWeight: '500' },
 
-  // ── Boarding pass hero ──
+  // ── Bump-style summary card ──
+  bumpSummaryCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 20,
+    padding: 20,
+    marginBottom: 20,
+    ...Platform.select({
+      ios: { shadowColor: '#0F172A', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.06, shadowRadius: 12 },
+      android: { elevation: 3 },
+    }),
+  },
+  bumpSummaryRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+  },
+  bumpSummaryText: { flex: 1 },
+  bumpSummaryTitle: { fontSize: 18, fontWeight: '700', color: '#0F172A' },
+  bumpSummarySub: { fontSize: 14, color: '#64748B', marginTop: 2, fontWeight: '500' },
+  bumpSummaryBudget: { alignItems: 'flex-end' },
+  bumpSummaryAmount: { fontSize: 18, fontWeight: '800', color: themeColors.primary },
+  bumpSummaryLabel: { fontSize: 11, color: '#94A3B8', marginTop: 2, fontWeight: '600' },
+
+  // ── Boarding pass hero (legacy) ──
   boardingPass: {
     backgroundColor: '#FFFFFF', borderRadius: 24, marginBottom: 28, overflow: 'hidden',
     borderWidth: 0,
@@ -1869,7 +1914,7 @@ const styles = StyleSheet.create({
   bpBudgetWrap: { alignItems: 'center' },
   bpBudgetRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 8 },
   bpBudgetTitle: { fontSize: 12, fontWeight: '800', color: '#475569', letterSpacing: 1.2, textTransform: 'uppercase' },
-  bpBudgetAmount: { fontSize: 30, fontWeight: '900', color: '#C8102E', letterSpacing: 0.5 },
+  bpBudgetAmount: { fontSize: 30, fontWeight: '900', color: themeColors.primary, letterSpacing: 0.5 },
   bpBudgetSub: { fontSize: 14, color: '#64748B', marginTop: 6, fontWeight: '600' },
   bpAdviceWrap: {
     flexDirection: 'row', alignItems: 'flex-start', gap: 12,
@@ -1878,7 +1923,55 @@ const styles = StyleSheet.create({
   },
   bpAdviceText: { fontSize: 15, color: '#92400E', lineHeight: 22, flex: 1, fontStyle: 'italic', fontWeight: '600' },
 
-  // ── Itinerary section ──
+  // ── Bump itinerary ──
+  bumpItinSection: { marginBottom: 24 },
+  bumpItinSectionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 12,
+  },
+  bumpItinSectionTitle: { fontSize: 16, fontWeight: '700' },
+  bumpItinSectionCount: {
+    fontSize: 13,
+    color: '#94A3B8',
+    fontWeight: '600',
+    marginLeft: 4,
+  },
+  bumpItinCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    padding: 16,
+    marginBottom: 10,
+    gap: 14,
+    ...Platform.select({
+      ios: { shadowColor: '#0F172A', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.04, shadowRadius: 8 },
+      android: { elevation: 2 },
+    }),
+  },
+  bumpItinNum: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  bumpItinNumText: { fontSize: 14, fontWeight: '800', color: '#FFFFFF' },
+  bumpItinContent: { flex: 1 },
+  bumpItinName: { fontSize: 16, fontWeight: '700', color: '#0F172A' },
+  bumpItinReason: { fontSize: 14, color: '#64748B', marginTop: 4, lineHeight: 20 },
+  bumpItinNavBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: 10,
+    alignSelf: 'flex-start',
+  },
+  bumpItinNavBtnText: { fontSize: 13, fontWeight: '600', color: themeColors.primary },
+
+  // ── Itinerary section (legacy) ──
   itinSection: { marginBottom: 16 },
 
   secBanner: {
@@ -1927,16 +2020,39 @@ const styles = StyleSheet.create({
   },
   destReasonQuote: { marginTop: 2 },
   destReasonText: { flex: 1, fontSize: 15, color: '#78350F', lineHeight: 22, fontStyle: 'italic', fontWeight: '600' },
+  destARBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    alignSelf: 'flex-start',
+    marginTop: 12,
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    backgroundColor: 'rgba(200,16,46,0.08)',
+    borderRadius: 12,
+  },
+  destARBtnText: { fontSize: 14, fontWeight: '700', color: themeColors.primary },
 
-  // ── Passport stamp footer ──
+  // ── Bump footer ──
+  bumpFooter: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    marginTop: 24,
+    paddingBottom: 12,
+  },
+  bumpFooterText: { fontSize: 15, fontWeight: '600', color: '#64748B', fontStyle: 'italic' },
+
+  // ── Passport stamp footer (legacy) ──
   stampFooter: { alignItems: 'center', marginTop: 28, paddingBottom: 12 },
   stampCircle: {
-    width: 96, height: 96, borderRadius: 48, borderWidth: 2.5, borderColor: '#C8102E',
+    width: 96, height: 96, borderRadius: 48, borderWidth: 2.5, borderColor: themeColors.primary,
     alignItems: 'center', justifyContent: 'center', marginBottom: 16,
     borderStyle: 'dashed',
   },
-  stampTop: { fontSize: 10, fontWeight: '800', color: '#C8102E', letterSpacing: 2 },
-  stampBottom: { fontSize: 9, fontWeight: '700', color: '#C8102E', letterSpacing: 1.5, marginTop: 2 },
+  stampTop: { fontSize: 10, fontWeight: '800', color: themeColors.primary, letterSpacing: 2 },
+  stampBottom: { fontSize: 9, fontWeight: '700', color: themeColors.primary, letterSpacing: 1.5, marginTop: 2 },
   stampTagline: { fontSize: 16, fontWeight: '600', color: '#475569', fontStyle: 'italic' },
 
   // ── Map pins ──
@@ -2001,9 +2117,9 @@ const styles = StyleSheet.create({
     right: 0,
     height: 4,
     backgroundColor: 'rgba(200,16,46,0.55)',
-    shadowColor: '#C8102E',
+    shadowColor: themeColors.primary,
     shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.7,
+    shadowOpacity: 0.3,
     shadowRadius: 12,
     elevation: 6,
   },
@@ -2087,17 +2203,118 @@ const styles = StyleSheet.create({
     width: 14,
     height: 14,
     borderRadius: 7,
-    backgroundColor: '#C8102E',
+    backgroundColor: themeColors.primary,
     borderWidth: 3,
     borderColor: 'rgba(255,255,255,0.95)',
-    shadowColor: '#C8102E',
+    shadowColor: themeColors.primary,
     shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.9,
+    shadowOpacity: 0.4,
     shadowRadius: 8,
     elevation: 10,
   },
 
-  // ── Spot detail card ──
+  // ── Bump-style UI ──
+  bumpHeaderWrap: {
+    position: 'absolute',
+    left: 16,
+    right: 16,
+    zIndex: 50,
+  },
+  bumpHeaderCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    paddingVertical: 14,
+    paddingHorizontal: 18,
+    gap: 12,
+    ...Platform.select({
+      ios: { shadowColor: '#0F172A', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.12, shadowRadius: 12 },
+      android: { elevation: 6 },
+    }),
+  },
+  bumpHeaderTextWrap: { flex: 1 },
+  bumpHeaderTitle: { fontSize: 17, fontWeight: '700', color: '#0F172A' },
+  bumpHeaderAddress: { fontSize: 14, color: '#64748B', marginTop: 2, fontWeight: '500' },
+  bumpTransportWrap: {
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 12,
+  },
+  bumpTransportChip: {
+    width: 44,
+    height: 44,
+    borderRadius: 12,
+    backgroundColor: '#F1F5F9',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  bumpBottomCardWrap: {
+    position: 'absolute',
+    left: 16,
+    right: 16,
+    zIndex: 50,
+  },
+  bumpBottomCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: themeColors.primary,
+    borderRadius: 20,
+    paddingVertical: 18,
+    paddingHorizontal: 20,
+    ...Platform.select({
+      ios: { shadowColor: themeColors.primary, shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.2, shadowRadius: 12 },
+      android: { elevation: 8 },
+    }),
+  },
+  bumpBottomCardLeft: {
+    flex: 1,
+  },
+  bumpBottomCardEta: {
+    fontSize: 22,
+    fontWeight: '800',
+    color: '#FFFFFF',
+    letterSpacing: -0.4,
+  },
+  bumpBottomCardSub: {
+    fontSize: 14,
+    color: 'rgba(255,255,255,0.9)',
+    marginTop: 4,
+    fontWeight: '600',
+  },
+  bumpBottomCardStop: {
+    paddingHorizontal: 24,
+    paddingVertical: 12,
+    borderRadius: 14,
+  },
+  bumpBottomCardStopText: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#FFFFFF',
+  },
+  bumpBottomCardExpand: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    paddingVertical: 14,
+    paddingHorizontal: 18,
+    marginTop: 10,
+    ...Platform.select({
+      ios: { shadowColor: '#0F172A', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.08, shadowRadius: 8 },
+      android: { elevation: 4 },
+    }),
+  },
+  bumpBottomCardExpandText: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#0F172A',
+    flex: 1,
+  },
+
+  // ── Spot detail card (legacy, kept for fallback) ──
   spotDetailWrap: {
     position: 'absolute', left: 20, right: 20, zIndex: 100,
   },
@@ -2168,7 +2385,7 @@ const styles = StyleSheet.create({
     width: 56,
     height: 4,
     borderRadius: 2,
-    backgroundColor: PLAN_COLORS.primary,
+    backgroundColor: themeColors.primary,
     opacity: 0.95,
     marginBottom: 16,
   },
@@ -2252,7 +2469,7 @@ const styles = StyleSheet.create({
     borderWidth: 2,
   },
   planModalLoadingDotDone: {
-    backgroundColor: '#10B981',
+    backgroundColor: themeColors.success,
     borderColor: 'rgba(255,255,255,0.5)',
     borderWidth: 2,
   },
@@ -2449,7 +2666,7 @@ const styles = StyleSheet.create({
     gap: 8,
     height: 52,
     borderRadius: 14,
-    backgroundColor: PLAN_COLORS.primary,
+    backgroundColor: themeColors.primary,
   },
   planModalContinueBtnText: { fontSize: 16, fontWeight: '700', color: '#FFFFFF' },
   planModalGenerateBtn: {
@@ -2460,9 +2677,9 @@ const styles = StyleSheet.create({
     gap: 8,
     height: 52,
     borderRadius: 14,
-    backgroundColor: PLAN_COLORS.primary,
+    backgroundColor: themeColors.primary,
     ...Platform.select({
-      ios: { shadowColor: PLAN_COLORS.primary, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.35, shadowRadius: 8 },
+      ios: { shadowColor: themeColors.primary, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.2, shadowRadius: 8 },
       android: { elevation: 6 },
     }),
   },

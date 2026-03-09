@@ -26,6 +26,8 @@ import { OPENAI_KEY } from '../config/keys';
 import { supabase } from '../config/supabase';
 import { fetchPineconePlacesForChat } from '../services/aiPipeline';
 import { useUserPreferences } from '../context/UserPreferencesContext';
+import { useTheme } from '../context/ThemeContext';
+import { colors as themeColors } from '../theme/designTokens';
 
 const OPENAI_CHAT_URL = 'https://api.openai.com/v1/chat/completions';
 
@@ -41,7 +43,7 @@ async function fetchPostsByQuery(query) {
   const q = (query && String(query).trim()) ? query.trim().toLowerCase() : '';
   const isGenericPicsRequest = PICS_LIKE_QUERIES.some((k) => q === k || q.includes(k));
   const { data: rows, error } = await supabase
-    .from('post')
+    .from('posts')
     .select('*')
     .order('created_at', { ascending: false })
     .limit(50);
@@ -369,6 +371,29 @@ Reply: 1-3 short sentences, friendly, and often end with an offer (e.g. "Want me
 }
 
 export default function BottomControlBar({ state, navigation }) {
+  const { colors, isDark } = useTheme();
+  const themeStyles = React.useMemo(() => ({
+    wrapper: { backgroundColor: colors.background },
+    bar: {
+      backgroundColor: colors.surface,
+      borderTopColor: colors.border,
+    },
+    navLabel: { color: colors.textMuted },
+    navLabelActive: { color: colors.primary },
+    fab: {
+      backgroundColor: isDark ? colors.surfaceElevated : '#111827',
+      borderColor: colors.border,
+    },
+    fabLabel: { color: colors.textMuted },
+    swipeUpRingTrack: { borderColor: colors.primaryMuted },
+    swipeUpRingDot: { backgroundColor: colors.primary },
+    khalidCardLinkText: { color: colors.primary },
+    khalidHeaderAvatar: {
+      backgroundColor: colors.primary,
+      ...Platform.select({ ios: { shadowColor: colors.primary, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.2, shadowRadius: 8 }, android: { elevation: 4 } }),
+    },
+    khalidSendBtn: Platform.OS === 'ios' ? { shadowColor: colors.primary, shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.2, shadowRadius: 6 } : {},
+  }), [colors, isDark]);
   const insets = useSafeAreaInsets();
   const currentRouteName = state.routes[state.index]?.name;
   const { generalLabels, activityLabels, foodLabels } = useUserPreferences();
@@ -918,10 +943,11 @@ export default function BottomControlBar({ state, navigation }) {
   const totalBarHeight = barContentHeight + bottomInset;
 
   return (
-    <View style={styles.wrapper}>
+    <View style={[styles.wrapper, themeStyles.wrapper]}>
       <View
         style={[
           styles.bar,
+          themeStyles.bar,
           {
             height: totalBarHeight,
             paddingBottom: bottomInset,
@@ -941,14 +967,14 @@ export default function BottomControlBar({ state, navigation }) {
                         { opacity: swipeRingOpacity },
                       ]}
                     >
-                      <View style={styles.swipeUpRingTrack} />
+                      <View style={[styles.swipeUpRingTrack, themeStyles.swipeUpRingTrack]} />
                       <Animated.View
                         style={[
                           styles.swipeUpRingFillWrap,
                           { transform: [{ rotate: swipeRingRotation }] },
                         ]}
                       >
-                        <View style={styles.swipeUpRingDot} />
+                        <View style={[styles.swipeUpRingDot, themeStyles.swipeUpRingDot]} />
                       </Animated.View>
                     </Animated.View>
                   ) : null}
@@ -973,7 +999,7 @@ export default function BottomControlBar({ state, navigation }) {
                     ]}
                   />
                   <View style={styles.fabWrap} {...panResponder.panHandlers}>
-                    <View style={styles.fab}>
+                    <View style={[styles.fab, themeStyles.fab]}>
                       <Image
                         source={require('../../assets/ai-button-logo.png')}
                         style={styles.aiIcon}
@@ -981,7 +1007,7 @@ export default function BottomControlBar({ state, navigation }) {
                       />
                     </View>
                   </View>
-                  <Text style={styles.fabLabel}>AI</Text>
+                  <Text style={[styles.fabLabel, themeStyles.fabLabel]}>AI</Text>
                 </View>
               );
             }
@@ -996,12 +1022,14 @@ export default function BottomControlBar({ state, navigation }) {
                 <Ionicons
                   name={item.icon}
                   size={24}
-                  color={isActive ? '#C8102E' : '#9CA3AF'}
+                  color={isActive ? colors.primary : colors.textMuted}
                 />
                 <Text
                   style={[
                     styles.navLabel,
+                    themeStyles.navLabel,
                     isActive && styles.navLabelActive,
+                    isActive && themeStyles.navLabelActive,
                   ]}
                   numberOfLines={1}
                 >
@@ -1049,7 +1077,7 @@ export default function BottomControlBar({ state, navigation }) {
             </View>
             <View style={styles.khalidHeader}>
               <View style={styles.khalidHeaderLeft}>
-                <View style={styles.khalidHeaderAvatar}>
+                <View style={[styles.khalidHeaderAvatar, themeStyles.khalidHeaderAvatar]}>
                   <Ionicons name="sparkles" size={20} color="#FFF" />
                 </View>
                 <View>
@@ -1120,6 +1148,7 @@ export default function BottomControlBar({ state, navigation }) {
               <TouchableOpacity
                 style={[
                   styles.khalidSendBtn,
+                  themeStyles.khalidSendBtn,
                   (!khalidInput.trim() || khalidLoading) && styles.khalidSendBtnDisabled,
                 ]}
                 onPress={sendKhalidMessage}
@@ -1257,7 +1286,7 @@ const styles = StyleSheet.create({
     height: 72,
     borderRadius: 36,
     borderWidth: 2.5,
-    borderColor: 'rgba(200,16,46,0.45)',
+    borderColor: 'rgba(200,16,46,0.2)',
     backgroundColor: 'transparent',
   },
   swipeUpRingFillWrap: {
@@ -1336,11 +1365,11 @@ const styles = StyleSheet.create({
     width: 40,
     height: 40,
     borderRadius: 20,
-    backgroundColor: 'rgba(200,16,46,0.95)',
+    backgroundColor: themeColors.primary,
     alignItems: 'center',
     justifyContent: 'center',
     ...Platform.select({
-      ios: { shadowColor: '#C8102E', shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.35, shadowRadius: 8 },
+      ios: { shadowColor: themeColors.primary, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.2, shadowRadius: 8 },
       android: { elevation: 4 },
     }),
   },
@@ -1688,7 +1717,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     ...Platform.select({
-      ios: { shadowColor: '#C8102E', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.3, shadowRadius: 6 },
+      ios: { shadowColor: '#C8102E', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.2, shadowRadius: 6 },
       android: { elevation: 4 },
     }),
   },

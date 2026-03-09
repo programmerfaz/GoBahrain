@@ -30,23 +30,20 @@ function isValidUUID(s) {
 const GUEST_USER_UUID = (typeof process !== 'undefined' && process.env?.EXPO_PUBLIC_GUEST_USER_UUID) || 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaa0003';
 
 /**
- * Get user_a_uuid for community posts. Uses Supabase auth if available; otherwise uses guest user (EXPO_PUBLIC_GUEST_USER_UUID).
+ * Get user_a_uuid for community posts. Must be a UUID that exists in public."user" (FK constraint).
+ * Returns the signed-in user's user_a_uuid from get_my_profile when available; otherwise GUEST_USER_UUID.
+ * Ensure GUEST_USER_UUID exists in public."user" (e.g. seed row or EXPO_PUBLIC_GUEST_USER_UUID).
  */
 export async function getCommunityUserId() {
   try {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (user?.id && isValidUUID(user.id)) return user.id;
-
-    const { data: anon, error: anonError } = await supabase.auth.signInAnonymously();
-    if (!anonError && anon?.user?.id && isValidUUID(anon.user.id)) return anon.user.id;
-
-    if (GUEST_USER_UUID && isValidUUID(GUEST_USER_UUID)) return GUEST_USER_UUID;
-    return generateUUID();
+    const { data: profile } = await supabase.rpc('get_my_profile');
+    const userUuid = profile?.user?.user_a_uuid;
+    if (userUuid && isValidUUID(userUuid)) return userUuid;
   } catch (e) {
-    console.warn('[Community] getCommunityUserId failed:', e);
-    if (GUEST_USER_UUID && isValidUUID(GUEST_USER_UUID)) return GUEST_USER_UUID;
-    return generateUUID();
+    console.warn('[Community] getCommunityUserId get_my_profile failed:', e?.message);
   }
+  if (GUEST_USER_UUID && isValidUUID(GUEST_USER_UUID)) return GUEST_USER_UUID;
+  return generateUUID();
 }
 
 /**

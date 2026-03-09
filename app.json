@@ -10,9 +10,14 @@
       "resizeMode": "contain",
       "backgroundColor": "#ffffff"
     },
-    "ios": { "supportsTablet": true },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.esmailooo576.go-bahrain"
+    },
     "android": {
-      "adaptiveIcon": { "backgroundColor": "#ffffff" },
+      "adaptiveIcon": {
+        "backgroundColor": "#ffffff"
+      },
       "edgeToEdgeEnabled": true
     }
   }

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import {
   StyleSheet,
   Text,
@@ -17,17 +17,8 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import ScreenContainer from '../components/ScreenContainer';
+import { useTheme } from '../context/ThemeContext';
 import { fetchEvents } from '../services/aiPipeline';
-
-const C = {
-  bg: '#FFFFFF',
-  text: '#111827',
-  sub: '#6B7280',
-  muted: '#9CA3AF',
-  accent: '#C8102E',
-  cardBg: '#F9FAFB',
-  border: 'rgba(209,213,219,0.7)',
-};
 
 // Placeholder image when event has no image (deterministic per name)
 function getEventImage(m) {
@@ -39,7 +30,7 @@ function getEventImage(m) {
 
 const CARD_GAP = 20;
 
-function EventCard({ item, index, cardWidth, cardHeight, scrollX, onPress }) {
+function EventCard({ item, index, cardWidth, cardHeight, scrollX, onPress, C, styles }) {
   const m = item?.metadata || {};
   const name = m.event_name || m.business_name || m.name || 'Event';
   const venue = m.venue || m.location || m.area || '';
@@ -157,6 +148,17 @@ function EventCard({ item, index, cardWidth, cardHeight, scrollX, onPress }) {
 }
 
 export default function ExploreScreen({ navigation }) {
+  const { colors } = useTheme();
+  const C = useMemo(() => ({
+    bg: colors.background,
+    text: colors.textPrimary,
+    sub: colors.textSecondary,
+    muted: colors.textMuted,
+    accent: colors.primary,
+    cardBg: colors.surface,
+    border: colors.border,
+  }), [colors]);
+  const styles = useMemo(() => StyleSheet.create(getExploreStyles(C)), [C]);
   const { width, height } = useWindowDimensions();
   const cardWidth = Math.round(width * 0.78);
   const peekPadding = (width - cardWidth - CARD_GAP) / 2;
@@ -208,9 +210,11 @@ export default function ExploreScreen({ navigation }) {
         cardHeight={cardHeight}
         scrollX={scrollX}
         onPress={handleCardPress}
+        C={C}
+        styles={styles}
       />
     ),
-    [cardWidth, cardHeight, scrollX, handleCardPress]
+    [cardWidth, cardHeight, scrollX, handleCardPress, C]
   );
 
   const keyExtractor = useCallback((item) => item?.id || item?.metadata?.event_name || String(Math.random()), []);
@@ -218,7 +222,7 @@ export default function ExploreScreen({ navigation }) {
   const openAR = () => {
     if (Platform.OS !== 'web') Vibration.vibrate(40);
     const nav = navigation?.getParent?.() ?? navigation;
-    nav?.navigate?.('AR');
+    nav?.navigate?.('AR', { fromExplore: true });
   };
 
   return (
@@ -316,21 +320,12 @@ export default function ExploreScreen({ navigation }) {
   );
 }
 
-const styles = StyleSheet.create({
-  scroll: {
-    flex: 1,
-  },
-  scrollContent: {
-    paddingTop: 20,
-    paddingBottom: 32,
-  },
-  section: {
-    paddingHorizontal: 0,
-  },
-  sectionHeader: {
-    paddingHorizontal: 24,
-    marginBottom: 20,
-  },
+function getExploreStyles(C) {
+  return {
+  scroll: { flex: 1 },
+  scrollContent: { paddingTop: 20, paddingBottom: 32 },
+  section: { paddingHorizontal: 0 },
+  sectionHeader: { paddingHorizontal: 24, marginBottom: 20 },
   sectionTitle: {
     fontSize: 26,
     fontWeight: '800',
@@ -573,4 +568,5 @@ const styles = StyleSheet.create({
     marginTop: 2,
     letterSpacing: 0.5,
   },
-});
+  };
+}

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   StyleSheet,
   Text,
@@ -12,26 +12,20 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import ScreenContainer from '../components/ScreenContainer';
+import { useTheme } from '../context/ThemeContext';
 import { useUserPreferences } from '../context/UserPreferencesContext';
 import { useAuth } from '../context/AuthContext';
 import { GENERAL_GROUPS } from '../constants/preferences';
 
-// Match app theme (HomeScreen, CommunitiesScreen, ScreenContainer)
-const COLORS = {
-  primary: '#C8102E',
-  screenBg: '#FFFFFF',
-  cardBg: '#FFFFFF',
-  cardBgAlt: '#F9FAFB',
-  textPrimary: '#111827',
-  textSecondary: '#6B7280',
-  textMuted: '#9CA3AF',
-  border: 'rgba(209,213,219,0.7)',
-  pillBg: '#F3F4F6',
-};
-
 const TAB_BAR_HEIGHT = Platform.OS === 'ios' ? 70 : 60;
 
-function ProfileRow({ icon, iconColor, label, onPress, showChevron = true, isLast }) {
+const APPEARANCE_OPTIONS = [
+  { id: 'light', label: 'Light', icon: 'sunny-outline' },
+  { id: 'dark', label: 'Dark', icon: 'moon-outline' },
+  { id: 'system', label: 'System', icon: 'phone-portrait-outline' },
+];
+
+function ProfileRow({ icon, iconColor, label, onPress, showChevron = true, isLast, styles, COLORS }) {
   return (
     <TouchableOpacity
       style={[styles.row, isLast && styles.rowLast]}
@@ -56,7 +50,7 @@ function ProfileRow({ icon, iconColor, label, onPress, showChevron = true, isLas
   );
 }
 
-function Section({ title, children }) {
+function Section({ title, children, styles }) {
   return (
     <View style={styles.section}>
       <Text style={styles.sectionTitle}>{title}</Text>
@@ -67,6 +61,7 @@ function Section({ title, children }) {
 
 export default function ProfileScreen() {
   const insets = useSafeAreaInsets();
+  const { colors, colorScheme, setColorScheme } = useTheme();
   const bottomPadding = TAB_BAR_HEIGHT + (Platform.OS === 'android' ? insets.bottom : 0);
   const {
     preferences,
@@ -77,9 +72,94 @@ export default function ProfileScreen() {
   } = useUserPreferences();
   const { profile, user: authUser, signOut } = useAuth();
   const [preferencesModalVisible, setPreferencesModalVisible] = useState(false);
+  const [appearanceModalVisible, setAppearanceModalVisible] = useState(false);
   const [editGeneralIds, setEditGeneralIds] = useState([]);
   const [editActivityIds, setEditActivityIds] = useState([]);
   const [editFoodIds, setEditFoodIds] = useState([]);
+
+  const COLORS = useMemo(() => ({
+    primary: colors.primary,
+    screenBg: colors.background,
+    cardBg: colors.surface,
+    cardBgAlt: colors.borderLight,
+    textPrimary: colors.textPrimary,
+    textSecondary: colors.textSecondary,
+    textMuted: colors.textMuted,
+    border: colors.border,
+    pillBg: colors.borderLight,
+  }), [colors]);
+
+  const styles = useMemo(() => {
+    const C = COLORS;
+    return StyleSheet.create({
+      scroll: { flex: 1, backgroundColor: C.screenBg },
+      scrollContent: { paddingHorizontal: 16, paddingTop: 20 },
+      headerBlock: { alignItems: 'center', paddingVertical: 24, marginBottom: 8 },
+      avatarWrap: { marginBottom: 12 },
+      avatar: {
+        width: 80, height: 80, borderRadius: 40, backgroundColor: C.pillBg,
+        alignItems: 'center', justifyContent: 'center', borderWidth: 2, borderColor: C.border,
+      },
+      avatarInitial: { fontSize: 28, fontWeight: '800', color: C.textPrimary },
+      userName: { fontSize: 20, fontWeight: '700', color: C.textPrimary, marginBottom: 4 },
+      userSub: { fontSize: 14, color: C.textMuted, fontWeight: '500' },
+      section: { marginBottom: 24 },
+      sectionTitle: { fontSize: 18, fontWeight: '800', color: C.textPrimary, marginBottom: 10, paddingHorizontal: 2 },
+      card: {
+        backgroundColor: C.cardBg, borderRadius: 14, overflow: 'hidden', borderWidth: 1, borderColor: C.border,
+        ...Platform.select({ ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.06, shadowRadius: 4 }, android: { elevation: 2 } }),
+      },
+      row: {
+        flexDirection: 'row', alignItems: 'center', paddingVertical: 14, paddingHorizontal: 16,
+        borderBottomWidth: 1, borderBottomColor: C.border, gap: 12,
+      },
+      rowIconWrap: {
+        width: 36, height: 36, borderRadius: 12, backgroundColor: C.primary + '18',
+        alignItems: 'center', justifyContent: 'center',
+      },
+      rowLabel: { flex: 1, fontSize: 15, fontWeight: '600', color: C.textPrimary },
+      rowLast: { borderBottomWidth: 0 },
+      ctaSection: { paddingTop: 8, paddingHorizontal: 2 },
+      primaryButton: {
+        backgroundColor: C.primary, paddingVertical: 14, borderRadius: 14, alignItems: 'center', justifyContent: 'center',
+        ...Platform.select({ ios: { shadowColor: C.primary, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 8 }, android: { elevation: 6 } }),
+      },
+      primaryButtonText: { fontSize: 16, fontWeight: '700', color: '#FFFFFF' },
+      modalSafe: { flex: 1, backgroundColor: C.screenBg },
+      modalHeader: {
+        flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+        paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: C.border,
+      },
+      modalCloseBtn: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center' },
+      modalTitle: { fontSize: 18, fontWeight: '700', color: C.textPrimary },
+      modalScroll: { flex: 1 },
+      modalScrollContent: { padding: 20, paddingBottom: 24 },
+      modalSectionLabel: { fontSize: 17, fontWeight: '700', color: C.textPrimary, marginBottom: 6 },
+      modalSectionHint: { fontSize: 13, color: C.textMuted, marginBottom: 12, lineHeight: 18 },
+      modalGroupBlock: { marginBottom: 14 },
+      modalGroupLabel: { fontSize: 12, fontWeight: '600', color: C.textMuted, marginBottom: 8, textTransform: 'uppercase', letterSpacing: 0.4 },
+      modalChipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
+      modalChip: {
+        flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 10, paddingHorizontal: 14,
+        borderRadius: 12, borderWidth: 1, borderColor: C.border, backgroundColor: C.cardBgAlt,
+      },
+      modalChipLabel: { fontSize: 14, color: C.textSecondary, fontWeight: '500' },
+      modalHint: { fontSize: 13, color: C.textMuted, marginTop: 20, lineHeight: 20 },
+      modalFooter: { padding: 16, paddingBottom: Platform.OS === 'ios' ? 34 : 16, borderTopWidth: 1, borderTopColor: C.border },
+      modalSaveBtn: {
+        flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 16, borderRadius: 14, backgroundColor: C.primary,
+        ...Platform.select({ ios: { shadowColor: C.primary, shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.3, shadowRadius: 6 }, android: { elevation: 4 } }),
+      },
+      modalSaveBtnText: { fontSize: 16, fontWeight: '700', color: '#FFF' },
+      appearanceOption: {
+        flexDirection: 'row', alignItems: 'center', paddingVertical: 16, paddingHorizontal: 16, gap: 14,
+        borderBottomWidth: 1, borderBottomColor: C.border,
+      },
+      appearanceOptionLast: { borderBottomWidth: 0 },
+      appearanceOptionLabel: { fontSize: 16, fontWeight: '600', color: C.textPrimary, flex: 1 },
+      appearanceCheck: { marginLeft: 8 },
+    });
+  }, [COLORS]);
 
   useEffect(() => {
     if (preferencesModalVisible) {
@@ -134,42 +214,57 @@ export default function ProfileScreen() {
         </View>
 
         {/* Account */}
-        <Section title="Account">
-          <ProfileRow icon="person-outline" label="Edit profile" onPress={() => {}} />
-          <ProfileRow icon="notifications-outline" label="Notifications" onPress={() => {}} />
+        <Section title="Account" styles={styles}>
+          <ProfileRow icon="person-outline" label="Edit profile" onPress={() => {}} styles={styles} COLORS={COLORS} />
+          <ProfileRow icon="notifications-outline" label="Notifications" onPress={() => {}} styles={styles} COLORS={COLORS} />
           <ProfileRow
             icon="lock-closed-outline"
             label="Privacy & security"
             onPress={() => {}}
             isLast
+            styles={styles}
+            COLORS={COLORS}
           />
         </Section>
 
         {/* Preferences */}
-        <Section title="Preferences">
+        <Section title="Preferences" styles={styles}>
           <ProfileRow
             icon="heart-outline"
             iconColor={COLORS.primary}
             label="Activity & food preferences"
             onPress={() => setPreferencesModalVisible(true)}
+            styles={styles}
+            COLORS={COLORS}
           />
-          <ProfileRow icon="language-outline" label="Language" onPress={() => {}} />
-          <ProfileRow icon="moon-outline" label="Appearance" onPress={() => {}} isLast />
+          <ProfileRow icon="language-outline" label="Language" onPress={() => {}} styles={styles} COLORS={COLORS} />
+          <ProfileRow
+            icon="moon-outline"
+            label="Appearance"
+            onPress={() => setAppearanceModalVisible(true)}
+            isLast
+            styles={styles}
+            COLORS={COLORS}
+          />
         </Section>
 
         {/* Support */}
-        <Section title="Support">
+        <Section title="Support" styles={styles}>
           <ProfileRow
             icon="help-circle-outline"
             iconColor={COLORS.textSecondary}
             label="Help & FAQ"
             onPress={() => {}}
+            styles={styles}
+            COLORS={COLORS}
           />
           <ProfileRow
             icon="chatbubble-outline"
             iconColor={COLORS.textSecondary}
             label="Contact us"
             onPress={() => {}}
+            styles={styles}
+            COLORS={COLORS}
           />
           <ProfileRow
             icon="document-text-outline"
@@ -177,6 +272,8 @@ export default function ProfileScreen() {
             label="About Go Bahrain"
             onPress={() => {}}
             isLast
+            styles={styles}
+            COLORS={COLORS}
           />
         </Section>
 
@@ -187,6 +284,50 @@ export default function ProfileScreen() {
           </TouchableOpacity>
         </View>
       </ScrollView>
+
+      {/* Appearance modal */}
+      <Modal
+        visible={appearanceModalVisible}
+        animationType="slide"
+        presentationStyle="pageSheet"
+        onRequestClose={() => setAppearanceModalVisible(false)}
+      >
+        <SafeAreaView style={styles.modalSafe}>
+          <View style={styles.modalHeader}>
+            <TouchableOpacity
+              onPress={() => setAppearanceModalVisible(false)}
+              style={styles.modalCloseBtn}
+              hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+            >
+              <Ionicons name="close" size={26} color={COLORS.textPrimary} />
+            </TouchableOpacity>
+            <Text style={styles.modalTitle}>Appearance</Text>
+            <View style={styles.modalCloseBtn} />
+          </View>
+          <View style={styles.modalScrollContent}>
+            {APPEARANCE_OPTIONS.map((opt, i) => {
+              const selected = colorScheme === opt.id;
+              return (
+                <TouchableOpacity
+                  key={opt.id}
+                  style={[styles.appearanceOption, i === APPEARANCE_OPTIONS.length - 1 && styles.appearanceOptionLast]}
+                  onPress={() => {
+                    setColorScheme(opt.id);
+                    setAppearanceModalVisible(false);
+                  }}
+                  activeOpacity={0.7}
+                >
+                  <Ionicons name={opt.icon} size={22} color={selected ? COLORS.primary : COLORS.textMuted} />
+                  <Text style={styles.appearanceOptionLabel}>{opt.label}</Text>
+                  {selected && (
+                    <Ionicons name="checkmark-circle" size={22} color={COLORS.primary} style={styles.appearanceCheck} />
+                  )}
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        </SafeAreaView>
+      </Modal>
 
       {/* Edit preferences modal */}
       <Modal
@@ -310,231 +451,3 @@ export default function ProfileScreen() {
     </ScreenContainer>
   );
 }
-
-const styles = StyleSheet.create({
-  scroll: {
-    flex: 1,
-    backgroundColor: COLORS.screenBg,
-  },
-  scrollContent: {
-    paddingHorizontal: 16,
-    paddingTop: 20,
-  },
-  headerBlock: {
-    alignItems: 'center',
-    paddingVertical: 24,
-    marginBottom: 8,
-  },
-  avatarWrap: {
-    marginBottom: 12,
-  },
-  avatar: {
-    width: 80,
-    height: 80,
-    borderRadius: 40,
-    backgroundColor: COLORS.pillBg,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 2,
-    borderColor: COLORS.border,
-  },
-  avatarInitial: {
-    fontSize: 28,
-    fontWeight: '800',
-    color: COLORS.textPrimary,
-  },
-  userName: {
-    fontSize: 20,
-    fontWeight: '700',
-    color: COLORS.textPrimary,
-    marginBottom: 4,
-  },
-  userSub: {
-    fontSize: 14,
-    color: COLORS.textMuted,
-    fontWeight: '500',
-  },
-  section: {
-    marginBottom: 24,
-  },
-  sectionTitle: {
-    fontSize: 18,
-    fontWeight: '800',
-    color: COLORS.textPrimary,
-    marginBottom: 10,
-    paddingHorizontal: 2,
-  },
-  card: {
-    backgroundColor: COLORS.cardBg,
-    borderRadius: 14,
-    overflow: 'hidden',
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    ...Platform.select({
-      ios: {
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 1 },
-        shadowOpacity: 0.06,
-        shadowRadius: 4,
-      },
-      android: { elevation: 2 },
-    }),
-  },
-  row: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 14,
-    paddingHorizontal: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: COLORS.border,
-    gap: 12,
-  },
-  rowIconWrap: {
-    width: 36,
-    height: 36,
-    borderRadius: 12,
-    backgroundColor: COLORS.primary + '18',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  rowLabel: {
-    flex: 1,
-    fontSize: 15,
-    fontWeight: '600',
-    color: COLORS.textPrimary,
-  },
-  rowLast: {
-    borderBottomWidth: 0,
-  },
-  ctaSection: {
-    paddingTop: 8,
-    paddingHorizontal: 2,
-  },
-  primaryButton: {
-    backgroundColor: COLORS.primary,
-    paddingVertical: 14,
-    borderRadius: 14,
-    alignItems: 'center',
-    justifyContent: 'center',
-    ...Platform.select({
-      ios: {
-        shadowColor: COLORS.primary,
-        shadowOffset: { width: 0, height: 4 },
-        shadowOpacity: 0.3,
-        shadowRadius: 8,
-      },
-      android: { elevation: 6 },
-    }),
-  },
-  primaryButtonText: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: '#FFFFFF',
-  },
-  // Edit preferences modal
-  modalSafe: {
-    flex: 1,
-    backgroundColor: COLORS.screenBg,
-  },
-  modalHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: COLORS.border,
-  },
-  modalCloseBtn: {
-    width: 40,
-    height: 40,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  modalTitle: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: COLORS.textPrimary,
-  },
-  modalScroll: {
-    flex: 1,
-  },
-  modalScrollContent: {
-    padding: 20,
-    paddingBottom: 24,
-  },
-  modalSectionLabel: {
-    fontSize: 17,
-    fontWeight: '700',
-    color: COLORS.textPrimary,
-    marginBottom: 6,
-  },
-  modalSectionHint: {
-    fontSize: 13,
-    color: COLORS.textMuted,
-    marginBottom: 12,
-    lineHeight: 18,
-  },
-  modalGroupBlock: {
-    marginBottom: 14,
-  },
-  modalGroupLabel: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: COLORS.textMuted,
-    marginBottom: 8,
-    textTransform: 'uppercase',
-    letterSpacing: 0.4,
-  },
-  modalChipRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 10,
-  },
-  modalChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    paddingVertical: 10,
-    paddingHorizontal: 14,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    backgroundColor: COLORS.cardBgAlt,
-  },
-  modalChipLabel: {
-    fontSize: 14,
-    color: COLORS.textSecondary,
-    fontWeight: '500',
-  },
-  modalHint: {
-    fontSize: 13,
-    color: COLORS.textMuted,
-    marginTop: 20,
-    lineHeight: 20,
-  },
-  modalFooter: {
-    padding: 16,
-    paddingBottom: Platform.OS === 'ios' ? 34 : 16,
-    borderTopWidth: 1,
-    borderTopColor: COLORS.border,
-  },
-  modalSaveBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    paddingVertical: 16,
-    borderRadius: 14,
-    backgroundColor: COLORS.primary,
-    ...Platform.select({
-      ios: { shadowColor: COLORS.primary, shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.3, shadowRadius: 6 },
-      android: { elevation: 4 },
-    }),
-  },
-  modalSaveBtnText: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: '#FFF',
-  },
-});

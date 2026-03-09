@@ -10,6 +10,21 @@ const PINECONE_QUERY_URL = `${PINECONE_HOST}/query`;
 
 // ─── helpers ────────────────────────────────────────────────────────
 
+/** Parse response as JSON; avoid "Unexpected character" when API returns plain text (e.g. Forbidden). */
+async function parseJsonResponse(res, serviceName = 'API') {
+  const text = await res.text();
+  if (!text || !text.trim()) return null;
+  const trimmed = text.trim();
+  if ((trimmed.startsWith('{') && trimmed.endsWith('}')) || (trimmed.startsWith('[') && trimmed.endsWith(']'))) {
+    try {
+      return JSON.parse(text);
+    } catch (e) {
+      throw new Error(`${serviceName} returned invalid JSON (${res.status}): ${text.slice(0, 80)}`);
+    }
+  }
+  throw new Error(`${serviceName} returned non-JSON (${res.status}): ${text.slice(0, 80)}`);
+}
+
 async function getEmbedding(text) {
   const res = await fetch(OPENAI_EMBEDDINGS_URL, {
     method: 'POST',
@@ -19,7 +34,7 @@ async function getEmbedding(text) {
     },
     body: JSON.stringify({ model: 'text-embedding-3-small', input: text }),
   });
-  const json = await res.json();
+  const json = await parseJsonResponse(res, 'OpenAI');
   if (!res.ok) throw new Error(json?.error?.message || `OpenAI embed error (${res.status})`);
   const embedding = json?.data?.[0]?.embedding;
   if (!embedding || !Array.isArray(embedding)) throw new Error('No embedding returned');
@@ -41,9 +56,9 @@ async function queryPinecone(vector, topK, filter) {
       namespace: '',
     }),
   });
-  const json = await res.json();
+  const json = await parseJsonResponse(res, 'Pinecone');
   if (!res.ok) throw new Error(json?.message || `Pinecone error (${res.status})`);
-  return json.matches || [];
+  return (json && json.matches) || [];
 }
 
 // ─── Step 1: Places (from preferences) ─────────────────────────────
@@ -179,21 +194,26 @@ export async function fetchBreakfastSpots() {
 // ─── Step 4: Events ─────────────────────────────────────────────────
 
 export async function fetchEvents(preferenceLabels) {
-  const text =
-    preferenceLabels.length > 0
-      ? `Events in Bahrain related to ${preferenceLabels.join(', ')}`
-      : 'Popular events and activities happening in Bahrain';
+  try {
+    const text =
+      preferenceLabels.length > 0
+        ? `Events in Bahrain related to ${preferenceLabels.join(', ')}`
+        : 'Popular events and activities happening in Bahrain';
 
-  const embedding = await getEmbedding(text);
+    const embedding = await getEmbedding(text);
 
-  const events = await queryPinecone(embedding, 4, {
-    record_type: { $eq: 'event' },
-  });
+    const events = await queryPinecone(embedding, 4, {
+      record_type: { $eq: 'event' },
+    });
 
-  console.log(`[Events] Found ${events.length} events`);
-  events.forEach(m => console.log(`  → ${m.metadata?.event_name || m.metadata?.business_name} (${m.metadata?.start_time} - ${m.metadata?.end_time})`));
+    console.log(`[Events] Found ${events.length} events`);
+    events.forEach(m => console.log(`  → ${m.metadata?.event_name || m.metadata?.business_name} (${m.metadata?.start_time} - ${m.metadata?.end_time})`));
 
-  return events;
+    return events;
+  } catch (e) {
+    console.warn('[Events] fetchEvents failed:', e?.message);
+    return [];
+  }
 }
 
 // ─── Pinecone places for Khalid chat (only recommend these) ─────
@@ -330,7 +350,14 @@ function bearingDeg(lat1, lon1, lat2, lon2) {
   return ((Math.atan2(y, x) * 180) / Math.PI + 360) % 360;
 }
 
-export async function fetchNearbyPOIs(userLat, userLng, mode = 'all') {
+/**
+ * @param {number} userLat
+ * @param {number} userLng
+ * @param {string} mode - 'landmarks' | 'all' | 'food' | 'saved'
+ * @param {{ allPlaces?: boolean }} options - If allPlaces is true, return every client with location (no limit). Used when opening AR from Explore.
+ */
+export async function fetchNearbyPOIs(userLat, userLng, mode = 'all', options = {}) {
+  const { allPlaces = false } = options;
   const isLandmarks = mode === 'landmarks';
   const isFood = mode === 'food';
 
@@ -417,8 +444,10 @@ export async function fetchNearbyPOIs(userLat, userLng, mode = 'all') {
       };
     })
     .filter(Boolean)
-    .sort((a, b) => a.distanceKm - b.distanceKm)
-    .slice(0, mode === 'all' ? 16 : 12);
+    .sort((a, b) => a.distanceKm - b.distanceKm);
+  if (!allPlaces) {
+    withCoords = withCoords.slice(0, mode === 'all' ? 16 : 12);
+  }
   return withCoords;
 }
 
@@ -556,7 +585,7 @@ Build Khalid's perfect day. Remember: the user's selected preferences and food t
     }),
   });
 
-  const json = await res.json();
+  const json = await parseJsonResponse(res, 'OpenAI');
   if (!res.ok) throw new Error(json?.error?.message || `GPT error (${res.status})`);
 
   const raw = json?.choices?.[0]?.message?.content?.trim();
@@ -567,7 +596,15 @@ Build Khalid's perfect day. Remember: the user's selected preferences and food t
     plan = JSON.parse(raw);
   } catch (_) {
     const jsonMatch = raw.match(/\[[\s\S]*\]/);
-    plan = jsonMatch ? JSON.parse(jsonMatch[0]) : null;
+    if (jsonMatch) {
+      try {
+        plan = JSON.parse(jsonMatch[0]);
+      } catch (e2) {
+        plan = null;
+      }
+    } else {
+      plan = null;
+    }
   }
   if (!Array.isArray(plan)) throw new Error('Could not parse day plan');
 

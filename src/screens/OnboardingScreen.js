@@ -10,9 +10,12 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useUserPreferences } from '../context/UserPreferencesContext';
+import { useTheme } from '../context/ThemeContext';
+import { colors as themeColors } from '../theme/designTokens';
 import { GENERAL_GROUPS } from '../constants/preferences';
 
 export default function OnboardingScreen() {
+  const { colors } = useTheme();
   const { GENERAL_PREFERENCES, PREFERENCES, FOOD_CATEGORIES, completeOnboarding } = useUserPreferences();
   const [generalIds, setGeneralIds] = useState([]);
   const [activityIds, setActivityIds] = useState([]);
@@ -265,9 +268,9 @@ const styles = StyleSheet.create({
     gap: 8,
     paddingVertical: 16,
     borderRadius: 14,
-    backgroundColor: '#C8102E',
+    backgroundColor: themeColors.primary,
     ...Platform.select({
-      ios: { shadowColor: '#C8102E', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.3, shadowRadius: 6 },
+      ios: { shadowColor: themeColors.primary, shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.2, shadowRadius: 6 },
       android: { elevation: 4 },
     }),
   },

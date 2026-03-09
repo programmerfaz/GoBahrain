@@ -1,4 +1,5 @@
 import React, { useState, useRef, useMemo, useEffect, useCallback } from 'react';
+import { useTheme } from '../context/ThemeContext';
 import {
   StyleSheet,
   Text,
@@ -12,6 +13,8 @@ import {
   Platform,
   Animated,
   Easing,
+  LayoutAnimation,
+  UIManager,
   TextInput,
   Modal,
   KeyboardAvoidingView,
@@ -21,6 +24,10 @@ import {
   RefreshControl,
   Alert,
 } from 'react-native';
+
+if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
+  UIManager.setLayoutAnimationEnabledExperimental(true);
+}
 import * as Location from 'expo-location';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation, useRoute } from '@react-navigation/native';
@@ -29,7 +36,6 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import ScreenContainer from '../components/ScreenContainer';
-import ProfileButton from '../components/ProfileButton';
 import ClientProfileModal from '../components/ClientProfileModal';
 import { useAuth } from '../context/AuthContext';
 import { supabase } from '../config/supabase';
@@ -50,13 +56,377 @@ async function getVoterId() {
 }
 
 const DOUBLE_TAP_DELAY = 350;
-const UPVOTE_GREEN = '#10B981';
 const { width: WINDOW_WIDTH, height: WINDOW_HEIGHT } = Dimensions.get('window');
 
-const PARTICLE_SIZE = 32;
-const PARTICLE_COUNT = 10;
+const PARTICLE_SIZE = 28;
+const PARTICLE_COUNT = 14;
+const BURST_EASING = Easing.out(Easing.cubic);
 
-function UpvoteParticles({ visible, position }) {
+function getHomeStyles(colors) {
+  const C = {
+    primary: colors.primary,
+    primaryLight: colors.primaryLight,
+    screenBg: colors.background,
+    cardBg: colors.surface,
+    textPrimary: colors.textPrimary,
+    textSecondary: colors.textSecondary,
+    textMuted: colors.textMuted,
+    border: colors.border,
+    borderLight: colors.borderLight,
+    openNow: colors.success,
+    badge: colors.primary,
+    pillBg: colors.borderLight,
+    success: colors.success,
+  };
+  return {
+    screen: { backgroundColor: C.screenBg },
+    screenGradientWrap: { ...StyleSheet.absoluteFillObject, zIndex: 0 },
+    scrollToTopBtn: {
+      position: 'absolute', right: 20, width: 56, height: 56, borderRadius: 28, overflow: 'hidden',
+      alignItems: 'center', justifyContent: 'center', zIndex: 8,
+      ...Platform.select({ ios: { shadowColor: C.primary, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.35, shadowRadius: 10 }, android: { elevation: 8 } }),
+    },
+    scrollToTopGradient: { width: '100%', height: '100%', alignItems: 'center', justifyContent: 'center' },
+    headerFloatingWrap: {
+      position: 'absolute',
+      top: 0,
+      left: 0,
+      right: 0,
+      zIndex: 10,
+      backgroundColor: C.screenBg,
+    },
+    headerBlur: {
+      ...StyleSheet.absoluteFillObject,
+      backgroundColor: Platform.OS === 'android' ? C.screenBg : 'transparent',
+    },
+    headerContent: {
+      paddingBottom: 0,
+    },
+    instagramHeader: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      paddingHorizontal: 16,
+      height: 44,
+    },
+    headerCenter: {
+      flex: 1,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    instagramLogo: {
+      fontSize: 20,
+      fontWeight: '800',
+      color: C.primary,
+      letterSpacing: -0.5,
+    },
+    headerRight: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 4,
+    },
+    headerIconBtn: {
+      width: 36,
+      height: 36,
+      borderRadius: 18,
+      backgroundColor: C.cardBg,
+      alignItems: 'center',
+      justifyContent: 'center',
+      ...Platform.select({
+        ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.1, shadowRadius: 4 },
+        android: { elevation: 3 },
+      }),
+    },
+    headerIconBtnActive: {
+      backgroundColor: C.primaryLight || C.borderLight,
+    },
+    locationBtnInner: {
+      width: 36,
+      height: 36,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    locationBtnRing: {
+      position: 'absolute',
+      width: 36,
+      height: 36,
+      borderRadius: 18,
+      borderWidth: 2,
+      backgroundColor: 'transparent',
+    },
+    locationSuccessIconWrap: {
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    searchBarContainer: {
+      paddingHorizontal: 16,
+      paddingVertical: 4,
+    },
+    searchBar: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      backgroundColor: C.cardBg,
+      borderRadius: 12,
+      paddingHorizontal: 12,
+      height: 40,
+      borderWidth: 1,
+      borderColor: C.borderLight,
+      ...Platform.select({
+        ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.05, shadowRadius: 4 },
+        android: { elevation: 2 },
+      }),
+    },
+    searchText: {
+      flex: 1,
+      marginLeft: 8,
+      fontSize: 14,
+      color: C.textSecondary,
+    },
+    searchInput: {
+      flex: 1,
+      marginLeft: 8,
+      fontSize: 14,
+      color: C.textPrimary,
+      paddingVertical: Platform.OS === 'ios' ? 10 : 6,
+    },
+    searchClearBtn: {
+      marginLeft: 4,
+      padding: 4,
+    },
+    aiSparkle: {
+      marginLeft: 8,
+      padding: 4,
+    },
+    filtersSection: {
+      paddingTop: 0,
+      paddingBottom: 0,
+      minHeight: 0,
+    },
+    filtersScrollView: {
+      flexGrow: 0,
+      flex: 1,
+    },
+    filtersScroll: {
+      paddingVertical: 8,
+      paddingHorizontal: 16,
+      paddingRight: 24,
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 10,
+      minHeight: 60,
+    },
+    filterChipTouchable: {
+      marginRight: 0,
+    },
+    filterChip: {
+      alignItems: 'center',
+      paddingHorizontal: 2,
+    },
+    filterChipSelected: {
+      opacity: 1,
+    },
+    filterCircle: {
+      width: 48,
+      height: 48,
+      borderRadius: 24,
+      backgroundColor: C.cardBg,
+      borderWidth: 1,
+      borderColor: C.borderLight,
+      alignItems: 'center',
+      justifyContent: 'center',
+      marginBottom: 6,
+    },
+    filterCircleGradient: {
+      width: 48,
+      height: 48,
+      borderRadius: 24,
+      alignItems: 'center',
+      justifyContent: 'center',
+      marginBottom: 6,
+      overflow: 'hidden',
+    },
+    filterLabel: {
+      fontSize: 11,
+      color: C.textSecondary,
+      fontWeight: '600',
+      textAlign: 'center',
+    },
+    filterLabelSelected: {
+      fontWeight: '700',
+      color: C.textPrimary,
+    },
+    feedList: {
+      flex: 1,
+    },
+    feedContent: {
+      paddingVertical: 8,
+      paddingBottom: 40,
+    },
+    card: {
+      backgroundColor: C.cardBg,
+      marginHorizontal: 12,
+      marginBottom: 16,
+      borderRadius: 16,
+      overflow: 'hidden',
+      ...Platform.select({
+        ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.08, shadowRadius: 8 },
+        android: { elevation: 3 },
+      }),
+    },
+    cardHeader: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      padding: 10,
+    },
+    cardAvatar: {
+      width: 32,
+      height: 32,
+      borderRadius: 16,
+      backgroundColor: C.borderLight,
+      alignItems: 'center',
+      justifyContent: 'center',
+      marginRight: 10,
+      overflow: 'hidden',
+      borderWidth: 1,
+      borderColor: C.borderLight,
+    },
+    cardAvatarImage: {
+      width: 32,
+      height: 32,
+      borderRadius: 16,
+    },
+    cardHeaderInfo: {
+      flex: 1,
+    },
+    cardHeaderUsername: {
+      fontSize: 14,
+      fontWeight: '700',
+      color: C.textPrimary,
+    },
+    cardHeaderLocation: {
+      fontSize: 11,
+      color: C.textSecondary,
+      marginTop: 0,
+    },
+    cardImageContainer: {
+      width: '100%',
+      aspectRatio: 1,
+      backgroundColor: '#E2E8F0',
+      overflow: 'hidden',
+    },
+    cardImage: {
+      width: '100%',
+      height: '100%',
+      backgroundColor: C.pillBg,
+    },
+    cardFloatingBadge: {
+      position: 'absolute',
+      top: 10,
+      right: 10,
+      backgroundColor: 'rgba(0,0,0,0.6)',
+      paddingHorizontal: 8,
+      paddingVertical: 4,
+      borderRadius: 10,
+    },
+    cardFloatingBadgeText: {
+      color: '#FFF',
+      fontSize: 11,
+      fontWeight: '600',
+    },
+    cardBody: {
+      padding: 12,
+    },
+    actionRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      marginBottom: 8,
+    },
+    actionRowLeft: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 10,
+    },
+    igActionBtn: {
+      width: 36,
+      height: 36,
+      borderRadius: 18,
+      backgroundColor: C.borderLight,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    upvoteCircle: {
+      width: 36,
+      height: 36,
+      borderRadius: 18,
+      alignItems: 'center',
+      justifyContent: 'center',
+      borderWidth: 1.5,
+      borderColor: C.success,
+    },
+    upvoteCircleActive: {
+      backgroundColor: C.success,
+      borderColor: C.success,
+    },
+    igLikesLine: {
+      fontSize: 13,
+      fontWeight: '700',
+      color: C.textPrimary,
+      marginBottom: 4,
+    },
+    igCaption: {
+      fontSize: 13,
+      color: C.textPrimary,
+      lineHeight: 18,
+    },
+    igCaptionBold: {
+      fontWeight: '700',
+    },
+    usernameRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 2 },
+    username: { fontSize: 15, fontWeight: '600', color: C.textPrimary, marginRight: 4 },
+    verifiedIcon: { marginLeft: 2 },
+    locationRow: { flexDirection: 'row', alignItems: 'center' },
+    location: { fontSize: 12, color: C.textSecondary, marginLeft: 4 },
+    openNowPill: { flexDirection: 'row', alignItems: 'center', backgroundColor: C.openNow, paddingVertical: 6, paddingHorizontal: 10, borderRadius: 8 },
+    openNowDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: '#FFFFFF', marginRight: 6 },
+    openNowText: { fontSize: 12, fontWeight: '600', color: '#FFFFFF' },
+    imageWrap: { position: 'relative', backgroundColor: C.pillBg },
+    upvoteParticlesContainer: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 9999, pointerEvents: 'none' },
+    upvoteParticle: { position: 'absolute', left: 0, top: 0, justifyContent: 'center', alignItems: 'center' },
+    upvoteParticleIconWrap: {
+      width: PARTICLE_SIZE, height: PARTICLE_SIZE, borderRadius: PARTICLE_SIZE / 2, backgroundColor: '#FFFFFF', justifyContent: 'center', alignItems: 'center',
+      ...Platform.select({ ios: { shadowColor: C.success, shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.35, shadowRadius: 4 }, android: { elevation: 6 } }),
+    },
+    description: { fontSize: 14, color: C.textSecondary, lineHeight: 20 },
+    moreLessLink: { fontSize: 14, color: C.primary, fontWeight: '600' },
+    khalidContextBanner: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 10, paddingHorizontal: 14, marginBottom: 8, backgroundColor: C.primary + '12', borderLeftWidth: 4, borderLeftColor: C.primary, borderRadius: 12, marginHorizontal: 0 },
+    khalidContextBannerText: { flex: 1, fontSize: 14, fontWeight: '600', color: C.textPrimary },
+    overlayRoot: { flex: 1, backgroundColor: 'transparent' },
+    overlayBackdropWrap: { ...StyleSheet.absoluteFillObject },
+    overlayBackdropDim: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.12)' },
+    overlayContentWrap: { flex: 1, paddingHorizontal: 24, paddingTop: 72, paddingBottom: 32, alignItems: 'stretch' },
+    overlayQuestionBlock: { marginBottom: 28, paddingVertical: 28, paddingHorizontal: 20, alignItems: 'center' },
+    overlayQuestionInner: { alignItems: 'center', maxWidth: 320 },
+    overlayQuestionTitle: { fontSize: 36, fontWeight: '800', color: '#FFFFFF', textAlign: 'center', lineHeight: 44, letterSpacing: 1.2, marginBottom: 14, ...Platform.select({ ios: { textShadowColor: 'rgba(0,0,0,0.25)', textShadowOffset: { width: 0, height: 2 }, textShadowRadius: 8 }, android: { elevation: 2 } }) },
+    overlayQuestionAccent: { width: 56, height: 4, borderRadius: 2, backgroundColor: C.primary, opacity: 0.95, marginBottom: 16 },
+    overlayQuestionSub: { fontSize: 15, fontWeight: '500', color: 'rgba(255,255,255,0.88)', textAlign: 'center', letterSpacing: 0.4, lineHeight: 22 },
+    overlayOptionsWrap: { width: '100%', maxWidth: 400, alignSelf: 'center' },
+    overlayOptionsGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 12, marginBottom: 20 },
+    overlayOptionBlock: { width: '47%', minHeight: 56, backgroundColor: 'rgba(255,255,255,0.2)', borderRadius: 14, borderWidth: 1, borderColor: 'rgba(255,255,255,0.35)', justifyContent: 'center', alignItems: 'center', paddingVertical: 16, paddingHorizontal: 16 },
+    overlayOptionBlockText: { fontSize: 16, fontWeight: '600', color: '#FFFFFF' },
+    overlayInputRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+    overlayInput: { flex: 1, backgroundColor: 'rgba(255,255,255,0.2)', borderRadius: 14, paddingVertical: 16, paddingHorizontal: 18, fontSize: 16, color: '#FFFFFF', borderWidth: 1, borderColor: 'rgba(255,255,255,0.35)' },
+    overlaySubmitBtn: { width: 52, height: 52, borderRadius: 14, backgroundColor: 'rgba(255,255,255,0.3)', alignItems: 'center', justifyContent: 'center' },
+    pageContentWrap: { flex: 1 },
+    loadingWrap: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingTop: 80 },
+    emptyText: { marginTop: 12, fontSize: 16, color: C.textMuted, fontWeight: '500' },
+    retryBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 16, paddingVertical: 10, paddingHorizontal: 20, backgroundColor: C.primary, borderRadius: 10 },
+    retryBtnText: { fontSize: 15, color: '#fff', fontWeight: '600' },
+  };
+}
+
+function UpvoteParticles({ visible, position, UPVOTE_COLOR, colors }) {
+  const styles = StyleSheet.create(getHomeStyles(colors));
   const particles = useRef(
     Array.from({ length: PARTICLE_COUNT }, (_, i) => ({
       id: i,
@@ -77,43 +447,50 @@ function UpvoteParticles({ visible, position }) {
 
     particles.forEach((particle, index) => {
       if (!particle.x || !particle.y || !particle.opacity || !particle.scale) return;
-      const angle = (index * 360) / particles.length;
-      const distance = 95 + Math.random() * 55;
+      const angle = (index * 360) / particles.length + (index % 2) * 12;
+      const distance = 80 + (index % 4) * 28;
       const radians = (angle * Math.PI) / 180;
+      const endX = centerX + Math.cos(radians) * distance;
+      const endY = centerY + Math.sin(radians) * distance - 50;
 
       particle.x.setValue(centerX);
       particle.y.setValue(centerY);
       particle.opacity.setValue(1);
-      particle.scale.setValue(0.4);
+      particle.scale.setValue(0.3);
 
       Animated.parallel([
         Animated.timing(particle.x, {
-          toValue: centerX + Math.cos(radians) * distance,
-          duration: 700,
+          toValue: endX,
+          duration: 650,
+          easing: BURST_EASING,
           useNativeDriver: true,
         }),
         Animated.timing(particle.y, {
-          toValue: centerY + Math.sin(radians) * distance - 40,
-          duration: 700,
+          toValue: endY,
+          duration: 650,
+          easing: BURST_EASING,
           useNativeDriver: true,
         }),
         Animated.sequence([
           Animated.timing(particle.scale, {
-            toValue: 1.2,
-            duration: 180,
+            toValue: 1.15,
+            duration: 120,
+            easing: Easing.out(Easing.quad),
             useNativeDriver: true,
           }),
           Animated.timing(particle.scale, {
-            toValue: 0.6,
-            duration: 520,
+            toValue: 0.5,
+            duration: 530,
+            easing: Easing.in(Easing.quad),
             useNativeDriver: true,
           }),
         ]),
         Animated.sequence([
-          Animated.delay(250),
+          Animated.delay(200),
           Animated.timing(particle.opacity, {
             toValue: 0,
-            duration: 450,
+            duration: 400,
+            easing: Easing.in(Easing.quad),
             useNativeDriver: true,
           }),
         ]),
@@ -143,7 +520,7 @@ function UpvoteParticles({ visible, position }) {
           ]}
         >
           <View style={styles.upvoteParticleIconWrap}>
-            <Ionicons name="arrow-up-circle" size={PARTICLE_SIZE} color={UPVOTE_GREEN} />
+            <Ionicons name="arrow-up-circle" size={PARTICLE_SIZE} color={UPVOTE_COLOR || '#059669'} />
           </View>
         </Animated.View>
       ))}
@@ -151,37 +528,86 @@ function UpvoteParticles({ visible, position }) {
   );
 }
 
-// App theme (match rest of app)
-const COLORS = {
-  primary: '#C8102E',
-  screenBg: '#fff',
-  cardBg: '#FFFFFF',
-  cardBgAlt: '#F9FAFB',
-  textPrimary: '#111827',
-  textSecondary: '#6B7280',
-  textMuted: '#9CA3AF',
-  textMutedAlt: '#4B5563',
-  border: 'rgba(209,213,219,0.7)',
-  borderAlt: 'rgba(209,213,219,0.8)',
-  openNow: '#10B981',
-  badge: '#C8102E',
-  pillBg: '#F3F4F6',
+
+/** Map overlay quick-option ids to search keywords for matching posts. */
+const AI_OPTION_KEYWORDS = {
+  nearby: ['nearby', 'location', 'area'],
+  opennow: ['open', 'now', 'hours'],
+  toprated: ['rating', 'best', 'top'],
+  cafes: ['cafe', 'coffee', 'café', 'latte'],
+  withaview: ['view', 'terrace', 'rooftop', 'sea'],
+  food: ['food', 'eat', 'restaurant', 'burger', 'pizza', 'dish', 'meal', 'cuisine'],
 };
 
-const CATEGORIES = [
-  { id: 'nearby', label: 'Nearby', icon: 'location', color: COLORS.primary },
-  { id: 'food', label: 'Food', icon: 'restaurant', color: '#10B981' },
-  { id: 'hangout', label: 'Hangout', icon: 'pin', color: '#0EA5E9' },
-  { id: 'trending', label: 'Trending', icon: 'trending-up', color: '#F97316' },
-  { id: 'opennow', label: 'Open Now', icon: 'time', color: '#6366F1' },
-];
+function matchPostToQuery(post, q) {
+  const lower = q.toLowerCase().trim();
+  const desc = (post.description || '').toLowerCase();
+  const business = (post.businessName || '').toLowerCase();
+  const location = (post.location || '').toLowerCase();
+  const tags = Array.isArray(post.tags) ? post.tags : [];
+  const tagStr = tags.join(' ').toLowerCase();
+  if (desc.includes(lower) || business.includes(lower) || location.includes(lower)) return true;
+  if (tags.some((t) => String(t).toLowerCase().includes(lower))) return true;
+  if (tagStr.includes(lower)) return true;
+  if (lower.length <= 2) return false;
+  const words = lower.split(/\s+/).filter(Boolean);
+  const allText = [desc, business, tagStr].join(' ');
+  return words.every((w) => allText.includes(w));
+}
+
+function filterPostsBySearch(posts, searchQuery) {
+  const q = (searchQuery || '').trim();
+  if (!q) return posts;
+  const keywords = AI_OPTION_KEYWORDS[q.toLowerCase()] || [q];
+  return posts.filter((p) => {
+    const text = [(p.description || ''), (p.businessName || ''), (p.location || ''), ...(p.tags || [])].join(' ').toLowerCase();
+    if (keywords.length > 1) return keywords.some((kw) => text.includes(kw.toLowerCase()));
+    return matchPostToQuery(p, q);
+  });
+}
+
+/** Distance in km between two points (haversine). */
+function haversineKm(lat1, lon1, lat2, lon2) {
+  const R = 6371;
+  const dLat = ((lat2 - lat1) * Math.PI) / 180;
+  const dLon = ((lon2 - lon1) * Math.PI) / 180;
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos((lat1 * Math.PI) / 180) * Math.cos((lat2 * Math.PI) / 180) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+}
+
+/** Sort posts by distance from user (closest first). Posts without coords go last. */
+function sortPostsByDistance(posts, userLat, userLng) {
+  if (!posts.length || userLat == null || userLng == null) return posts;
+  return [...posts].sort((a, b) => {
+    const latA = a.lat != null ? parseFloat(a.lat) : NaN;
+    const lngA = a.lng != null ? parseFloat(a.lng) : (a.long != null ? parseFloat(a.long) : NaN);
+    const latB = b.lat != null ? parseFloat(b.lat) : NaN;
+    const lngB = b.lng != null ? parseFloat(b.lng) : (b.long != null ? parseFloat(b.long) : NaN);
+    const hasA = !Number.isNaN(latA) && !Number.isNaN(lngA);
+    const hasB = !Number.isNaN(latB) && !Number.isNaN(lngB);
+    if (!hasA && !hasB) return 0;
+    if (!hasA) return 1;
+    if (!hasB) return -1;
+    const distA = haversineKm(userLat, userLng, latA, lngA);
+    const distB = haversineKm(userLat, userLng, latB, lngB);
+    return distA - distB;
+  });
+}
 
 function choiceToPostId(choice, posts) {
   const q = (choice || '').trim().toLowerCase();
   if (!posts.length) return null;
+  const keywords = AI_OPTION_KEYWORDS[q] || [q];
   const match = posts.find((p) => {
     const desc = (p.description || '').toLowerCase();
-    return desc.includes(q) || q.includes(desc.split(' ')[0]);
+    const business = (p.businessName || '').toLowerCase();
+    const tags = (p.tags || []).join(' ').toLowerCase();
+    const combined = `${desc} ${business} ${tags}`;
+    if (keywords.length > 1) return keywords.some((kw) => combined.includes(kw));
+    return desc.includes(q) || business.includes(q) || tags.includes(q) || q.includes(desc.split(' ')[0]);
   });
   return match ? match.id : posts[0]?.id ?? null;
 }
@@ -196,26 +622,68 @@ function shufflePosts(posts) {
   return arr;
 }
 
-const ACTION_BUTTONS = [
-  { id: 'upvote', icon: 'arrow-up', label: 'Upvote', color: '#10B981', getLabel: (item) => `Upvote ${item?.upvotes ?? 0}` },
-  { id: 'share', icon: 'paper-plane-outline', label: 'Share', color: '#0EA5E9' },
-  { id: 'menu', icon: 'restaurant-outline', label: 'Menu', color: '#EC4899' },
-];
+/** Instagram-style: Upvote (replaces Like), Share; no comment. Bookmark on right. Built in HomeScreen from theme. */
 
 const NOTIFICATION_COUNT = 3;
 const CARD_MARGIN_H = 16;
 const CARD_PADDING = 14;
 
-function PostCard({ item, isHighlighted = false, onHighlightDone, onUpvoteToggle, onClientPress, upvoteScaleAnim }) {
+const DESC_COLLAPSED_LENGTH = 100; // ~2 lines
+
+function PostCard({ item, isHighlighted = false, onHighlightDone, onUpvoteToggle, onClientPress, upvoteScaleAnim, styles, COLORS, ACTION_BUTTONS_LEFT, UPVOTE_COLOR }) {
   const { width } = useWindowDimensions();
   const imageWidth = width;
-  const imageHeight = Math.round(imageWidth * 1.05);
+  const imageHeight = imageWidth; // Instagram: square 1:1
 
   const lastTapRef = useRef(0);
+  const [descExpanded, setDescExpanded] = useState(false);
   const hasUpvoted = item.hasUpvoted ?? false;
   const displayUpvotes = item.upvotes ?? 0;
   const highlightScale = useRef(new Animated.Value(1)).current;
   const highlightGlow = useRef(new Animated.Value(0)).current;
+
+  // Double tap upvote animation
+  const upvoteAnimScale = useRef(new Animated.Value(0)).current;
+  const upvoteAnimOpacity = useRef(new Animated.Value(0)).current;
+  const upvoteAnimTranslateY = useRef(new Animated.Value(0)).current;
+
+  const animateUpvote = () => {
+    upvoteAnimScale.setValue(0);
+    upvoteAnimOpacity.setValue(0);
+    upvoteAnimTranslateY.setValue(0);
+    
+    // Create a sequence of animations for a "cool" burst effect
+    Animated.parallel([
+      // Scale up with a spring "pop"
+      Animated.spring(upvoteAnimScale, {
+        toValue: 1.5,
+        friction: 4,
+        tension: 40,
+        useNativeDriver: true,
+      }),
+      // Fade in quickly then out slowly
+      Animated.sequence([
+        Animated.timing(upvoteAnimOpacity, {
+          toValue: 0.9,
+          duration: 150,
+          useNativeDriver: true,
+        }),
+        Animated.delay(400),
+        Animated.timing(upvoteAnimOpacity, {
+          toValue: 0,
+          duration: 300,
+          useNativeDriver: true,
+        }),
+      ]),
+      // Float upwards
+      Animated.timing(upvoteAnimTranslateY, {
+        toValue: -50,
+        duration: 850,
+        easing: Easing.out(Easing.quad),
+        useNativeDriver: true,
+      })
+    ]).start();
+  };
 
   useEffect(() => {
     if (!isHighlighted || !onHighlightDone) return;
@@ -257,12 +725,18 @@ function PostCard({ item, isHighlighted = false, onHighlightDone, onUpvoteToggle
   }, [isHighlighted, onHighlightDone, highlightScale, highlightGlow]);
 
   const handleUpvotePress = (e) => {
+    if (!hasUpvoted) {
+      animateUpvote();
+    }
     onUpvoteToggle?.(item, e);
   };
 
   const handleImagePress = (e) => {
     const now = Date.now();
     if (now - lastTapRef.current < DOUBLE_TAP_DELAY) {
+      if (!hasUpvoted) {
+        animateUpvote();
+      }
       onUpvoteToggle?.(item, e);
       lastTapRef.current = 0;
     } else {
@@ -270,7 +744,6 @@ function PostCard({ item, isHighlighted = false, onHighlightDone, onUpvoteToggle
     }
   };
 
-  const itemWithDisplayUpvotes = { ...item, upvotes: displayUpvotes, hasUpvoted };
   const glowOpacity = highlightGlow.interpolate({
     inputRange: [0, 1],
     outputRange: [0, 0.85],
@@ -285,7 +758,7 @@ function PostCard({ item, isHighlighted = false, onHighlightDone, onUpvoteToggle
         style={[
           StyleSheet.absoluteFill,
           styles.cardHighlightGlow,
-          { opacity: glowOpacity },
+          { opacity: glowOpacity, borderRadius: 24 },
         ]}
       />
       <Animated.View
@@ -293,7 +766,7 @@ function PostCard({ item, isHighlighted = false, onHighlightDone, onUpvoteToggle
         style={[
           StyleSheet.absoluteFill,
           styles.cardHighlightBorder,
-          { opacity: glowOpacity },
+          { opacity: glowOpacity, borderRadius: 24 },
         ]}
       />
       <TouchableOpacity
@@ -302,96 +775,183 @@ function PostCard({ item, isHighlighted = false, onHighlightDone, onUpvoteToggle
         onPress={() => onClientPress?.(item)}
       >
         <View style={styles.cardAvatar}>
-          <Ionicons name="storefront" size={20} color={COLORS.primary} />
+          {item.clientImage ? (
+            <Image source={{ uri: item.clientImage }} style={styles.cardAvatarImage} resizeMode="cover" />
+          ) : (
+            <Ionicons name="storefront" size={20} color={COLORS.primary} />
+          )}
         </View>
-        <View style={styles.cardHeaderContent}>
-          <Text style={styles.businessName} numberOfLines={1}>
+        <View style={styles.cardHeaderInfo}>
+          <Text style={styles.cardHeaderUsername} numberOfLines={1}>
             {item.businessName || 'Business'}
           </Text>
-          <View style={styles.cardSubline}>
-            {item.rating != null && item.rating !== '' && (
-              <Text style={styles.cardSublineText}>★ {item.rating}</Text>
-            )}
-            {item.rating != null && item.rating !== '' && item.priceRange ? (
-              <Text style={styles.cardSublineDot}> · </Text>
-            ) : null}
-            {item.priceRange ? (
-              <Text style={styles.cardSublineText}>{item.priceRange}</Text>
-            ) : null}
-          </View>
+          {item.location ? (
+            <Text style={styles.cardHeaderLocation} numberOfLines={1}>
+              {item.location}
+            </Text>
+          ) : null}
         </View>
-        {item.openNow && (
-          <View style={styles.openNowPill}>
-            <View style={styles.openNowDot} />
-            <Text style={styles.openNowText}>Open</Text>
-          </View>
-        )}
-        <Ionicons name="chevron-forward" size={18} color={COLORS.textMuted} />
+        <TouchableOpacity 
+          style={styles.cardHeaderMore} 
+          hitSlop={8}
+          onPress={() => onClientPress?.(item)}
+        >
+          <Ionicons name="chevron-forward-circle-outline" size={22} color={COLORS.primary} />
+        </TouchableOpacity>
       </TouchableOpacity>
       <TouchableWithoutFeedback onPress={handleImagePress}>
-        <View style={[styles.imageWrap, { width: imageWidth, height: imageHeight }]}>
-          <Image
-            source={{ uri: item.imageUri }}
-            style={[styles.cardImage, { width: imageWidth, height: imageHeight }]}
-            resizeMode="cover"
-          />
+        <View style={styles.cardImageContainer}>
+          {item.imageUri ? (
+            <Image
+              source={{ uri: item.imageUri }}
+              style={[styles.cardImage, { width: '100%', height: '100%' }]}
+              resizeMode="cover"
+              onLoad={() => console.log(`[PostCard] LOADED: ${item.imageUri}`)}
+              onError={(e) => console.error(`[PostCard] ERROR: ${item.imageUri}`, e.nativeEvent.error)}
+            />
+          ) : (
+            <View style={[styles.cardImage, { width: WINDOW_WIDTH, height: WINDOW_WIDTH, alignItems: 'center', justifyContent: 'center' }]}>
+              <Ionicons name="image-outline" size={48} color={COLORS.textMuted} />
+            </View>
+          )}
+          
+          <Animated.View 
+            style={[
+              StyleSheet.absoluteFill, 
+              { 
+                alignItems: 'center', 
+                justifyContent: 'center', 
+                opacity: upvoteAnimOpacity, 
+                transform: [
+                  { scale: upvoteAnimScale },
+                  { translateY: upvoteAnimTranslateY }
+                ] 
+              }
+            ]}
+            pointerEvents="none"
+          >
+            <Ionicons name="arrow-up-circle" size={100} color="#FFFFFF" />
+          </Animated.View>
+
+          {item.priceRange ? (
+            <View style={styles.cardFloatingBadge}>
+              <Text style={styles.cardFloatingBadgeText}>{item.priceRange}</Text>
+            </View>
+          ) : null}
         </View>
       </TouchableWithoutFeedback>
-      <View style={styles.actionRow}>
-        {ACTION_BUTTONS.map((btn) => {
-          const isUpvote = btn.id === 'upvote';
-          const isUpvoteActive = isUpvote && hasUpvoted;
-          const btnContent = (
-            <TouchableOpacity
-              style={[
-                styles.actionBtn,
-                btn.iconOnly && styles.actionBtnIconOnly,
-                { borderColor: btn.color },
-                isUpvoteActive && { backgroundColor: UPVOTE_GREEN, borderColor: UPVOTE_GREEN },
-              ]}
-              activeOpacity={0.8}
-              onPress={isUpvote ? handleUpvotePress : undefined}
-            >
-              <Ionicons
-                name={isUpvote && hasUpvoted ? 'arrow-up-circle' : btn.icon}
-                size={18}
-                color={isUpvoteActive ? '#FFFFFF' : btn.color}
-                style={btn.iconOnly ? null : styles.actionBtnIcon}
-              />
-              {!btn.iconOnly && (
-                <Text
-                  style={[styles.actionBtnText, { color: isUpvoteActive ? '#FFFFFF' : btn.color }]}
-                  numberOfLines={1}
+      <View style={styles.cardBody}>
+        <View style={styles.actionRow}>
+          <View style={styles.actionRowLeft}>
+            {ACTION_BUTTONS_LEFT.map((btn) => {
+              const isUpvote = btn.id === 'upvote';
+              const isUpvoteActive = isUpvote && hasUpvoted;
+              const iconName = isUpvote && hasUpvoted ? btn.iconFilled : btn.icon;
+              const iconColor = isUpvote && hasUpvoted ? '#FFFFFF' : (isUpvote ? UPVOTE_COLOR : COLORS.textPrimary);
+              
+              const btnContent = (
+                <TouchableOpacity
+                  style={[
+                    styles.igActionBtn,
+                    isUpvote && isUpvoteActive && styles.upvoteCircleActive,
+                    isUpvote && !isUpvoteActive && { borderColor: UPVOTE_COLOR, borderWidth: 1.5, backgroundColor: 'transparent' }
+                  ]}
+                  activeOpacity={0.7}
+                  onPress={isUpvote ? handleUpvotePress : undefined}
                 >
-                  {typeof btn.getLabel === 'function' ? btn.getLabel(itemWithDisplayUpvotes) : btn.label}
-                </Text>
-              )}
-            </TouchableOpacity>
-          );
-          return isUpvote && upvoteScaleAnim ? (
-            <Animated.View key={btn.id} style={{ transform: [{ scale: upvoteScaleAnim }] }}>
-              {btnContent}
-            </Animated.View>
-          ) : (
-            <View key={btn.id}>{btnContent}</View>
-          );
-        })}
-      </View>
-      {item.description ? (
-        <Text style={styles.description} numberOfLines={3}>
-          {item.description}
-        </Text>
-      ) : null}
-      {Array.isArray(item.tags) && item.tags.length > 0 ? (
-        <View style={styles.tagsRow}>
-          {item.tags.slice(0, 4).map((tag, idx) => (
-            <View key={idx} style={styles.tagPill}>
-              <Text style={styles.tagText} numberOfLines={1}>{tag}</Text>
-            </View>
-          ))}
+                  <Ionicons name={iconName} size={isUpvote ? 22 : 24} color={iconColor} />
+                </TouchableOpacity>
+              );
+              
+              return isUpvote && upvoteScaleAnim != null ? (
+                <Animated.View key={btn.id} style={{ transform: [{ scale: upvoteScaleAnim }] }}>
+                  {btnContent}
+                </Animated.View>
+              ) : (
+                <View key={btn.id}>{btnContent}</View>
+              );
+            })}
+          </View>
+          <TouchableOpacity 
+            style={[styles.igActionBtn, { backgroundColor: 'transparent' }]} 
+            activeOpacity={0.7}
+          >
+            <Ionicons name="bookmark-outline" size={24} color={COLORS.textPrimary} />
+          </TouchableOpacity>
         </View>
-      ) : null}
+        {displayUpvotes > 0 ? (
+          <Text style={styles.igLikesLine}>
+            {displayUpvotes} {displayUpvotes === 1 ? 'upvote' : 'upvotes'}
+          </Text>
+        ) : null}
+        {item.description ? (() => {
+          const desc = item.description;
+          const isLong = desc.length > DESC_COLLAPSED_LENGTH;
+          const showTruncated = isLong && !descExpanded;
+          const text = showTruncated ? desc.slice(0, DESC_COLLAPSED_LENGTH).trim() + '...' : desc;
+          return (
+            <Text style={styles.igCaption} numberOfLines={!isLong ? 2 : undefined}>
+              <Text style={styles.igCaptionBold}>{item.businessName || 'Business'}</Text>
+              {' '}{text}
+              {isLong ? (
+                <Text style={styles.moreLessLink} onPress={() => setDescExpanded(!descExpanded)}>
+                  {descExpanded ? ' less' : ' more...'}
+                </Text>
+              ) : null}
+            </Text>
+          );
+        })() : null}
+      </View>
     </Animated.View>
+  );
+}
+
+/** Animated category chip with scale-on-press and selected gradient (21st/AuraUI-style). */
+function CategoryChip({ cat, selected, onPress, colors }) {
+  const styles = StyleSheet.create(getHomeStyles(colors));
+  const scaleAnim = useRef(new Animated.Value(1)).current;
+  const handlePressIn = () => {
+    Animated.spring(scaleAnim, {
+      toValue: 0.92,
+      useNativeDriver: true,
+      speed: 50,
+      bounciness: 4,
+    }).start();
+  };
+  const handlePressOut = () => {
+    Animated.spring(scaleAnim, {
+      toValue: 1,
+      useNativeDriver: true,
+      speed: 50,
+      bounciness: 8,
+    }).start();
+  };
+  return (
+    <TouchableOpacity
+      activeOpacity={1}
+      onPress={onPress}
+      onPressIn={handlePressIn}
+      onPressOut={handlePressOut}
+      style={styles.filterChipTouchable}
+    >
+      <Animated.View style={[styles.filterChip, selected && styles.filterChipSelected, { transform: [{ scale: scaleAnim }] }]}>
+        {selected ? (
+          <LinearGradient
+            colors={[`${cat.color}E6`, cat.color]}
+            style={styles.filterCircleGradient}
+          >
+            <Ionicons name={cat.icon} size={18} color="#FFFFFF" />
+          </LinearGradient>
+        ) : (
+          <View style={[styles.filterCircle, { borderColor: cat.color }]}>
+            <Ionicons name={cat.icon} size={16} color={cat.color} />
+          </View>
+        )}
+        <Text style={[styles.filterLabel, selected && styles.filterLabelSelected]} numberOfLines={1}>
+          {cat.label}
+        </Text>
+      </Animated.View>
+    </TouchableOpacity>
   );
 }
 
@@ -416,35 +976,176 @@ function easeInOutCubic(t) {
   return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
 }
 
-function PlaneLoader({ label = 'Refreshing…' }) {
+/** Wraps a feed item and runs a staggered fade-in + slide-up on mount. */
+function StaggeredFeedItem({ index, children }) {
+  const opacity = useRef(new Animated.Value(0)).current;
+  const translateY = useRef(new Animated.Value(24)).current;
+  useEffect(() => {
+    const delay = Math.min(index * 58, 420);
+    Animated.sequence([
+      Animated.delay(delay),
+      Animated.parallel([
+        Animated.timing(opacity, {
+          toValue: 1,
+          duration: 360,
+          easing: Easing.out(Easing.cubic),
+          useNativeDriver: true,
+        }),
+        Animated.timing(translateY, {
+          toValue: 0,
+          duration: 360,
+          easing: Easing.out(Easing.cubic),
+          useNativeDriver: true,
+        }),
+      ]),
+    ]).start();
+  }, [index]);
   return (
-    <View style={styles.loaderWithPlaneWrap}>
-      <View style={styles.loaderWithPlaneCircle}>
-        <ActivityIndicator size="small" color={COLORS.primary} />
-        <View style={styles.loaderWithPlaneInner} pointerEvents="none">
-          <Ionicons name="airplane" size={18} color={COLORS.primary} />
+    <Animated.View style={{ opacity, transform: [{ translateY }] }}>
+      {children}
+    </Animated.View>
+  );
+}
+
+function CoolRefreshControl({ scrollY, refreshing, topInset, colors }) {
+  const rotateAnim = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    if (refreshing) {
+      Animated.loop(
+        Animated.timing(rotateAnim, {
+          toValue: 1,
+          duration: 1000,
+          easing: Easing.linear,
+          useNativeDriver: true,
+        })
+      ).start();
+    } else {
+      rotateAnim.setValue(0);
+      rotateAnim.stopAnimation();
+    }
+  }, [refreshing]);
+
+  const scale = scrollY.interpolate({
+    inputRange: [-120, -60, 0],
+    outputRange: [1.2, 1, 0],
+    extrapolate: 'clamp',
+  });
+
+  const rotate = scrollY.interpolate({
+    inputRange: [-150, 0],
+    outputRange: ['360deg', '0deg'],
+    extrapolate: 'clamp',
+  });
+  
+  const spin = rotateAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: ['0deg', '360deg']
+  });
+
+  const translateY = scrollY.interpolate({
+    inputRange: [-150, 0],
+    outputRange: [0, -50], // Move down slightly as you pull
+    extrapolate: 'clamp',
+  });
+
+  return (
+    <View style={{
+      position: 'absolute',
+      top: topInset + 10,
+      left: 0,
+      right: 0,
+      alignItems: 'center',
+      justifyContent: 'center',
+      zIndex: 1, // Visible above background but below list content if possible, or just rely on list moving down
+      pointerEvents: 'none'
+    }}>
+      <Animated.View style={{
+        transform: [
+          { translateY },
+          { scale },
+          { rotate: refreshing ? spin : rotate }
+        ],
+        opacity: scale
+      }}>
+        <View style={{
+          width: 48, height: 48, borderRadius: 24,
+          backgroundColor: colors.surface,
+          alignItems: 'center', justifyContent: 'center',
+          shadowColor: colors.primary, shadowOffset: {width: 0, height: 4}, shadowOpacity: 0.2, shadowRadius: 8, elevation: 6,
+          borderWidth: 1, borderColor: colors.borderLight
+        }}>
+           <Ionicons name="airplane" size={26} color={colors.primary} />
         </View>
-      </View>
-      {label ? <Text style={styles.footerLoaderText}>{label}</Text> : null}
+      </Animated.View>
     </View>
   );
 }
 
 export default function HomeScreen() {
   const insets = useSafeAreaInsets();
+  const { colors } = useTheme();
   const route = useRoute();
   const navigation = useNavigation();
   const { profile } = useAuth();
+
+  const COLORS = useMemo(() => ({
+    primary: colors.primary,
+    primaryLight: colors.primaryLight,
+    screenBg: colors.background,
+    cardBg: colors.surface,
+    cardBgAlt: colors.borderLight,
+    textPrimary: colors.textPrimary,
+    textSecondary: colors.textSecondary,
+    textMuted: colors.textMuted,
+    textMutedAlt: colors.textMuted,
+    border: colors.border,
+    borderAlt: colors.borderLight,
+    openNow: colors.success,
+    badge: colors.primary,
+    pillBg: colors.borderLight,
+  }), [colors]);
+
+  const CATEGORIES = useMemo(() => [
+    { id: 'nearby', label: 'Nearby', icon: 'location', color: colors.primary },
+    { id: 'food', label: 'Food', icon: 'restaurant', color: colors.success },
+    { id: 'hangout', label: 'Hangout', icon: 'pin', color: colors.afternoon },
+    { id: 'trending', label: 'Trending', icon: 'trending-up', color: colors.morning },
+    { id: 'opennow', label: 'Open Now', icon: 'time', color: colors.primary },
+  ], [colors]);
+
+  const ACTION_BUTTONS_LEFT = useMemo(() => [
+    { id: 'upvote', icon: 'arrow-up', iconFilled: 'arrow-up-circle', color: colors.success },
+    { id: 'share', icon: 'paper-plane-outline', iconFilled: 'paper-plane', color: colors.textPrimary },
+  ], [colors]);
+
+  const UPVOTE_COLOR = colors.success;
+  const styles = useMemo(() => StyleSheet.create(getHomeStyles(colors)), [colors]);
+
   const [locationUpdating, setLocationUpdating] = useState(false);
+  const [userPosition, setUserPosition] = useState(null);
   const [selectedCategory, setSelectedCategory] = useState('nearby');
+  const locationBtnScale = useRef(new Animated.Value(1)).current;
+  const locationBtnRingScale = useRef(new Animated.Value(1)).current;
+  const locationBtnRingOpacity = useRef(new Animated.Value(0)).current;
+  const locationSuccessOpacity = useRef(new Animated.Value(0)).current;
+  const locationBtnBlinkOpacity = useRef(new Animated.Value(1)).current;
+  const pageEntranceOpacity = useRef(new Animated.Value(0)).current;
+  const pageEntranceScale = useRef(new Animated.Value(0.97)).current;
   const [showAIOverlay, setShowAIOverlay] = useState(false);
   const [customQuery, setCustomQuery] = useState('');
+  const [searchQuery, setSearchQuery] = useState('');
   const [highlightedPostId, setHighlightedPostId] = useState(null);
+  const searchInputRef = useRef(null);
   const [posts, setPosts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [fetchError, setFetchError] = useState(null);
   const [showScrollToTop, setShowScrollToTop] = useState(false);
+  const [searchExpanded, setSearchExpanded] = useState(false);
+  const [filtersExpanded, setFiltersExpanded] = useState(false);
+  const searchAnim = useRef(new Animated.Value(0)).current;
+  const filtersSectionAnim = useRef(new Animated.Value(0)).current;
   const [upvoteParticlesVisible, setUpvoteParticlesVisible] = useState(false);
   const [upvoteParticlePosition, setUpvoteParticlePosition] = useState({ x: 0, y: 0 });
   const [selectedClientId, setSelectedClientId] = useState(null);
@@ -453,13 +1154,128 @@ export default function HomeScreen() {
   const scrollOffsetRef = useRef(0);
   const scrollAnimationRef = useRef(null);
   const upvoteAnimations = useRef({}).current;
+  const upvoteInFlightRef = useRef(new Set());
   const refreshingRef = useRef(false);
   const lastScrollY = useRef(0);
   const headerTranslateY = useRef(new Animated.Value(0)).current;
   const headerVisibleRef = useRef(true);
-  const headerBarHeight = insets.top + 6 + 52 + 58;
+  // Reserve space so first post is not covered. Must match header: paddingTop (2) + title row (44) + search (52) + filters (84) + buffer
+  const FILTERS_SECTION_EXPANDED_HEIGHT = 84;
+  const HEADER_TITLE_ROW_HEIGHT = 44;
+  const SEARCH_BAR_HEIGHT = 52; // searchHeight outputRange max
+  const HEADER_TOP_PADDING = 2;
+  const HEADER_BOTTOM_BUFFER = 20; // extra space below header before first post
+  const headerBarHeight =
+    insets.top +
+    HEADER_TOP_PADDING +
+    HEADER_TITLE_ROW_HEIGHT +
+    (searchExpanded ? SEARCH_BAR_HEIGHT : 0) +
+    (filtersExpanded ? FILTERS_SECTION_EXPANDED_HEIGHT : 0) +
+    HEADER_BOTTOM_BUFFER;
   const khalidCommandRef = useRef(null);
   const [khalidContextBanner, setKhalidContextBanner] = useState(null);
+
+  useEffect(() => {
+    Animated.spring(searchAnim, {
+      toValue: searchExpanded ? 1 : 0,
+      useNativeDriver: false, // height/opacity don't support native driver
+      tension: 50,
+      friction: 8,
+    }).start();
+  }, [searchExpanded]);
+
+  useEffect(() => {
+    if (searchExpanded) {
+      const t = setTimeout(() => searchInputRef.current?.focus(), 320);
+      return () => clearTimeout(t);
+    }
+  }, [searchExpanded]);
+
+  useEffect(() => {
+    Animated.spring(filtersSectionAnim, {
+      toValue: filtersExpanded ? 1 : 0,
+      useNativeDriver: false,
+      tension: 65,
+      friction: 11,
+    }).start();
+  }, [filtersExpanded, filtersSectionAnim]);
+
+  const toggleFilters = useCallback(() => {
+    setFiltersExpanded((prev) => !prev);
+  }, []);
+
+  // Continuous blink for location icon so it stays noticeable
+  useEffect(() => {
+    const blink = Animated.loop(
+      Animated.sequence([
+        Animated.timing(locationBtnBlinkOpacity, {
+          toValue: 0.42,
+          duration: 850,
+          easing: Easing.inOut(Easing.ease),
+          useNativeDriver: true,
+        }),
+        Animated.timing(locationBtnBlinkOpacity, {
+          toValue: 1,
+          duration: 850,
+          easing: Easing.inOut(Easing.ease),
+          useNativeDriver: true,
+        }),
+      ])
+    );
+    blink.start();
+    return () => blink.stop();
+  }, [locationBtnBlinkOpacity]);
+
+  // Page entrance: fade + scale when content is ready
+  useEffect(() => {
+    if (!loading) {
+      Animated.parallel([
+        Animated.timing(pageEntranceOpacity, {
+          toValue: 1,
+          duration: 420,
+          easing: Easing.out(Easing.cubic),
+          useNativeDriver: true,
+        }),
+        Animated.spring(pageEntranceScale, {
+          toValue: 1,
+          friction: 11,
+          tension: 80,
+          useNativeDriver: true,
+        }),
+      ]).start();
+    }
+  }, [loading, pageEntranceOpacity, pageEntranceScale]);
+
+  const toggleSearch = () => {
+    setSearchExpanded(!searchExpanded);
+  };
+
+  const searchHeight = searchAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0, 52],
+  });
+
+  const searchOpacity = searchAnim.interpolate({
+    inputRange: [0, 0.5, 1],
+    outputRange: [0, 0, 1],
+  });
+
+  const filtersSectionHeight = filtersSectionAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0, FILTERS_SECTION_EXPANDED_HEIGHT],
+  });
+  const filtersSectionOpacity = filtersSectionAnim.interpolate({
+    inputRange: [0, 0.5, 1],
+    outputRange: [0, 0, 1],
+  });
+
+  const filteredPosts = useMemo(() => {
+    const bySearch = filterPostsBySearch(posts, searchQuery);
+    if (userPosition?.latitude != null && userPosition?.longitude != null) {
+      return sortPostsByDistance(bySearch, userPosition.latitude, userPosition.longitude);
+    }
+    return bySearch;
+  }, [posts, searchQuery, userPosition?.latitude, userPosition?.longitude]);
 
   const fetchPosts = useCallback(async (opts = {}) => {
     const { skipGlobalLoading = false, onDone } = opts;
@@ -468,7 +1284,7 @@ export default function HomeScreen() {
       if (!skipGlobalLoading) setLoading(true);
       console.log('[Home] Fetching posts from Supabase...');
       const { data: postRows, error } = await supabase
-        .from('post')
+        .from('posts')
         .select('*')
         .order('created_at', { ascending: false });
 
@@ -523,18 +1339,56 @@ export default function HomeScreen() {
         const postPrice = row.price_range != null && row.price_range !== '' ? row.price_range : null;
         const priceRange = postPrice ?? clientPrice;
         const businessName = client?.business_name ?? client?.name ?? client?.business_name_ar ?? null;
+        const clientImage = client?.client_image != null && String(client.client_image).trim() !== '' ? String(client.client_image).trim() : null;
+        
+        // Ensure post_image is a valid string/URI
+        let imageUri = row.post_image;
+        
+        if (imageUri && typeof imageUri === 'string' && imageUri.startsWith('[{')) {
+          try {
+            const parsed = JSON.parse(imageUri);
+            if (Array.isArray(parsed) && parsed[0]?.url) {
+              imageUri = parsed[0].url;
+            } else if (Array.isArray(parsed) && typeof parsed[0] === 'string') {
+              imageUri = parsed[0];
+            }
+          } catch (e) {
+            console.warn('[Home] Failed to parse post_image JSON:', e);
+          }
+        }
+        
+        // If it's a relative path from Supabase storage, prepend the base URL
+        if (imageUri && typeof imageUri === 'string' && !imageUri.startsWith('http')) {
+          const cleanPath = imageUri.startsWith('gobahrain-post-images/') 
+            ? imageUri.replace('gobahrain-post-images/', '') 
+            : imageUri;
+          imageUri = `https://zonhaprelkjyjugpqfdn.supabase.co/storage/v1/object/public/gobahrain-post-images/${cleanPath}`;
+        }
+
+        // Final check: if still no imageUri, use a placeholder or check if it's a direct Supabase path
+        if (!imageUri && row.post_image) {
+          imageUri = row.post_image;
+        }
+
+        const lat = client?.lat != null && client?.lat !== '' ? parseFloat(client.lat) : null;
+        const lng = client?.long != null && client?.long !== '' ? parseFloat(client.long) : (client?.lng != null && client?.lng !== '' ? parseFloat(client.lng) : null);
+        const hasCoords = lat != null && !Number.isNaN(lat) && lng != null && !Number.isNaN(lng);
+
         return {
           id: row.post_uuid,
           clientId: row.client_a_uuid,
           username: row.client_a_uuid?.slice(0, 8) ?? 'client',
           businessName: businessName ? String(businessName).trim() : null,
+          clientImage,
           tags,
           rating,
           priceRange: priceRange != null ? `${priceRange} BHD` : '',
           verified: false,
           location: client?.location || client?.address || '',
           distance: '',
-          imageUri: row.post_image,
+          lat: hasCoords ? lat : null,
+          lng: hasCoords ? lng : null,
+          imageUri: imageUri,
           openNow: false,
           upvotes: 0,
           hasUpvoted: false,
@@ -604,8 +1458,19 @@ export default function HomeScreen() {
 
   const handleUpvoteToggle = useCallback(async (post, event) => {
     const adding = !post.hasUpvoted;
+    if (upvoteInFlightRef.current.has(post.id)) return;
+    upvoteInFlightRef.current.add(post.id);
+
     if (!upvoteAnimations[post.id]) upvoteAnimations[post.id] = { scale: new Animated.Value(1) };
     const scaleAnim = upvoteAnimations[post.id].scale;
+
+    // Update count and state immediately so the UI feels instant
+    const newCount = Math.max(0, post.upvotes + (adding ? 1 : -1));
+    setPosts((prev) =>
+      prev.map((p) =>
+        p.id === post.id ? { ...p, hasUpvoted: adding, upvotes: newCount } : p
+      )
+    );
 
     if (event?.nativeEvent) {
       const { pageX, pageY } = event.nativeEvent;
@@ -613,58 +1478,56 @@ export default function HomeScreen() {
     }
     if (adding) {
       setUpvoteParticlesVisible(true);
-      setTimeout(() => setUpvoteParticlesVisible(false), 950);
+      setTimeout(() => setUpvoteParticlesVisible(false), 1000);
       Animated.sequence([
         Animated.spring(scaleAnim, {
-          toValue: 1.15,
-          tension: 300,
-          friction: 4,
+          toValue: 1.18,
+          tension: 280,
+          friction: 7,
           useNativeDriver: true,
         }),
         Animated.spring(scaleAnim, {
           toValue: 1,
-          tension: 300,
-          friction: 6,
+          tension: 260,
+          friction: 9,
           useNativeDriver: true,
         }),
       ]).start();
     } else {
       Animated.sequence([
         Animated.timing(scaleAnim, {
-          toValue: 0.9,
-          duration: 150,
+          toValue: 0.92,
+          duration: 100,
           useNativeDriver: true,
         }),
         Animated.spring(scaleAnim, {
           toValue: 1,
-          tension: 300,
-          friction: 6,
+          tension: 260,
+          friction: 10,
           useNativeDriver: true,
         }),
       ]).start();
     }
 
-    const voterId = await getVoterId();
-    if (adding) {
-      const { error } = await supabase.from('post_upvote').insert({ post_uuid: post.id, voter_id: voterId });
-      if (error) {
-        console.warn('[Home] Upvote insert failed:', error.message);
-        return;
+    try {
+      const voterId = await getVoterId();
+      if (adding) {
+        const { error } = await supabase.from('post_upvote').insert({ post_uuid: post.id, voter_id: voterId });
+        if (error) throw error;
+      } else {
+        const { error } = await supabase.from('post_upvote').delete().eq('post_uuid', post.id).eq('voter_id', voterId);
+        if (error) throw error;
       }
-    } else {
-      const { error } = await supabase.from('post_upvote').delete().eq('post_uuid', post.id).eq('voter_id', voterId);
-      if (error) {
-        console.warn('[Home] Upvote delete failed:', error.message);
-        return;
-      }
+    } catch (err) {
+      console.warn('[Home] Upvote failed:', err?.message ?? err);
+      setPosts((prev) =>
+        prev.map((p) =>
+          p.id === post.id ? { ...p, hasUpvoted: !adding, upvotes: post.upvotes } : p
+        )
+      );
+    } finally {
+      upvoteInFlightRef.current.delete(post.id);
     }
-    setPosts((prev) =>
-      prev.map((p) =>
-        p.id === post.id
-          ? { ...p, hasUpvoted: adding, upvotes: Math.max(0, p.upvotes + (adding ? 1 : -1)) }
-          : p
-      )
-    );
   }, [upvoteAnimations]);
 
   const overlayBackdropOpacity = useRef(new Animated.Value(0)).current;
@@ -880,51 +1743,61 @@ export default function HomeScreen() {
   };
 
   const handleAISubmit = (choice) => {
-    const resolved = typeof choice === 'string' ? choice : (customQuery.trim() || choice);
-    const postId = choiceToPostId(resolved, posts);
+    const isQuickOption = typeof choice === 'string' && AI_QUICK_OPTIONS.some((o) => o.id === choice);
+    const nextQuery = isQuickOption ? choice : (customQuery.trim() || (typeof choice === 'string' ? choice : ''));
+    setSearchQuery(nextQuery);
+    setCustomQuery('');
+    const nextFiltered = filterPostsBySearch(posts, nextQuery);
     closeOverlayWithAnimation(() => {
       InteractionManager.runAfterInteractions(() => {
         setTimeout(() => {
-          const idx = posts.findIndex((p) => p.id === postId);
-          if (flatListRef.current && idx >= 0) {
-            smoothScrollToIndex(idx, () => setHighlightedPostId(postId));
+          if (nextFiltered.length > 0 && flatListRef.current) {
+            smoothScrollToIndex(0, () => setHighlightedPostId(nextFiltered[0].id));
           } else {
-            setHighlightedPostId(postId);
+            setHighlightedPostId(null);
           }
-        }, 120);
+        }, 150);
       });
     });
   };
 
-  const handleScroll = useCallback(
-    (e) => {
-      const y = e.nativeEvent.contentOffset.y;
-      const diff = y - lastScrollY.current;
-      lastScrollY.current = y;
-      scrollOffsetRef.current = y;
+  const scrollY = useRef(new Animated.Value(0)).current;
+  const handleScroll = useMemo(
+    () =>
+      Animated.event(
+        [{ nativeEvent: { contentOffset: { y: scrollY } } }],
+        {
+          useNativeDriver: true, // Use native driver for performance
+          listener: (e) => {
+            const y = e.nativeEvent.contentOffset.y;
+            const diff = y - lastScrollY.current;
+            lastScrollY.current = y;
+            scrollOffsetRef.current = y;
 
-      if (y > SCROLL_TO_TOP_SHOW_AT) setShowScrollToTop(true);
-      else if (y < SCROLL_TO_TOP_HIDE_AT) setShowScrollToTop(false);
+            if (y > SCROLL_TO_TOP_SHOW_AT) setShowScrollToTop(true);
+            else if (y < SCROLL_TO_TOP_HIDE_AT) setShowScrollToTop(false);
 
-      if (diff > SCROLL_DIRECTION_THRESHOLD && y > SCROLL_THRESHOLD && headerVisibleRef.current) {
-        headerVisibleRef.current = false;
-        Animated.timing(headerTranslateY, {
-          toValue: -headerBarHeight,
-          duration: HEADER_ANIM_DURATION,
-          easing: Easing.out(Easing.cubic),
-          useNativeDriver: true,
-        }).start();
-      } else if (diff < -SCROLL_DIRECTION_THRESHOLD && !headerVisibleRef.current) {
-        headerVisibleRef.current = true;
-        Animated.timing(headerTranslateY, {
-          toValue: 0,
-          duration: HEADER_ANIM_DURATION,
-          easing: Easing.out(Easing.cubic),
-          useNativeDriver: true,
-        }).start();
-      }
-    },
-    [headerTranslateY, headerBarHeight]
+            if (diff > SCROLL_DIRECTION_THRESHOLD && y > SCROLL_THRESHOLD && headerVisibleRef.current) {
+              headerVisibleRef.current = false;
+              Animated.timing(headerTranslateY, {
+                toValue: -headerBarHeight,
+                duration: HEADER_ANIM_DURATION,
+                easing: Easing.out(Easing.cubic),
+                useNativeDriver: true,
+              }).start();
+            } else if (diff < -SCROLL_DIRECTION_THRESHOLD && !headerVisibleRef.current) {
+              headerVisibleRef.current = true;
+              Animated.timing(headerTranslateY, {
+                toValue: 0,
+                duration: HEADER_ANIM_DURATION,
+                easing: Easing.out(Easing.cubic),
+                useNativeDriver: true,
+              }).start();
+            }
+          },
+        }
+      ),
+    [scrollY, headerTranslateY, headerBarHeight]
   );
 
   const scrollToTop = useCallback(() => {
@@ -969,6 +1842,65 @@ export default function HomeScreen() {
         .update({ lat: latitude, long: longitude })
         .eq('user_a_uuid', userUuid);
       if (error) throw error;
+
+      // Animate list reorder (closest first)
+      LayoutAnimation.configureNext(
+        LayoutAnimation.create(320, LayoutAnimation.Types.easeInEaseOut, LayoutAnimation.Properties.opacity)
+      );
+      setUserPosition({ latitude, longitude });
+      // Scroll to top after reorder so the closest place is visible
+      requestAnimationFrame(() => {
+        setTimeout(() => {
+          flatListRef.current?.scrollToOffset({ offset: 0, animated: true });
+        }, 100);
+      });
+
+      // Cool button animation: pulse + radar ring
+      locationBtnRingOpacity.setValue(0.7);
+      locationBtnRingScale.setValue(1);
+      locationSuccessOpacity.setValue(0);
+      Animated.sequence([
+        Animated.parallel([
+          Animated.spring(locationBtnScale, {
+            toValue: 1.35,
+            useNativeDriver: true,
+            friction: 6,
+            tension: 200,
+          }),
+          Animated.timing(locationBtnRingOpacity, {
+            toValue: 0,
+            duration: 500,
+            useNativeDriver: true,
+            easing: Easing.out(Easing.cubic),
+          }),
+          Animated.timing(locationBtnRingScale, {
+            toValue: 2.2,
+            duration: 500,
+            useNativeDriver: true,
+            easing: Easing.out(Easing.cubic),
+          }),
+        ]),
+        Animated.spring(locationBtnScale, {
+          toValue: 1,
+          useNativeDriver: true,
+          friction: 7,
+          tension: 120,
+        }),
+        Animated.sequence([
+          Animated.timing(locationSuccessOpacity, {
+            toValue: 1,
+            duration: 120,
+            useNativeDriver: true,
+          }),
+          Animated.delay(600),
+          Animated.timing(locationSuccessOpacity, {
+            toValue: 0,
+            duration: 200,
+            useNativeDriver: true,
+          }),
+        ]),
+      ]).start();
+
       if (areaLabel) {
         Alert.alert('Location saved', `You're in ${areaLabel}. Coordinates saved.`);
       } else {
@@ -979,79 +1911,200 @@ export default function HomeScreen() {
     } finally {
       setLocationUpdating(false);
     }
-  }, [profile?.user?.user_a_uuid]);
+  }, [profile?.user?.user_a_uuid, locationBtnScale, locationBtnRingScale, locationBtnRingOpacity, locationSuccessOpacity]);
 
   return (
     <ScreenContainer style={styles.screen}>
+      <View style={styles.screenGradientWrap} pointerEvents="none">
+        <LinearGradient
+          colors={[COLORS.screenBg, '#F1F5F9', COLORS.screenBg]}
+          locations={[0, 0.4, 1]}
+          style={StyleSheet.absoluteFill}
+        />
+      </View>
       <Animated.View
         style={[
           styles.headerFloatingWrap,
-          { paddingTop: insets.top + 6, transform: [{ translateY: headerTranslateY }] },
+          { paddingTop: insets.top + 2, transform: [{ translateY: headerTranslateY }] },
         ]}
         pointerEvents="box-none"
       >
-        <View style={styles.instagramHeader}>
-          <TouchableOpacity
-            style={styles.headerIconBtn}
-            onPress={handleUpdateLocation}
-            disabled={locationUpdating}
-            activeOpacity={0.7}
-          >
-            {locationUpdating ? (
-              <ActivityIndicator size="small" color={COLORS.textPrimary} />
-            ) : (
-              <Ionicons name="location" size={26} color={COLORS.textPrimary} />
-            )}
-          </TouchableOpacity>
-          <Text style={styles.instagramLogo}>Go Bahrain</Text>
-          <View style={styles.headerRight}>
-            <TouchableOpacity style={styles.headerIconBtn} activeOpacity={0.7}>
-              <View style={styles.heartWrap}>
-                <Ionicons name="heart-outline" size={26} color={COLORS.textPrimary} />
-                {NOTIFICATION_COUNT > 0 && (
-                  <View style={[styles.badge, styles.badgeOnHeart]}>
-                    <Text style={styles.badgeText}>{NOTIFICATION_COUNT > 9 ? '9+' : NOTIFICATION_COUNT}</Text>
-                  </View>
-                )}
+        <BlurView intensity={Platform.OS === 'ios' ? 80 : 0} tint={colors.mode === 'dark' ? 'dark' : 'light'} style={styles.headerBlur} />
+        <View style={styles.headerContent}>
+          <View style={styles.instagramHeader}>
+            <TouchableOpacity
+              style={styles.headerIconBtn}
+              onPress={handleUpdateLocation}
+              disabled={locationUpdating}
+              activeOpacity={0.7}
+            >
+              <View style={styles.locationBtnInner}>
+                <Animated.View
+                  style={[
+                    styles.locationBtnRing,
+                    {
+                      transform: [{ scale: locationBtnRingScale }],
+                      opacity: locationBtnRingOpacity,
+                      borderColor: COLORS.primary,
+                    },
+                  ]}
+                />
+                <Animated.View style={{ transform: [{ scale: locationBtnScale }] }}>
+                  {locationUpdating ? (
+                    <ActivityIndicator size="small" color={COLORS.textPrimary} />
+                  ) : (
+                    <>
+                      <Animated.View
+                        style={{
+                          opacity: Animated.multiply(
+                            Animated.subtract(1, locationSuccessOpacity),
+                            locationBtnBlinkOpacity
+                          ),
+                        }}
+                      >
+                        <Ionicons name="location-outline" size={24} color={COLORS.textPrimary} />
+                      </Animated.View>
+                      <Animated.View
+                        style={[
+                          StyleSheet.absoluteFill,
+                          styles.locationSuccessIconWrap,
+                          { opacity: locationSuccessOpacity },
+                        ]}
+                        pointerEvents="none"
+                      >
+                        <Ionicons name="location" size={24} color={COLORS.primary} />
+                      </Animated.View>
+                    </>
+                  )}
+                </Animated.View>
               </View>
             </TouchableOpacity>
-            <ProfileButton iconColor={COLORS.textPrimary} />
+            <View style={styles.headerCenter}>
+              <Text style={styles.instagramLogo}>Go Bahrain</Text>
+            </View>
+            <View style={styles.headerRight}>
+              <TouchableOpacity
+                style={[styles.headerIconBtn, filtersExpanded && styles.headerIconBtnActive]}
+                activeOpacity={0.7}
+                onPress={toggleFilters}
+              >
+                <Ionicons
+                  name={filtersExpanded ? "options" : "options-outline"}
+                  size={24}
+                  color={filtersExpanded ? COLORS.primary : COLORS.textPrimary}
+                />
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.headerIconBtn}
+                activeOpacity={0.7}
+                onPress={toggleSearch}
+              >
+                <Ionicons name={searchExpanded ? "close-outline" : "search-outline"} size={24} color={COLORS.textPrimary} />
+              </TouchableOpacity>
+            </View>
           </View>
-        </View>
-        <View style={styles.filtersSection}>
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={styles.filtersScroll}
-            style={styles.filtersScrollView}
+
+          <Animated.View 
+            style={[
+              styles.searchBarContainer, 
+              { 
+                height: searchHeight,
+                opacity: searchOpacity,
+                overflow: 'hidden'
+              }
+            ]}
           >
-            {CATEGORIES.map((cat) => {
-              const selected = selectedCategory === cat.id;
-              return (
+            <View style={styles.searchBar}>
+              <Ionicons name="search-outline" size={20} color={COLORS.textSecondary} />
+              <TextInput
+                ref={searchInputRef}
+                style={styles.searchInput}
+                placeholder="Search places, food, tags…"
+                placeholderTextColor={COLORS.textMuted}
+                value={searchQuery}
+                onChangeText={setSearchQuery}
+                returnKeyType="search"
+                onSubmitEditing={() => {
+                  if (filteredPosts.length > 0 && flatListRef.current) {
+                    smoothScrollToIndex(0, () => setHighlightedPostId(filteredPosts[0].id));
+                  }
+                }}
+              />
+              {searchQuery.length > 0 ? (
                 <TouchableOpacity
-                  key={cat.id}
-                  style={[styles.filterChip, selected && styles.filterChipSelected]}
-                  onPress={() => setSelectedCategory(cat.id)}
-                  activeOpacity={0.8}
+                  onPress={() => { setSearchQuery(''); setHighlightedPostId(null); }}
+                  hitSlop={8}
+                  style={styles.searchClearBtn}
                 >
-                  <View style={[styles.filterCircle, { borderColor: cat.color }, selected && { backgroundColor: `${cat.color}18` }]}>
-                    <Ionicons name={cat.icon} size={16} color={cat.color} />
-                  </View>
-                  <Text style={[styles.filterLabel, selected && styles.filterLabelSelected]} numberOfLines={1}>
-                    {cat.label}
-                  </Text>
+                  <Ionicons name="close-circle" size={20} color={COLORS.textMuted} />
                 </TouchableOpacity>
-              );
-            })}
-          </ScrollView>
+              ) : (
+                <TouchableOpacity
+                  onPress={() => setShowAIOverlay(true)}
+                  hitSlop={8}
+                  style={styles.aiSparkle}
+                >
+                  <Ionicons name="sparkles" size={18} color={COLORS.primary} />
+                </TouchableOpacity>
+              )}
+            </View>
+          </Animated.View>
+
+          <Animated.View
+            style={[
+              styles.filtersSection,
+              {
+                height: filtersSectionHeight,
+                opacity: filtersSectionOpacity,
+                overflow: 'hidden',
+              },
+            ]}
+          >
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.filtersScroll}
+              style={styles.filtersScrollView}
+            >
+              {CATEGORIES.map((cat) => {
+                const selected = selectedCategory === cat.id;
+                return (
+                <CategoryChip
+                  key={cat.id}
+                  cat={cat}
+                  selected={selected}
+                  onPress={() => setSelectedCategory(cat.id)}
+                  colors={colors}
+                />
+                );
+              })}
+            </ScrollView>
+          </Animated.View>
         </View>
       </Animated.View>
+
+      <CoolRefreshControl 
+        scrollY={scrollY} 
+        refreshing={refreshing} 
+        topInset={headerBarHeight} 
+        colors={colors} 
+      />
 
       {loading ? (
         <View style={styles.loadingWrap}>
           <ActivityIndicator size="large" color={COLORS.primary} />
         </View>
-      ) : posts.length === 0 ? (
+      ) : (
+      <Animated.View
+        style={[
+          styles.pageContentWrap,
+          {
+            opacity: pageEntranceOpacity,
+            transform: [{ scale: pageEntranceScale }],
+          },
+        ]}
+      >
+      {posts.length === 0 ? (
         <View style={styles.loadingWrap}>
           <Ionicons
             name={fetchError ? 'cloud-offline-outline' : 'images-outline'}
@@ -1076,38 +2129,59 @@ export default function HomeScreen() {
             </TouchableOpacity>
           ) : null}
         </View>
+      ) : searchQuery.trim() && filteredPosts.length === 0 ? (
+        <View style={styles.loadingWrap}>
+          <Ionicons name="search-outline" size={48} color={COLORS.textMuted} />
+          <Text style={styles.emptyText}>No results for "{searchQuery.trim()}"</Text>
+          <TouchableOpacity
+            style={styles.retryBtn}
+            onPress={() => { setSearchQuery(''); setHighlightedPostId(null); }}
+            activeOpacity={0.8}
+          >
+            <Text style={styles.retryBtnText}>Clear search</Text>
+          </TouchableOpacity>
+        </View>
       ) : (
-        <FlatList
+        <Animated.FlatList
           ref={flatListRef}
-          data={posts}
+          data={filteredPosts}
           keyExtractor={(item) => item.id}
-          ListHeaderComponent={
-            khalidContextBanner ? (
-              <View style={styles.khalidContextBanner}>
-                <Ionicons name="sparkles" size={16} color={COLORS.primary} />
-                <Text style={styles.khalidContextBannerText} numberOfLines={1}>
-                  Khalid showed you: {khalidContextBanner}
-                </Text>
-                <TouchableOpacity onPress={() => setKhalidContextBanner(null)} hitSlop={8}>
-                  <Ionicons name="close-circle" size={20} color={COLORS.textMuted} />
-                </TouchableOpacity>
-              </View>
-            ) : null
-          }
-          renderItem={({ item }) => {
+          renderItem={({ item, index }) => {
             if (!upvoteAnimations[item.id]) upvoteAnimations[item.id] = { scale: new Animated.Value(1) };
             return (
-              <PostCard
-                item={item}
-                isHighlighted={item.id === highlightedPostId}
-                onHighlightDone={() => setHighlightedPostId(null)}
-                onUpvoteToggle={handleUpvoteToggle}
-                onClientPress={(post) => post?.clientId && setSelectedClientId(post.clientId)}
-                upvoteScaleAnim={upvoteAnimations[item.id].scale}
-              />
+              <StaggeredFeedItem index={index}>
+                <PostCard
+                  item={item}
+                  isHighlighted={item.id === highlightedPostId}
+                  onHighlightDone={() => setHighlightedPostId(null)}
+                  onUpvoteToggle={handleUpvoteToggle}
+                  onClientPress={(post) => post?.clientId && setSelectedClientId(post.clientId)}
+                  upvoteScaleAnim={upvoteAnimations[item.id].scale}
+                  styles={styles}
+                  COLORS={COLORS}
+                  ACTION_BUTTONS_LEFT={ACTION_BUTTONS_LEFT}
+                  UPVOTE_COLOR={UPVOTE_COLOR}
+                />
+              </StaggeredFeedItem>
             );
           }}
-          contentContainerStyle={[styles.feedContent, { paddingTop: headerBarHeight + 8 }]}
+          ListHeaderComponent={
+            <>
+              {khalidContextBanner ? (
+                <View style={styles.khalidContextBanner}>
+                  <Ionicons name="sparkles" size={16} color={COLORS.primary} />
+                  <Text style={styles.khalidContextBannerText} numberOfLines={1}>
+                    Khalid showed you: {khalidContextBanner}
+                  </Text>
+                  <TouchableOpacity onPress={() => setKhalidContextBanner(null)} hitSlop={8}>
+                    <Ionicons name="close-circle" size={20} color={COLORS.textMuted} />
+                  </TouchableOpacity>
+                </View>
+              ) : null}
+              {refreshing ? null : null}
+            </>
+          }
+          contentContainerStyle={[styles.feedContent, { paddingTop: headerBarHeight }]}
           style={styles.feedList}
           showsVerticalScrollIndicator={false}
           onScrollToIndexFailed={() => {}}
@@ -1117,12 +2191,15 @@ export default function HomeScreen() {
             <RefreshControl
               refreshing={refreshing}
               onRefresh={handleRefresh}
-              colors={[COLORS.primary]}
-              tintColor={COLORS.primary}
+              colors={['transparent']} 
+              tintColor="transparent"
+              progressBackgroundColor="transparent"
+              style={{ backgroundColor: 'transparent' }}
             />
           }
-          ListHeaderComponent={refreshing ? <PlaneLoader label="Refreshing…" /> : null}
         />
+      )}
+      </Animated.View>
       )}
 
       <ClientProfileModal
@@ -1130,6 +2207,10 @@ export default function HomeScreen() {
         clientId={selectedClientId}
         onClose={() => setSelectedClientId(null)}
         insets={insets}
+        onOpenARNavigate={(dest) => {
+          setSelectedClientId(null);
+          navigation.navigate('AR', { navigateTo: dest });
+        }}
       />
 
       {/* AI overlay: glass, question + block options */}
@@ -1224,558 +2305,24 @@ export default function HomeScreen() {
           </Animated.View>
         </KeyboardAvoidingView>
       </Modal>
-      <UpvoteParticles visible={upvoteParticlesVisible} position={upvoteParticlePosition} />
+      <UpvoteParticles visible={upvoteParticlesVisible} position={upvoteParticlePosition} UPVOTE_COLOR={UPVOTE_COLOR} colors={colors} />
       {!loading && posts.length > 0 && showScrollToTop ? (
         <TouchableOpacity
           style={[styles.scrollToTopBtn, { bottom: 24 + insets.bottom }]}
           onPress={scrollToTop}
-          activeOpacity={0.85}
+          activeOpacity={0.9}
         >
-          <Ionicons name="arrow-up" size={24} color="#FFFFFF" />
+          <LinearGradient
+            colors={[colors.primaryLight, colors.primary]}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={styles.scrollToTopGradient}
+          >
+            <Ionicons name="arrow-up" size={24} color="#FFFFFF" />
+          </LinearGradient>
         </TouchableOpacity>
       ) : null}
     </ScreenContainer>
   );
 }
 
-const styles = StyleSheet.create({
-  screen: {
-    backgroundColor: COLORS.screenBg,
-  },
-  scrollToTopBtn: {
-    position: 'absolute',
-    right: 20,
-    width: 52,
-    height: 52,
-    borderRadius: 26,
-    backgroundColor: COLORS.primary,
-    alignItems: 'center',
-    justifyContent: 'center',
-    zIndex: 8,
-    ...Platform.select({
-      ios: {
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.25,
-        shadowRadius: 6,
-      },
-      android: { elevation: 6 },
-    }),
-  },
-  headerFloatingWrap: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    zIndex: 10,
-    backgroundColor: COLORS.cardBg,
-    paddingBottom: 4,
-  },
-  instagramHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 14,
-    backgroundColor: COLORS.cardBg,
-  },
-  headerRight: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-  },
-  headerIconBtn: {
-    width: 44,
-    height: 44,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  instagramLogo: {
-    fontSize: 22,
-    fontWeight: '700',
-    color: COLORS.textPrimary,
-    letterSpacing: 0.5,
-  },
-  heartWrap: {
-    position: 'relative',
-  },
-  badge: {
-    position: 'absolute',
-    top: -2,
-    right: -2,
-    minWidth: 16,
-    height: 16,
-    borderRadius: 8,
-    backgroundColor: COLORS.badge,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 4,
-  },
-  badgeOnHeart: {
-    top: -4,
-    right: -4,
-  },
-  badgeText: {
-    fontSize: 10,
-    fontWeight: '700',
-    color: '#FFFFFF',
-  },
-  filtersSection: {
-    borderBottomWidth: 1,
-    borderBottomColor: COLORS.border,
-    backgroundColor: COLORS.cardBg,
-  },
-  filtersScrollView: {
-    flexGrow: 0,
-  },
-  filtersScroll: {
-    paddingVertical: 6,
-    paddingHorizontal: 10,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-  },
-  filterChip: {
-    alignItems: 'center',
-    marginRight: 12,
-  },
-  filterChipSelected: {
-    opacity: 1,
-  },
-  filterCircle: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    borderWidth: 1.5,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 4,
-  },
-  filterLabel: {
-    fontSize: 11,
-    color: COLORS.textPrimary,
-    fontWeight: '500',
-    maxWidth: 56,
-    textAlign: 'center',
-  },
-  filterLabelSelected: {
-    fontWeight: '600',
-    color: COLORS.primary,
-  },
-  feedList: {
-    flex: 1,
-  },
-  feedContent: {
-    paddingVertical: 8,
-    paddingBottom: 24,
-  },
-  loaderWithPlaneWrap: {
-    paddingVertical: 20,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  loaderWithPlaneCircle: {
-    width: 36,
-    height: 36,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 8,
-  },
-  loaderWithPlaneInner: {
-    ...StyleSheet.absoluteFillObject,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  footerLoader: {
-    paddingVertical: 20,
-    alignItems: 'center',
-    justifyContent: 'center',
-    flexDirection: 'row',
-    gap: 10,
-  },
-  footerLoaderText: {
-    fontSize: 14,
-    color: COLORS.textMuted,
-    fontWeight: '500',
-  },
-  card: {
-    backgroundColor: '#FFFFFF',
-    marginHorizontal: 0,
-    marginBottom: 16,
-    borderRadius: 0,
-    overflow: 'hidden',
-    ...Platform.select({
-      ios: {
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 4 },
-        shadowOpacity: 0.08,
-        shadowRadius: 12,
-      },
-      android: {
-        elevation: 4,
-      },
-    }),
-  },
-  cardHighlightGlow: {
-    borderRadius: 0,
-    ...Platform.select({
-      ios: {
-        shadowColor: COLORS.primary,
-        shadowOffset: { width: 0, height: 0 },
-        shadowOpacity: 1,
-        shadowRadius: 16,
-      },
-      android: { elevation: 0 },
-    }),
-  },
-  cardHighlightBorder: {
-    borderWidth: 2,
-    borderColor: COLORS.primary,
-    borderRadius: 0,
-  },
-  cardHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 12,
-    paddingHorizontal: 14,
-    paddingLeft: 14,
-  },
-  cardAvatar: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: '#FEF2F2',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 12,
-  },
-  cardHeaderContent: {
-    flex: 1,
-    minWidth: 0,
-  },
-  businessName: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: '#111827',
-    marginBottom: 2,
-  },
-  cardSubline: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  cardSublineText: {
-    fontSize: 13,
-    color: '#6B7280',
-    fontWeight: '500',
-  },
-  cardSublineDot: {
-    fontSize: 13,
-    color: '#9CA3AF',
-    fontWeight: '400',
-  },
-  tagsRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: 14,
-    paddingBottom: 14,
-    paddingTop: 4,
-  },
-  tagPill: {
-    backgroundColor: '#F3F4F6',
-    paddingVertical: 4,
-    paddingHorizontal: 10,
-    borderRadius: 20,
-  },
-  tagText: {
-    fontSize: 12,
-    color: '#4B5563',
-    fontWeight: '500',
-  },
-  usernameRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 2,
-  },
-  username: {
-    fontSize: 15,
-    fontWeight: '600',
-    color: COLORS.textPrimary,
-    marginRight: 4,
-  },
-  verifiedIcon: {
-    marginLeft: 2,
-  },
-  locationRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  location: {
-    fontSize: 12,
-    color: COLORS.textSecondary,
-    marginLeft: 4,
-  },
-  openNowPill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: COLORS.openNow,
-    paddingVertical: 6,
-    paddingHorizontal: 10,
-    borderRadius: 8,
-  },
-  openNowDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: '#FFFFFF',
-    marginRight: 6,
-  },
-  openNowText: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#FFFFFF',
-  },
-  imageWrap: {
-    position: 'relative',
-    backgroundColor: COLORS.pillBg,
-  },
-  cardImage: {
-    backgroundColor: COLORS.pillBg,
-  },
-  upvoteParticlesContainer: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    zIndex: 9999,
-    pointerEvents: 'none',
-  },
-  upvoteParticle: {
-    position: 'absolute',
-    left: 0,
-    top: 0,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  upvoteParticleIconWrap: {
-    width: PARTICLE_SIZE,
-    height: PARTICLE_SIZE,
-    borderRadius: PARTICLE_SIZE / 2,
-    backgroundColor: '#FFFFFF',
-    justifyContent: 'center',
-    alignItems: 'center',
-    ...Platform.select({
-      ios: {
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.4,
-        shadowRadius: 4,
-      },
-      android: { elevation: 6 },
-    }),
-  },
-  actionRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    alignItems: 'center',
-    justifyContent: 'flex-start',
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    gap: 10,
-  },
-  actionBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    flexShrink: 0,
-    paddingVertical: 8,
-    paddingHorizontal: 10,
-    borderRadius: 20,
-    borderWidth: 1.5,
-  },
-  actionBtnIconOnly: {
-    width: 40,
-    height: 40,
-    padding: 0,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderRadius: 10,
-  },
-  actionBtnIcon: {
-    marginRight: 5,
-  },
-  actionBtnText: {
-    fontSize: 12,
-    fontWeight: '600',
-    flexShrink: 1,
-  },
-  description: {
-    fontSize: 14,
-    color: '#4B5563',
-    lineHeight: 20,
-    paddingHorizontal: 14,
-    paddingTop: 4,
-    paddingBottom: 12,
-  },
-  khalidContextBanner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    paddingVertical: 10,
-    paddingHorizontal: 14,
-    marginBottom: 8,
-    backgroundColor: '#FEF2F2',
-    borderLeftWidth: 4,
-    borderLeftColor: COLORS.primary,
-    borderRadius: 12,
-    marginHorizontal: 0,
-  },
-  khalidContextBannerText: {
-    flex: 1,
-    fontSize: 14,
-    fontWeight: '600',
-    color: COLORS.textPrimary,
-  },
-  overlayRoot: {
-    flex: 1,
-    backgroundColor: 'transparent',
-  },
-  overlayBackdropWrap: {
-    ...StyleSheet.absoluteFillObject,
-  },
-  overlayBackdropDim: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(0,0,0,0.12)',
-  },
-  overlayContentWrap: {
-    flex: 1,
-    paddingHorizontal: 24,
-    paddingTop: 72,
-    paddingBottom: 32,
-    alignItems: 'stretch',
-  },
-  overlayQuestionBlock: {
-    marginBottom: 28,
-    paddingVertical: 28,
-    paddingHorizontal: 20,
-    alignItems: 'center',
-  },
-  overlayQuestionInner: {
-    alignItems: 'center',
-    maxWidth: 320,
-  },
-  overlayQuestionTitle: {
-    fontSize: 36,
-    fontWeight: '800',
-    color: '#FFFFFF',
-    textAlign: 'center',
-    lineHeight: 44,
-    letterSpacing: 1.2,
-    marginBottom: 14,
-    ...Platform.select({
-      ios: {
-        textShadowColor: 'rgba(0,0,0,0.25)',
-        textShadowOffset: { width: 0, height: 2 },
-        textShadowRadius: 8,
-      },
-      android: {
-        elevation: 2,
-      },
-    }),
-  },
-  overlayQuestionAccent: {
-    width: 56,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: COLORS.primary,
-    opacity: 0.95,
-    marginBottom: 16,
-  },
-  overlayQuestionSub: {
-    fontSize: 15,
-    fontWeight: '500',
-    color: 'rgba(255,255,255,0.88)',
-    textAlign: 'center',
-    letterSpacing: 0.4,
-    lineHeight: 22,
-  },
-  overlayOptionsWrap: {
-    width: '100%',
-    maxWidth: 400,
-    alignSelf: 'center',
-  },
-  overlayOptionsGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 12,
-    marginBottom: 20,
-  },
-  overlayOptionBlock: {
-    width: '47%',
-    minHeight: 56,
-    backgroundColor: 'rgba(255,255,255,0.2)',
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.35)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    paddingVertical: 16,
-    paddingHorizontal: 16,
-  },
-  overlayOptionBlockText: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#FFFFFF',
-  },
-  overlayInputRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-  },
-  overlayInput: {
-    flex: 1,
-    backgroundColor: 'rgba(255,255,255,0.2)',
-    borderRadius: 14,
-    paddingVertical: 16,
-    paddingHorizontal: 18,
-    fontSize: 16,
-    color: '#FFFFFF',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.35)',
-  },
-  overlaySubmitBtn: {
-    width: 52,
-    height: 52,
-    borderRadius: 14,
-    backgroundColor: 'rgba(255,255,255,0.3)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  loadingWrap: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingTop: 80,
-  },
-  emptyText: {
-    marginTop: 12,
-    fontSize: 16,
-    color: COLORS.textMuted,
-    fontWeight: '500',
-  },
-  retryBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    marginTop: 16,
-    paddingVertical: 10,
-    paddingHorizontal: 20,
-    backgroundColor: COLORS.primary,
-    borderRadius: 10,
-  },
-  retryBtnText: {
-    fontSize: 15,
-    color: '#fff',
-    fontWeight: '600',
-  },
-});

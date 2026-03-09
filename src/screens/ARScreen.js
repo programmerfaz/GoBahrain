@@ -12,6 +12,8 @@ import {
   Linking,
   Animated,
   Pressable,
+  Share,
+  Vibration,
 } from 'react-native';
 import Slider from '@react-native-community/slider';
 import { CameraView, useCameraPermissions } from 'expo-camera';
@@ -19,27 +21,57 @@ import { BlurView } from 'expo-blur';
 import * as Location from 'expo-location';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useRoute } from '@react-navigation/native';
 import { fetchNearbyPOIs } from '../services/aiPipeline';
 import ClientProfileModal from '../components/ClientProfileModal';
+import { useSavedPlaces } from '../context/SavedPlacesContext';
+import { colors as themeColors } from '../theme/designTokens';
+import { useTheme } from '../context/ThemeContext';
+
+const FUN_HINTS = [
+  'Turn around — adventure awaits! 🧭',
+  'The arrow knows the way. Follow it!',
+  'Closer spots = quicker discoveries',
+  'Yalla! Point your camera and explore',
+  'Saved places show in the Saved tab',
+  'Quiet cafés have a cool blue glow',
+  'Busy now? Warm orange = lively spot',
+];
 
 const C = {
-  accent: '#C8102E',
+  accent: themeColors.primary,
   text: '#FFFFFF',
   sub: 'rgba(255,255,255,0.85)',
   card: 'rgba(0,0,0,0.75)',
   cardBorder: 'rgba(255,255,255,0.3)',
   glow: 'rgba(200, 16, 46, 0.4)',
+  busy: themeColors.morning,
+  quiet: themeColors.afternoon,
 };
 
 const MODES = [
   { id: 'landmarks', label: 'Landmarks', icon: 'business' },
   { id: 'all', label: 'All', icon: 'compass' },
   { id: 'food', label: 'Food & Events', icon: 'restaurant' },
+  { id: 'saved', label: 'Saved', icon: 'bookmark' },
 ];
+
+const LANDMARK_HERITAGE = {
+  'Bahrain Fort (Qal\'at al-Bahrain)': { fact: 'Ancient Dilmun capital and UNESCO World Heritage Site.', didYouKnow: 'Over 4,000 years of history — one of the most important archaeological sites in the Gulf.' },
+  'Bahrain National Museum': { fact: 'The country\'s most popular attraction.', didYouKnow: 'Houses 6,000 years of Bahrain history with bilingual exhibits and a replica burial mound.' },
+  'Al Fateh Grand Mosque': { fact: 'Bahrain\'s largest mosque.', didYouKnow: 'The dome is one of the world\'s largest fibreglass domes — open to visitors outside prayer times.' },
+  'Bahrain World Trade Center': { fact: 'Iconic twin towers with integrated wind turbines.', didYouKnow: 'First skyscraper in the world to harness wind power for electricity.' },
+  'Tree of Life': { fact: '400-year-old tree standing alone in the desert.', didYouKnow: 'No one knows how it survives — no visible water source for miles.' },
+  'Bab Al Bahrain': { fact: 'Gateway to Manama Souq.', didYouKnow: 'Historic twin-arched entrance; the souq behind it is perfect for spices and gold.' },
+  'Manama Souq': { fact: 'Traditional marketplace in the heart of Manama.', didYouKnow: 'Narrow streets, local crafts, and the best place for authentic Bahraini atmosphere.' },
+  'Bahrain Pearling Trail': { fact: 'UNESCO World Heritage Site.', didYouKnow: 'Celebrates the historic pearling tradition that shaped the Gulf economy.' },
+  'Beit Al Quran': { fact: 'Museum of Islamic calligraphy and Qurans.', didYouKnow: 'One of the finest collections of ancient Qurans in the region.' },
+  'Bahrain International Circuit': { fact: 'Home of the F1 Gulf Air Bahrain Grand Prix.', didYouKnow: 'First F1 race in the Middle East; Sakhir Tower offers 360° track views.' },
+};
 
 const CAMERA_FOV_DEG = 55;
 
-function POIMarker({ poi, x, y, onPress, isNearest, index }) {
+function POIMarker({ poi, x, y, onPress, isNearest, index, isBusy }) {
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const scaleAnim = useRef(new Animated.Value(0.85)).current;
   const pulseAnim = useRef(new Animated.Value(1)).current;
@@ -93,6 +125,8 @@ function POIMarker({ poi, x, y, onPress, isNearest, index }) {
           styles.marker,
           isLandmark && styles.markerLandmark,
           isNearest && styles.markerNearest,
+          isBusy && styles.markerBusy,
+          isBusy === false && styles.markerQuiet,
         ]}
         onPress={() => onPress?.(poi)}
         activeOpacity={0.9}
@@ -112,6 +146,41 @@ function POIMarker({ poi, x, y, onPress, isNearest, index }) {
         <Text style={styles.markerDist}>{distText}</Text>
       </TouchableOpacity>
     </Animated.View>
+  );
+}
+
+function NavigateToBanner({ destination, userLat, userLng, heading, getWalkingTime, onDismiss }) {
+  if (!destination || userLat == null || userLng == null) return null;
+  const R = 6371;
+  const dLat = ((destination.lat - userLat) * Math.PI) / 180;
+  const dLon = ((destination.lng - userLng) * Math.PI) / 180;
+  const y = Math.sin(dLon) * Math.cos((destination.lat * Math.PI) / 180);
+  const x = Math.cos((userLat * Math.PI) / 180) * Math.sin((destination.lat * Math.PI) / 180) -
+    Math.sin((userLat * Math.PI) / 180) * Math.cos((destination.lat * Math.PI) / 180) * Math.cos(dLon);
+  const bearing = ((Math.atan2(y, x) * 180) / Math.PI + 360) % 360;
+  const distKm = R * 2 * Math.atan2(Math.sqrt(Math.sin(dLat / 2) ** 2 + Math.cos((userLat * Math.PI) / 180) * Math.cos((destination.lat * Math.PI) / 180) * Math.sin(dLon / 2) ** 2), Math.sqrt(1 - (Math.sin(dLat / 2) ** 2 + Math.cos((userLat * Math.PI) / 180) * Math.cos((destination.lat * Math.PI) / 180) * Math.sin(dLon / 2) ** 2)));
+  const relBearing = (bearing - heading + 360) % 360;
+  const inView = Math.min(relBearing, 360 - relBearing) <= CAMERA_FOV_DEG / 2;
+  return (
+    <View style={styles.navigateBanner}>
+      <View style={styles.navigateBannerInner}>
+        <View style={styles.navigateBannerArrowWrap}>
+          <Ionicons name="navigate" size={36} color={C.accent} style={{ transform: [{ rotate: `${relBearing}deg` }] }} />
+        </View>
+        <View style={styles.navigateBannerText}>
+          <Text style={styles.navigateBannerTitle}>{destination.name}</Text>
+          <Text style={styles.navigateBannerSub}>
+            {inView ? 'Walk toward the arrow on screen' : `Turn until you see the arrow (${Math.round(relBearing)}° ${relBearing > 180 ? 'left' : 'right'})`}
+          </Text>
+          <Text style={styles.navigateBannerDist}>{distKm < 1 ? `${Math.round(distKm * 1000)}m` : `${distKm.toFixed(1)}km`} · {getWalkingTime(distKm)}</Text>
+        </View>
+        {onDismiss ? (
+          <TouchableOpacity style={styles.navigateBannerClose} onPress={onDismiss} hitSlop={12}>
+            <Ionicons name="close" size={24} color={C.sub} />
+          </TouchableOpacity>
+        ) : null}
+      </View>
+    </View>
   );
 }
 
@@ -154,7 +223,7 @@ function CompassRing({ heading, nearestOutOfView, centerY }) {
   );
 }
 
-function POIDetailModal({ visible, poi, onClose, onRequestClose, insets, openDirections, getWalkingTime, onViewProfile }) {
+function POIDetailModal({ visible, poi, onClose, onRequestClose, insets, openDirections, getWalkingTime, onViewProfile, onToggleSave, isSaved, heritage }) {
   if (!poi) return null;
   const dismiss = onRequestClose || onClose;
   const clientId = poi.client_a_uuid || poi.id;
@@ -163,6 +232,21 @@ function POIDetailModal({ visible, poi, onClose, onRequestClose, insets, openDir
   const isLandmark = poi._isLandmark || poi._type === 'landmark' || poi.category;
   const typeLabel = poi._type === 'event' ? 'Event' : poi._type === 'restaurant' ? 'Restaurant' : isLandmark ? (m.category || poi.category || 'Landmark') : 'Place';
   const typeIcon = poi._type === 'event' ? 'calendar' : poi._type === 'restaurant' ? 'restaurant' : isLandmark ? 'business' : 'compass';
+  const phone = m?.phone || poi?.phone || '';
+  const menuUrl = m?.menu_url || poi?.menu_url || m?.website || poi?.website || '';
+  const heritageInfo = heritage || LANDMARK_HERITAGE[poi.name];
+
+  const handleShare = () => {
+    Share.share({
+      title: poi.name,
+      message: `${poi.name} — ${poi.distanceKm < 1 ? Math.round(poi.distanceKm * 1000) + 'm' : poi.distanceKm.toFixed(1) + 'km'} away. Explore with Go Bahrain!`,
+      url: `https://www.google.com/maps/search/?api=1&query=${poi.lat},${poi.lng}`,
+    }).catch(() => {});
+  };
+  const handleCall = () => {
+    const tel = phone.replace(/\D/g, '');
+    if (tel.length >= 8) Linking.openURL(`tel:${tel}`).catch(() => {});
+  };
   const distText = poi.distanceKm < 1
     ? `${Math.round(poi.distanceKm * 1000)}m away`
     : `${poi.distanceKm.toFixed(1)} km away`;
@@ -246,6 +330,12 @@ function POIDetailModal({ visible, poi, onClose, onRequestClose, insets, openDir
               ) : null}
             </View>
           ) : null}
+          {heritageInfo?.didYouKnow ? (
+            <View style={styles.detailSection}>
+              <Text style={styles.detailSectionTitle}>Did you know?</Text>
+              <Text style={styles.detailDesc}>{heritageInfo.didYouKnow}</Text>
+            </View>
+          ) : null}
           {desc ? (
             <View style={styles.detailSection}>
               <Text style={styles.detailSectionTitle}>{isLandmark ? 'Why visit' : 'About'}</Text>
@@ -274,6 +364,30 @@ function POIDetailModal({ visible, poi, onClose, onRequestClose, insets, openDir
                 <Text style={styles.viewProfileBtnText}>View profile</Text>
               </TouchableOpacity>
             ) : null}
+            <View style={styles.detailActionsRow}>
+              {onToggleSave ? (
+                <TouchableOpacity style={styles.detailActionIconBtn} onPress={() => onToggleSave(poi)} activeOpacity={0.8}>
+                  <Ionicons name={isSaved ? 'bookmark' : 'bookmark-outline'} size={22} color={isSaved ? C.accent : '#FFF'} />
+                  <Text style={styles.detailActionIconLabel}>{isSaved ? 'Saved' : 'Save'}</Text>
+                </TouchableOpacity>
+              ) : null}
+              <TouchableOpacity style={styles.detailActionIconBtn} onPress={handleShare} activeOpacity={0.8}>
+                <Ionicons name="share-outline" size={22} color="#FFF" />
+                <Text style={styles.detailActionIconLabel}>Share</Text>
+              </TouchableOpacity>
+              {phone ? (
+                <TouchableOpacity style={styles.detailActionIconBtn} onPress={handleCall} activeOpacity={0.8}>
+                  <Ionicons name="call-outline" size={22} color="#FFF" />
+                  <Text style={styles.detailActionIconLabel}>Call</Text>
+                </TouchableOpacity>
+              ) : null}
+              {menuUrl ? (
+                <TouchableOpacity style={styles.detailActionIconBtn} onPress={() => Linking.openURL(menuUrl).catch(() => {})} activeOpacity={0.8}>
+                  <Ionicons name="restaurant-outline" size={22} color="#FFF" />
+                  <Text style={styles.detailActionIconLabel}>Menu</Text>
+                </TouchableOpacity>
+              ) : null}
+            </View>
           </View>
         </View>
       </View>
@@ -281,9 +395,26 @@ function POIDetailModal({ visible, poi, onClose, onRequestClose, insets, openDir
   );
 }
 
+function getIsBusy(poi) {
+  const hour = new Date().getHours();
+  const isRestaurant = (poi._type || '').toLowerCase() === 'restaurant';
+  if (!isRestaurant) return null;
+  if ((hour >= 11 && hour <= 14) || (hour >= 19 && hour <= 22)) return true;
+  if (hour >= 14 && hour <= 17) return false;
+  return Math.random() > 0.5;
+}
+
 export default function ARScreen({ navigation }) {
+  const { colors } = useTheme();
+  const route = useRoute();
+  const fromExplore = route.params?.fromExplore === true;
+  const [navigateToDest, setNavigateToDest] = useState(route.params?.navigateTo ?? null);
+  useEffect(() => {
+    if (route.params?.navigateTo) setNavigateToDest(route.params.navigateTo);
+  }, [route.params?.navigateTo]);
   const { width, height } = useWindowDimensions();
   const insets = useSafeAreaInsets();
+  const { savedIds, toggle: toggleSave, isSaved } = useSavedPlaces();
   const [permission, requestPermission] = useCameraPermissions();
   const [location, setLocation] = useState(null);
   const [heading, setHeading] = useState(0);
@@ -292,11 +423,41 @@ export default function ARScreen({ navigation }) {
   const [error, setError] = useState(null);
   const [selectedPoi, setSelectedPoi] = useState(null);
   const [profileClientId, setProfileClientId] = useState(null);
-  const [mode, setMode] = useState('landmarks');
-  const [maxDistanceKm, setMaxDistanceKm] = useState(10);
+  const [mode, setMode] = useState(route.params?.navigateTo ? 'all' : fromExplore ? 'all' : 'landmarks');
+  const [maxDistanceKm, setMaxDistanceKm] = useState(fromExplore ? 50 : 10);
+  const [showQuietHint, setShowQuietHint] = useState(false);
+  const [funHintIndex, setFunHintIndex] = useState(0);
   const headingSub = useRef(null);
 
-  const filteredPois = pois.filter((p) => {
+  useEffect(() => {
+    const id = setInterval(() => {
+      setFunHintIndex((i) => (i + 1) % FUN_HINTS.length);
+    }, 6000);
+    return () => clearInterval(id);
+  }, []);
+
+  let basePois = pois;
+  if (mode === 'saved' && savedIds.size > 0) {
+    basePois = pois.filter((p) => {
+      const id = p.client_a_uuid || p.id || `${p.name}-${p.lat}-${p.lng}`;
+      return savedIds.has(id);
+    });
+  } else if (navigateToDest && location) {
+    basePois = [{ ...navigateToDest, distanceKm: 0, bearing: 0, name: navigateToDest.name || 'Destination', lat: navigateToDest.lat, lng: navigateToDest.lng }].map((p) => {
+      const R = 6371;
+      const dLat = ((p.lat - location.latitude) * Math.PI) / 180;
+      const dLon = ((p.lng - location.longitude) * Math.PI) / 180;
+      const a = Math.sin(dLat / 2) ** 2 + Math.cos((location.latitude * Math.PI) / 180) * Math.cos((p.lat * Math.PI) / 180) * Math.sin(dLon / 2) ** 2;
+      const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+      const distKm = R * c;
+      const y = Math.sin(dLon) * Math.cos((p.lat * Math.PI) / 180);
+      const x = Math.cos((location.latitude * Math.PI) / 180) * Math.sin((p.lat * Math.PI) / 180) - Math.sin((location.latitude * Math.PI) / 180) * Math.cos((p.lat * Math.PI) / 180) * Math.cos(dLon);
+      const bear = ((Math.atan2(y, x) * 180) / Math.PI + 360) % 360;
+      return { ...p, distanceKm: distKm, bearing: bear };
+    });
+  }
+
+  const filteredPois = basePois.filter((p) => {
     if (p.distanceKm > maxDistanceKm) return false;
     const relBearing = (p.bearing - heading + 360) % 360;
     const angleFromCenter = Math.min(relBearing, 360 - relBearing);
@@ -305,9 +466,11 @@ export default function ARScreen({ navigation }) {
 
   const nearestInView = filteredPois.length > 0 ? filteredPois.reduce((a, b) => a.distanceKm <= b.distanceKm ? a : b) : null;
   const inViewIds = new Set((filteredPois || []).map((p) => p.name + p.lat));
-  const nearestOutOfView = pois
+  const nearestOutOfView = basePois
     .filter((p) => p.distanceKm <= maxDistanceKm && !inViewIds.has(p.name + p.lat))
     .sort((a, b) => a.distanceKm - b.distanceKm)[0] || null;
+
+  const clearNavigateTo = useCallback(() => setNavigateToDest(null), []);
 
   const centerX = width / 2;
   const centerY = height / 2 - 40;
@@ -315,13 +478,13 @@ export default function ARScreen({ navigation }) {
 
   const loadNearby = useCallback(async (lat, lng, filterMode = mode) => {
     try {
-      const data = await fetchNearbyPOIs(lat, lng, filterMode);
+      const data = await fetchNearbyPOIs(lat, lng, filterMode, fromExplore ? { allPlaces: true } : {});
       setPois(data);
     } catch (e) {
       console.warn('[AR] fetchNearbyPOIs failed:', e?.message);
       setPois([]);
     }
-  }, [mode]);
+  }, [mode, fromExplore]);
 
   useEffect(() => {
     if (location && !loading) {
@@ -352,7 +515,7 @@ export default function ARScreen({ navigation }) {
         const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
         if (!mounted) return;
         setLocation(loc.coords);
-        await loadNearby(loc.coords.latitude, loc.coords.longitude, 'landmarks');
+        await loadNearby(loc.coords.latitude, loc.coords.longitude, fromExplore ? 'all' : 'landmarks');
       } catch (e) {
         if (mounted) setError(e?.message || 'Could not get location');
       } finally {
@@ -401,6 +564,7 @@ export default function ARScreen({ navigation }) {
     setSelectedPoi(null);
   }, []);
   const handleOpenPOI = useCallback((poi) => {
+    if (Platform.OS !== 'web') Vibration.vibrate(50);
     setSelectedPoi(poi);
     modalJustOpenedRef.current = true;
     setTimeout(() => { modalJustOpenedRef.current = false; }, 400);
@@ -456,8 +620,19 @@ export default function ARScreen({ navigation }) {
         </View>
       ) : (
         <>
+          {navigateToDest && location && (
+            <NavigateToBanner
+              destination={navigateToDest}
+              userLat={location.latitude}
+              userLng={location.longitude}
+              heading={heading}
+              getWalkingTime={getWalkingTime}
+              onDismiss={clearNavigateTo}
+            />
+          )}
           {filteredPois.map((poi, i) => {
             const { x, y } = getMarkerPosition(poi);
+            const busy = getIsBusy(poi);
             return (
               <POIMarker
                 key={`${poi.name}-${poi.lat}-${i}`}
@@ -467,6 +642,7 @@ export default function ARScreen({ navigation }) {
                 onPress={handleOpenPOI}
                 isNearest={nearestInView && nearestInView.name === poi.name && nearestInView.lat === poi.lat}
                 index={i}
+                isBusy={busy}
               />
             );
           })}
@@ -525,19 +701,30 @@ export default function ARScreen({ navigation }) {
           />
         </View>
         <View style={[styles.footer, { paddingBottom: insets.bottom + 12 }]}>
+          {mode === 'food' && (showQuietHint || filteredPois.some((p) => getIsBusy(p) === false)) ? (
+            <TouchableOpacity style={styles.hintChip} onPress={() => setShowQuietHint((s) => !s)} activeOpacity={0.8}>
+              <Ionicons name="cafe-outline" size={14} color={C.quiet} />
+              <Text style={styles.hintChipText}>{showQuietHint ? 'Showing quieter spots' : 'Looking for quiet cafés?'}</Text>
+            </TouchableOpacity>
+          ) : null}
           <Text style={styles.hint}>
-            {filteredPois.length === 0 && nearestOutOfView
-              ? `Turn to see ${nearestOutOfView.name} (${nearestOutOfView.distanceKm < 1 ? Math.round(nearestOutOfView.distanceKm * 1000) + 'm' : nearestOutOfView.distanceKm.toFixed(1) + 'km'})`
-              : filteredPois.length === 0 && pois.length > 0
-                ? 'Point your camera toward places to see them'
-                : filteredPois.length > 0 && nearestInView
-                  ? `${filteredPois.length} in view · Nearest: ${nearestInView.name}`
-                  : mode === 'landmarks'
-                    ? 'Discover famous buildings & heritage sites'
-                    : mode === 'food'
-                      ? 'Find restaurants & events nearby'
-                      : 'Explore landmarks, food & events'}
+            {navigateToDest
+              ? 'Turn until the arrow points at your destination, then walk'
+              : filteredPois.length === 0 && nearestOutOfView
+                ? `Turn to see ${nearestOutOfView.name} (${nearestOutOfView.distanceKm < 1 ? Math.round(nearestOutOfView.distanceKm * 1000) + 'm' : nearestOutOfView.distanceKm.toFixed(1) + 'km'})`
+                : filteredPois.length === 0 && pois.length > 0
+                  ? mode === 'saved' ? 'Save places from the detail card to see them here' : 'Point your camera toward places to see them'
+                  : filteredPois.length > 0 && nearestInView
+                    ? `${filteredPois.length} in view · Nearest: ${nearestInView.name}`
+                    : mode === 'landmarks'
+                      ? 'Discover famous buildings & heritage sites'
+                      : mode === 'food'
+                        ? 'Warm = busy now · Cool = quieter'
+                        : mode === 'saved'
+                          ? 'Your saved places nearby'
+                          : 'Explore landmarks, food & events'}
           </Text>
+          <Text style={styles.funHint}>{FUN_HINTS[funHintIndex]}</Text>
         </View>
       </BlurView>
       <POIDetailModal
@@ -549,12 +736,18 @@ export default function ARScreen({ navigation }) {
         openDirections={openDirections}
         getWalkingTime={getWalkingTime}
         onViewProfile={handleViewProfile}
+        onToggleSave={toggleSave}
+        isSaved={selectedPoi ? isSaved(selectedPoi) : false}
       />
       <ClientProfileModal
         visible={!!profileClientId}
         clientId={profileClientId}
         onClose={() => setProfileClientId(null)}
         insets={insets}
+        onOpenARNavigate={(dest) => {
+          setProfileClientId(null);
+          setNavigateToDest(dest);
+        }}
       />
     </View>
   );
@@ -635,6 +828,13 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   placeholder: { width: 80 },
+  funHint: {
+    color: 'rgba(255,255,255,0.5)',
+    fontSize: 12,
+    fontStyle: 'italic',
+    marginTop: 6,
+    textAlign: 'center',
+  },
   footer: {
     position: 'absolute',
     bottom: 0,
@@ -741,6 +941,96 @@ const styles = StyleSheet.create({
   },
   markerNameLandmark: {
     fontSize: 13,
+  },
+  markerBusy: {
+    borderColor: C.busy,
+    borderWidth: 1.5,
+  },
+  markerQuiet: {
+    borderColor: C.quiet,
+    borderWidth: 1.5,
+  },
+  navigateBanner: {
+    position: 'absolute',
+    top: 100,
+    left: 16,
+    right: 16,
+    zIndex: 10,
+  },
+  navigateBannerInner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(0,0,0,0.85)',
+    borderRadius: 16,
+    padding: 16,
+    borderWidth: 2,
+    borderColor: C.accent,
+  },
+  navigateBannerArrowWrap: {
+    width: 48,
+    height: 48,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  navigateBannerText: {
+    flex: 1,
+    marginLeft: 12,
+  },
+  navigateBannerTitle: {
+    color: C.text,
+    fontSize: 16,
+    fontWeight: '800',
+    marginBottom: 4,
+  },
+  navigateBannerSub: {
+    color: C.sub,
+    fontSize: 13,
+    marginBottom: 2,
+  },
+  navigateBannerDist: {
+    color: C.accent,
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  navigateBannerClose: {
+    padding: 8,
+  },
+  detailActionsRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 12,
+    marginTop: 12,
+  },
+  detailActionIconBtn: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    backgroundColor: 'rgba(255,255,255,0.12)',
+    borderRadius: 12,
+    minWidth: 64,
+  },
+  detailActionIconLabel: {
+    color: C.sub,
+    fontSize: 11,
+    fontWeight: '600',
+    marginTop: 4,
+  },
+  hintChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'center',
+    gap: 6,
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    backgroundColor: 'rgba(14,165,233,0.2)',
+    borderRadius: 20,
+    marginBottom: 8,
+  },
+  hintChipText: {
+    color: C.quiet,
+    fontSize: 12,
+    fontWeight: '700',
   },
   sliderWrap: {
     position: 'absolute',
