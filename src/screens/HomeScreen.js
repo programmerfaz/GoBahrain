@@ -39,6 +39,7 @@ import ScreenContainer from '../components/ScreenContainer';
 import ClientProfileModal from '../components/ClientProfileModal';
 import { useAuth } from '../context/AuthContext';
 import { supabase } from '../config/supabase';
+import { ensureImageUrl } from '../utils/imageUrl';
 
 const VOTER_ID_KEY = '@gobahrain_voter_id';
 
@@ -1339,7 +1340,8 @@ export default function HomeScreen() {
         const postPrice = row.price_range != null && row.price_range !== '' ? row.price_range : null;
         const priceRange = postPrice ?? clientPrice;
         const businessName = client?.business_name ?? client?.name ?? client?.business_name_ar ?? null;
-        const clientImage = client?.client_image != null && String(client.client_image).trim() !== '' ? String(client.client_image).trim() : null;
+        const rawClientImage = client?.client_image != null && String(client.client_image).trim() !== '' ? String(client.client_image).trim() : null;
+        const clientImage = rawClientImage ? (ensureImageUrl(rawClientImage) || rawClientImage) : null;
         
         // Ensure post_image is a valid string/URI
         let imageUri = row.post_image;

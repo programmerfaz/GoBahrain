@@ -16,14 +16,18 @@ import {
   Image,
 } from 'react-native';
 import { BlurView } from 'expo-blur';
+import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRoute, useNavigation } from '@react-navigation/native';
 import MapView, { Marker, Circle, Polyline } from 'react-native-maps';
 import { Ionicons } from '@expo/vector-icons';
-import { fetchPlaces, fetchRestaurants, fetchBreakfastSpots, fetchEvents, generateDayPlan } from '../services/aiPipeline';
+import { fetchPlaces, fetchRestaurants, fetchBreakfastSpots, fetchEvents, generateDayPlan, getMockDayPlan } from '../services/aiPipeline';
 import { useUserPreferences } from '../context/UserPreferencesContext';
 import { colors as themeColors } from '../theme/designTokens';
 import { useTheme } from '../context/ThemeContext';
+import { supabase } from '../config/supabase';
+import ClientProfileModal from '../components/ClientProfileModal';
+import { ensureImageUrl } from '../utils/imageUrl';
 
 const { height: SCREEN_HEIGHT, width: SCREEN_WIDTH } = Dimensions.get('window');
 const APP_TAB_BAR_HEIGHT_IOS = 70;
@@ -74,13 +78,6 @@ function clampRegionToBahrain(region) {
 
 import { PREFERENCES, FOOD_CATEGORIES } from '../constants/preferences';
 
-// Bump-style transport modes (modern muted palette)
-const TRANSPORT_MODES = [
-  { id: 'walk', icon: 'walk', label: 'Walk', color: themeColors.textSecondary },
-  { id: 'car', icon: 'car', label: 'Drive', color: themeColors.primary },
-  { id: 'bike', icon: 'bicycle', label: 'Bike', color: themeColors.success },
-];
-
 const SURPRISE_THEMES = [
   { label: 'Scenic Day', icon: 'heart', color: themeColors.evening, prefs: ['Sightseeing', 'Leisure'], food: ['Italian', 'Seafood'] },
   { label: 'Adventure', icon: 'rocket', color: themeColors.error, prefs: ['Adventure', 'Nature'], food: ['Fast Food'] },
@@ -107,7 +104,7 @@ const PLAN_COLORS = {
   overlayBlockText: '#FFFFFF',
 };
 
-// Build lightweight preview cards from raw Pinecone matches
+// Build lightweight preview cards from raw Pinecone matches (with image for visuals)
 function buildSpotPreviews(places, restaurants, events) {
   const previews = [];
   const pushFrom = (items, type) => {
@@ -134,12 +131,15 @@ function buildSpotPreviews(places, restaurants, events) {
           : type === 'event'
           ? meta.event_type || 'Event'
           : meta.category || 'Explore';
-      const image =
+      const rawImage =
         meta.image_url ||
         meta.thumbnail_url ||
         meta.cover_image ||
         meta.image ||
         null;
+      const image = ensureImageUrl(rawImage) || rawImage;
+      const clientId = meta.client_a_uuid || meta.id || m.id || null;
+      const rating = meta.rating != null && meta.rating !== '' ? meta.rating : null;
 
       previews.push({
         id: m.id || `${type}-${idx}`,
@@ -149,6 +149,8 @@ function buildSpotPreviews(places, restaurants, events) {
         area,
         snippet: description,
         image,
+        clientId,
+        rating,
       });
     });
   };
@@ -158,6 +160,195 @@ function buildSpotPreviews(places, restaurants, events) {
   pushFrom(events, 'event');
 
   return previews;
+}
+
+// Enrich spot previews: use client_a_uuid from Pinecone to fetch client_image from Supabase client table
+async function enrichSpotPreviewsWithClientImages(previews) {
+  if (!previews?.length) return previews;
+  const ids = [...new Set(previews.map((p) => p.clientId).filter(Boolean))];
+  if (ids.length === 0) return previews;
+
+  const { data: clients } = await supabase
+    .from('client')
+    .select('client_a_uuid, client_image')
+    .in('client_a_uuid', ids);
+
+  const imageByClientId = {};
+  (clients || []).forEach((c) => {
+    if (c.client_a_uuid && c.client_image) {
+      imageByClientId[c.client_a_uuid] = ensureImageUrl(String(c.client_image).trim()) || String(c.client_image).trim();
+    }
+  });
+
+  return previews.map((p) => {
+    const url = p.clientId ? imageByClientId[p.clientId] : null;
+    return url ? { ...p, image: url } : p;
+  });
+}
+
+// Build spot previews from plan spot names (for mock/fallback when Pinecone returns empty)
+function buildSpotPreviewsFromPlan(plan) {
+  return (plan || []).slice(0, 8).map((item, idx) => ({
+    id: `plan-${idx}`,
+    name: item.spot || `Spot ${idx + 1}`,
+    type: item.type || 'place',
+    typeLabel: item.type === 'restaurant' ? 'Food & drinks' : item.type === 'event' ? 'Event' : 'Explore',
+    area: '',
+    snippet: item.reason || '',
+    image: null,
+    clientId: null,
+    rating: null,
+  }));
+}
+
+// Match plan item to Pinecone match by spot name (fuzzy), extract image + clientId
+function matchPlanToPinecone(planItem, pineconeMatches) {
+  if (!planItem || !pineconeMatches?.length) return null;
+  const spotName = (planItem.spot || '').trim().toLowerCase();
+  if (!spotName) return null;
+  const norm = (s) => String(s || '').trim().toLowerCase().replace(/\s+/g, ' ');
+  for (const m of pineconeMatches) {
+    const meta = m.metadata || {};
+    const names = [
+      meta.business_name,
+      meta.event_name,
+      meta.name,
+      meta.place_name,
+    ].filter(Boolean);
+    const matched = names.some((n) => norm(n) === spotName || norm(n).includes(spotName) || spotName.includes(norm(n)));
+    if (matched) {
+      const image = meta.image_url || meta.thumbnail_url || meta.cover_image || meta.image || null;
+      const clientId = meta.client_a_uuid || meta.id || m.id || null;
+      const rating = meta.rating != null && meta.rating !== '' ? meta.rating : null;
+      return { image, clientId, rating };
+    }
+  }
+  return null;
+}
+
+// Normalize name for matching (lowercase, collapse spaces, remove common suffixes)
+function normName(s) {
+  if (!s || typeof s !== 'string') return '';
+  return String(s)
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .replace(/\b(bahrain|city centre|mall|centre|center)\b/gi, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+// Match plan item to Supabase client by business_name (fuzzy, relaxed)
+function matchPlanToClient(planItem, clients) {
+  if (!planItem || !clients?.length) return null;
+  const spotName = (planItem.spot || '').trim().toLowerCase();
+  if (!spotName) return null;
+  const spotNorm = normName(spotName);
+  const spotWords = spotNorm.split(/\s+/).filter((w) => w.length > 1);
+  for (const c of clients) {
+    const name = (c.business_name || c.name || c.business_name_ar || '').trim();
+    if (!name) continue;
+    const n = normName(name);
+    if (!n) continue;
+    // Exact or substring match
+    if (n === spotNorm || n.includes(spotNorm) || spotNorm.includes(n)) return c;
+    // Word overlap: e.g. "cafe lilou" matches "Café Lilou"
+    const nameWords = n.split(/\s+/).filter((w) => w.length > 1);
+    const overlap = spotWords.filter((w) => nameWords.some((nw) => nw.includes(w) || w.includes(nw)));
+    if (overlap.length >= Math.min(2, spotWords.length, nameWords.length)) return c;
+  }
+  return null;
+}
+
+// Enrich plan items with client images from Supabase (Pinecone or direct client lookup)
+async function enrichPlanWithClientData(plan, pineconeMatches) {
+  // Step 1: Match from Pinecone when available
+  let enriched = plan.map((item) => {
+    const match = matchPlanToPinecone(item, pineconeMatches);
+    return {
+      ...item,
+      image: match?.image || null,
+      clientId: match?.clientId || null,
+      rating: match?.rating != null ? match.rating : null,
+    };
+  });
+
+  // Step 2: Fetch client images from Supabase (for matched clientIds)
+  const clientIds = [...new Set(enriched.map((i) => i.clientId).filter(Boolean))];
+  let clientImageMap = {};
+  if (clientIds.length > 0) {
+    const { data: clients } = await supabase.from('client').select('client_a_uuid, client_image').in('client_a_uuid', clientIds);
+    (clients || []).forEach((c) => {
+      if (c.client_a_uuid && c.client_image) {
+        clientImageMap[c.client_a_uuid] = ensureImageUrl(String(c.client_image).trim()) || String(c.client_image).trim();
+      }
+    });
+  }
+
+  // Step 3: ALWAYS fetch clients from Supabase and match by business_name for items without images
+  const needsImage = enriched.filter((i) => !i.image || !ensureImageUrl(i.image));
+  if (needsImage.length > 0) {
+    const { data: allClients } = await supabase
+      .from('client')
+      .select('client_a_uuid, business_name, name, business_name_ar, client_image, rating')
+      .limit(300);
+    const clientsList = allClients || [];
+    enriched = enriched.map((item) => {
+      if (item.image && ensureImageUrl(item.image)) return item;
+      const client = matchPlanToClient(item, clientsList);
+      if (client) {
+        const img = client.client_image ? ensureImageUrl(String(client.client_image).trim()) || String(client.client_image).trim() : null;
+        return {
+          ...item,
+          image: item.image || img,
+          clientId: item.clientId || client.client_a_uuid,
+          rating: item.rating != null ? item.rating : (client.rating != null ? client.rating : null),
+        };
+      }
+      return item;
+    });
+    const newIds = [...new Set(enriched.map((i) => i.clientId).filter(Boolean))];
+    for (const cid of newIds) {
+      if (clientImageMap[cid]) continue;
+      const c = (clientsList || []).find((x) => x.client_a_uuid === cid);
+      if (c?.client_image) {
+        clientImageMap[cid] = ensureImageUrl(String(c.client_image).trim()) || String(c.client_image).trim();
+      }
+    }
+  }
+
+  // Step 4: Fallback — fetch first post image when client_image is null
+  const stillNoImage = enriched.filter((i) => !i.image && i.clientId);
+  if (stillNoImage.length > 0) {
+    const postIds = [...new Set(stillNoImage.map((i) => i.clientId))];
+    for (const cid of postIds) {
+      if (clientImageMap[cid]) continue;
+      const { data: posts } = await supabase
+        .from('posts')
+        .select('post_image')
+        .eq('client_a_uuid', cid)
+        .not('post_image', 'is', null)
+        .limit(3);
+      const firstWithImage = (posts || []).find((p) => p.post_image);
+      const raw = firstWithImage?.post_image;
+      if (!raw) continue;
+      let url = raw;
+      if (typeof raw === 'string' && raw.startsWith('[')) {
+        try {
+          const parsed = JSON.parse(raw);
+          const arr = Array.isArray(parsed) ? parsed : [parsed];
+          url = arr[0]?.url || (typeof arr[0] === 'string' ? arr[0] : raw);
+        } catch { /* keep url */ }
+      }
+      const fullUrl = ensureImageUrl(String(url)) || (typeof url === 'string' && url.startsWith('http') ? url : null);
+      if (fullUrl) clientImageMap[cid] = fullUrl;
+    }
+  }
+
+  return enriched.map((item) => ({
+    ...item,
+    image: ensureImageUrl(item.image) || (item.clientId ? clientImageMap[item.clientId] : null) || null,
+  }));
 }
 
 // Fun facts about Bahrain, used while loading
@@ -170,7 +361,17 @@ const BAHRAIN_FACTS = [
   'Bahrain has a vibrant cafe culture – from hidden specialty coffee spots to seaside shisha lounges.',
 ];
 
-// Animated loading view with tick-done checks + spot previews
+// Bump-style fun loading messages
+const LOADING_PHRASES = [
+  "Khalid's on it!",
+  'Finding your spots…',
+  'Building your map…',
+  'Almost there, habibi!',
+  'Stitching the perfect day…',
+  'Yalla, one sec…',
+];
+
+// Animated loading view — Bump-style: friend bubbles, playful steps, spot preview carousel
 function PlanModalLoadingView({ loadingStatus, showSuccess, spotPreviews }) {
   const pulse = useRef(new Animated.Value(0)).current;
   const fadeIn = useRef(new Animated.Value(0)).current;
@@ -178,6 +379,9 @@ function PlanModalLoadingView({ loadingStatus, showSuccess, spotPreviews }) {
   const stepCheck = useRef([new Animated.Value(0), new Animated.Value(0), new Animated.Value(0)]).current;
   const successScale = useRef(new Animated.Value(0)).current;
   const successOpacity = useRef(new Animated.Value(0)).current;
+  const bubble1 = useRef(new Animated.Value(0)).current;
+  const bubble2 = useRef(new Animated.Value(0)).current;
+  const bubble3 = useRef(new Animated.Value(0)).current;
   const [activePreviewIdx, setActivePreviewIdx] = useState(0);
   const activePreviewOpacity = useRef(new Animated.Value(1)).current;
 
@@ -196,48 +400,57 @@ function PlanModalLoadingView({ loadingStatus, showSuccess, spotPreviews }) {
   };
   const completedSteps = getCompletedSteps();
 
-  const hasPreviews = !!spotPreviews && spotPreviews.length > 0;
-  const fact =
-    BAHRAIN_FACTS[Math.floor(Math.random() * BAHRAIN_FACTS.length)];
+  const MOCK_PREVIEWS = [
+    { id: 'm1', name: 'Bahrain Fort', type: 'place', typeLabel: 'UNESCO Heritage' },
+    { id: 'm2', name: 'Manama Souq', type: 'place', typeLabel: 'Explore' },
+    { id: 'm3', name: 'Café Lilou', type: 'restaurant', typeLabel: 'Cafe' },
+    { id: 'm4', name: 'Bahrain National Museum', type: 'place', typeLabel: 'Cultural' },
+    { id: 'm5', name: 'City Centre', type: 'place', typeLabel: 'Shopping' },
+    { id: 'm6', name: 'Rasoi by Vineet', type: 'restaurant', typeLabel: 'Indian' },
+  ];
+  const displayPreviews = (spotPreviews && spotPreviews.length > 0) ? spotPreviews : MOCK_PREVIEWS;
+  const hasPreviews = displayPreviews.length > 0;
+  const fact = BAHRAIN_FACTS[Math.floor(Math.random() * BAHRAIN_FACTS.length)];
+  const funPhrase = LOADING_PHRASES[Math.floor(Math.random() * LOADING_PHRASES.length)];
 
   useEffect(() => {
     if (showSuccess) return;
     const pulseLoop = Animated.loop(
       Animated.sequence([
-        Animated.timing(pulse, {
-          toValue: 1,
-          duration: 1800,
-          easing: Easing.inOut(Easing.ease),
-          useNativeDriver: true,
-        }),
-        Animated.timing(pulse, {
-          toValue: 0,
-          duration: 1800,
-          easing: Easing.inOut(Easing.ease),
-          useNativeDriver: true,
-        }),
+        Animated.timing(pulse, { toValue: 1, duration: 1800, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
+        Animated.timing(pulse, { toValue: 0, duration: 1800, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
       ])
     );
     pulseLoop.start();
     return () => pulseLoop.stop();
   }, [pulse, showSuccess]);
 
+  // Bump-style floating bubbles
+  useEffect(() => {
+    if (showSuccess) return;
+    const b1 = Animated.loop(Animated.sequence([
+      Animated.timing(bubble1, { toValue: 1, duration: 2000, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
+      Animated.timing(bubble1, { toValue: 0, duration: 2000, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
+    ]));
+    const b2 = Animated.loop(Animated.sequence([
+      Animated.timing(bubble2, { toValue: 1, duration: 2400, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
+      Animated.timing(bubble2, { toValue: 0, duration: 2400, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
+    ]));
+    const b3 = Animated.loop(Animated.sequence([
+      Animated.timing(bubble3, { toValue: 1, duration: 2200, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
+      Animated.timing(bubble3, { toValue: 0, duration: 2200, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
+    ]));
+    b1.start();
+    b2.start();
+    b3.start();
+    return () => { b1.stop(); b2.stop(); b3.stop(); };
+  }, [showSuccess, bubble1, bubble2, bubble3]);
+
   useEffect(() => {
     Animated.parallel([
-      Animated.timing(fadeIn, {
-        toValue: 1,
-        duration: 400,
-        easing: Easing.out(Easing.cubic),
-        useNativeDriver: true,
-      }),
+      Animated.timing(fadeIn, { toValue: 1, duration: 400, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
       ...stepEntrance.map((anim, i) =>
-        Animated.timing(anim, {
-          toValue: 1,
-          duration: 450,
-          delay: i * 100,
-          easing: Easing.out(Easing.back(1.2)),
-          useNativeDriver: true,
-        })
+        Animated.timing(anim, { toValue: 1, duration: 450, delay: i * 100, easing: Easing.out(Easing.back(1.2)), useNativeDriver: true })
       ),
     ]).start();
   }, []);
@@ -247,163 +460,127 @@ function PlanModalLoadingView({ loadingStatus, showSuccess, spotPreviews }) {
     completedSteps.forEach((idx) => {
       if (animatedChecks.has(idx)) return;
       animatedChecks.add(idx);
-      Animated.spring(stepCheck[idx], {
-        toValue: 1,
-        tension: 180,
-        friction: 7,
-        useNativeDriver: true,
-      }).start();
+      Animated.spring(stepCheck[idx], { toValue: 1, tension: 180, friction: 7, useNativeDriver: true }).start();
     });
   }, [completedSteps.join(',')]);
 
   useEffect(() => {
     if (showSuccess) {
       Animated.parallel([
-        Animated.spring(successScale, {
-          toValue: 1,
-          tension: 120,
-          friction: 10,
-          useNativeDriver: true,
-        }),
-        Animated.timing(successOpacity, {
-          toValue: 1,
-          duration: 400,
-          useNativeDriver: true,
-        }),
+        Animated.spring(successScale, { toValue: 1, tension: 120, friction: 10, useNativeDriver: true }),
+        Animated.timing(successOpacity, { toValue: 1, duration: 400, useNativeDriver: true }),
       ]).start();
     }
   }, [showSuccess]);
 
-  // Auto-loop through preview spots while loading
+  // Spot preview carousel — Bump-style "places you might visit"
   useEffect(() => {
     if (!hasPreviews || showSuccess) return;
-
     setActivePreviewIdx(0);
     activePreviewOpacity.setValue(1);
-
     const interval = setInterval(() => {
       Animated.sequence([
-        Animated.timing(activePreviewOpacity, {
-          toValue: 0,
-          duration: 220,
-          useNativeDriver: true,
-        }),
-        Animated.timing(activePreviewOpacity, {
-          toValue: 1,
-          duration: 260,
-          useNativeDriver: true,
-        }),
+        Animated.timing(activePreviewOpacity, { toValue: 0, duration: 200, useNativeDriver: true }),
+        Animated.timing(activePreviewOpacity, { toValue: 1, duration: 250, useNativeDriver: true }),
       ]).start();
+      setActivePreviewIdx((prev) => (displayPreviews.length === 0 ? 0 : (prev + 1) % displayPreviews.length));
+    }, 2800);
+    return () => { clearInterval(interval); activePreviewOpacity.setValue(1); };
+  }, [hasPreviews, showSuccess, displayPreviews?.length]);
 
-      setActivePreviewIdx((prev) =>
-        spotPreviews.length === 0 ? 0 : (prev + 1) % spotPreviews.length
-      );
-    }, 2600);
-
-    return () => {
-      clearInterval(interval);
-      activePreviewOpacity.setValue(1);
-    };
-  }, [hasPreviews, showSuccess, spotPreviews?.length]);
-
-  const pulseScale = pulse.interpolate({
-    inputRange: [0, 1],
-    outputRange: [0.9, 1.12],
-  });
-  const pulseOpacity = pulse.interpolate({
-    inputRange: [0, 1],
-    outputRange: [0.35, 0.8],
-  });
+  const pulseScale = pulse.interpolate({ inputRange: [0, 1], outputRange: [0.9, 1.12] });
+  const pulseOpacity = pulse.interpolate({ inputRange: [0, 1], outputRange: [0.35, 0.8] });
+  const by1 = bubble1.interpolate({ inputRange: [0, 1], outputRange: [0, -8] });
+  const by2 = bubble2.interpolate({ inputRange: [0, 1], outputRange: [0, 6] });
+  const by3 = bubble3.interpolate({ inputRange: [0, 1], outputRange: [0, -5] });
 
   return (
     <Animated.View style={[styles.planModalLoadingWrap, { opacity: fadeIn }]}>
+      {/* Bump-style floating friend bubbles */}
+      {!showSuccess && (
+        <>
+          <Animated.View style={[styles.planModalBubble, styles.planModalBubble1, { transform: [{ translateY: by1 }] }]}>
+            <Ionicons name="location" size={20} color="rgba(255,255,255,0.9)" />
+          </Animated.View>
+          <Animated.View style={[styles.planModalBubble, styles.planModalBubble2, { transform: [{ translateY: by2 }] }]}>
+            <Ionicons name="restaurant" size={18} color="rgba(255,255,255,0.9)" />
+          </Animated.View>
+          <Animated.View style={[styles.planModalBubble, styles.planModalBubble3, { transform: [{ translateY: by3 }] }]}>
+            <Ionicons name="sunny" size={18} color="rgba(255,255,255,0.9)" />
+          </Animated.View>
+        </>
+      )}
+
       <View style={styles.planModalLoadingCenter}>
         {!showSuccess && (
-          <Animated.View
-            style={[
-              styles.planModalLoadingPulseOuter,
-              {
-                opacity: pulseOpacity,
-                transform: [{ scale: pulseScale }],
-              },
-            ]}
-          />
+          <Animated.View style={[styles.planModalLoadingPulseOuter, { opacity: pulseOpacity, transform: [{ scale: pulseScale }] }]} />
         )}
         <View style={[styles.planModalLoadingPulse, showSuccess && styles.planModalLoadingPulseSuccess]}>
           {showSuccess ? (
             <Animated.View style={{ transform: [{ scale: successScale }], opacity: successOpacity }}>
-              <Ionicons name="checkmark-circle" size={56} color={colors.success} />
+              <Ionicons name="checkmark-circle" size={64} color={themeColors.success} />
             </Animated.View>
           ) : (
-            <ActivityIndicator size="large" color="#FFFFFF" />
+            <View style={styles.planModalLoadingSpinnerWrap}>
+              <ActivityIndicator size="large" color="#FFFFFF" />
+            </View>
           )}
         </View>
       </View>
+
       <Animated.View style={showSuccess && { opacity: successOpacity }}>
         <Text style={styles.planModalLoadingTitle}>
-          {showSuccess ? 'Your plan is ready!' : 'Hang tight, habibi!'}
+          {showSuccess ? "Your plan is ready!" : funPhrase}
         </Text>
         <Text style={styles.planModalLoadingSub}>
-          {showSuccess ? 'Yalla, let\'s explore Bahrain!' : loadingStatus}
+          {showSuccess ? "Yalla, let's explore Bahrain!" : (loadingStatus || 'Building your perfect day…')}
         </Text>
       </Animated.View>
+
       <View style={styles.planModalLoadingSteps}>
         {steps.map((s, i) => {
           const entrance = stepEntrance[i];
           const check = stepCheck[i];
           const isDone = completedSteps.includes(i);
           return (
-            <Animated.View
-              key={s.key}
-              style={[
-                styles.planModalLoadingStepRow,
-                {
-                  opacity: entrance,
-                  transform: [
-                    {
-                      translateX: entrance.interpolate({
-                        inputRange: [0, 1],
-                        outputRange: [-24, 0],
-                      }),
-                    },
-                  ],
-                },
-              ]}
-            >
+            <Animated.View key={s.key} style={[styles.planModalLoadingStepRow, { opacity: entrance, transform: [{ translateX: entrance.interpolate({ inputRange: [0, 1], outputRange: [-24, 0] }) }] }]}>
               <View style={[styles.planModalLoadingDot, isDone && styles.planModalLoadingDotDone]}>
                 {isDone ? (
-                  <Animated.View
-                    style={{
-                      transform: [
-                        {
-                          scale: check.interpolate({
-                            inputRange: [0, 1],
-                            outputRange: [0.5, 1],
-                          }),
-                        },
-                      ],
-                    }}
-                  >
+                  <Animated.View style={{ transform: [{ scale: check.interpolate({ inputRange: [0, 1], outputRange: [0.5, 1] }) }] }}>
                     <Ionicons name="checkmark" size={26} color="#FFFFFF" />
                   </Animated.View>
                 ) : (
                   <Ionicons name={s.icon} size={18} color="rgba(255,255,255,0.9)" />
                 )}
               </View>
-              <Text
-                style={[
-                  styles.planModalLoadingStepText,
-                  isDone && styles.planModalLoadingStepTextDone,
-                ]}
-              >
-                {s.text}
-              </Text>
+              <Text style={[styles.planModalLoadingStepText, isDone && styles.planModalLoadingStepTextDone]}>{s.text}</Text>
             </Animated.View>
           );
         })}
       </View>
 
-      {/* Bahrain teaser while generating */}
+      {/* Bump-style spot preview carousel — image-first when available */}
+      {hasPreviews && !showSuccess && (
+        <View style={styles.planModalPreviewSection}>
+          <Text style={styles.planModalPreviewTitle}>Places we're considering…</Text>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.planModalPreviewScroll}>
+            {displayPreviews.slice(0, 6).map((p, idx) => (
+              <Animated.View key={p.id} style={[styles.planModalPreviewCard, idx === activePreviewIdx && { opacity: activePreviewOpacity }]}>
+                {p.image ? (
+                  <Image source={{ uri: p.image }} style={styles.planModalPreviewImage} resizeMode="cover" />
+                ) : (
+                  <View style={styles.planModalPreviewIcon}>
+                    <Ionicons name={p.type === 'restaurant' ? 'restaurant' : p.type === 'event' ? 'calendar' : 'location'} size={22} color={themeColors.primary} />
+                  </View>
+                )}
+                <Text style={styles.planModalPreviewName} numberOfLines={1}>{p.name}</Text>
+                <Text style={styles.planModalPreviewTag} numberOfLines={1}>{p.typeLabel}</Text>
+              </Animated.View>
+            ))}
+          </ScrollView>
+        </View>
+      )}
+
       {!showSuccess && (
         <View style={styles.planModalFactWrap}>
           <Ionicons name="information-circle-outline" size={16} color="#FACC15" />
@@ -646,7 +823,7 @@ export default function AIPlanScreen() {
   const [planModalStep, setPlanModalStep] = useState(1);
   const [planGenerationSuccess, setPlanGenerationSuccess] = useState(false);
   const [spotPreviews, setSpotPreviews] = useState([]);
-  const [transportMode, setTransportMode] = useState('car');
+  const [profileClientId, setProfileClientId] = useState(null);
   const spinAnim = useRef(new Animated.Value(0)).current;
 
   // Plan modal animations (match Home AI overlay)
@@ -754,12 +931,17 @@ export default function AIPlanScreen() {
 
               // Build previews so the user sees some of the spots being considered
               const preview = buildSpotPreviews(places, restaurants, events);
-              setSpotPreviews(preview);
+              const enrichedPreviews = await enrichSpotPreviewsWithClientImages(preview);
+              setSpotPreviews(enrichedPreviews);
+
+              const allMatches = [...places, ...restaurants, ...breakfastSpots, ...events];
+              setPineconeMatches(allMatches);
 
               setLoadingStatus(`Khalid is building your ${theme.label} day…`);
               const plan = await generateDayPlan(places, restaurants, breakfastSpots, events, prefLabels, foodLabels);
               generatedPlan = plan;
-              setDayPlan(plan);
+              const enriched = await enrichPlanWithClientData(plan, allMatches);
+              setDayPlan(enriched);
               setError(null);
 
               const validMarkers = buildMapMarkers(plan).filter(m => m.lat && m.lng);
@@ -770,13 +952,18 @@ export default function AIPlanScreen() {
                   animated: true,
                 });
               }
-            } catch (err) {
-              setError(err.message || 'Something went wrong');
-              setDayPlan(null);
-            } finally {
-              setLoading(false);
-              setLoadingStatus('');
-              if (generatedPlan && generatedPlan.length > 0) {
+    } catch (err) {
+      console.warn('[AI Plan] API error, using mock plan:', err?.message);
+      generatedPlan = getMockDayPlan();
+      const allM = [...(places || []), ...(restaurants || []), ...(breakfastSpots || []), ...(events || [])];
+      const mockPreviews = buildSpotPreviewsFromPlan(generatedPlan);
+      enrichSpotPreviewsWithClientImages(mockPreviews).then((p) => setSpotPreviews(p));
+      enrichPlanWithClientData(generatedPlan, allM).then((e) => setDayPlan(e));
+      setError(null);
+    } finally {
+      setLoading(false);
+      setLoadingStatus('');
+      if (generatedPlan && generatedPlan.length > 0) {
                 setRevealingPins(true);
                 setVisiblePinCount(0);
                 sheetOpacity.setValue(0);
@@ -937,7 +1124,8 @@ export default function AIPlanScreen() {
 
       // Build previews so the user sees some of the spots being considered
       const preview = buildSpotPreviews(places, restaurants, events);
-      setSpotPreviews(preview);
+      const enrichedPreviews = await enrichSpotPreviewsWithClientImages(preview);
+      setSpotPreviews(enrichedPreviews);
 
       console.log(`Pinecone: ${places.length} places, ${restaurants.length} restaurants, ${breakfastSpots.length} breakfast, ${events.length} events`);
 
@@ -945,7 +1133,8 @@ export default function AIPlanScreen() {
       setLoadingStatus('Khalid is crafting your perfect day…');
       const plan = await generateDayPlan(places, restaurants, breakfastSpots, events, prefLabels, foodLabels);
       generatedPlan = plan;
-      setDayPlan(plan);
+      const enriched = await enrichPlanWithClientData(plan, allMatches);
+      setDayPlan(enriched);
       setError(null);
 
       // Debug markers
@@ -963,8 +1152,13 @@ export default function AIPlanScreen() {
       }
 
     } catch (err) {
-      setError(err.message || 'Something went wrong');
-      setDayPlan(null);
+      console.warn('[AI Plan] API error, using mock plan:', err?.message);
+      generatedPlan = getMockDayPlan();
+      const allM = [...(places || []), ...(restaurants || []), ...(breakfastSpots || []), ...(events || [])];
+      const mockPreviews = buildSpotPreviewsFromPlan(generatedPlan);
+      enrichSpotPreviewsWithClientImages(mockPreviews).then((p) => setSpotPreviews(p));
+      enrichPlanWithClientData(generatedPlan, allM).then((e) => setDayPlan(e));
+      setError(null);
     } finally {
       setLoading(false);
       setLoadingStatus('');
@@ -1226,7 +1420,7 @@ export default function AIPlanScreen() {
       {dayPlan && dayPlan.length > 0 && !loading && (
         <View style={[styles.bumpHeaderWrap, { top: insets.top + 12 }]}>
           <View style={styles.bumpHeaderCard}>
-            <Ionicons name="location" size={20} color={colors.primary} />
+            <Ionicons name="location" size={18} color={colors.primary} />
             <View style={styles.bumpHeaderTextWrap}>
               <Text style={styles.bumpHeaderTitle}>
                 {selectedMarker ? selectedMarker.spot : 'Your Day in Bahrain'}
@@ -1238,26 +1432,6 @@ export default function AIPlanScreen() {
               </Text>
             </View>
           </View>
-          {/* Transport mode chips — Bump style */}
-          <View style={styles.bumpTransportWrap}>
-            {TRANSPORT_MODES.map((m) => (
-              <TouchableOpacity
-                key={m.id}
-                style={[
-                  styles.bumpTransportChip,
-                  transportMode === m.id && { backgroundColor: m.color },
-                ]}
-                onPress={() => setTransportMode(m.id)}
-                activeOpacity={0.8}
-              >
-                <Ionicons
-                  name={m.icon}
-                  size={18}
-                  color={transportMode === m.id ? '#FFF' : '#64748B'}
-                />
-              </TouchableOpacity>
-            ))}
-          </View>
         </View>
       )}
 
@@ -1268,16 +1442,12 @@ export default function AIPlanScreen() {
         const timeCols = { Morning: colors.morning, Afternoon: colors.afternoon, Evening: colors.evening };
         const accent = isEat ? colors.dining : isEvent ? colors.event : (timeCols[selectedMarker.time] || colors.textSecondary);
         const stepNum = selectedMarker.idx + 1;
-        const transportLabels = { walk: '~12 min', car: '~5 min', bike: '~8 min' };
-        const etaLabel = transportLabels[transportMode] || '~5 min';
         return (
-          <View style={[styles.bumpBottomCardWrap, { bottom: SCREEN_HEIGHT * SHEET_VISIBLE_PEEK + getAppTabBarHeight(insets) + 20 }]}>
+          <View style={[styles.bumpBottomCardWrap, { bottom: SCREEN_HEIGHT * SHEET_VISIBLE_PEEK + getAppTabBarHeight(insets) + 12 }]}>
             <View style={styles.bumpBottomCard}>
               <View style={styles.bumpBottomCardLeft}>
-                <Text style={styles.bumpBottomCardEta}>{etaLabel} by {transportMode}</Text>
-                <Text style={styles.bumpBottomCardSub}>
-                  Stop {stepNum} · {selectedMarker.time}
-                </Text>
+                <Text style={styles.bumpBottomCardEta}>Stop {stepNum}</Text>
+                <Text style={styles.bumpBottomCardSub}>{selectedMarker.time}</Text>
               </View>
               <TouchableOpacity
                 style={[styles.bumpBottomCardStop, { backgroundColor: accent }]}
@@ -1302,7 +1472,7 @@ export default function AIPlanScreen() {
               activeOpacity={0.8}
             >
               <Text style={styles.bumpBottomCardExpandText}>{selectedMarker.spot}</Text>
-              <Ionicons name="chevron-up" size={18} color="#64748B" />
+              <Ionicons name="chevron-up" size={16} color="#64748B" />
             </TouchableOpacity>
           </View>
         );
@@ -1320,83 +1490,82 @@ export default function AIPlanScreen() {
       >
         <View style={styles.grabberWrap} {...panResponder.panHandlers}>
           <View style={styles.grabber} />
-          <Text style={styles.grabberHint}>Drag up for more details</Text>
+          <Text style={styles.grabberHint}>{dayPlan ? 'Swipe up for full itinerary' : 'Drag up for more'}</Text>
         </View>
 
-        {/* Step 0 — Past Plans */}
+        {/* Step 0 — Past Plans (modern hero layout) */}
         {drawerStep === 0 && (
           <>
-            <View style={styles.pastPlansHeader}>
-              <View>
-                <Text style={styles.pastPlansTitle}>Past Plans</Text>
-                <Text style={styles.pastPlansSubtitle}>{DUMMY_PAST_PLANS.length} plans saved</Text>
+            <View style={styles.pastPlansHero}>
+              <View style={styles.pastPlansHeroContent}>
+                <View style={styles.pastPlansHeroBadge}>
+                  <Ionicons name="map" size={16} color={themeColors.primary} />
+                  <Text style={styles.pastPlansHeroBadgeText}>AI-Powered</Text>
+                </View>
+                <Text style={styles.pastPlansTitle}>Your Bahrain{'\n'}Adventure</Text>
+                <Text style={styles.pastPlansSubtitle}>Let Khalid craft the perfect day — tailored to you</Text>
               </View>
-              <TouchableOpacity style={styles.startAiButton} activeOpacity={0.8} onPress={startSetup}>
-                <Ionicons name="sparkles" size={18} color="#FFFFFF" />
-                <Text style={styles.startAiButtonText}>Start AI trip setup</Text>
+              <TouchableOpacity style={styles.startAiButtonWrap} activeOpacity={0.85} onPress={startSetup}>
+                <LinearGradient colors={[themeColors.primary, themeColors.primaryLight || '#E63950']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.startAiButton}>
+                  <Ionicons name="sparkles" size={20} color="#FFFFFF" />
+                  <Text style={styles.startAiButtonText}>Build my day</Text>
+                </LinearGradient>
               </TouchableOpacity>
             </View>
             <ScrollView style={styles.pastPlansScroll} contentContainerStyle={styles.pastPlansContent} showsVerticalScrollIndicator={false}>
-              {/* Surprise Me Section */}
+              {/* Surprise Me — premium card */}
               <View style={styles.surpriseCard}>
-                <View style={styles.surpriseHeader}>
-                  <Ionicons name="dice-outline" size={20} color={colors.primary} />
-                  <Text style={styles.surpriseTitle}>Feeling Lucky?</Text>
-                </View>
-                <Text style={styles.surpriseDesc}>
-                  Let Khalid pick a random theme and plan your entire day — no choices needed!
-                </Text>
-
-                {/* Roulette display */}
-                <View style={styles.rouletteWrap}>
-                  <View style={[styles.rouletteBox, { borderColor: (surprisePicked || SURPRISE_THEMES[surpriseIndex]).color }]}>
-                    <Ionicons
-                      name={(surprisePicked || SURPRISE_THEMES[surpriseIndex]).icon}
-                      size={28}
-                      color={(surprisePicked || SURPRISE_THEMES[surpriseIndex]).color}
-                    />
-                    <Text style={[styles.rouletteLabel, { color: (surprisePicked || SURPRISE_THEMES[surpriseIndex]).color }]}>
-                      {(surprisePicked || SURPRISE_THEMES[surpriseIndex]).label}
-                    </Text>
+                <LinearGradient colors={['rgba(200,16,46,0.06)', 'rgba(200,16,46,0.02)']} style={styles.surpriseCardGradient}>
+                  <View style={styles.surpriseHeader}>
+                    <View style={styles.surpriseIconWrap}>
+                      <Ionicons name="dice" size={24} color={themeColors.primary} />
+                    </View>
+                    <View style={styles.surpriseHeaderText}>
+                      <Text style={styles.surpriseTitle}>Feeling Lucky?</Text>
+                      <Text style={styles.surpriseDesc}>
+                        Let Khalid pick a theme and plan your entire day — zero decisions needed!
+                      </Text>
+                    </View>
                   </View>
-                </View>
-
-                <TouchableOpacity
-                  style={[styles.surpriseBtn, surpriseSpinning && { opacity: 0.6 }]}
-                  activeOpacity={0.8}
-                  onPress={handleSurpriseMe}
-                  disabled={surpriseSpinning}
-                >
-                  <Ionicons name={surpriseSpinning ? 'sync' : 'sparkles'} size={18} color="#FFF" />
-                  <Text style={styles.surpriseBtnText}>
-                    {surpriseSpinning ? 'Spinning…' : surprisePicked ? `Go with ${surprisePicked.label}!` : 'Surprise Me!'}
-                  </Text>
-                </TouchableOpacity>
+                  <View style={styles.rouletteWrap}>
+                    <View style={[styles.rouletteBox, { borderColor: (surprisePicked || SURPRISE_THEMES[surpriseIndex]).color, backgroundColor: `${(surprisePicked || SURPRISE_THEMES[surpriseIndex]).color}12` }]}>
+                      <Ionicons name={(surprisePicked || SURPRISE_THEMES[surpriseIndex]).icon} size={26} color={(surprisePicked || SURPRISE_THEMES[surpriseIndex]).color} />
+                      <Text style={[styles.rouletteLabel, { color: (surprisePicked || SURPRISE_THEMES[surpriseIndex]).color }]}>
+                        {(surprisePicked || SURPRISE_THEMES[surpriseIndex]).label}
+                      </Text>
+                    </View>
+                  </View>
+                  <TouchableOpacity style={[styles.surpriseBtn, surpriseSpinning && styles.surpriseBtnDisabled]} activeOpacity={0.85} onPress={handleSurpriseMe} disabled={surpriseSpinning}>
+                    <Ionicons name={surpriseSpinning ? 'sync' : 'sparkles'} size={20} color="#FFF" />
+                    <Text style={styles.surpriseBtnText}>
+                      {surpriseSpinning ? 'Spinning…' : surprisePicked ? `Go with ${surprisePicked.label}!` : 'Surprise Me!'}
+                    </Text>
+                  </TouchableOpacity>
+                </LinearGradient>
               </View>
 
-              {/* Divider */}
               <View style={styles.surpriseDivider}>
                 <View style={styles.surpriseDividerLine} />
-                <Text style={styles.surpriseDividerText}>or check your past plans</Text>
+                <Text style={styles.surpriseDividerText}>or pick from past plans</Text>
                 <View style={styles.surpriseDividerLine} />
               </View>
 
               {DUMMY_PAST_PLANS.map((plan) => (
-                <TouchableOpacity key={plan.id} style={styles.pastPlanCard} activeOpacity={0.8}>
+                <TouchableOpacity key={plan.id} style={styles.pastPlanCard} activeOpacity={0.85}>
                   <View style={styles.pastPlanIcon}>
-                    <Ionicons name="map-outline" size={22} color={colors.primary} />
+                    <Ionicons name="map" size={24} color={themeColors.primary} />
                   </View>
                   <View style={styles.pastPlanInfo}>
-                    <View style={styles.pastPlanTitleRow}>
-                      <Text style={styles.pastPlanName}>{plan.title}</Text>
-                      <View style={styles.savedBadge}><Text style={styles.savedBadgeText}>Saved</Text></View>
-                    </View>
+                    <Text style={styles.pastPlanName}>{plan.title}</Text>
                     <View style={styles.pastPlanMetaRow}>
-                      <Ionicons name="calendar-outline" size={13} color="#9CA3AF" style={{ marginRight: 4 }} />
-                      <Text style={styles.pastPlanMeta}>{plan.spots} spots · {plan.date}</Text>
+                      <View style={styles.pastPlanMetaDot} />
+                      <Text style={styles.pastPlanMeta}>{plan.spots} stops · {plan.date}</Text>
                     </View>
                   </View>
-                  <Ionicons name="chevron-forward" size={18} color="#9CA3AF" />
+                  <View style={styles.savedBadge}>
+                    <Text style={styles.savedBadgeText}>Saved</Text>
+                  </View>
+                  <Ionicons name="chevron-forward" size={18} color="#94A3B8" />
                 </TouchableOpacity>
               ))}
             </ScrollView>
@@ -1409,7 +1578,7 @@ export default function AIPlanScreen() {
             {/* Header — no plan/preparation text when loading */}
             <View style={styles.drawerPageHeader}>
               <TouchableOpacity style={styles.backButton} activeOpacity={0.8} onPress={() => { setDrawerStep(0); setDayPlan(null); setError(null); }}>
-                <Ionicons name="chevron-back" size={22} color="#374151" />
+                      <Ionicons name="chevron-back" size={20} color="#374151" />
               </TouchableOpacity>
               {!loading && (
                 <View style={styles.drawerPageTitleWrap}>
@@ -1419,15 +1588,64 @@ export default function AIPlanScreen() {
             </View>
 
             {loading ? (
-              <View style={styles.loadingWrap} />
+              <View style={styles.loadingWrap}>
+                <LinearGradient colors={['#FFF5F6', '#FFFFFF']} style={styles.loadingBumpCard}>
+                  <View style={styles.loadingBumpPulse}>
+                    <ActivityIndicator size="large" color={themeColors.primary} />
+                  </View>
+                  <Text style={styles.loadingBumpTitle}>{loadingStatus || "Khalid's building your day…"}</Text>
+                  <Text style={styles.loadingBumpSub}>Hang tight, habibi — almost there!</Text>
+                  {spotPreviews.length > 0 && (
+                    <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.loadingSpotPreviews} contentContainerStyle={styles.loadingSpotPreviewsContent}>
+                      {spotPreviews.slice(0, 5).map((p) => (
+                        <View key={p.id} style={styles.loadingSpotPreviewItem}>
+                          {p.image ? (
+                            <Image source={{ uri: p.image }} style={styles.loadingSpotPreviewImg} resizeMode="cover" />
+                          ) : (
+                            <View style={styles.loadingSpotPreviewPlaceholder}>
+                              <Ionicons name={p.type === 'restaurant' ? 'restaurant' : 'location'} size={20} color={themeColors.primary} />
+                            </View>
+                          )}
+                          <Text style={styles.loadingSpotPreviewName} numberOfLines={1}>{p.name}</Text>
+                        </View>
+                      ))}
+                    </ScrollView>
+                  )}
+                  <View style={styles.loadingProgressBar}>
+                    <View style={[styles.loadingProgressFill, (() => {
+                      const s = (loadingStatus || '').toLowerCase();
+                      if (s.includes('crafting') || s.includes('stitch')) return { width: '100%' };
+                      if (s.includes('food') || s.includes('restaurant')) return { width: '66%' };
+                      return { width: '33%' };
+                    })()]} />
+                  </View>
+                  <View style={styles.loadingBumpSteps}>
+                    {['Finding spots', 'Picking food', 'Stitching plan'].map((step, i) => {
+                      const s = (loadingStatus || '').toLowerCase();
+                      const isDone = (i === 0 && (s.includes('food') || s.includes('restaurant') || s.includes('crafting') || s.includes('stitch'))) || (i === 1 && (s.includes('crafting') || s.includes('stitch')));
+                      return (
+                        <View key={step} style={styles.loadingBumpStep}>
+                          <View style={[styles.loadingBumpDot, isDone && styles.loadingBumpDotDone]}>
+                            {isDone ? <Ionicons name="checkmark" size={14} color="#FFFFFF" /> : <Ionicons name="ellipse" size={8} color={themeColors.primary} />}
+                          </View>
+                          <Text style={[styles.loadingBumpStepText, isDone && styles.loadingBumpStepTextDone]}>{step}</Text>
+                        </View>
+                      );
+                    })}
+                  </View>
+                </LinearGradient>
+              </View>
             ) : error ? (
-              <View style={{ paddingHorizontal: 20, flex: 1, justifyContent: 'center' }}>
+              <View style={styles.errorWrap}>
                 <View style={styles.errorCard}>
-                  <Ionicons name="alert-circle-outline" size={24} color="#DC2626" />
+                  <View style={styles.errorIconWrap}>
+                    <Ionicons name="alert-circle" size={28} color="#DC2626" />
+                  </View>
+                  <Text style={styles.errorTitle}>Something went wrong</Text>
                   <Text style={styles.errorText}>{error}</Text>
                 </View>
-                <TouchableOpacity style={styles.retryButton} activeOpacity={0.8} onPress={handleGenerate}>
-                  <Ionicons name="refresh-outline" size={18} color={colors.primary} />
+                <TouchableOpacity style={styles.retryButton} activeOpacity={0.85} onPress={handleGenerate}>
+                  <Ionicons name="refresh" size={20} color={themeColors.primary} />
                   <Text style={styles.retryButtonText}>Try again</Text>
                 </TouchableOpacity>
               </View>
@@ -1438,37 +1656,45 @@ export default function AIPlanScreen() {
             ) : (
               <ScrollView style={styles.resultsScroll} contentContainerStyle={styles.resultsContent} showsVerticalScrollIndicator={false}>
 
-                {/* ═══ Bump-style compact summary ═══ */}
+                {/* ═══ Bump-style fun summary card ═══ */}
                 <View style={styles.bumpSummaryCard}>
-                  <View style={styles.bumpSummaryRow}>
-                    <Ionicons name="location" size={20} color={colors.primary} />
-                    <View style={styles.bumpSummaryText}>
-                      <Text style={styles.bumpSummaryTitle}>Bahrain · Full Day</Text>
-                      <Text style={styles.bumpSummarySub}>
-                        {dayPlan.length} stops · {dayPlan.filter(i => i.type === 'restaurant').length} meals
-                      </Text>
+                  <LinearGradient colors={['rgba(200,16,46,0.06)', 'rgba(200,16,46,0.02)']} style={styles.bumpSummaryGradient}>
+                    <View style={styles.bumpSummaryBadge}>
+                      <Ionicons name="sparkles" size={14} color={themeColors.primary} />
+                      <Text style={styles.bumpSummaryBadgeText}>Your day is ready!</Text>
                     </View>
-                    <View style={styles.bumpSummaryBudget}>
-                      <Text style={styles.bumpSummaryAmount}>
-                        {(() => {
-                          const meals = dayPlan.filter(i => i.type === 'restaurant').length;
-                          const places = dayPlan.filter(i => i.type !== 'restaurant').length;
-                          const low = meals * 3 + places * 2;
-                          const high = meals * 15 + places * 8;
-                          return `${low}–${high} BHD`;
-                        })()}
-                      </Text>
-                      <Text style={styles.bumpSummaryLabel}>Est. budget</Text>
+                    <View style={styles.bumpSummaryRow}>
+                      <View style={styles.bumpSummaryIconWrap}>
+                        <Ionicons name="map" size={22} color={colors.primary} />
+                      </View>
+                      <View style={styles.bumpSummaryText}>
+                        <Text style={styles.bumpSummaryTitle}>Bahrain · Full Day</Text>
+                        <Text style={styles.bumpSummarySub}>
+                          {dayPlan.length} stops · {dayPlan.filter(i => i.type === 'restaurant').length} meals · Yalla!
+                        </Text>
+                      </View>
+                      <View style={styles.bumpSummaryBudget}>
+                        <Text style={styles.bumpSummaryAmount}>
+                          {(() => {
+                            const meals = dayPlan.filter(i => i.type === 'restaurant').length;
+                            const places = dayPlan.filter(i => i.type !== 'restaurant').length;
+                            const low = meals * 3 + places * 2;
+                            const high = meals * 15 + places * 8;
+                            return `${low}–${high} BHD`;
+                          })()}
+                        </Text>
+                        <Text style={styles.bumpSummaryLabel}>Est. budget</Text>
+                      </View>
                     </View>
-                  </View>
+                  </LinearGradient>
                 </View>
 
-                {/* ═══ Bump-style minimal itinerary list ═══ */}
+                {/* ═══ Bump-style itinerary list — modern cards ═══ */}
                 {(() => {
                   const sections = {
-                    Morning:   { color: colors.morning, icon: 'sunny-outline' },
-                    Afternoon: { color: colors.afternoon, icon: 'partly-sunny-outline' },
-                    Evening:   { color: colors.evening, icon: 'moon-outline' },
+                    Morning:   { color: colors.morning, icon: 'sunny-outline', label: 'Morning' },
+                    Afternoon: { color: colors.afternoon, icon: 'partly-sunny-outline', label: 'Afternoon' },
+                    Evening:   { color: colors.evening, icon: 'moon-outline', label: 'Evening' },
                   };
                   const order = ['Morning', 'Afternoon', 'Evening'];
                   const grouped = {};
@@ -1480,45 +1706,78 @@ export default function AIPlanScreen() {
                     const items = grouped[time];
                     return (
                       <View key={time} style={styles.bumpItinSection}>
-                        <View style={styles.bumpItinSectionHeader}>
-                          <Ionicons name={sec.icon} size={18} color={sec.color} />
-                          <Text style={[styles.bumpItinSectionTitle, { color: sec.color }]}>{time}</Text>
-                          <Text style={styles.bumpItinSectionCount}>{items.length}</Text>
+                        <View style={[styles.bumpItinSectionHeader, { backgroundColor: `${sec.color}12` }]}>
+                          <View style={[styles.bumpItinSectionIconWrap, { backgroundColor: sec.color }]}>
+                            <Ionicons name={sec.icon} size={14} color="#FFFFFF" />
+                          </View>
+                          <Text style={[styles.bumpItinSectionTitle, { color: sec.color }]}>{sec.label}</Text>
+                          <View style={[styles.bumpItinSectionCountBadge, { backgroundColor: sec.color }]}>
+                            <Text style={styles.bumpItinSectionCountText}>{items.length}</Text>
+                          </View>
                         </View>
                         {items.map((item, idx) => {
                           stopNum += 1;
                           const isEat = item.type === 'restaurant';
                           const isEvent = item.type === 'event';
                           const accent = isEat ? themeColors.dining : isEvent ? themeColors.event : sec.color;
+                          const hasImage = !!(item.image);
+                          const hasProfile = !!(item.clientId);
                           return (
                             <TouchableOpacity
                               key={idx}
                               style={styles.bumpItinCard}
-                              activeOpacity={0.8}
+                              activeOpacity={0.85}
                               onPress={() => {
                                 const markers = buildMapMarkers(dayPlan);
                                 const mk = markers[stopNum - 1];
                                 if (mk) setSelectedMarker(mk);
                               }}
                             >
-                              <View style={[styles.bumpItinNum, { backgroundColor: accent }]}>
-                                <Text style={styles.bumpItinNumText}>{stopNum}</Text>
+                              {/* Image-first: hero image or placeholder */}
+                              <View style={styles.bumpItinImageWrap}>
+                                {hasImage ? (
+                                  <Image source={{ uri: item.image }} style={styles.bumpItinImage} resizeMode="cover" />
+                                ) : (
+                                  <View style={[styles.bumpItinImagePlaceholder, { backgroundColor: `${accent}20` }]}>
+                                    <Ionicons name={isEat ? 'restaurant' : isEvent ? 'calendar' : 'location'} size={28} color={accent} />
+                                  </View>
+                                )}
+                                <View style={[styles.bumpItinNumBadge, { backgroundColor: accent }]}>
+                                  <Text style={styles.bumpItinNumText}>{stopNum}</Text>
+                                </View>
+                                {item.rating != null && (
+                                  <View style={styles.bumpItinRatingBadge}>
+                                    <Ionicons name="star" size={12} color="#F59E0B" />
+                                    <Text style={styles.bumpItinRatingText}>{Number(item.rating).toFixed(1)}</Text>
+                                  </View>
+                                )}
                               </View>
                               <View style={styles.bumpItinContent}>
                                 <Text style={styles.bumpItinName}>{item.spot}</Text>
                                 <Text style={styles.bumpItinReason} numberOfLines={2}>{item.reason}</Text>
-                                {item.lat != null && item.lng != null && (
-                                  <TouchableOpacity
-                                    style={styles.bumpItinNavBtn}
-                                    onPress={() => navigation.navigate('AR', { navigateTo: { lat: item.lat, lng: item.lng, name: item.spot } })}
-                                    activeOpacity={0.8}
-                                  >
-                                    <Ionicons name="navigate" size={14} color={colors.primary} />
-                                    <Text style={styles.bumpItinNavBtnText}>Open in AR</Text>
-                                  </TouchableOpacity>
-                                )}
+                                <View style={styles.bumpItinActions}>
+                                  {item.lat != null && item.lng != null && (
+                                    <TouchableOpacity
+                                      style={styles.bumpItinNavBtn}
+                                      onPress={() => navigation.navigate('AR', { navigateTo: { lat: item.lat, lng: item.lng, name: item.spot } })}
+                                      activeOpacity={0.85}
+                                    >
+                                      <Ionicons name="navigate" size={14} color={colors.primary} />
+                                      <Text style={styles.bumpItinNavBtnText}>Open in AR</Text>
+                                    </TouchableOpacity>
+                                  )}
+                                  {hasProfile && (
+                                    <TouchableOpacity
+                                      style={styles.bumpItinProfileBtn}
+                                      onPress={() => setProfileClientId(item.clientId)}
+                                      activeOpacity={0.85}
+                                    >
+                                      <Ionicons name="person-circle-outline" size={16} color={themeColors.primary} />
+                                      <Text style={styles.bumpItinProfileBtnText}>View profile</Text>
+                                    </TouchableOpacity>
+                                  )}
+                                </View>
                               </View>
-                              <Ionicons name="chevron-forward" size={18} color="#94A3B8" />
                             </TouchableOpacity>
                           );
                         })}
@@ -1527,10 +1786,15 @@ export default function AIPlanScreen() {
                   });
                 })()}
 
-                {/* ═══ Bump-style footer ═══ */}
+                {/* ═══ Bump-style fun footer ═══ */}
                 <View style={styles.bumpFooter}>
-                  <Ionicons name="heart" size={20} color={colors.primary} />
-                  <Text style={styles.bumpFooterText}>Yalla habibi, have the best day!</Text>
+                  <View style={styles.bumpFooterEmoji}>
+                    <Text style={styles.bumpFooterEmojiText}>✨</Text>
+                  </View>
+                  <Text style={styles.bumpFooterText}>Yalla habibi — have the best day!</Text>
+                  <View style={styles.bumpFooterEmoji}>
+                    <Text style={styles.bumpFooterEmojiText}>🇧🇭</Text>
+                  </View>
                 </View>
               </ScrollView>
             )}
@@ -1545,7 +1809,11 @@ export default function AIPlanScreen() {
           behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         >
           <Animated.View style={[styles.planModalBackdropWrap, { opacity: planModalBackdrop }]}>
-            <BlurView intensity={45} tint="dark" style={StyleSheet.absoluteFill} />
+            <LinearGradient
+              colors={['#1a0a0d', '#2d1519', '#1a0a0d']}
+              style={StyleSheet.absoluteFill}
+            />
+            <BlurView intensity={30} tint="dark" style={StyleSheet.absoluteFill} />
             <View style={styles.planModalBackdropDim} />
             <TouchableOpacity
               style={StyleSheet.absoluteFill}
@@ -1573,7 +1841,7 @@ export default function AIPlanScreen() {
               />
             ) : (
               <>
-                {/* Question block */}
+                {/* Question block — modern step indicator */}
                 <Animated.View
                   style={[
                     styles.planModalQuestionBlock,
@@ -1583,6 +1851,11 @@ export default function AIPlanScreen() {
                     },
                   ]}
                 >
+                  <View style={styles.planModalStepIndicator}>
+                    <View style={[styles.planModalStepDot, planModalStep >= 1 && styles.planModalStepDotActive]} />
+                    <View style={[styles.planModalStepLine, planModalStep >= 2 && styles.planModalStepLineActive]} />
+                    <View style={[styles.planModalStepDot, planModalStep >= 2 && styles.planModalStepDotActive]} />
+                  </View>
                   <View style={styles.planModalQuestionInner}>
                     <Text style={styles.planModalQuestionTitle}>
                       {planModalStep === 1 ? 'What kind of experiences do you prefer?' : 'What do you prefer to eat?'}
@@ -1634,10 +1907,12 @@ export default function AIPlanScreen() {
                                 sel && styles.planModalOptionBlockSelected,
                                 sel && { borderColor: item.color, backgroundColor: item.color, borderWidth: 2 },
                               ]}
-                              activeOpacity={0.8}
+                              activeOpacity={0.85}
                               onPress={() => onPress(item)}
                             >
-                              <Ionicons name={item.icon} size={22} color="#FFFFFF" />
+                              <View style={[styles.planModalOptionIconWrap, sel && { backgroundColor: 'rgba(255,255,255,0.25)' }]}>
+                                <Ionicons name={item.icon} size={18} color={sel ? '#FFFFFF' : 'rgba(255,255,255,0.95)'} />
+                              </View>
                               <Text style={[styles.planModalOptionText, sel && styles.planModalOptionTextSelected]}>
                                 {item.label}
                               </Text>
@@ -1705,6 +1980,19 @@ export default function AIPlanScreen() {
           </Animated.View>
         </KeyboardAvoidingView>
       </Modal>
+
+      <ClientProfileModal
+        visible={!!profileClientId}
+        clientId={profileClientId}
+        onClose={() => setProfileClientId(null)}
+        insets={insets}
+        onOpenARNavigate={(dest) => {
+          setProfileClientId(null);
+          if (dest?.lat != null && dest?.lng != null) {
+            navigation.navigate('AR', { navigateTo: { lat: dest.lat, lng: dest.lng, name: dest.name || 'Destination' } });
+          }
+        }}
+      />
     </View>
   );
 }
@@ -1723,66 +2011,132 @@ const styles = StyleSheet.create({
   grabber: { width: 36, height: 4, borderRadius: 2, backgroundColor: '#E2E8F0' },
   grabberHint: { marginTop: 8, fontSize: 12, color: '#94A3B8', fontWeight: '500' },
 
-  // Past plans (step 0)
-  pastPlansHeader: {
-    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
-    paddingHorizontal: 24, marginBottom: 20,
+  // Past plans (step 0) — compact, Bump-style
+  pastPlansHero: {
+    paddingHorizontal: 20,
+    paddingTop: 6,
+    paddingBottom: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F1F5F9',
   },
-  pastPlansTitle: { fontSize: 28, fontWeight: '800', color: '#0F172A', letterSpacing: -0.6 },
-  pastPlansSubtitle: { fontSize: 15, color: '#64748B', marginTop: 4, fontWeight: '500' },
+  pastPlansHeroContent: { marginBottom: 14 },
+  pastPlansHeroBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    gap: 5,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 999,
+    backgroundColor: themeColors.primaryMuted,
+    marginBottom: 10,
+  },
+  pastPlansHeroBadgeText: { fontSize: 11, fontWeight: '700', color: themeColors.primary, letterSpacing: 0.5 },
+  pastPlansTitle: { fontSize: 24, fontWeight: '800', color: '#0F172A', letterSpacing: -0.5, lineHeight: 30 },
+  pastPlansSubtitle: { fontSize: 14, color: '#64748B', marginTop: 6, fontWeight: '500', lineHeight: 20 },
+  startAiButtonWrap: {
+    borderRadius: 14,
+    overflow: 'hidden',
+    ...Platform.select({ ios: { shadowColor: themeColors.primary, shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.2, shadowRadius: 8 }, android: { elevation: 4 } }),
+  },
   startAiButton: {
-    flexDirection: 'row', alignItems: 'center', paddingHorizontal: 18, paddingVertical: 12,
-    borderRadius: 14, backgroundColor: themeColors.primary, gap: 8,
-    ...Platform.select({ ios: { shadowColor: themeColors.primary, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.2, shadowRadius: 8 }, android: { elevation: 4 } }),
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 14,
+    paddingHorizontal: 22,
+    gap: 8,
+    borderRadius: 14,
   },
-  startAiButtonText: { fontSize: 15, fontWeight: '700', color: '#FFFFFF' },
+  startAiButtonText: { fontSize: 15, fontWeight: '700', color: '#FFFFFF', letterSpacing: 0.2 },
   pastPlansScroll: { flex: 1 },
-  pastPlansContent: { paddingHorizontal: 24, paddingBottom: 24, gap: 12 },
+  pastPlansContent: { paddingHorizontal: 20, paddingBottom: 20, paddingTop: 14, gap: 10 },
   pastPlanCard: {
-    flexDirection: 'row', alignItems: 'center', backgroundColor: '#FFFFFF',
-    paddingVertical: 16, paddingHorizontal: 18, borderRadius: 18, borderWidth: 0,
-    shadowColor: '#0F172A', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.06, shadowRadius: 12, elevation: 3,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#F1F5F9',
+    ...Platform.select({ ios: { shadowColor: '#0F172A', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.04, shadowRadius: 8 }, android: { elevation: 2 } }),
   },
   pastPlanIcon: {
-    width: 48, height: 48, borderRadius: 14, backgroundColor: themeColors.primaryMuted,
-    alignItems: 'center', justifyContent: 'center', marginRight: 14,
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    backgroundColor: themeColors.primaryMuted,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 12,
   },
   pastPlanInfo: { flex: 1 },
-  pastPlanTitleRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 },
-  pastPlanName: { fontSize: 17, fontWeight: '700', color: '#0F172A' },
-  savedBadge: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 999, backgroundColor: themeColors.successMuted },
-  savedBadgeText: { fontSize: 11, fontWeight: '700', color: themeColors.success },
-  pastPlanMetaRow: { flexDirection: 'row', alignItems: 'center', marginTop: 2 },
+  pastPlanName: { fontSize: 15, fontWeight: '700', color: '#0F172A', marginBottom: 2 },
+  pastPlanMetaRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  pastPlanMetaDot: { width: 4, height: 4, borderRadius: 2, backgroundColor: '#94A3B8' },
   pastPlanMeta: { fontSize: 14, color: '#64748B', fontWeight: '500' },
+  savedBadge: { paddingHorizontal: 10, paddingVertical: 5, borderRadius: 999, backgroundColor: themeColors.successMuted, marginRight: 12 },
+  savedBadgeText: { fontSize: 11, fontWeight: '700', color: themeColors.success },
 
-  // Surprise Me
+  // Surprise Me — compact, fun
   surpriseCard: {
-    backgroundColor: '#FFFFFF', borderRadius: 20, padding: 22, marginBottom: 16,
-    borderWidth: 0,
-    shadowColor: '#0F172A', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.08, shadowRadius: 16, elevation: 4,
+    borderRadius: 16,
+    overflow: 'hidden',
+    marginBottom: 6,
+    ...Platform.select({ ios: { shadowColor: '#0F172A', shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.06, shadowRadius: 12 }, android: { elevation: 4 } }),
   },
-  surpriseHeader: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 8 },
-  surpriseTitle: { fontSize: 19, fontWeight: '800', color: '#0F172A' },
-  surpriseDesc: { fontSize: 15, color: '#64748B', lineHeight: 22, marginBottom: 20 },
-  rouletteWrap: { alignItems: 'center', marginBottom: 20 },
+  surpriseCardGradient: {
+    padding: 16,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(200,16,46,0.08)',
+  },
+  surpriseHeader: { flexDirection: 'row', alignItems: 'flex-start', gap: 12, marginBottom: 14 },
+  surpriseIconWrap: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    backgroundColor: 'rgba(200,16,46,0.12)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  surpriseHeaderText: { flex: 1 },
+  surpriseTitle: { fontSize: 17, fontWeight: '800', color: '#0F172A', marginBottom: 4 },
+  surpriseDesc: { fontSize: 13, color: '#64748B', lineHeight: 19, fontWeight: '500' },
+  rouletteWrap: { alignItems: 'center', marginBottom: 14 },
   rouletteBox: {
-    flexDirection: 'row', alignItems: 'center', gap: 12,
-    paddingVertical: 18, paddingHorizontal: 32,
-    borderRadius: 18, borderWidth: 2, backgroundColor: '#F8FAFC',
-    minWidth: 200, justifyContent: 'center',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingVertical: 14,
+    paddingHorizontal: 20,
+    borderRadius: 14,
+    borderWidth: 2,
+    minWidth: 180,
+    justifyContent: 'center',
   },
-  rouletteLabel: { fontSize: 20, fontWeight: '800', letterSpacing: 0.3 },
+  rouletteLabel: { fontSize: 16, fontWeight: '800', letterSpacing: 0.2 },
   surpriseBtn: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10,
-    backgroundColor: themeColors.primary, borderRadius: 16, paddingVertical: 16,
-    ...Platform.select({ ios: { shadowColor: themeColors.primary, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.2, shadowRadius: 12 }, android: { elevation: 6 } }),
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: themeColors.primary,
+    borderRadius: 14,
+    paddingVertical: 14,
+    ...Platform.select({ ios: { shadowColor: themeColors.primary, shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.2, shadowRadius: 8 }, android: { elevation: 4 } }),
   },
-  surpriseBtnText: { color: '#FFF', fontSize: 16, fontWeight: '700' },
+  surpriseBtnDisabled: { opacity: 0.7 },
+  surpriseBtnText: { color: '#FFF', fontSize: 14, fontWeight: '700' },
   surpriseDivider: {
-    flexDirection: 'row', alignItems: 'center', marginVertical: 16, paddingHorizontal: 4,
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginVertical: 14,
+    paddingHorizontal: 4,
   },
   surpriseDividerLine: { flex: 1, height: 1, backgroundColor: '#E2E8F0' },
-  surpriseDividerText: { fontSize: 13, color: '#94A3B8', marginHorizontal: 14, fontWeight: '500' },
+  surpriseDividerText: { fontSize: 13, color: '#94A3B8', marginHorizontal: 14, fontWeight: '600' },
 
   // Drawer page header
   drawerPageHeader: {
@@ -1797,17 +2151,17 @@ const styles = StyleSheet.create({
   // Grid tiles for preferences + food
   gridScroll: { flex: 1 },
   gridContent: { paddingHorizontal: 24, paddingBottom: 48 },
-  gridRow: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', gap: 12 },
+  gridRow: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', gap: 10 },
   gridTile: {
-    width: TILE_WIDTH, aspectRatio: 1, borderRadius: 18, borderWidth: 2,
+    width: TILE_WIDTH, aspectRatio: 1, borderRadius: 14, borderWidth: 2,
     borderColor: '#E2E8F0', backgroundColor: '#FFFFFF',
     justifyContent: 'center', alignItems: 'center',
-    shadowColor: '#0F172A', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.04, shadowRadius: 8, elevation: 2,
+    shadowColor: '#0F172A', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.04, shadowRadius: 6, elevation: 2,
   },
   gridTileIcon: {
-    width: 44, height: 44, borderRadius: 14, alignItems: 'center', justifyContent: 'center', marginBottom: 10,
+    width: 36, height: 36, borderRadius: 10, alignItems: 'center', justifyContent: 'center', marginBottom: 6,
   },
-  gridTileLabel: { fontSize: 13, fontWeight: '600', color: '#334155', textAlign: 'center' },
+  gridTileLabel: { fontSize: 12, fontWeight: '600', color: '#334155', textAlign: 'center' },
 
   fixedButtonWrap: {
     paddingHorizontal: 24,
@@ -1816,30 +2170,107 @@ const styles = StyleSheet.create({
   },
 
   continueButton: {
-    backgroundColor: themeColors.primary, paddingVertical: 18, borderRadius: 16,
-    alignItems: 'center', justifyContent: 'center', marginTop: 20,
-    ...Platform.select({ ios: { shadowColor: themeColors.primary, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.2, shadowRadius: 10 }, android: { elevation: 4 } }),
+    backgroundColor: themeColors.primary, paddingVertical: 14, borderRadius: 14,
+    alignItems: 'center', justifyContent: 'center', marginTop: 16,
+    ...Platform.select({ ios: { shadowColor: themeColors.primary, shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.18, shadowRadius: 8 }, android: { elevation: 4 } }),
   },
   continueButtonDisabled: { backgroundColor: '#E2E8F0' },
   continueButtonText: { fontSize: 16, fontWeight: '700', color: '#FFFFFF' },
 
   // Generate button (food)
   generateButton: {
-    flexDirection: 'row', backgroundColor: themeColors.primary, paddingVertical: 18, borderRadius: 16,
-    alignItems: 'center', justifyContent: 'center', marginTop: 20, gap: 10,
-    ...Platform.select({ ios: { shadowColor: themeColors.primary, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.2, shadowRadius: 10 }, android: { elevation: 4 } }),
+    flexDirection: 'row', backgroundColor: themeColors.primary, paddingVertical: 14, borderRadius: 14,
+    alignItems: 'center', justifyContent: 'center', marginTop: 16, gap: 8,
+    ...Platform.select({ ios: { shadowColor: themeColors.primary, shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.18, shadowRadius: 8 }, android: { elevation: 4 } }),
   },
   generateButtonDisabled: { opacity: 0.8 },
   generateButtonText: { fontSize: 16, fontWeight: '700', color: '#FFFFFF' },
 
   // ── Results (step 3) ────────────────────────────────────────────
   resultsScroll: { flex: 1 },
-  resultsContent: { paddingBottom: 48, paddingHorizontal: 24 },
+  resultsContent: { paddingBottom: 32, paddingHorizontal: 20 },
 
-  // Loading (sheet fallback)
+  // Loading (sheet fallback) — Bump-style fun
   loadingWrap: {
-    flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 36, paddingBottom: 56,
+    flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 24, paddingBottom: 40,
   },
+  loadingBumpCard: {
+    borderRadius: 16,
+    padding: 20,
+    alignItems: 'center',
+    width: '100%',
+    maxWidth: 300,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: 'rgba(200,16,46,0.08)',
+    ...Platform.select({ ios: { shadowColor: '#0F172A', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.08, shadowRadius: 16 }, android: { elevation: 6 } }),
+  },
+  loadingSpotPreviews: { maxHeight: 76, marginBottom: 14 },
+  loadingSpotPreviewsContent: { paddingHorizontal: 4, gap: 10 },
+  loadingSpotPreviewItem: { width: 64, alignItems: 'center' },
+  loadingSpotPreviewImg: { width: 52, height: 52, borderRadius: 10 },
+  loadingSpotPreviewPlaceholder: {
+    width: 52,
+    height: 52,
+    borderRadius: 10,
+    backgroundColor: themeColors.primaryMuted,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  loadingSpotPreviewName: { fontSize: 10, fontWeight: '600', color: '#64748B', marginTop: 4, textAlign: 'center' },
+  loadingProgressBar: {
+    width: '100%',
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: 'rgba(200,16,46,0.12)',
+    marginBottom: 16,
+    overflow: 'hidden',
+  },
+  loadingProgressFill: {
+    height: '100%',
+    borderRadius: 2,
+    backgroundColor: themeColors.primary,
+  },
+  loadingBumpPulse: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: themeColors.primaryMuted,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 12,
+  },
+  loadingBumpTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#0F172A',
+    textAlign: 'center',
+    marginBottom: 4,
+  },
+  loadingBumpSub: {
+    fontSize: 13,
+    color: '#64748B',
+    fontWeight: '600',
+    marginBottom: 16,
+  },
+  loadingBumpSteps: { gap: 10, width: '100%', paddingHorizontal: 4 },
+  loadingBumpStep: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  loadingBumpDot: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: 'rgba(200,16,46,0.15)',
+    borderWidth: 2,
+    borderColor: 'rgba(200,16,46,0.3)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  loadingBumpDotDone: {
+    backgroundColor: themeColors.primary,
+    borderColor: themeColors.primary,
+  },
+  loadingBumpStepText: { fontSize: 13, fontWeight: '600', color: '#64748B' },
+  loadingBumpStepTextDone: { color: '#0F172A', fontWeight: '700' },
   loadingPulse: {
     width: 96, height: 96, borderRadius: 48, backgroundColor: themeColors.primaryMuted,
     alignItems: 'center', justifyContent: 'center', marginBottom: 28,
@@ -1853,40 +2284,93 @@ const styles = StyleSheet.create({
   loadingStepText: { fontSize: 16, color: '#334155', fontWeight: '600' },
 
   // Error
+  errorWrap: { paddingHorizontal: 24, flex: 1, justifyContent: 'center' },
   errorCard: {
-    flexDirection: 'row', alignItems: 'flex-start', gap: 12, padding: 20,
-    backgroundColor: 'rgba(220,38,38,0.06)', borderRadius: 18, borderWidth: 1, borderColor: 'rgba(220,38,38,0.2)',
+    alignItems: 'center',
+    padding: 28,
+    backgroundColor: 'rgba(220,38,38,0.06)',
+    borderRadius: 24,
+    borderWidth: 1,
+    borderColor: 'rgba(220,38,38,0.15)',
   },
-  errorText: { flex: 1, fontSize: 15, color: '#DC2626', fontWeight: '600', lineHeight: 22 },
+  errorIconWrap: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: 'rgba(220,38,38,0.12)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 16,
+  },
+  errorTitle: { fontSize: 18, fontWeight: '800', color: '#991B1B', marginBottom: 8 },
+  errorText: { fontSize: 15, color: '#B91C1C', fontWeight: '600', lineHeight: 22, textAlign: 'center' },
   retryButton: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
-    marginTop: 20, paddingVertical: 16, borderRadius: 16, borderWidth: 2, borderColor: themeColors.primary, backgroundColor: themeColors.primaryMuted,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+    marginTop: 24,
+    paddingVertical: 18,
+    borderRadius: 16,
+    borderWidth: 2,
+    borderColor: themeColors.primary,
+    backgroundColor: themeColors.primaryMuted,
   },
   retryButtonText: { fontSize: 16, fontWeight: '700', color: themeColors.primary },
   emptyResults: { fontSize: 15, color: '#64748B', textAlign: 'center', paddingVertical: 32, fontWeight: '500' },
 
-  // ── Bump-style summary card ──
+  // ── Bump-style summary card — compact ──
   bumpSummaryCard: {
     backgroundColor: '#FFFFFF',
-    borderRadius: 20,
-    padding: 20,
-    marginBottom: 20,
+    borderRadius: 16,
+    marginBottom: 18,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: 'rgba(200,16,46,0.08)',
     ...Platform.select({
       ios: { shadowColor: '#0F172A', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.06, shadowRadius: 12 },
-      android: { elevation: 3 },
+      android: { elevation: 4 },
     }),
+  },
+  bumpSummaryGradient: {
+    padding: 16,
+    borderRadius: 16,
+  },
+  bumpSummaryBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    gap: 5,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 999,
+    backgroundColor: themeColors.primaryMuted,
+    marginBottom: 10,
+  },
+  bumpSummaryBadgeText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: themeColors.primary,
+  },
+  bumpSummaryIconWrap: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    backgroundColor: themeColors.primaryMuted,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   bumpSummaryRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 14,
+    gap: 12,
   },
   bumpSummaryText: { flex: 1 },
-  bumpSummaryTitle: { fontSize: 18, fontWeight: '700', color: '#0F172A' },
-  bumpSummarySub: { fontSize: 14, color: '#64748B', marginTop: 2, fontWeight: '500' },
+  bumpSummaryTitle: { fontSize: 15, fontWeight: '700', color: '#0F172A' },
+  bumpSummarySub: { fontSize: 13, color: '#64748B', marginTop: 2, fontWeight: '500' },
   bumpSummaryBudget: { alignItems: 'flex-end' },
-  bumpSummaryAmount: { fontSize: 18, fontWeight: '800', color: themeColors.primary },
-  bumpSummaryLabel: { fontSize: 11, color: '#94A3B8', marginTop: 2, fontWeight: '600' },
+  bumpSummaryAmount: { fontSize: 15, fontWeight: '800', color: themeColors.primary },
+  bumpSummaryLabel: { fontSize: 10, color: '#94A3B8', marginTop: 2, fontWeight: '600' },
 
   // ── Boarding pass hero (legacy) ──
   boardingPass: {
@@ -1923,15 +2407,34 @@ const styles = StyleSheet.create({
   },
   bpAdviceText: { fontSize: 15, color: '#92400E', lineHeight: 22, flex: 1, fontStyle: 'italic', fontWeight: '600' },
 
-  // ── Bump itinerary ──
-  bumpItinSection: { marginBottom: 24 },
+  // ── Bump itinerary — compact ──
+  bumpItinSection: { marginBottom: 20 },
   bumpItinSectionHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
-    marginBottom: 12,
+    gap: 10,
+    marginBottom: 10,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 12,
   },
-  bumpItinSectionTitle: { fontSize: 16, fontWeight: '700' },
+  bumpItinSectionIconWrap: {
+    width: 30,
+    height: 30,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  bumpItinSectionTitle: { fontSize: 15, fontWeight: '800', flex: 1 },
+  bumpItinSectionCountBadge: {
+    minWidth: 24,
+    height: 24,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 6,
+  },
+  bumpItinSectionCountText: { fontSize: 12, fontWeight: '800', color: '#FFFFFF' },
   bumpItinSectionCount: {
     fontSize: 13,
     color: '#94A3B8',
@@ -1939,29 +2442,68 @@ const styles = StyleSheet.create({
     marginLeft: 4,
   },
   bumpItinCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
     backgroundColor: '#FFFFFF',
-    borderRadius: 16,
-    padding: 16,
-    marginBottom: 10,
-    gap: 14,
+    borderRadius: 14,
+    marginBottom: 12,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: '#F1F5F9',
     ...Platform.select({
-      ios: { shadowColor: '#0F172A', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.04, shadowRadius: 8 },
-      android: { elevation: 2 },
+      ios: { shadowColor: '#0F172A', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.05, shadowRadius: 8 },
+      android: { elevation: 3 },
     }),
   },
-  bumpItinNum: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
+  bumpItinImageWrap: {
+    position: 'relative',
+    width: '100%',
+    height: 100,
+    backgroundColor: '#F1F5F9',
+  },
+  bumpItinImage: {
+    width: '100%',
+    height: '100%',
+  },
+  bumpItinImagePlaceholder: {
+    width: '100%',
+    height: '100%',
     alignItems: 'center',
     justifyContent: 'center',
   },
-  bumpItinNumText: { fontSize: 14, fontWeight: '800', color: '#FFFFFF' },
-  bumpItinContent: { flex: 1 },
-  bumpItinName: { fontSize: 16, fontWeight: '700', color: '#0F172A' },
-  bumpItinReason: { fontSize: 14, color: '#64748B', marginTop: 4, lineHeight: 20 },
+  bumpItinNumBadge: {
+    position: 'absolute',
+    top: 8,
+    left: 8,
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  bumpItinRatingBadge: {
+    position: 'absolute',
+    bottom: 8,
+    right: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    paddingHorizontal: 6,
+    paddingVertical: 3,
+    borderRadius: 8,
+    backgroundColor: 'rgba(255,255,255,0.95)',
+  },
+  bumpItinRatingText: { fontSize: 11, fontWeight: '700', color: '#0F172A' },
+  bumpItinNum: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  bumpItinNumText: { fontSize: 12, fontWeight: '800', color: '#FFFFFF' },
+  bumpItinContent: { padding: 12 },
+  bumpItinName: { fontSize: 15, fontWeight: '700', color: '#0F172A' },
+  bumpItinReason: { fontSize: 13, color: '#64748B', marginTop: 4, lineHeight: 18 },
+  bumpItinActions: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginTop: 10 },
   bumpItinNavBtn: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1970,6 +2512,12 @@ const styles = StyleSheet.create({
     alignSelf: 'flex-start',
   },
   bumpItinNavBtnText: { fontSize: 13, fontWeight: '600', color: themeColors.primary },
+  bumpItinProfileBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  bumpItinProfileBtnText: { fontSize: 13, fontWeight: '600', color: themeColors.primary },
 
   // ── Itinerary section (legacy) ──
   itinSection: { marginBottom: 16 },
@@ -2033,16 +2581,25 @@ const styles = StyleSheet.create({
   },
   destARBtnText: { fontSize: 14, fontWeight: '700', color: themeColors.primary },
 
-  // ── Bump footer ──
+  // ── Bump footer — compact, fun ──
   bumpFooter: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 8,
-    marginTop: 24,
-    paddingBottom: 12,
+    marginTop: 16,
+    paddingBottom: 8,
   },
-  bumpFooterText: { fontSize: 15, fontWeight: '600', color: '#64748B', fontStyle: 'italic' },
+  bumpFooterEmoji: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: 'rgba(200,16,46,0.08)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  bumpFooterEmojiText: { fontSize: 14 },
+  bumpFooterText: { fontSize: 13, fontWeight: '600', color: '#64748B', fontStyle: 'italic' },
 
   // ── Passport stamp footer (legacy) ──
   stampFooter: { alignItems: 'center', marginTop: 28, paddingBottom: 12 },
@@ -2225,30 +2782,17 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     backgroundColor: '#FFFFFF',
     borderRadius: 16,
-    paddingVertical: 14,
-    paddingHorizontal: 18,
-    gap: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    gap: 10,
     ...Platform.select({
-      ios: { shadowColor: '#0F172A', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.12, shadowRadius: 12 },
-      android: { elevation: 6 },
+      ios: { shadowColor: '#0F172A', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.08, shadowRadius: 8 },
+      android: { elevation: 4 },
     }),
   },
   bumpHeaderTextWrap: { flex: 1 },
-  bumpHeaderTitle: { fontSize: 17, fontWeight: '700', color: '#0F172A' },
-  bumpHeaderAddress: { fontSize: 14, color: '#64748B', marginTop: 2, fontWeight: '500' },
-  bumpTransportWrap: {
-    flexDirection: 'row',
-    gap: 10,
-    marginTop: 12,
-  },
-  bumpTransportChip: {
-    width: 44,
-    height: 44,
-    borderRadius: 12,
-    backgroundColor: '#F1F5F9',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
+  bumpHeaderTitle: { fontSize: 15, fontWeight: '700', color: '#0F172A' },
+  bumpHeaderAddress: { fontSize: 13, color: '#64748B', marginTop: 2, fontWeight: '500' },
   bumpBottomCardWrap: {
     position: 'absolute',
     left: 16,
@@ -2260,36 +2804,36 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     backgroundColor: themeColors.primary,
-    borderRadius: 20,
-    paddingVertical: 18,
-    paddingHorizontal: 20,
+    borderRadius: 14,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
     ...Platform.select({
-      ios: { shadowColor: themeColors.primary, shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.2, shadowRadius: 12 },
-      android: { elevation: 8 },
+      ios: { shadowColor: themeColors.primary, shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.2, shadowRadius: 8 },
+      android: { elevation: 6 },
     }),
   },
   bumpBottomCardLeft: {
     flex: 1,
   },
   bumpBottomCardEta: {
-    fontSize: 22,
+    fontSize: 17,
     fontWeight: '800',
     color: '#FFFFFF',
-    letterSpacing: -0.4,
+    letterSpacing: -0.3,
   },
   bumpBottomCardSub: {
-    fontSize: 14,
+    fontSize: 12,
     color: 'rgba(255,255,255,0.9)',
-    marginTop: 4,
+    marginTop: 2,
     fontWeight: '600',
   },
   bumpBottomCardStop: {
-    paddingHorizontal: 24,
-    paddingVertical: 12,
-    borderRadius: 14,
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 10,
   },
   bumpBottomCardStopText: {
-    fontSize: 15,
+    fontSize: 13,
     fontWeight: '700',
     color: '#FFFFFF',
   },
@@ -2298,17 +2842,17 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     backgroundColor: '#FFFFFF',
-    borderRadius: 16,
-    paddingVertical: 14,
-    paddingHorizontal: 18,
-    marginTop: 10,
+    borderRadius: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    marginTop: 8,
     ...Platform.select({
       ios: { shadowColor: '#0F172A', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.08, shadowRadius: 8 },
       android: { elevation: 4 },
     }),
   },
   bumpBottomCardExpandText: {
-    fontSize: 16,
+    fontSize: 14,
     fontWeight: '700',
     color: '#0F172A',
     flex: 1,
@@ -2352,31 +2896,58 @@ const styles = StyleSheet.create({
   planModalBackdropDim: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.12)' },
   planModalContentWrap: {
     flex: 1,
-    paddingHorizontal: 24,
-    paddingTop: 72,
-    paddingBottom: 32,
+    paddingHorizontal: 20,
+    paddingTop: 48,
+    paddingBottom: 24,
     alignItems: 'stretch',
   },
   planModalQuestionBlock: {
-    marginBottom: 28,
-    paddingVertical: 28,
-    paddingHorizontal: 20,
+    marginBottom: 18,
+    paddingVertical: 16,
+    paddingHorizontal: 16,
     alignItems: 'center',
+  },
+  planModalStepIndicator: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 16,
+    gap: 6,
+  },
+  planModalStepDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: 'rgba(255,255,255,0.35)',
+  },
+  planModalStepDotActive: {
+    backgroundColor: themeColors.primary,
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+  },
+  planModalStepLine: {
+    width: 32,
+    height: 3,
+    borderRadius: 2,
+    backgroundColor: 'rgba(255,255,255,0.2)',
+  },
+  planModalStepLineActive: {
+    backgroundColor: 'rgba(255,255,255,0.5)',
   },
   planModalQuestionInner: { alignItems: 'center', maxWidth: 320 },
   planModalQuestionTitle: {
-    fontSize: 28,
+    fontSize: 22,
     fontWeight: '800',
     color: PLAN_COLORS.overlayQuestionTitle,
     textAlign: 'center',
-    lineHeight: 36,
-    letterSpacing: 0.5,
-    marginBottom: 14,
+    lineHeight: 28,
+    letterSpacing: 0.3,
+    marginBottom: 10,
     ...Platform.select({
       ios: {
         textShadowColor: 'rgba(0,0,0,0.25)',
         textShadowOffset: { width: 0, height: 2 },
-        textShadowRadius: 8,
+        textShadowRadius: 6,
       },
       android: { elevation: 2 },
     }),
@@ -2390,12 +2961,12 @@ const styles = StyleSheet.create({
     marginBottom: 16,
   },
   planModalQuestionSub: {
-    fontSize: 15,
+    fontSize: 14,
     fontWeight: '500',
     color: PLAN_COLORS.overlayQuestionSub,
     textAlign: 'center',
-    letterSpacing: 0.4,
-    lineHeight: 22,
+    letterSpacing: 0.3,
+    lineHeight: 20,
   },
   planModalLoadingWrap: {
     flex: 1,
@@ -2403,6 +2974,27 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     paddingHorizontal: 32,
     paddingBottom: 48,
+    position: 'relative',
+  },
+  planModalBubble: {
+    position: 'absolute',
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: 'rgba(255,255,255,0.25)',
+    borderWidth: 2,
+    borderColor: 'rgba(255,255,255,0.4)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  planModalBubble1: { top: 60, left: 40 },
+  planModalBubble2: { top: 100, right: 50 },
+  planModalBubble3: { bottom: 180, left: 50 },
+  planModalLoadingSpinnerWrap: {
+    width: 88,
+    height: 88,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   planModalLoadingCenter: {
     position: 'relative',
@@ -2501,23 +3093,58 @@ const styles = StyleSheet.create({
     fontWeight: '500',
   },
   planModalPreviewSection: {
-    marginTop: 16,
-  },
-  planModalPreviewCarousel: {
-    paddingHorizontal: 16,
+    marginTop: 20,
+    width: '100%',
   },
   planModalPreviewTitle: {
-    fontSize: 15,
+    fontSize: 14,
     fontWeight: '700',
-    color: 'rgba(255,255,255,0.96)',
-    marginBottom: 10,
-    paddingHorizontal: 16,
+    color: 'rgba(255,255,255,0.9)',
+    marginBottom: 12,
+    paddingHorizontal: 4,
   },
   planModalPreviewScroll: {
-    paddingLeft: 16,
-    paddingRight: 4,
+    paddingLeft: 4,
+    paddingRight: 24,
+    gap: 12,
   },
   planModalPreviewCard: {
+    width: 110,
+    borderRadius: 16,
+    marginRight: 12,
+    backgroundColor: 'rgba(255,255,255,0.18)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.3)',
+    overflow: 'hidden',
+    alignItems: 'center',
+  },
+  planModalPreviewImage: {
+    width: '100%',
+    height: 72,
+    backgroundColor: 'rgba(0,0,0,0.2)',
+  },
+  planModalPreviewIcon: {
+    width: 72,
+    height: 72,
+    backgroundColor: 'rgba(255,255,255,0.25)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  planModalPreviewName: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#FFFFFF',
+    textAlign: 'center',
+    paddingHorizontal: 8,
+    paddingTop: 8,
+  },
+  planModalPreviewTag: {
+    fontSize: 11,
+    color: 'rgba(255,255,255,0.85)',
+    marginTop: 4,
+    fontWeight: '500',
+  },
+  planModalPreviewCardLegacy: {
     width: 220,
     borderRadius: 18,
     marginRight: 12,
@@ -2607,53 +3234,61 @@ const styles = StyleSheet.create({
   },
   planModalOptionsRow: {
     flexDirection: 'row',
-    gap: 12,
-    marginBottom: 12,
+    gap: 10,
+    marginBottom: 10,
   },
   planModalOptionSpacer: {
     flex: 1,
   },
   planModalOptionBlock: {
     flex: 1,
-    minHeight: 56,
+    minHeight: 52,
     backgroundColor: PLAN_COLORS.overlayBlockBg,
-    borderRadius: 14,
-    borderWidth: 1,
+    borderRadius: 12,
+    borderWidth: 1.5,
     borderColor: PLAN_COLORS.overlayBlockBorder,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 10,
-    paddingVertical: 16,
-    paddingHorizontal: 16,
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+  },
+  planModalOptionIconWrap: {
+    width: 32,
+    height: 32,
+    borderRadius: 10,
+    backgroundColor: 'rgba(255,255,255,0.15)',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   planModalOptionBlockSelected: {
     borderWidth: 2,
   },
   planModalOptionText: {
-    fontSize: 16,
+    fontSize: 14,
     fontWeight: '600',
     color: PLAN_COLORS.overlayBlockText,
   },
   planModalOptionTextSelected: {
     color: '#FFFFFF',
     fontWeight: '700',
-    fontSize: 17,
+    fontSize: 15,
   },
   planModalActionRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    gap: 12,
-    marginTop: 16,
-    paddingTop: 16,
+    gap: 10,
+    marginTop: 14,
+    paddingTop: 14,
     borderTopWidth: 1,
     borderTopColor: 'rgba(255,255,255,0.2)',
   },
   planModalBackBtn: {
-    width: 52,
-    height: 52,
-    borderRadius: 14,
+    width: 44,
+    height: 44,
+    borderRadius: 12,
     backgroundColor: 'rgba(255,255,255,0.2)',
     alignItems: 'center',
     justifyContent: 'center',
@@ -2663,25 +3298,25 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 8,
-    height: 52,
-    borderRadius: 14,
+    gap: 6,
+    height: 44,
+    borderRadius: 12,
     backgroundColor: themeColors.primary,
   },
-  planModalContinueBtnText: { fontSize: 16, fontWeight: '700', color: '#FFFFFF' },
+  planModalContinueBtnText: { fontSize: 14, fontWeight: '700', color: '#FFFFFF' },
   planModalGenerateBtn: {
     flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 8,
-    height: 52,
-    borderRadius: 14,
+    gap: 6,
+    height: 44,
+    borderRadius: 12,
     backgroundColor: themeColors.primary,
     ...Platform.select({
       ios: { shadowColor: themeColors.primary, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.2, shadowRadius: 8 },
       android: { elevation: 6 },
     }),
   },
-  planModalGenerateBtnText: { fontSize: 16, fontWeight: '700', color: '#FFFFFF' },
+  planModalGenerateBtnText: { fontSize: 14, fontWeight: '700', color: '#FFFFFF' },
 });

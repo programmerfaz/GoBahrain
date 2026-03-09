@@ -2,6 +2,7 @@ import { decode as decodeBase64ToArrayBuffer } from 'base64-arraybuffer';
 import { supabase } from '../config/supabase';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { OPENAI_KEY } from '../config/keys';
+import { ensureImageUrl } from '../utils/imageUrl';
 
 const OPENAI_CHAT_URL = 'https://api.openai.com/v1/chat/completions';
 const AI_REVIEWS_LIMIT = 40;
@@ -106,14 +107,32 @@ export async function fetchClientByQrPayload(payload) {
   };
 }
 
+const COMMUNITY_SELECT_WITH_AUTHOR = '*, user(account(user_name))';
+
+/** Fetch client_image for community posts (batch by client_a_uuid). Converts paths to full URLs. */
+async function fetchClientImagesForPosts(rows) {
+  const ids = [...new Set((rows || []).map((r) => r.client_a_uuid).filter(Boolean))];
+  if (ids.length === 0) return {};
+  const { data } = await supabase.from('client').select('client_a_uuid, client_image').in('client_a_uuid', ids);
+  const map = {};
+  (data || []).forEach((c) => {
+    if (c.client_a_uuid && c.client_image) {
+      const raw = String(c.client_image).trim();
+      map[c.client_a_uuid] = ensureImageUrl(raw) || raw;
+    }
+  });
+  return map;
+}
+
 /**
  * Fetch community posts from Supabase.
  * - all: all posts, newest first
  * - trending: top 40 by upvotes (descending)
  * - other topicId: filter by hashtags, newest first
+ * Uses direct join to user→account for author names. Run supabase/community-author-rls.sql for RLS.
  */
 export async function fetchCommunityPosts(topicId = 'all') {
-  let query = supabase.from('community').select('*');
+  let query = supabase.from('community').select(COMMUNITY_SELECT_WITH_AUTHOR);
 
   if (topicId === 'trending') {
     query = query.order('num_of_upvote', { ascending: false }).limit(40);
@@ -131,16 +150,44 @@ export async function fetchCommunityPosts(topicId = 'all') {
     return [];
   }
 
-  return (rows || []).map((row) => mapRowToPost(row));
+  const clientMap = await fetchClientImagesForPosts(rows || []);
+  return (rows || []).map((row) => mapRowToPost(row, clientMap));
 }
 
-function mapRowToPost(row) {
-  const images = parseImageUrls(row.image);
+/**
+ * Fetch community posts by the current user (user's own reviews).
+ */
+export async function fetchMyCommunityPosts(userId) {
+  if (!userId) return [];
+  const { data: rows, error } = await supabase
+    .from('community')
+    .select(COMMUNITY_SELECT_WITH_AUTHOR)
+    .eq('user_a_uuid', userId)
+    .order('created_at', { ascending: false });
+
+  if (error) {
+    console.error('[Community] fetchMyCommunityPosts error:', error);
+    return [];
+  }
+
+  const clientMap = await fetchClientImagesForPosts(rows || []);
+  return (rows || []).map((row) => mapRowToPost(row, clientMap));
+}
+
+function mapRowToPost(row, clientMap = {}) {
+  const rawImages = parseImageUrls(row.image);
+  const images = rawImages.map((u) => ensureImageUrl(u) || u).filter(Boolean);
+  const userName = (row.user?.account?.user_name || '').trim() || null;
+  const author = userName || 'User';
+  const handle = userName ? `@${userName.replace(/\s+/g, '').toLowerCase().slice(0, 16)}` : `@${(row.user_a_uuid || '').slice(0, 8)}`;
+  const clientImage = row.client_a_uuid ? clientMap[row.client_a_uuid] || null : null;
   return {
     id: row.community_uuid,
-    author: 'User',
-    handle: `@${(row.user_a_uuid || '').slice(0, 8)}`,
+    author,
+    handle,
     avatar: null,
+    client_image: clientImage,
+    client_a_uuid: row.client_a_uuid || null,
     time: formatTimeAgo(row.created_at),
     topic: row.hashtags || 'tips',
     place: row.badge || null,

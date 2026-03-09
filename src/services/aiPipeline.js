@@ -8,6 +8,21 @@ const OPENAI_EMBEDDINGS_URL = 'https://api.openai.com/v1/embeddings';
 const OPENAI_CHAT_URL = 'https://api.openai.com/v1/chat/completions';
 const PINECONE_QUERY_URL = `${PINECONE_HOST}/query`;
 
+// ─── Mock plan (fallback when OpenAI/Pinecone unavailable) ──────────
+
+/** Returns a full-day Bahrain plan for demo/fallback when APIs fail. */
+export function getMockDayPlan() {
+  return [
+    { spot: 'Cinnabon Bahrain City Centre', time: 'Morning', type: 'restaurant', lat: 26.2195, lng: 50.5878, reason: 'Start your day with sweet pastries and coffee — a Bahrain favourite for breakfast.' },
+    { spot: 'Bahrain National Museum', time: 'Morning', type: 'place', lat: 26.2285, lng: 50.5865, reason: 'Discover 5000 years of Bahraini history and the ancient Dilmun civilization.' },
+    { spot: 'Bahrain Fort (Qal\'at al-Bahrain)', time: 'Morning', type: 'place', lat: 26.2326, lng: 50.5216, reason: 'UNESCO World Heritage site — stunning views and ancient ruins by the sea.' },
+    { spot: 'Café Lilou', time: 'Afternoon', type: 'restaurant', lat: 26.2189, lng: 50.5834, reason: 'Chill lunch spot with great salads and sandwiches — perfect midday break.' },
+    { spot: 'Bahrain City Centre', time: 'Afternoon', type: 'place', lat: 26.2195, lng: 50.5878, reason: 'Shop, catch a movie, or escape the heat in one of the Gulf\'s best malls.' },
+    { spot: 'Manama Souq', time: 'Evening', type: 'place', lat: 26.2287, lng: 50.5795, reason: 'Wander the old souq — spices, gold, and that authentic Bahrain vibe.' },
+    { spot: 'Rasoi by Vineet', time: 'Evening', type: 'restaurant', lat: 26.2282, lng: 50.5852, reason: 'Michelin-starred Indian cuisine to end your day in style. Yalla!' },
+  ];
+}
+
 // ─── helpers ────────────────────────────────────────────────────────
 
 /** Parse response as JSON; avoid "Unexpected character" when API returns plain text (e.g. Forbidden). */

@@ -17,6 +17,7 @@ const K1 = 'c2stcHJvai12OGFMRTRvQVJxem01Zi1aNjlESGlzTy1UOElhWHRDNWY5b0lGNXIwZGw4
 const K2 = 'cGNza180RnFLUnpfTENjUVFwa1R3OWpWWHRwa2tDVDVBRFM1MXBTVUhXZkJtclNoZURXcnRaZGluSzZvQnFaZ29Ld0RQOUc0bXo2';
 const K3 = 'https://gobahrain-1pj8txc.svc.aped-4627-b74a.pinecone.io';
 
-export const OPENAI_KEY = _d(K1);
-export const PINECONE_KEY = _d(K2);
-export const PINECONE_HOST = K3;
+// Prefer .env (EXPO_PUBLIC_*) when available; fallback to decoded keys
+export const OPENAI_KEY = (typeof process !== 'undefined' && process.env?.EXPO_PUBLIC_OPENAI_API_KEY) || _d(K1);
+export const PINECONE_KEY = (typeof process !== 'undefined' && process.env?.EXPO_PUBLIC_PINECONE_API_KEY) || _d(K2);
+export const PINECONE_HOST = (typeof process !== 'undefined' && process.env?.EXPO_PUBLIC_PINECONE_HOST) || K3;

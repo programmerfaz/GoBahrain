@@ -28,6 +28,7 @@ import { fetchPineconePlacesForChat } from '../services/aiPipeline';
 import { useUserPreferences } from '../context/UserPreferencesContext';
 import { useTheme } from '../context/ThemeContext';
 import { colors as themeColors } from '../theme/designTokens';
+import { ensureImageUrl } from '../utils/imageUrl';
 
 const OPENAI_CHAT_URL = 'https://api.openai.com/v1/chat/completions';
 
@@ -35,7 +36,10 @@ const PICS_LIKE_QUERIES = ['pic', 'pics', 'photo', 'photos', 'image', 'images', 
 
 function getPostImageUrl(row) {
   const url = row.post_image ?? row.image ?? null;
-  if (url != null && String(url).trim() !== '') return String(url).trim();
+  if (url != null && String(url).trim() !== '') {
+    const raw = String(url).trim();
+    return ensureImageUrl(raw) || raw;
+  }
   return null;
 }
 
@@ -107,7 +111,8 @@ async function fetchReviewsByPlace(place) {
     return text.includes(p.toLowerCase()) || badge.includes(p.toLowerCase());
   });
   const reviews = filtered.slice(0, 5).map((r) => {
-    const images = parseReviewImages(r.image);
+    const rawImages = parseReviewImages(r.image);
+    const images = rawImages.map((u) => ensureImageUrl(u) || u).filter(Boolean);
     return {
       id: r.community_uuid,
       body: (r.review_text || '').trim().slice(0, 200),

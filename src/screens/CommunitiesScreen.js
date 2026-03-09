@@ -12,6 +12,7 @@ import {
   useWindowDimensions,
   Platform,
   Animated,
+  Easing,
   Modal,
   TextInput,
   KeyboardAvoidingView,
@@ -19,6 +20,7 @@ import {
   RefreshControl,
   Alert,
 } from 'react-native';
+import { ScrollView as GHScrollView, FlatList as GHFlatList, TouchableOpacity as GHTouchableOpacity } from 'react-native-gesture-handler';
 import { BlurView } from 'expo-blur';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation, useRoute } from '@react-navigation/native';
@@ -28,6 +30,7 @@ import ScreenContainer from '../components/ScreenContainer';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import {
   fetchCommunityPosts,
+  fetchMyCommunityPosts,
   createCommunityPost,
   uploadCommunityImages,
   upvoteCommunityPost,
@@ -121,6 +124,66 @@ const CREATE_POST_TOPIC_ICONS = {
 
 const TOTAL_STARS = 5;
 
+/** Smooth shimmer skeleton loader for community feed. */
+function CommunityLoadingShimmer() {
+  const { width } = useWindowDimensions();
+  const cardWidth = width - 40;
+  const imgH = Math.round(cardWidth * 0.6);
+  const shimmer = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    const loop = Animated.loop(
+      Animated.timing(shimmer, {
+        toValue: 1,
+        duration: 1400,
+        easing: Easing.inOut(Easing.ease),
+        useNativeDriver: true,
+      })
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [shimmer]);
+
+  const opacity = shimmer.interpolate({
+    inputRange: [0, 0.5, 1],
+    outputRange: [0.35, 0.75, 0.35],
+  });
+
+  const SkeletonBox = ({ style, width: w, height: h }) => (
+    <Animated.View style={[s.skeletonBox, style, { width: w || '100%', height: h || 14, opacity }]} />
+  );
+
+  return (
+    <ScrollView
+      style={s.loaderScroll}
+      contentContainerStyle={s.loaderContent}
+      showsVerticalScrollIndicator={false}
+    >
+      {[1, 2, 3].map((i) => (
+        <View key={i} style={s.skeletonCard}>
+          <View style={s.cardAuthorRow}>
+            <SkeletonBox style={s.skeletonAvatar} width={38} height={38} />
+            <View style={{ flex: 1, marginLeft: 10 }}>
+              <SkeletonBox width="60%" height={14} />
+              <SkeletonBox width="40%" height={11} style={{ marginTop: 8 }} />
+            </View>
+          </View>
+          <SkeletonBox width="100%" height={14} style={{ marginBottom: 6 }} />
+          <SkeletonBox width="90%" height={14} style={{ marginBottom: 6 }} />
+          <SkeletonBox width="70%" height={14} style={{ marginBottom: 12 }} />
+          <View style={[s.cardImgWrap, { height: imgH }]}>
+            <Animated.View style={[StyleSheet.absoluteFill, s.skeletonImage, { opacity }]} />
+          </View>
+          <View style={[s.actions, { marginTop: 12 }]}>
+            <SkeletonBox width={60} height={20} />
+            <SkeletonBox width={50} height={20} />
+          </View>
+        </View>
+      ))}
+    </ScrollView>
+  );
+}
+
 function RatingStars({ rating, size = 12, color }) {
   if (rating == null || rating <= 0) return null;
   const r = Math.min(5, Math.max(0, Number(rating)));
@@ -143,12 +206,17 @@ function RatingStars({ rating, size = 12, color }) {
 function ReviewCard({ item, onPress, onCommentPress, onUpvote, onRemoveUpvote }) {
   const { width } = useWindowDimensions();
   const cardWidth = width - 40;
-  const imgH = Math.round(cardWidth * 0.48);
+  const imgH = Math.round(cardWidth * 0.6);
   const [upvoted, setUpvoted] = useState(item.upvoted);
+  const [imageIndex, setImageIndex] = useState(0);
   const scale = useRef(new Animated.Value(1)).current;
   const count = item.upvotes ?? 0;
 
   const images = item.images?.length > 0 ? item.images : item.image ? [item.image] : [];
+
+  useEffect(() => {
+    setImageIndex(0);
+  }, [item.id]);
 
   const doUpvote = () => {
     const next = !upvoted;
@@ -162,36 +230,78 @@ function ReviewCard({ item, onPress, onCommentPress, onUpvote, onRemoveUpvote })
 
   const topicIds = (item.topic || '').split(',').map((t) => t.trim()).filter(Boolean);
 
+  const clientProfilePic = item.client_image || null;
+  const hasClientProfilePic = !!clientProfilePic;
+
   const body = (
-    <TouchableOpacity activeOpacity={0.94} onPress={() => onPress?.(item)} style={s.card}>
+    <GHTouchableOpacity activeOpacity={0.94} onPress={() => onPress?.(item)} style={s.card}>
       <View style={s.cardInner}>
-        {/* Author row */}
-        <View style={s.cardAuthorRow}>
-          {item.avatar ? (
-            <Image source={{ uri: item.avatar }} style={s.av} />
+        {/* Client row — place name + rating, with client profile pic */}
+        <View style={s.cardClientRow}>
+          {hasClientProfilePic ? (
+            <Image source={{ uri: clientProfilePic }} style={s.clientAv} resizeMode="cover" />
           ) : (
-            <View style={[s.av, s.avPlaceholder]}>
-              <Text style={s.avInitial}>{(item.author || 'U')[0].toUpperCase()}</Text>
+            <View style={[s.clientAv, s.clientAvPlaceholder]}>
+              <Ionicons name="storefront-outline" size={22} color={C.red} />
             </View>
           )}
-          <View style={s.cardMeta}>
-            <Text style={s.authorText} numberOfLines={1}>{item.author}</Text>
-            {item.place ? (
-              <View style={s.cardPlaceRow}>
-                <Ionicons name="location-sharp" size={11} color={C.red} />
-                <Text style={s.cardPlaceText} numberOfLines={1}>{item.place}</Text>
+          <View style={s.cardClientMeta}>
+            <Text style={s.clientPlaceText} numberOfLines={1}>{item.place || 'A place in Bahrain'}</Text>
+            {item.rating != null && item.rating > 0 && (
+              <View style={s.cardRatingPill}>
+                <RatingStars rating={item.rating} size={11} color={C.sub} />
+                <Text style={s.cardRatingNum}>{Number(item.rating).toFixed(1)}</Text>
               </View>
-            ) : null}
+            )}
+            <Text style={s.cardAuthorSub} numberOfLines={1}>by {item.author}</Text>
           </View>
-          {item.rating != null && item.rating > 0 && (
-            <View style={[s.cardRatingPill, { backgroundColor: C.redSoft }]}>
-              <RatingStars rating={item.rating} size={11} color={C.red} />
-              <Text style={[s.cardRatingNum, { color: C.red }]}>{Number(item.rating).toFixed(1)}</Text>
-            </View>
-          )}
         </View>
 
-        <Text style={s.bodyText} numberOfLines={3}>{item.body}</Text>
+        {/* Review photos — slider when 2+ (gesture-handler for nested scroll) */}
+        {images.length > 0 && (
+          <View style={[s.cardImgWrap, { height: imgH, width: cardWidth }]}>
+            {images.length === 1 ? (
+              <Image source={{ uri: images[0] }} style={s.cardImg} resizeMode="contain" />
+            ) : (
+              <>
+                <GHScrollView
+                  horizontal
+                  pagingEnabled
+                  showsHorizontalScrollIndicator={false}
+                  onMomentumScrollEnd={(e) => {
+                    const i = Math.round(e.nativeEvent.contentOffset.x / cardWidth);
+                    setImageIndex(i);
+                  }}
+                  onScrollEndDrag={(e) => {
+                    const i = Math.round(e.nativeEvent.contentOffset.x / cardWidth);
+                    setImageIndex(i);
+                  }}
+                  style={{ width: cardWidth, height: imgH }}
+                  contentContainerStyle={{ width: cardWidth * images.length }}
+                >
+                  {images.map((uri, i) => (
+                    <View key={i} style={{ width: cardWidth, height: imgH }}>
+                      <Image source={{ uri }} style={{ width: cardWidth, height: imgH }} resizeMode="contain" />
+                    </View>
+                  ))}
+                </GHScrollView>
+                <View style={s.cardImgPills}>
+                  {images.map((_, i) => (
+                    <View key={i} style={[s.cardImgPill, i === imageIndex && s.cardImgPillActive]} />
+                  ))}
+                </View>
+                {images.length > 2 && (
+                  <View style={s.imgCountBadge}>
+                    <Text style={s.imgCountText}>+{images.length - 1}</Text>
+                  </View>
+                )}
+              </>
+            )}
+          </View>
+        )}
+
+        {/* Review body — main emphasis */}
+        <Text style={s.bodyText} numberOfLines={4}>{item.body}</Text>
 
         {/* Topic pills */}
         {topicIds.length > 0 && (
@@ -203,31 +313,6 @@ function ReviewCard({ item, onPress, onCommentPress, onUpvote, onRemoveUpvote })
             ))}
           </View>
         )}
-
-        {/* Image */}
-        {images.length > 0 && (
-          <View style={[s.cardImgWrap, { height: imgH, width: '100%' }]}>
-            {images.length === 1 ? (
-              <Image source={{ uri: images[0] }} style={s.cardImg} resizeMode="cover" />
-            ) : images.length === 2 ? (
-              <View style={s.cardImgSplitRow}>
-                <Image source={{ uri: images[0] }} style={s.cardImgHalf} resizeMode="cover" />
-                <View style={s.cardImgGap} />
-                <Image source={{ uri: images[1] }} style={s.cardImgHalf} resizeMode="cover" />
-              </View>
-            ) : (
-              <>
-                <Image source={{ uri: images[0] }} style={s.cardImg} resizeMode="cover" />
-                <View style={s.imgCountBadge}>
-                  <Text style={s.imgCountText}>+{images.length - 1}</Text>
-                </View>
-              </>
-            )}
-          </View>
-        )}
-
-        {/* Khalid's tip — dashed line + yellow block (same as itinerary tip) */}
-        {/* Removed AI tip */}
 
         {/* Actions: Upvote · Comment only */}
         <View style={s.actions}>
@@ -243,7 +328,7 @@ function ReviewCard({ item, onPress, onCommentPress, onUpvote, onRemoveUpvote })
           </TouchableOpacity>
         </View>
       </View>
-    </TouchableOpacity>
+    </GHTouchableOpacity>
   );
 
   return body;
@@ -255,7 +340,7 @@ function DetailModal({ post, onClose, onUpvote, onRemoveUpvote, focusReplyWhenOp
   const cardMargin = 24;
   const cardW = width - cardMargin * 2;
   const imgW = cardW;
-  const imgH = Math.round(imgW * 0.5);
+  const imgH = Math.round(imgW * 0.6);
   const popupMaxHeight = height * 0.88;
   const popupCardHeaderH = 54; // "Review" header row
   const [upvoted, setUpvoted] = useState(post?.upvoted ?? false);
@@ -323,14 +408,17 @@ function DetailModal({ post, onClose, onUpvote, onRemoveUpvote, focusReplyWhenOp
         <View style={[s.popCard, { width: cardW, height: cardHeight, maxHeight: popupMaxHeight, zIndex: 10 }]}>
           <View style={s.popHeader}>
             <View style={s.popHeaderLeft}>
-              {post.avatar ? (
-                <Image source={{ uri: post.avatar }} style={s.popHeaderAv} />
+              {post.client_image ? (
+                <Image source={{ uri: post.client_image }} style={s.popHeaderAv} resizeMode="cover" />
               ) : (
                 <View style={[s.popHeaderAv, s.popHeaderAvPlaceholder]}>
-                  <Text style={s.popHeaderAvLetter}>{(post.author || 'U')[0].toUpperCase()}</Text>
+                  <Ionicons name="storefront-outline" size={18} color={C.red} />
                 </View>
               )}
-              <Text style={s.popHeaderName}>{post.author}</Text>
+              <View style={{ flex: 1, minWidth: 0 }}>
+                <Text style={s.popHeaderName} numberOfLines={1}>{post.place || 'A place in Bahrain'}</Text>
+                <Text style={s.popHeaderSub} numberOfLines={1}>by {post.author}</Text>
+              </View>
             </View>
             <TouchableOpacity onPress={onClose} hitSlop={14} activeOpacity={0.7}>
               <Ionicons name="close-circle" size={28} color={C.red} />
@@ -362,7 +450,7 @@ function DetailModal({ post, onClose, onUpvote, onRemoveUpvote, focusReplyWhenOp
                   style={{ width: cardW, height: imgH }}
                 >
                   {images.map((uri, i) => (
-                    <Image key={i} source={{ uri }} style={{ width: imgW, height: imgH }} resizeMode="cover" />
+                    <Image key={i} source={{ uri }} style={{ width: imgW, height: imgH }} resizeMode="contain" />
                   ))}
                 </ScrollView>
                 {images.length > 1 && (
@@ -391,7 +479,7 @@ function DetailModal({ post, onClose, onUpvote, onRemoveUpvote, focusReplyWhenOp
                 ) : null}
                 {post.rating != null && post.rating > 0 && (
                   <View style={s.popRatingWrap}>
-                    <RatingStars rating={post.rating} size={13} />
+                    <RatingStars rating={post.rating} size={13} color={C.sub} />
                     <Text style={s.popRatingNum}>{Number(post.rating).toFixed(1)}</Text>
                   </View>
                 )}
@@ -868,6 +956,159 @@ function CreatePostModal({ visible, onClose, onPosted, initialPlace, initialClie
   );
 }
 
+const MAIN_TABS = [
+  { id: 'public', label: 'Public Reviews', icon: 'globe-outline' },
+  { id: 'my', label: 'My Reviews', icon: 'person-outline' },
+];
+
+// FAB menu: Post on top, Scan on left — each with distinct look
+const FAB_MENU_OPTIONS = [
+  { id: 'post', label: 'Post', icon: 'create-outline', position: 'top', variant: 'post' },
+  { id: 'scan', label: 'Scan', icon: 'scan-outline', position: 'left', variant: 'scan' },
+];
+
+function FabButton({ expanded, onPress }) {
+  const rotateAnim = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    Animated.timing(rotateAnim, {
+      toValue: expanded ? 1 : 0,
+      duration: 260,
+      easing: Easing.out(Easing.back(1.2)),
+      useNativeDriver: true,
+    }).start();
+  }, [expanded]);
+  const rotate = rotateAnim.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '45deg'] });
+  return (
+    <TouchableOpacity onPress={onPress} activeOpacity={0.85}>
+      <Animated.View style={[s.fab, { transform: [{ rotate }] }]}>
+        <Ionicons name="add" size={28} color="#FFF" />
+      </Animated.View>
+    </TouchableOpacity>
+  );
+}
+
+function FabOptionIconWriting({ icon, expanded }) {
+  const rotate = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    if (!expanded) return;
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(rotate, { toValue: 1, duration: 400, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
+        Animated.timing(rotate, { toValue: 0, duration: 400, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
+      ])
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [expanded]);
+  const rotateDeg = rotate.interpolate({ inputRange: [0, 1], outputRange: ['-8deg', '8deg'] });
+  return (
+    <Animated.View style={{ transform: [{ rotate: rotateDeg }] }}>
+      <Ionicons name={icon} size={22} color="#FFF" />
+    </Animated.View>
+  );
+}
+
+function FabOptionIconScanning({ icon, expanded }) {
+  const scanLine = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    if (!expanded) return;
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(scanLine, { toValue: 1, duration: 900, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
+        Animated.timing(scanLine, { toValue: 0, duration: 900, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
+      ])
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [expanded]);
+  const translateY = scanLine.interpolate({ inputRange: [0, 1], outputRange: [0, 28] });
+  return (
+    <View style={s.fabOptionIconWrap}>
+      <Ionicons name={icon} size={22} color="#FFF" />
+      {expanded && (
+        <Animated.View style={[s.fabOptionScanLine, { transform: [{ translateY }] }]} pointerEvents="none">
+          <View style={s.fabOptionScanLineInner} />
+        </Animated.View>
+      )}
+    </View>
+  );
+}
+
+function RevolverFabOverlay({ expanded, onClose }) {
+  const opacity = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    Animated.timing(opacity, {
+      toValue: expanded ? 1 : 0,
+      duration: expanded ? 180 : 120,
+      useNativeDriver: true,
+    }).start();
+  }, [expanded]);
+  return (
+    <Animated.View style={[s.fabOverlay, s.fabOverlayDim, { opacity }]} pointerEvents={expanded ? 'auto' : 'none'}>
+      <TouchableWithoutFeedback onPress={onClose}>
+        <View style={StyleSheet.absoluteFill} />
+      </TouchableWithoutFeedback>
+    </Animated.View>
+  );
+}
+
+function RevolverFabOptions({ expanded, onOptionPress, children }) {
+  const optionAnims = useRef(FAB_MENU_OPTIONS.map(() => new Animated.Value(0))).current;
+
+  useEffect(() => {
+    if (expanded) {
+      optionAnims.forEach((a) => a.setValue(0));
+      FAB_MENU_OPTIONS.forEach((_, i) => {
+        Animated.timing(optionAnims[i], {
+          toValue: 1,
+          duration: 260,
+          delay: 50 + i * 65,
+          easing: Easing.out(Easing.back(1.35)),
+          useNativeDriver: true,
+        }).start();
+      });
+    } else {
+      optionAnims.forEach((a) => {
+        Animated.timing(a, { toValue: 0, duration: 100, useNativeDriver: true }).start();
+      });
+    }
+  }, [expanded]);
+
+  const topOpt = FAB_MENU_OPTIONS.find((o) => o.position === 'top');
+  const leftOpt = FAB_MENU_OPTIONS.find((o) => o.position === 'left');
+
+  const OptionBtn = ({ opt, index, style }) => {
+    const scale = optionAnims[index].interpolate({ inputRange: [0, 1], outputRange: [0.3, 1] });
+    const translateY = optionAnims[index].interpolate({ inputRange: [0, 1], outputRange: [8, 0] });
+    const isPost = opt.variant === 'post';
+    const btnStyle = isPost ? s.fabOptionBtnPost : s.fabOptionBtnScan;
+    const textStyle = isPost ? s.fabOptionTextPost : s.fabOptionTextScan;
+    return (
+      <Animated.View
+        pointerEvents={expanded ? 'auto' : 'none'}
+        style={[s.fabOptionAbsolute, style, { opacity: optionAnims[index], transform: [{ scale }, { translateY }] }]}
+      >
+        <TouchableOpacity style={[s.fabRadialOptionBtn, btnStyle]} onPress={() => onOptionPress(opt.id)} activeOpacity={0.85}>
+          {isPost ? (
+            <FabOptionIconWriting icon={opt.icon} expanded={expanded} />
+          ) : (
+            <FabOptionIconScanning icon={opt.icon} expanded={expanded} />
+          )}
+          <Text style={[s.fabRadialOptionText, textStyle]}>{opt.label}</Text>
+        </TouchableOpacity>
+      </Animated.View>
+    );
+  };
+
+  return (
+    <View style={s.fabMenuLayout}>
+      {topOpt && <OptionBtn opt={topOpt} index={FAB_MENU_OPTIONS.indexOf(topOpt)} style={s.fabOptionTop} />}
+      {leftOpt && <OptionBtn opt={leftOpt} index={FAB_MENU_OPTIONS.indexOf(leftOpt)} style={s.fabOptionLeft} />}
+      {children}
+    </View>
+  );
+}
+
 export default function CommunitiesScreen() {
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
@@ -876,6 +1117,7 @@ export default function CommunitiesScreen() {
   const [posts, setPosts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [mainTab, setMainTab] = useState('public');
   const [activeTopic, setActiveTopic] = useState('all');
   const [selectedPost, setSelectedPost] = useState(null);
   const [focusReplyWhenOpen, setFocusReplyWhenOpen] = useState(false);
@@ -888,10 +1130,23 @@ export default function CommunitiesScreen() {
 
   const loadPosts = useCallback(async (opts = {}) => {
     const { isRefresh = false } = opts;
-    if (isRefresh) setRefreshing(true); else setLoading(true);
+    if (isRefresh) {
+      setRefreshing(true);
+    } else {
+      setPosts([]);
+      setLoading(true);
+    }
     try {
-      const list = await fetchCommunityPosts(activeTopic);
-      setPosts(list);
+      if (mainTab === 'my') {
+        const userId = await getCommunityUserId();
+        const list = await fetchMyCommunityPosts(userId);
+        // Ensure only current user's posts (filter by user_a_uuid)
+        const myOnly = (list || []).filter((p) => p.user_a_uuid === userId);
+        setPosts(myOnly);
+      } else {
+        const list = await fetchCommunityPosts(activeTopic);
+        setPosts(list);
+      }
     } catch (e) {
       console.error('[Community] load posts failed:', e);
       setPosts([]);
@@ -899,7 +1154,7 @@ export default function CommunitiesScreen() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [activeTopic]);
+  }, [mainTab, activeTopic]);
 
   useEffect(() => { loadPosts(); }, [loadPosts]);
 
@@ -927,38 +1182,66 @@ export default function CommunitiesScreen() {
 
   return (
     <ScreenContainer style={s.screen}>
-      <View style={[s.topBar, { paddingTop: insets.top + 8 }]}>
+      <View style={[s.topBar, { paddingTop: insets.top + 4 }]}>
         {/* Header row */}
         <View style={s.header}>
+          <View style={s.headerSpacer} />
           <Text style={s.headerTitle}>Community</Text>
-          <View style={s.headerRight} />
+          <View style={s.headerSpacer} />
         </View>
 
-        {/* Filter chips */}
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.filterScroll}>
-          {TOPICS.map((t) => {
-            const on = activeTopic === t.id;
-            return (
-              <TouchableOpacity
-                key={t.id}
-                style={[s.filterChip, on && s.filterChipOn]}
-                onPress={() => setActiveTopic(t.id)}
-                activeOpacity={0.75}
-              >
-                <Text style={[s.filterChipText, on && s.filterChipTextOn]}>{t.label}</Text>
-              </TouchableOpacity>
-            );
-          })}
-        </ScrollView>
+        {/* Main tabs: Public Reviews | My Reviews */}
+        <View style={s.mainTabsWrap}>
+          <View style={s.mainTabsRow}>
+            {MAIN_TABS.map((tab) => {
+              const on = mainTab === tab.id;
+              return (
+                <TouchableOpacity
+                  key={tab.id}
+                  style={[s.mainTab, on && s.mainTabOn]}
+                  onPress={() => setMainTab(tab.id)}
+                  activeOpacity={0.7}
+                >
+                  <Ionicons name={tab.icon} size={18} color={on ? C.red : C.sub} />
+                  <Text style={[s.mainTabText, on && s.mainTabTextOn]}>{tab.label}</Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+          <View style={s.mainTabsIndicatorWrap}>
+            <View style={[s.mainTabsIndicator, { left: mainTab === 'public' ? 0 : '50%' }]} />
+          </View>
+        </View>
+
+        {/* Topic filter tabs — only when Public */}
+        {mainTab === 'public' && (
+          <View style={s.filterTabsWrap}>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.filterScroll}>
+              {TOPICS.map((t) => {
+                const on = activeTopic === t.id;
+                return (
+                  <TouchableOpacity
+                    key={t.id}
+                    style={[s.filterChip, on && s.filterChipOn]}
+                    onPress={() => setActiveTopic(t.id)}
+                    activeOpacity={0.75}
+                  >
+                    <Text style={[s.filterChipText, on && s.filterChipTextOn]}>{t.label}</Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
+          </View>
+        )}
       </View>
 
       {/* Ask Khalid — full-screen blurred modal */}
       {/* Removed Ask Khalid modal */}
 
       {loading && posts.length === 0 ? (
-        <View style={s.loadingWrap}><ActivityIndicator size="large" color={C.red} /></View>
+        <CommunityLoadingShimmer />
       ) : (
-        <FlatList
+        <GHFlatList
           data={posts}
           keyExtractor={(item) => item.id}
           ListHeaderComponent={
@@ -978,47 +1261,38 @@ export default function CommunitiesScreen() {
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => loadPosts({ isRefresh: true })} colors={[C.red]} />}
           ListEmptyComponent={
             <View style={s.empty}>
-              <View style={s.emptyIcon}><Ionicons name="compass-outline" size={44} color={C.muted} /></View>
-              <Text style={s.emptyTitle}>No reviews yet</Text>
-              <Text style={s.emptySub}>Be the first to share a hidden gem in Bahrain</Text>
+              <View style={s.emptyIcon}>
+                <Ionicons
+                  name={mainTab === 'my' ? 'document-text-outline' : 'compass-outline'}
+                  size={44}
+                  color={C.muted}
+                />
+              </View>
+              <Text style={s.emptyTitle}>
+                {mainTab === 'my' ? 'No reviews from you yet' : 'No reviews yet'}
+              </Text>
+              <Text style={s.emptySub}>
+                {mainTab === 'my'
+                  ? 'Tap + to post your first review and share your favorite spots'
+                  : 'Be the first to share a hidden gem in Bahrain'}
+              </Text>
             </View>
           }
         />
       )}
 
-      {fabExpanded && (
-        <TouchableWithoutFeedback onPress={() => setFabExpanded(false)}>
-          <View style={s.fabOverlay} />
-        </TouchableWithoutFeedback>
-      )}
+      <RevolverFabOverlay expanded={fabExpanded} onClose={() => setFabExpanded(false)} />
       <View style={[s.fabContainer, { bottom: fabBottom }]} pointerEvents="box-none">
-        {fabExpanded && (
-          <View style={s.fabMenu}>
-            <TouchableOpacity
-              style={s.fabMenuBtn}
-              onPress={() => { setFabExpanded(false); setShowCreate(true); }}
-              activeOpacity={0.85}
-            >
-              <Ionicons name="create-outline" size={20} color="#FFF" />
-              <Text style={s.fabMenuBtnText}>Post</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={s.fabMenuBtn}
-              onPress={() => { setFabExpanded(false); setShowScanner(true); }}
-              activeOpacity={0.85}
-            >
-              <Ionicons name="scan-outline" size={20} color="#FFF" />
-              <Text style={s.fabMenuBtnText}>Scan</Text>
-            </TouchableOpacity>
-          </View>
-        )}
-        <TouchableOpacity
-          style={[s.fab, fabExpanded && s.fabRotate]}
-          onPress={() => setFabExpanded((v) => !v)}
-          activeOpacity={0.85}
+        <RevolverFabOptions
+          expanded={fabExpanded}
+          onOptionPress={(id) => {
+            setFabExpanded(false);
+            if (id === 'post') setShowCreate(true);
+            if (id === 'scan') setShowScanner(true);
+          }}
         >
-          <Ionicons name="add" size={28} color="#FFF" />
-        </TouchableOpacity>
+          <FabButton expanded={fabExpanded} onPress={() => setFabExpanded((v) => !v)} />
+        </RevolverFabOptions>
       </View>
 
       <QRScannerModal
@@ -1053,29 +1327,68 @@ const s = StyleSheet.create({
   screen: { backgroundColor: C.bg },
   topBar: {
     backgroundColor: C.bg,
-    paddingBottom: 12,
+    paddingBottom: 6,
   },
   header: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    paddingHorizontal: 20, paddingBottom: 12,
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    paddingHorizontal: 20, paddingBottom: 6,
   },
-  headerRight: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  headerTitle: { fontSize: 20, fontWeight: '700', color: C.text, letterSpacing: -0.2 },
-  filterScroll: { paddingHorizontal: 20, gap: 8, flexDirection: 'row', alignItems: 'center' },
+  headerSpacer: { flex: 1 },
+  headerTitle: { fontSize: 18, fontWeight: '800', color: C.text, letterSpacing: -0.3 },
+  mainTabsWrap: {
+    marginHorizontal: 20,
+    marginBottom: 6,
+    borderBottomWidth: 1,
+    borderBottomColor: C.border,
+  },
+  mainTabsRow: {
+    flexDirection: 'row',
+    alignItems: 'stretch',
+  },
+  mainTab: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingVertical: 8,
+    paddingHorizontal: 8,
+  },
+  mainTabOn: {},
+  mainTabText: { fontSize: 14, fontWeight: '600', color: C.sub },
+  mainTabTextOn: { color: C.text, fontWeight: '700' },
+  mainTabsIndicatorWrap: {
+    position: 'absolute',
+    bottom: -1,
+    left: 0,
+    right: 0,
+    height: 3,
+    alignItems: 'center',
+  },
+  mainTabsIndicator: {
+    position: 'absolute',
+    bottom: 0,
+    width: '50%',
+    height: 3,
+    backgroundColor: C.red,
+    borderRadius: 2,
+  },
+  filterTabsWrap: {
+    borderBottomWidth: 1,
+    borderBottomColor: C.border,
+    marginBottom: 6,
+  },
+  filterScroll: { paddingHorizontal: 20, paddingVertical: 4, gap: 4, flexDirection: 'row', alignItems: 'center' },
   filterChip: {
-    flexDirection: 'row', alignItems: 'center', gap: 4,
-    paddingVertical: 6, paddingHorizontal: 14, borderRadius: 16,
-    backgroundColor: C.chip,
+    flexDirection: 'row', alignItems: 'center',
+    paddingVertical: 6, paddingHorizontal: 14, borderRadius: 8,
+    backgroundColor: 'transparent',
   },
   filterChipOn: {
-    backgroundColor: C.red,
-    ...Platform.select({
-      ios: { shadowColor: C.red, shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.25, shadowRadius: 4 },
-      android: { elevation: 2 },
-    }),
+    backgroundColor: C.redSoft,
   },
   filterChipText: { fontSize: 13, fontWeight: '600', color: C.sub },
-  filterChipTextOn: { color: '#FFFFFF', fontWeight: '700' },
+  filterChipTextOn: { color: C.red, fontWeight: '700' },
   filterChipDisabled: { opacity: 0.5 },
   filterChipTextDisabled: { color: C.muted },
   feed: { paddingHorizontal: 16, paddingBottom: 110 },
@@ -1083,6 +1396,28 @@ const s = StyleSheet.create({
   feedHeaderTitle: { fontSize: 18, fontWeight: '800', color: C.text, marginBottom: 4 },
   feedHeaderSub: { fontSize: 14, color: C.muted, fontWeight: '500' },
   loadingWrap: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingVertical: 60 },
+  loaderScroll: { flex: 1 },
+  loaderContent: { paddingHorizontal: 16, paddingBottom: 40 },
+  skeletonCard: {
+    backgroundColor: C.card,
+    marginBottom: 16,
+    padding: 16,
+    borderRadius: 16,
+    overflow: 'hidden',
+    ...Platform.select({
+      ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.06, shadowRadius: 8 },
+      android: { elevation: 2 },
+    }),
+  },
+  skeletonBox: {
+    backgroundColor: C.chip,
+    borderRadius: 8,
+  },
+  skeletonAvatar: { borderRadius: 19 },
+  skeletonImage: {
+    backgroundColor: C.chip,
+    borderRadius: 12,
+  },
   card: {
     backgroundColor: C.card,
     paddingVertical: 12,
@@ -1098,20 +1433,32 @@ const s = StyleSheet.create({
   authorText: { fontSize: 14, fontWeight: '700', color: C.text },
   cardPlaceRow: { flexDirection: 'row', alignItems: 'center', gap: 3, marginTop: 2 },
   cardPlaceText: { fontSize: 12, fontWeight: '600', color: C.red },
+  // Client-focused card layout
+  cardClientRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 12 },
+  clientAv: { width: 48, height: 48, borderRadius: 24, backgroundColor: C.chip, marginRight: 12, overflow: 'hidden' },
+  clientAvPlaceholder: { alignItems: 'center', justifyContent: 'center', backgroundColor: C.red + '18' },
+  cardClientMeta: { flex: 1, minWidth: 0 },
+  clientPlaceText: { fontSize: 16, fontWeight: '700', color: C.text, marginBottom: 2 },
+  cardAuthorSub: { fontSize: 12, color: C.sub, fontWeight: '500', marginTop: 2 },
   cardRatingPill: {
     flexDirection: 'row', alignItems: 'center', gap: 4,
-    paddingHorizontal: 8, paddingVertical: 4, borderRadius: 10,
   },
-  cardRatingNum: { fontSize: 12, fontWeight: '700', marginLeft: 2 },
+  cardRatingNum: { fontSize: 12, fontWeight: '600', marginLeft: 2, color: C.sub },
   bodyText: { fontSize: 14, lineHeight: 21, color: C.text, marginBottom: 10 },
   cardTopicRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginBottom: 10 },
   cardTopicPill: { backgroundColor: C.chip, paddingHorizontal: 10, paddingVertical: 4, borderRadius: 10 },
   cardTopicPillText: { fontSize: 12, fontWeight: '600', color: C.sub },
-  cardImgWrap: { overflow: 'hidden', backgroundColor: C.chip, position: 'relative', borderRadius: 12, marginBottom: 10 },
+  cardImgWrap: { overflow: 'hidden', backgroundColor: C.chip, position: 'relative', borderRadius: 12, marginBottom: 12 },
   cardImg: { width: '100%', height: '100%' },
   cardImgSplitRow: { flexDirection: 'row', width: '100%', height: '100%' },
   cardImgHalf: { flex: 1, height: '100%' },
   cardImgGap: { width: 2, backgroundColor: 'rgba(0,0,0,0.08)' },
+  cardImgPills: {
+    position: 'absolute', bottom: 8, left: 0, right: 0,
+    flexDirection: 'row', justifyContent: 'center', gap: 5,
+  },
+  cardImgPill: { width: 6, height: 6, borderRadius: 3, backgroundColor: 'rgba(255,255,255,0.5)' },
+  cardImgPillActive: { backgroundColor: '#FFF', width: 18, borderRadius: 3 },
   imgCountBadge: {
     position: 'absolute', bottom: 8, right: 8,
     backgroundColor: 'rgba(0,0,0,0.55)', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12,
@@ -1128,22 +1475,83 @@ const s = StyleSheet.create({
   fabOverlay: {
     position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 0,
   },
+  fabOverlayDim: {
+    backgroundColor: 'rgba(0,0,0,0.35)',
+  },
   fabContainer: {
-    position: 'absolute', right: 20, alignItems: 'flex-end', zIndex: 1,
+    position: 'absolute', right: 20, width: 200, height: 170, alignItems: 'flex-end', justifyContent: 'flex-end', zIndex: 1, overflow: 'visible',
   },
-  fabMenu: {
-    flexDirection: 'column-reverse', alignItems: 'flex-end', marginBottom: 12, gap: 10,
+  fabMenuLayout: {
+    position: 'relative',
+    width: '100%',
+    height: '100%',
+    alignItems: 'flex-end',
+    justifyContent: 'flex-end',
+    overflow: 'visible',
   },
-  fabMenuBtn: {
-    flexDirection: 'row', alignItems: 'center', gap: 8,
-    backgroundColor: C.red, paddingVertical: 10, paddingHorizontal: 14, borderRadius: 24,
+  fabOptionAbsolute: {
+    position: 'absolute',
+  },
+  fabOptionTop: {
+    bottom: 76,
+    right: 0,
+  },
+  fabOptionLeft: {
+    bottom: 0,
+    right: 76,
+  },
+  fabRadialOptionBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    minWidth: 56,
     ...Platform.select({
-      ios: { shadowColor: C.red, shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.3, shadowRadius: 6 },
-      android: { elevation: 6 },
+      ios: { shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.25, shadowRadius: 8 },
+      android: { elevation: 8 },
     }),
   },
-  fabMenuBtnText: { fontSize: 14, fontWeight: '700', color: '#FFF' },
-  fabRotate: { transform: [{ rotate: '45deg' }] },
+  fabOptionBtnPost: {
+    backgroundColor: C.red,
+    borderRadius: 28,
+    borderWidth: 2,
+    borderColor: 'rgba(255,255,255,0.5)',
+    ...Platform.select({
+      ios: { shadowColor: C.red },
+      android: {},
+    }),
+  },
+  fabOptionBtnScan: {
+    backgroundColor: C.green,
+    borderRadius: 16,
+    borderWidth: 2,
+    borderColor: 'rgba(255,255,255,0.5)',
+    ...Platform.select({
+      ios: { shadowColor: C.green },
+      android: {},
+    }),
+  },
+  fabRadialOptionText: { fontSize: 15, fontWeight: '800', color: '#FFF', letterSpacing: 0.2 },
+  fabOptionTextPost: {},
+  fabOptionTextScan: {},
+  fabOptionIconWrap: { position: 'relative', overflow: 'hidden', width: 22, height: 22, alignItems: 'center', justifyContent: 'center' },
+  fabOptionScanLine: {
+    position: 'absolute',
+    top: -2,
+    left: -4,
+    right: -4,
+    height: 4,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  fabOptionScanLineInner: {
+    width: 30,
+    height: 2,
+    backgroundColor: 'rgba(255,255,255,0.9)',
+    borderRadius: 1,
+  },
   fab: {
     width: 58, height: 58, borderRadius: 29,
     backgroundColor: C.red, alignItems: 'center', justifyContent: 'center',
@@ -1213,15 +1621,16 @@ const s = StyleSheet.create({
     paddingHorizontal: 18, paddingVertical: 12, paddingTop: 14, borderBottomWidth: 1, borderBottomColor: C.border,
   },
   popHeaderLeft: { flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 },
-  popHeaderAv: { width: 36, height: 36, borderRadius: 18, backgroundColor: C.chip },
+  popHeaderAv: { width: 40, height: 40, borderRadius: 10, backgroundColor: C.chip, overflow: 'hidden' },
   popHeaderAvPlaceholder: { alignItems: 'center', justifyContent: 'center', backgroundColor: C.red + '18' },
   popHeaderAvLetter: { fontSize: 14, fontWeight: '800', color: C.red },
   popHeaderName: { fontSize: 15, fontWeight: '700', color: C.text },
+  popHeaderSub: { fontSize: 12, color: C.sub, fontWeight: '500', marginTop: 1 },
   popPlaceRatingRow: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8, marginBottom: 12,
   },
   popPlaceWrap: { flexDirection: 'row', alignItems: 'center', gap: 4, flex: 1, minWidth: 0 },
-  popImgWrap: { position: 'relative', overflow: 'hidden' },
+  popImgWrap: { position: 'relative', overflow: 'hidden', backgroundColor: C.chip },
   popImgPills: {
     position: 'absolute', bottom: 10, left: 0, right: 0,
     flexDirection: 'row', justifyContent: 'center', gap: 5,
@@ -1235,7 +1644,7 @@ const s = StyleSheet.create({
   popImgBadgeText: { color: '#FFF', fontSize: 12, fontWeight: '700' },
   popBody: { paddingHorizontal: 18, paddingTop: 16 },
   popRatingWrap: { flexDirection: 'row', alignItems: 'center', gap: 4 },
-  popRatingNum: { fontSize: 13, fontWeight: '700', color: C.text },
+  popRatingNum: { fontSize: 13, fontWeight: '600', color: C.sub },
   popPlaceText: { fontSize: 13, fontWeight: '600', color: C.red },
   popReviewText: {
     fontSize: 15, lineHeight: 24, color: C.text, marginTop: 14,

@@ -17,6 +17,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { supabase } from '../config/supabase';
 import { colors as themeColors } from '../theme/designTokens';
 import { useTheme } from '../context/ThemeContext';
+import { ensureImageUrl } from '../utils/imageUrl';
 
 function getModalColors(themeColors) {
   return {
@@ -314,16 +315,20 @@ export default function ClientProfileModal({ visible, clientId, onClose, insets,
           return { id: r.post_uuid, imageUri: imageUri || null, description: r.description || '' };
         }));
       }
+      const toReviewUri = (img) => {
+        const raw = parseReviewImage(img);
+        return raw ? (ensureImageUrl(raw) || raw) : null;
+      };
       let reviews = (reviewsRes.data || []).map((r) => ({
         id: r.community_uuid,
         body: (r.review_text || '').trim(),
         rating: r.rating != null ? Number(r.rating) : null,
         place: r.badge || null,
-        imageUri: parseReviewImage(r.image),
+        imageUri: toReviewUri(r.image),
       }));
       if (reviews.length === 0 && name) {
         const { data: byBadge } = await supabase.from('community').select('community_uuid, review_text, rating, badge, image, created_at').ilike('badge', `%${name.slice(0, 20)}%`).order('created_at', { ascending: false }).limit(20);
-        if (!cancelled && byBadge?.length) reviews = byBadge.map((r) => ({ id: r.community_uuid, body: (r.review_text || '').trim(), rating: r.rating != null ? Number(r.rating) : null, place: r.badge || null, imageUri: parseReviewImage(r.image) }));
+        if (!cancelled && byBadge?.length) reviews = byBadge.map((r) => ({ id: r.community_uuid, body: (r.review_text || '').trim(), rating: r.rating != null ? Number(r.rating) : null, place: r.badge || null, imageUri: toReviewUri(r.image) }));
       }
       if (!cancelled) setClientReviews(reviews);
     })();
@@ -390,7 +395,7 @@ export default function ClientProfileModal({ visible, clientId, onClose, insets,
                   <View style={styles.clientProfileHeroIconWrap}>
                     <View style={styles.clientProfileHeroIcon}>
                       {client.client_image ? (
-                        <Image source={{ uri: client.client_image }} style={styles.clientProfileHeroImage} resizeMode="cover" />
+                        <Image source={{ uri: ensureImageUrl(client.client_image) || client.client_image }} style={styles.clientProfileHeroImage} resizeMode="cover" />
                       ) : (
                         <Ionicons name="storefront" size={36} color={COLORS.primary} />
                       )}
