@@ -1,4 +1,4 @@
-import React, { useRef, useEffect, useState } from 'react';
+import React, { useRef, useEffect, useState, useMemo } from 'react';
 import {
   StyleSheet,
   Text,
@@ -8,20 +8,25 @@ import {
   PanResponder,
   Platform,
   TouchableOpacity,
+  TouchableWithoutFeedback,
   ScrollView,
   ActivityIndicator,
   Modal,
   KeyboardAvoidingView,
   Easing,
   Image,
+  Linking,
+  LayoutAnimation,
+  Alert,
 } from 'react-native';
+import * as Location from 'expo-location';
 import { BlurView } from 'expo-blur';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRoute, useNavigation } from '@react-navigation/native';
-import MapView, { Marker, Circle, Polyline } from 'react-native-maps';
+import MapView, { Marker, Circle } from 'react-native-maps';
 import { Ionicons } from '@expo/vector-icons';
-import { fetchPlaces, fetchRestaurants, fetchBreakfastSpots, fetchEvents, generateDayPlan, getMockDayPlan } from '../services/aiPipeline';
+import { fetchPlaces, fetchRestaurants, fetchBreakfastSpots, fetchEvents, generateDayPlan, getMockDayPlan, fetchClientsWithLocation } from '../services/aiPipeline';
 import { useUserPreferences } from '../context/UserPreferencesContext';
 import { colors as themeColors } from '../theme/designTokens';
 import { useTheme } from '../context/ThemeContext';
@@ -30,6 +35,45 @@ import ClientProfileModal from '../components/ClientProfileModal';
 import { ensureImageUrl } from '../utils/imageUrl';
 
 const { height: SCREEN_HEIGHT, width: SCREEN_WIDTH } = Dimensions.get('window');
+
+const openInMaps = (lat, lng, name) => {
+  const label = encodeURIComponent(name || 'Destination');
+  const url = Platform.select({
+    ios: `maps:0,0?q=${label}@${lat},${lng}`,
+    android: `geo:0,0?q=${lat},${lng}(${label})`,
+  });
+  Linking.openURL(url).catch(() => {});
+};
+
+// Open Google Maps with directions from current location through all plan stops in order
+const openAllStopsInGoogleMaps = async (plan) => {
+  const markers = (plan || []).map((item) => {
+    const lat = parseFloat(item.lat);
+    const lng = parseFloat(item.lng);
+    return isNaN(lat) || isNaN(lng) ? null : { lat, lng };
+  }).filter(Boolean);
+  if (markers.length === 0) return;
+  try {
+    const { status } = await Location.requestForegroundPermissionsAsync();
+    if (status !== 'granted') {
+      Alert.alert('Location needed', 'Enable location access to get directions from your current position.');
+      return;
+    }
+    const { coords } = await Location.getCurrentPositionAsync({
+      accuracy: Location.Accuracy.Balanced,
+    });
+    const origin = `${coords.latitude},${coords.longitude}`;
+    const destination = `${markers[markers.length - 1].lat},${markers[markers.length - 1].lng}`;
+    const waypoints = markers.length > 1
+      ? markers.slice(0, -1).map((m) => `${m.lat},${m.lng}`).join('|')
+      : null;
+    let url = `https://www.google.com/maps/dir/?api=1&origin=${encodeURIComponent(origin)}&destination=${encodeURIComponent(destination)}&travelmode=driving`;
+    if (waypoints) url += `&waypoints=${encodeURIComponent(waypoints)}`;
+    Linking.openURL(url).catch(() => {});
+  } catch (e) {
+    Alert.alert('Location error', e?.message ?? 'Could not get your location. Enable location and try again.');
+  }
+};
 const APP_TAB_BAR_HEIGHT_IOS = 70;
 const getAppTabBarHeight = (insets) =>
   Platform.OS === 'ios' ? APP_TAB_BAR_HEIGHT_IOS : 60 + (insets?.bottom ?? 0);
@@ -162,7 +206,97 @@ function buildSpotPreviews(places, restaurants, events) {
   return previews;
 }
 
-// Enrich spot previews: use client_a_uuid from Pinecone to fetch client_image from Supabase client table
+// Parse storage image (post_image or client_image) to full URL — handles string path, JSON array, or full URL
+function parseStorageImageUrl(raw) {
+  if (raw == null) return null;
+  let str = null;
+  if (typeof raw === 'string') {
+    const trimmed = raw.trim();
+    if (!trimmed) return null;
+    if (trimmed.startsWith('[') || trimmed.startsWith('{')) {
+      try {
+        const parsed = JSON.parse(trimmed);
+        const arr = Array.isArray(parsed) ? parsed : [parsed];
+        const first = arr[0];
+        str = first?.url || (typeof first === 'string' ? first : null);
+      } catch { return null; }
+    } else {
+      str = trimmed;
+    }
+  } else if (typeof raw === 'object' && raw?.url) {
+    str = raw.url;
+  } else if (Array.isArray(raw) && raw[0]) {
+    str = raw[0]?.url || (typeof raw[0] === 'string' ? raw[0] : null);
+  }
+  if (!str || typeof str !== 'string') return null;
+  str = str.trim();
+  if (!str) return null;
+  if (str.startsWith('http://') || str.startsWith('https://')) return str;
+  const cleanPath = str.startsWith('gobahrain-post-images/') ? str.replace('gobahrain-post-images/', '') : str;
+  return `https://zonhaprelkjyjugpqfdn.supabase.co/storage/v1/object/public/gobahrain-post-images/${cleanPath}`;
+}
+
+// Fetch "Places we're considering" from Supabase — uses POSTS table (post_image) + CLIENT table (business_name)
+// Posts have images; client has names. Same source as HomeScreen feed.
+async function fetchSpotPreviewsFromSupabase() {
+  const { data: postRows, error: postErr } = await supabase
+    .from('posts')
+    .select('client_a_uuid, post_image')
+    .not('post_image', 'is', null)
+    .not('client_a_uuid', 'is', null)
+    .order('created_at', { ascending: false })
+    .limit(60);
+
+  if (postErr || !postRows?.length) {
+    if (postErr) console.warn('[AIPlan] fetchSpotPreviews posts error:', postErr?.message);
+    return [];
+  }
+
+  const clientIds = [...new Set(postRows.map((r) => r.client_a_uuid).filter(Boolean))];
+  const { data: clients, error: clientErr } = await supabase
+    .from('client')
+    .select('client_a_uuid, business_name, name, client_type')
+    .in('client_a_uuid', clientIds);
+
+  const nameByClient = {};
+  (clients || []).forEach((c) => {
+    if (c.client_a_uuid) {
+      nameByClient[c.client_a_uuid] = (c.business_name || c.name || 'Spot').trim();
+    }
+  });
+
+  const seen = new Set();
+  const arr = [];
+  for (const row of postRows) {
+    const key = `${row.client_a_uuid}-${row.post_image}`;
+    if (seen.has(key)) continue;
+    let image = parseStorageImageUrl(row.post_image) || ensureImageUrl(String(row.post_image).trim()) || (row.post_image ? String(row.post_image).trim() : null);
+    if (!image) continue;
+    seen.add(key);
+    const name = nameByClient[row.client_a_uuid] || 'Spot';
+    const ct = ((clients || []).find((c) => c.client_a_uuid === row.client_a_uuid)?.client_type || '').toLowerCase();
+    const type = ct === 'restaurant' ? 'restaurant' : ct === 'event' ? 'event' : 'place';
+    const typeLabel = type === 'restaurant' ? 'Food & drinks' : type === 'event' ? 'Event' : 'Explore';
+    arr.push({
+      id: `${row.client_a_uuid}-${arr.length}`,
+      name,
+      type,
+      typeLabel,
+      image,
+      clientId: row.client_a_uuid,
+    });
+    if (arr.length >= 12) break;
+  }
+
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  arr.forEach((p) => p.image && Image.prefetch(p.image).catch(() => {}));
+  return arr.slice(0, 12);
+}
+
+// Enrich spot previews: client_image only (no post images) — used when we have Pinecone IDs
 async function enrichSpotPreviewsWithClientImages(previews) {
   if (!previews?.length) return previews;
   const ids = [...new Set(previews.map((p) => p.clientId).filter(Boolean))];
@@ -170,20 +304,27 @@ async function enrichSpotPreviewsWithClientImages(previews) {
 
   const { data: clients } = await supabase
     .from('client')
-    .select('client_a_uuid, client_image')
+    .select('client_a_uuid, client_image, business_name, name')
     .in('client_a_uuid', ids);
 
   const imageByClientId = {};
+  const nameByClientId = {};
   (clients || []).forEach((c) => {
-    if (c.client_a_uuid && c.client_image) {
-      imageByClientId[c.client_a_uuid] = ensureImageUrl(String(c.client_image).trim()) || String(c.client_image).trim();
+    if (c.client_a_uuid) {
+      nameByClientId[c.client_a_uuid] = c.business_name || c.name || '';
+      if (c.client_image) {
+        imageByClientId[c.client_a_uuid] = ensureImageUrl(String(c.client_image).trim()) || String(c.client_image).trim();
+      }
     }
   });
 
-  return previews.map((p) => {
+  const enriched = previews.map((p) => {
     const url = p.clientId ? imageByClientId[p.clientId] : null;
     return url ? { ...p, image: url } : p;
   });
+  // Prefetch images immediately so they appear faster in the banner
+  enriched.filter((p) => p.image).forEach((p) => Image.prefetch(p.image).catch(() => {}));
+  return enriched;
 }
 
 // Build spot previews from plan spot names (for mock/fallback when Pinecone returns empty)
@@ -345,10 +486,46 @@ async function enrichPlanWithClientData(plan, pineconeMatches) {
     }
   }
 
-  return enriched.map((item) => ({
-    ...item,
-    image: ensureImageUrl(item.image) || (item.clientId ? clientImageMap[item.clientId] : null) || null,
-  }));
+  // Step 5: Build images array (client_image + post images) for detail area diversity
+  const postImagesByClient = {};
+  const idsWithClient = [...new Set(enriched.map((i) => i.clientId).filter(Boolean))];
+  if (idsWithClient.length > 0) {
+    const { data: posts } = await supabase
+      .from('posts')
+      .select('client_a_uuid, post_image')
+      .in('client_a_uuid', idsWithClient)
+      .not('post_image', 'is', null)
+      .order('created_at', { ascending: false })
+      .limit(idsWithClient.length * 3);
+    (posts || []).forEach((row) => {
+      if (!row.post_image) return;
+      let url = row.post_image;
+      if (typeof url === 'string' && url.startsWith('[')) {
+        try {
+          const parsed = JSON.parse(url);
+          url = (Array.isArray(parsed) && parsed[0]?.url) ? parsed[0].url : (typeof parsed[0] === 'string' ? parsed[0] : url);
+        } catch { /* keep */ }
+      }
+      url = ensureImageUrl(String(url)) || (typeof url === 'string' && url.startsWith('http') ? url : null);
+      if (url) {
+        if (!postImagesByClient[row.client_a_uuid]) postImagesByClient[row.client_a_uuid] = [];
+        if (!postImagesByClient[row.client_a_uuid].includes(url)) postImagesByClient[row.client_a_uuid].push(url);
+      }
+    });
+  }
+
+  return enriched.map((item) => {
+    const primary = ensureImageUrl(item.image) || (item.clientId ? clientImageMap[item.clientId] : null) || null;
+    const postUrls = (item.clientId ? postImagesByClient[item.clientId] : null) || [];
+    const allImages = [primary, ...postUrls].filter(Boolean);
+    const seen = new Set();
+    const images = allImages.filter((u) => { if (seen.has(u)) return false; seen.add(u); return true; });
+    return {
+      ...item,
+      image: primary,
+      images: images.length > 0 ? images : (primary ? [primary] : []),
+    };
+  });
 }
 
 // Fun facts about Bahrain, used while loading
@@ -361,7 +538,7 @@ const BAHRAIN_FACTS = [
   'Bahrain has a vibrant cafe culture – from hidden specialty coffee spots to seaside shisha lounges.',
 ];
 
-// Bump-style fun loading messages
+// Fun loading messages
 const LOADING_PHRASES = [
   "Khalid's on it!",
   'Finding your spots…',
@@ -369,9 +546,141 @@ const LOADING_PHRASES = [
   'Almost there, habibi!',
   'Stitching the perfect day…',
   'Yalla, one sec…',
+  'Magic in progress ✨',
+  'Curating your adventure…',
+  'Scouting the best of Bahrain…',
+  'One moment, greatness loading…',
 ];
 
-// Animated loading view — Bump-style: friend bubbles, playful steps, spot preview carousel
+// Reusable right-to-left marquee banner for spot previews (shuffled, as fetched)
+function SpotMarqueeBanner({ items, itemWidth = 88, itemGap = 10, variant = 'modal' }) {
+  const bannerScrollX = useRef(new Animated.Value(0)).current;
+  const content = useMemo(() => (items || []).filter((p) => p.image || p.name), [items?.length, items?.map((p) => p.id).join(',') ?? '']);
+  const bannerWidth = content.length * (itemWidth + itemGap);
+
+  // Prefetch images so they appear faster when banner renders
+  const imageUrls = useMemo(() => content.filter((p) => p.image).map((p) => p.image), [content]);
+  useEffect(() => {
+    imageUrls.forEach((uri) => Image.prefetch(uri).catch(() => {}));
+  }, [imageUrls.join(',')]);
+  // Seamless infinite scroll — never stops, instant reset when duplicate set is fully scrolled
+  useEffect(() => {
+    if (content.length === 0) return;
+    const duration = Math.max(12000, content.length * 2200);
+    const anim = Animated.loop(
+      Animated.sequence([
+        Animated.timing(bannerScrollX, {
+          toValue: -bannerWidth,
+          duration,
+          easing: Easing.linear,
+          useNativeDriver: true,
+        }),
+        Animated.timing(bannerScrollX, { toValue: 0, duration: 0, useNativeDriver: true }),
+      ])
+    );
+    anim.start();
+    return () => anim.stop();
+  }, [content.length, bannerWidth]);
+  if (content.length === 0) return null;
+  const isSheet = variant === 'sheet';
+  const cardStyle = isSheet ? styles.loadingSpotPreviewItem : [styles.planModalPreviewCard, { width: itemWidth, marginRight: itemGap }];
+  const imgStyle = isSheet ? styles.loadingSpotPreviewImg : styles.planModalPreviewImage;
+  const nameStyle = isSheet ? styles.loadingSpotPreviewName : styles.planModalBannerName;
+  const tagStyle = isSheet ? null : styles.planModalBannerTag;
+  const iconStyle = isSheet ? styles.loadingSpotPreviewPlaceholder : styles.planModalPreviewIcon;
+  return (
+    <View style={isSheet ? styles.loadingSpotPreviews : styles.planModalBannerWrap}>
+      <Animated.View style={[styles.planModalBannerRow, { transform: [{ translateX: bannerScrollX }] }]}>
+        {[...content, ...content].map((p, idx) => (
+          <View key={`${p.id}-${idx}`} style={[cardStyle, isSheet && { width: itemWidth, marginRight: itemGap }]}>
+            {p.image ? (
+              <PreviewImage uri={p.image} style={imgStyle} />
+            ) : (
+              <View style={iconStyle}>
+                <Ionicons name={p.type === 'restaurant' ? 'restaurant' : p.type === 'event' ? 'calendar' : 'location'} size={isSheet ? 20 : 22} color={themeColors.primary} />
+              </View>
+            )}
+            <Text style={nameStyle} numberOfLines={1}>{p.name}</Text>
+            {tagStyle && <Text style={tagStyle} numberOfLines={1}>{p.typeLabel}</Text>}
+          </View>
+        ))}
+      </Animated.View>
+    </View>
+  );
+}
+
+// Smooth image with shimmer placeholder — avoids empty flash while loading
+function PreviewImage({ uri, style }) {
+  const [loaded, setLoaded] = useState(false);
+  const fadeAnim = useRef(new Animated.Value(0)).current;
+  const shimmerAnim = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    if (loaded) {
+      Animated.timing(fadeAnim, { toValue: 1, duration: 220, useNativeDriver: true }).start();
+    }
+  }, [loaded, fadeAnim]);
+  useEffect(() => {
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(shimmerAnim, { toValue: 1, duration: 1200, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
+        Animated.timing(shimmerAnim, { toValue: 0, duration: 1200, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
+      ])
+    );
+    if (!loaded) loop.start();
+    return () => loop.stop();
+  }, [loaded, shimmerAnim]);
+  if (!uri) return null;
+  const shimmerOpacity = shimmerAnim.interpolate({ inputRange: [0, 1], outputRange: [0.3, 0.7] });
+  return (
+    <View style={[style, { overflow: 'hidden' }]}>
+      <LinearGradient colors={['rgba(255,255,255,0.22)', 'rgba(255,255,255,0.08)']} style={StyleSheet.absoluteFill} pointerEvents="none" />
+      {!loaded && (
+        <Animated.View style={[StyleSheet.absoluteFill, { opacity: shimmerOpacity }]} pointerEvents="none">
+          <LinearGradient colors={['transparent', 'rgba(255,255,255,0.4)', 'transparent']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={StyleSheet.absoluteFill} />
+        </Animated.View>
+      )}
+      <Animated.View style={[StyleSheet.absoluteFill, { opacity: fadeAnim }]}>
+        <Image source={{ uri, ...(Platform.OS === 'ios' && { cache: 'force-cache' }) }} style={StyleSheet.absoluteFill} resizeMode="cover" onLoad={() => setLoaded(true)} />
+      </Animated.View>
+    </View>
+  );
+}
+
+// Custom fun spinner — orbiting dots with subtle pulse
+function FunSpinner() {
+  const spin = useRef(new Animated.Value(0)).current;
+  const pulse = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    Animated.loop(
+      Animated.timing(spin, { toValue: 1, duration: 1400, easing: Easing.linear, useNativeDriver: true })
+    ).start();
+  }, [spin]);
+  useEffect(() => {
+    Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulse, { toValue: 1, duration: 600, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
+        Animated.timing(pulse, { toValue: 0, duration: 600, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
+      ])
+    ).start();
+  }, [pulse]);
+  const rotate = spin.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '360deg'] });
+  const pulseScale = pulse.interpolate({ inputRange: [0, 1], outputRange: [0.85, 1.15] });
+  const radius = 26;
+  const dotCount = 5;
+  const dots = [...Array(dotCount)].map((_, i) => {
+    const angle = (i / dotCount) * Math.PI * 2 - Math.PI / 2;
+    return { x: Math.cos(angle) * radius, y: Math.sin(angle) * radius };
+  });
+  return (
+    <Animated.View style={[styles.funSpinnerWrap, { transform: [{ rotate }, { scale: pulseScale }] }]}>
+      {dots.map((d, i) => (
+        <Animated.View key={i} style={[styles.funSpinnerDot, { transform: [{ translateX: d.x }, { translateY: d.y }] }]} />
+      ))}
+    </Animated.View>
+  );
+}
+
+// Animated loading view — fun bubbles, playful steps, infinite marquee
 function PlanModalLoadingView({ loadingStatus, showSuccess, spotPreviews }) {
   const pulse = useRef(new Animated.Value(0)).current;
   const fadeIn = useRef(new Animated.Value(0)).current;
@@ -382,9 +691,6 @@ function PlanModalLoadingView({ loadingStatus, showSuccess, spotPreviews }) {
   const bubble1 = useRef(new Animated.Value(0)).current;
   const bubble2 = useRef(new Animated.Value(0)).current;
   const bubble3 = useRef(new Animated.Value(0)).current;
-  const [activePreviewIdx, setActivePreviewIdx] = useState(0);
-  const activePreviewOpacity = useRef(new Animated.Value(1)).current;
-
   const steps = [
     { icon: 'compass-outline', text: 'Matching places to your vibe', key: 'places' },
     { icon: 'restaurant-outline', text: 'Hunting perfect food spots', key: 'food' },
@@ -408,7 +714,16 @@ function PlanModalLoadingView({ loadingStatus, showSuccess, spotPreviews }) {
     { id: 'm5', name: 'City Centre', type: 'place', typeLabel: 'Shopping' },
     { id: 'm6', name: 'Rasoi by Vineet', type: 'restaurant', typeLabel: 'Indian' },
   ];
-  const displayPreviews = (spotPreviews && spotPreviews.length > 0) ? spotPreviews : MOCK_PREVIEWS;
+  const rawPreviews = (spotPreviews && spotPreviews.length > 0) ? spotPreviews : MOCK_PREVIEWS;
+  const [displayPreviews, setDisplayPreviews] = useState(rawPreviews);
+  useEffect(() => {
+    const arr = [...rawPreviews];
+    for (let i = arr.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [arr[i], arr[j]] = [arr[j], arr[i]];
+    }
+    setDisplayPreviews(arr);
+  }, [spotPreviews?.length ?? 0, spotPreviews?.map((p) => p.id).join(',') ?? '']);
   const hasPreviews = displayPreviews.length > 0;
   const fact = BAHRAIN_FACTS[Math.floor(Math.random() * BAHRAIN_FACTS.length)];
   const funPhrase = LOADING_PHRASES[Math.floor(Math.random() * LOADING_PHRASES.length)];
@@ -473,20 +788,6 @@ function PlanModalLoadingView({ loadingStatus, showSuccess, spotPreviews }) {
     }
   }, [showSuccess]);
 
-  // Spot preview carousel — Bump-style "places you might visit"
-  useEffect(() => {
-    if (!hasPreviews || showSuccess) return;
-    setActivePreviewIdx(0);
-    activePreviewOpacity.setValue(1);
-    const interval = setInterval(() => {
-      Animated.sequence([
-        Animated.timing(activePreviewOpacity, { toValue: 0, duration: 200, useNativeDriver: true }),
-        Animated.timing(activePreviewOpacity, { toValue: 1, duration: 250, useNativeDriver: true }),
-      ]).start();
-      setActivePreviewIdx((prev) => (displayPreviews.length === 0 ? 0 : (prev + 1) % displayPreviews.length));
-    }, 2800);
-    return () => { clearInterval(interval); activePreviewOpacity.setValue(1); };
-  }, [hasPreviews, showSuccess, displayPreviews?.length]);
 
   const pulseScale = pulse.interpolate({ inputRange: [0, 1], outputRange: [0.9, 1.12] });
   const pulseOpacity = pulse.interpolate({ inputRange: [0, 1], outputRange: [0.35, 0.8] });
@@ -516,13 +817,16 @@ function PlanModalLoadingView({ loadingStatus, showSuccess, spotPreviews }) {
           <Animated.View style={[styles.planModalLoadingPulseOuter, { opacity: pulseOpacity, transform: [{ scale: pulseScale }] }]} />
         )}
         <View style={[styles.planModalLoadingPulse, showSuccess && styles.planModalLoadingPulseSuccess]}>
+          {!showSuccess && (
+            <LinearGradient colors={['rgba(255,255,255,0.35)', 'rgba(255,255,255,0.08)']} style={[StyleSheet.absoluteFill, styles.planModalLoadingPulseGradient]} />
+          )}
           {showSuccess ? (
             <Animated.View style={{ transform: [{ scale: successScale }], opacity: successOpacity }}>
               <Ionicons name="checkmark-circle" size={64} color={themeColors.success} />
             </Animated.View>
           ) : (
             <View style={styles.planModalLoadingSpinnerWrap}>
-              <ActivityIndicator size="large" color="#FFFFFF" />
+              <FunSpinner />
             </View>
           )}
         </View>
@@ -559,25 +863,16 @@ function PlanModalLoadingView({ loadingStatus, showSuccess, spotPreviews }) {
         })}
       </View>
 
-      {/* Bump-style spot preview carousel — image-first when available */}
+      {/* Infinite marquee — never stops */}
       {hasPreviews && !showSuccess && (
         <View style={styles.planModalPreviewSection}>
-          <Text style={styles.planModalPreviewTitle}>Places we're considering…</Text>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.planModalPreviewScroll}>
-            {displayPreviews.slice(0, 6).map((p, idx) => (
-              <Animated.View key={p.id} style={[styles.planModalPreviewCard, idx === activePreviewIdx && { opacity: activePreviewOpacity }]}>
-                {p.image ? (
-                  <Image source={{ uri: p.image }} style={styles.planModalPreviewImage} resizeMode="cover" />
-                ) : (
-                  <View style={styles.planModalPreviewIcon}>
-                    <Ionicons name={p.type === 'restaurant' ? 'restaurant' : p.type === 'event' ? 'calendar' : 'location'} size={22} color={themeColors.primary} />
-                  </View>
-                )}
-                <Text style={styles.planModalPreviewName} numberOfLines={1}>{p.name}</Text>
-                <Text style={styles.planModalPreviewTag} numberOfLines={1}>{p.typeLabel}</Text>
-              </Animated.View>
-            ))}
-          </ScrollView>
+          <View style={styles.planModalPreviewTitleRow}>
+            <Ionicons name="map" size={18} color="rgba(255,255,255,0.95)" style={{ marginRight: 8 }} />
+            <Text style={styles.planModalPreviewTitle}>Places we're considering…</Text>
+          </View>
+          <View style={styles.planModalMarqueeMask}>
+            <SpotMarqueeBanner items={displayPreviews} itemWidth={110} itemGap={12} variant="modal" />
+          </View>
         </View>
       )}
 
@@ -588,6 +883,201 @@ function PlanModalLoadingView({ loadingStatus, showSuccess, spotPreviews }) {
         </View>
       )}
     </Animated.View>
+  );
+}
+
+// Animated map marker with profile image and entrance animation
+// zoomScale: 0.2–1, Google Maps–style; markers shrink when zoomed out
+function AnimatedPlaceMarker({ mk, accent, isCurrent, onPress, showBadge = true, showCircle = true, zoomScale = 1 }) {
+  const scaleAnim = useRef(new Animated.Value(0)).current;
+  const opacityAnim = useRef(new Animated.Value(0)).current;
+  const pulseRing = useRef(new Animated.Value(0)).current;
+  const breatheScale = useRef(new Animated.Value(1)).current;
+
+  useEffect(() => {
+    Animated.parallel([
+      Animated.spring(scaleAnim, {
+        toValue: 1,
+        tension: 180,
+        friction: 12,
+        useNativeDriver: true,
+      }),
+      Animated.timing(opacityAnim, {
+        toValue: 1,
+        duration: 400,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: true,
+      }),
+    ]).start();
+  }, []);
+
+  useEffect(() => {
+    if (!isCurrent) {
+      breatheScale.setValue(1);
+      pulseRing.setValue(0);
+      return;
+    }
+    const breathe = Animated.loop(
+      Animated.sequence([
+        Animated.timing(breatheScale, { toValue: 1.08, duration: 800, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
+        Animated.timing(breatheScale, { toValue: 1, duration: 800, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
+      ])
+    );
+    const ring = Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulseRing, { toValue: 1, duration: 1200, easing: Easing.out(Easing.ease), useNativeDriver: true }),
+        Animated.timing(pulseRing, { toValue: 0, duration: 0, useNativeDriver: true }),
+      ])
+    );
+    breathe.start();
+    ring.start();
+    return () => { breathe.stop(); ring.stop(); };
+  }, [isCurrent, breatheScale, pulseRing]);
+
+  const ringScale = pulseRing.interpolate({ inputRange: [0, 1], outputRange: [1, 1.6] });
+  const ringOpacity = pulseRing.interpolate({ inputRange: [0, 0.6, 1], outputRange: [0.6, 0.2, 0] });
+  const combinedScale = Animated.multiply(scaleAnim, breatheScale);
+  const showLabel = zoomScale >= 0.55;
+
+  const pinIcon = mk.type === 'restaurant' ? 'restaurant' : mk.type === 'event' ? 'calendar' : 'location';
+  const imageUrl = mk.image ? ensureImageUrl(mk.image) || mk.image : null;
+
+  return (
+    <React.Fragment>
+      {showCircle && (
+        <Circle
+          center={{ latitude: mk.lat, longitude: mk.lng }}
+          radius={220}
+          fillColor={`${accent}12`}
+          strokeColor={`${accent}35`}
+          strokeWidth={1}
+        />
+      )}
+      <Marker coordinate={{ latitude: mk.lat, longitude: mk.lng }} onPress={onPress} anchor={{ x: 0.5, y: 0.5 }}>
+        <Animated.View style={[styles.animatedMarkerWrap, { opacity: opacityAnim, transform: [{ scale: Animated.multiply(combinedScale, zoomScale) }] }]}>
+          {isCurrent && (
+            <Animated.View
+              style={[
+                styles.animatedMarkerPulseRing,
+                {
+                  borderColor: accent,
+                  transform: [{ scale: ringScale }],
+                  opacity: ringOpacity,
+                },
+              ]}
+            />
+          )}
+          <View style={[styles.animatedMarkerAvatar, { borderColor: accent }]}>
+            {imageUrl ? (
+              <Image source={{ uri: imageUrl }} style={styles.animatedMarkerImage} />
+            ) : (
+              <>
+                <View style={[styles.animatedMarkerIconBg, { backgroundColor: accent }]}>
+                  <Ionicons name={pinIcon} size={18} color="#FFF" />
+                </View>
+                {showBadge && (
+                  <View style={[styles.animatedMarkerBadge, { backgroundColor: accent }]}>
+                    <Text style={styles.animatedMarkerBadgeText}>{mk.idx + 1}</Text>
+                  </View>
+                )}
+              </>
+            )}
+          </View>
+          {showLabel && (
+            <>
+              <View style={[styles.animatedMarkerLabel, { borderColor: accent }]}>
+                <Text style={[styles.animatedMarkerLabelText, { color: accent }]} numberOfLines={1}>{mk.spot}</Text>
+              </View>
+              <View style={[styles.animatedMarkerArrow, { borderTopColor: accent }]} />
+            </>
+          )}
+        </Animated.View>
+      </Marker>
+    </React.Fragment>
+  );
+}
+
+// Radial options menu surrounding a marker (Google Maps–style)
+const RADIAL_ORBIT = 72;
+const RADIAL_BTN = 44;
+const RADIAL_OPTIONS = [
+  { key: 'profile', icon: 'person-circle-outline', label: 'Profile' },
+  { key: 'directions', icon: 'navigate-outline', label: 'Directions' },
+  { key: 'ar', icon: 'camera-outline', label: 'AR' },
+];
+
+function RadialMarkerMenu({ visible, position, marker, onAction, onClose }) {
+  const scaleAnim = useRef(new Animated.Value(0)).current;
+  const opacityAnim = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    if (!visible) {
+      scaleAnim.setValue(0);
+      opacityAnim.setValue(0);
+      return;
+    }
+    Animated.parallel([
+      Animated.spring(scaleAnim, { toValue: 1, tension: 200, friction: 14, useNativeDriver: true }),
+      Animated.timing(opacityAnim, { toValue: 1, duration: 200, useNativeDriver: true }),
+    ]).start();
+  }, [visible, scaleAnim, opacityAnim]);
+
+  if (!visible || !position) return null;
+
+  const { x, y } = position;
+  const containerSize = (RADIAL_ORBIT + RADIAL_BTN) * 2;
+  const left = x - (RADIAL_ORBIT + RADIAL_BTN);
+  const top = y - (RADIAL_ORBIT + RADIAL_BTN);
+
+  const handleAction = (key) => {
+    onAction(key);
+    onClose();
+  };
+
+  return (
+    <TouchableWithoutFeedback onPress={onClose}>
+      <View style={[StyleSheet.absoluteFill, { zIndex: 1000 }]}>
+        <Animated.View
+          pointerEvents="box-none"
+          style={[
+            styles.radialMenuContainer,
+            {
+              left,
+              top,
+              width: containerSize,
+              height: containerSize,
+              opacity: opacityAnim,
+              transform: [{ scale: scaleAnim }],
+            },
+          ]}
+        >
+          {RADIAL_OPTIONS.filter((opt) => {
+            if (opt.key === 'profile') return !!marker?.clientId;
+            if (opt.key === 'directions' || opt.key === 'ar') return marker?.lat != null && marker?.lng != null;
+            return true;
+          }).map((opt, i) => {
+            const count = RADIAL_OPTIONS.filter((o) => {
+              if (o.key === 'profile') return !!marker?.clientId;
+              if (o.key === 'directions' || o.key === 'ar') return marker?.lat != null && marker?.lng != null;
+              return true;
+            }).length;
+            const angle = (i / count) * 2 * Math.PI - Math.PI / 2;
+            const bx = RADIAL_ORBIT + RADIAL_BTN + RADIAL_ORBIT * Math.cos(angle) - RADIAL_BTN / 2;
+            const by = RADIAL_ORBIT + RADIAL_BTN + RADIAL_ORBIT * Math.sin(angle) - RADIAL_BTN / 2;
+            return (
+              <TouchableOpacity
+                key={opt.key}
+                style={[styles.radialMenuBtn, { left: bx, top: by }]}
+                onPress={() => handleAction(opt.key)}
+                activeOpacity={0.8}
+              >
+                <Ionicons name={opt.icon} size={22} color="#FFF" />
+              </TouchableOpacity>
+            );
+          })}
+        </Animated.View>
+      </View>
+    </TouchableWithoutFeedback>
   );
 }
 
@@ -775,6 +1265,8 @@ function buildMapMarkers(plan) {
     const lat = parseFloat(item.lat);
     const lng = parseFloat(item.lng);
     if (isNaN(lat) || isNaN(lng) || lat === 0 || lng === 0) return null;
+    const rawImg = item.image || (item.client_image ? parseStorageImageUrl(item.client_image) : null);
+    const image = rawImg ? (ensureImageUrl(rawImg) || rawImg) : null;
     return {
       idx,
       spot: item.spot,
@@ -783,6 +1275,8 @@ function buildMapMarkers(plan) {
       reason: item.reason,
       lat,
       lng,
+      image,
+      clientId: item.clientId || null,
     };
   }).filter(Boolean);
 }
@@ -824,6 +1318,31 @@ export default function AIPlanScreen() {
   const [planGenerationSuccess, setPlanGenerationSuccess] = useState(false);
   const [spotPreviews, setSpotPreviews] = useState([]);
   const [profileClientId, setProfileClientId] = useState(null);
+  const [expandedStops, setExpandedStops] = useState(() => new Set());
+  const [openingMaps, setOpeningMaps] = useState(false);
+  const [allPlaceMarkers, setAllPlaceMarkers] = useState([]);
+  const [mapRegion, setMapRegion] = useState(BAHRAIN_REGION);
+  const [radialMenuPosition, setRadialMenuPosition] = useState(null);
+
+  const handleOpenInGoogleMaps = async () => {
+    if (!dayPlan || openingMaps) return;
+    setOpeningMaps(true);
+    try {
+      await openAllStopsInGoogleMaps(dayPlan);
+    } finally {
+      setOpeningMaps(false);
+    }
+  };
+
+  const toggleExpandStop = (stopNum) => {
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+    setExpandedStops((prev) => {
+      const next = new Set(prev);
+      if (next.has(stopNum)) next.delete(stopNum);
+      else next.add(stopNum);
+      return next;
+    });
+  };
   const spinAnim = useRef(new Animated.Value(0)).current;
 
   // Plan modal animations (match Home AI overlay)
@@ -835,6 +1354,32 @@ export default function AIPlanScreen() {
   const planModalChipsOpacity = useRef(new Animated.Value(0)).current;
   const planModalChipsTranslateY = useRef(new Animated.Value(14)).current;
   const sheetOpacity = useRef(new Animated.Value(1)).current;
+
+  // Fetch all clients with coordinates for pre-plan map markers
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const clients = await fetchClientsWithLocation();
+        if (cancelled) return;
+        const markers = clients.map((c, idx) => {
+          const lat = parseFloat(c.lat ?? c.latitude ?? '');
+          const lng = parseFloat(c.lng ?? c.long ?? c.longitude ?? '');
+          if (isNaN(lat) || isNaN(lng) || lat === 0 || lng === 0) return null;
+          const rawImg = c.client_image ? parseStorageImageUrl(c.client_image) : null;
+          const image = rawImg ? (ensureImageUrl(rawImg) || rawImg) : null;
+          const spot = (c.business_name || c.name || 'Place').trim();
+          const ct = ((c.client_type || '').toLowerCase());
+          const type = ct === 'restaurant' ? 'restaurant' : ct === 'event' ? 'event' : 'place';
+          return { idx, spot, type, lat, lng, image, clientId: c.client_a_uuid };
+        }).filter(Boolean);
+        setAllPlaceMarkers(markers);
+      } catch (e) {
+        if (!cancelled) console.warn('[AIPlan] fetch clients for map:', e?.message);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
 
   const togglePreference = (id) => {
     setSelectedPreferences((prev) =>
@@ -912,6 +1457,8 @@ export default function AIPlanScreen() {
           setLoadingStatus(`Finding places and restaurants for your ${theme.label.toLowerCase()} day…`);
           setDrawerStep(3);
 
+          fetchSpotPreviewsFromSupabase().then((p) => setSpotPreviews(p));
+
           (async () => {
             let generatedPlan = null;
             try {
@@ -928,11 +1475,6 @@ export default function AIPlanScreen() {
               ]);
 
               console.log(`[Surprise ${theme.label}] ${places.length}P ${restaurants.length}R ${breakfastSpots.length}B ${events.length}E`);
-
-              // Build previews so the user sees some of the spots being considered
-              const preview = buildSpotPreviews(places, restaurants, events);
-              const enrichedPreviews = await enrichSpotPreviewsWithClientImages(preview);
-              setSpotPreviews(enrichedPreviews);
 
               const allMatches = [...places, ...restaurants, ...breakfastSpots, ...events];
               setPineconeMatches(allMatches);
@@ -956,8 +1498,6 @@ export default function AIPlanScreen() {
       console.warn('[AI Plan] API error, using mock plan:', err?.message);
       generatedPlan = getMockDayPlan();
       const allM = [...(places || []), ...(restaurants || []), ...(breakfastSpots || []), ...(events || [])];
-      const mockPreviews = buildSpotPreviewsFromPlan(generatedPlan);
-      enrichSpotPreviewsWithClientImages(mockPreviews).then((p) => setSpotPreviews(p));
       enrichPlanWithClientData(generatedPlan, allM).then((e) => setDayPlan(e));
       setError(null);
     } finally {
@@ -1078,6 +1618,9 @@ export default function AIPlanScreen() {
     setSelectedMarker(null);
     setDrawerStep(3);
 
+    // Fetch "Places we're considering" directly from Supabase — no Pinecone wait, random order
+    fetchSpotPreviewsFromSupabase().then((p) => setSpotPreviews(p));
+
     let generatedPlan = null;
     try {
       const prefsKey = prefLabels.join('|');
@@ -1122,11 +1665,6 @@ export default function AIPlanScreen() {
       const allMatches = [...places, ...restaurants, ...breakfastSpots, ...events];
       setPineconeMatches(allMatches);
 
-      // Build previews so the user sees some of the spots being considered
-      const preview = buildSpotPreviews(places, restaurants, events);
-      const enrichedPreviews = await enrichSpotPreviewsWithClientImages(preview);
-      setSpotPreviews(enrichedPreviews);
-
       console.log(`Pinecone: ${places.length} places, ${restaurants.length} restaurants, ${breakfastSpots.length} breakfast, ${events.length} events`);
 
       // Pipeline Step 5 — GPT builds a smart day plan from all results
@@ -1155,8 +1693,6 @@ export default function AIPlanScreen() {
       console.warn('[AI Plan] API error, using mock plan:', err?.message);
       generatedPlan = getMockDayPlan();
       const allM = [...(places || []), ...(restaurants || []), ...(breakfastSpots || []), ...(events || [])];
-      const mockPreviews = buildSpotPreviewsFromPlan(generatedPlan);
-      enrichSpotPreviewsWithClientImages(mockPreviews).then((p) => setSpotPreviews(p));
       enrichPlanWithClientData(generatedPlan, allM).then((e) => setDayPlan(e));
       setError(null);
     } finally {
@@ -1305,13 +1841,57 @@ export default function AIPlanScreen() {
     return () => clearInterval(interval);
   }, [revealingPins, dayPlan]);
 
+  const regionThrottleRef = useRef({ last: 0, lastDelta: null });
+  const handleRegionChange = (region) => {
+    if (region?.latitudeDelta == null) return;
+    const now = Date.now();
+    const prev = regionThrottleRef.current;
+    const deltaChanged = prev.lastDelta == null || Math.abs(region.latitudeDelta - prev.lastDelta) / prev.lastDelta > 0.08;
+    if (deltaChanged || now - prev.last > 120) {
+      prev.last = now;
+      prev.lastDelta = region.latitudeDelta;
+      setMapRegion(region);
+    }
+  };
+
   const handleRegionChangeComplete = (region) => {
     if (!region || !mapRef.current) return;
     const clamped = clampRegionToBahrain(region);
     if (Math.abs(clamped.latitude - region.latitude) > 0.0005 || Math.abs(clamped.longitude - region.longitude) > 0.0005) {
       mapRef.current.animateToRegion(clamped, 180);
     }
+    if (region?.latitudeDelta != null) setMapRegion(region);
   };
+
+  // When marker selected, get screen position for radial menu (re-run when region changes)
+  useEffect(() => {
+    if (!selectedMarker || !mapRef.current) {
+      setRadialMenuPosition(null);
+      return;
+    }
+    mapRef.current.pointForCoordinate({ latitude: selectedMarker.lat, longitude: selectedMarker.lng })
+      .then((p) => setRadialMenuPosition(p))
+      .catch(() => setRadialMenuPosition(null));
+  }, [selectedMarker?.lat, selectedMarker?.lng, mapRegion?.latitudeDelta]);
+
+  const closeRadialMenu = () => {
+    setSelectedMarker(null);
+    setRadialMenuPosition(null);
+  };
+
+  const handleRadialAction = (key) => {
+    if (!selectedMarker) return;
+    if (key === 'profile' && selectedMarker.clientId) setProfileClientId(selectedMarker.clientId);
+    if (key === 'directions') openInMaps(selectedMarker.lat, selectedMarker.lng, selectedMarker.spot);
+    if (key === 'ar') navigation.navigate('AR', { navigateTo: { lat: selectedMarker.lat, lng: selectedMarker.lng, name: selectedMarker.spot } });
+  };
+
+  // Google Maps–style zoom scaling: markers shrink when zoomed out to avoid overcrowding
+  const zoomScale = (() => {
+    const delta = mapRegion?.latitudeDelta ?? BAHRAIN_REGION.latitudeDelta;
+    const s = Math.max(0.2, Math.min(1, 0.06 / delta));
+    return s;
+  })();
 
   const panResponder = useRef(
     PanResponder.create({
@@ -1348,28 +1928,28 @@ export default function AIPlanScreen() {
         mapType="standard"
         showsUserLocation={false}
         showsMyLocationButton={false}
+        onRegionChange={handleRegionChange}
         onRegionChangeComplete={handleRegionChangeComplete}
-        onPress={() => setSelectedMarker(null)}
       >
-        {/* Bump-style route path */}
-        {dayPlan && (() => {
-          const markers = buildMapMarkers(dayPlan);
-          const maxVisible = revealingPins ? visiblePinCount : markers.length;
-          const coords = markers
-            .filter((m) => m.idx < maxVisible && m.lat && m.lng)
-            .map((m) => ({ latitude: m.lat, longitude: m.lng }));
-          if (coords.length < 2) return null;
+        {/* Pre-plan: all clients with profile images as markers */}
+        {!dayPlan && allPlaceMarkers.map((mk) => {
+          const isEat = mk.type === 'restaurant';
+          const isEvent = mk.type === 'event';
+          const accent = isEat ? colors.dining : isEvent ? colors.event : colors.textSecondary;
           return (
-            <Polyline
-              coordinates={coords}
-              strokeColor={colors.route}
-              strokeWidth={4}
-              lineCap="round"
-              lineJoin="round"
+            <AnimatedPlaceMarker
+              key={mk.clientId || `pre-${mk.idx}-${mk.lat}-${mk.lng}`}
+              mk={mk}
+              accent={accent}
+              isCurrent={false}
+              showBadge={false}
+              showCircle={false}
+              zoomScale={zoomScale}
+              onPress={() => setSelectedMarker(mk)}
             />
           );
-        })()}
-        {/* Markers — reveal one by one when plan is generated */}
+        })}
+        {/* Plan markers — reveal one by one with profile images and entrance animation */}
         {dayPlan && (() => {
           const markers = buildMapMarkers(dayPlan);
           const maxVisible = revealingPins ? visiblePinCount : markers.length;
@@ -1378,36 +1958,16 @@ export default function AIPlanScreen() {
             const isEvent = mk.type === 'event';
             const timeCols = { Morning: colors.morning, Afternoon: colors.afternoon, Evening: colors.evening };
             const accent = isEat ? colors.dining : isEvent ? colors.event : (timeCols[mk.time] || colors.textSecondary);
-            const pinIcon = isEat ? 'restaurant' : isEvent ? 'calendar' : 'location';
+            const isCurrent = revealingPins && mk.idx === visiblePinCount - 1;
             return (
-              <React.Fragment key={mk.idx}>
-              <Circle
-                center={{ latitude: mk.lat, longitude: mk.lng }}
-                radius={200}
-                fillColor={`${accent}18`}
-                strokeColor={`${accent}40`}
-                strokeWidth={1.5}
-              />
-              <Marker
-                coordinate={{ latitude: mk.lat, longitude: mk.lng }}
+              <AnimatedPlaceMarker
+                key={mk.idx}
+                mk={mk}
+                accent={accent}
+                isCurrent={isCurrent}
+                zoomScale={zoomScale}
                 onPress={() => setSelectedMarker(mk)}
-              >
-                <View style={styles.mapPinWrap}>
-                  <View style={styles.mapPinRow}>
-                    <View style={[styles.mapPin, { backgroundColor: accent }]}>
-                      <Ionicons name={pinIcon} size={14} color="#FFF" />
-                      <Text style={styles.mapPinNum}>{mk.idx + 1}</Text>
-                    </View>
-                    <View style={[styles.mapPinLabel, { borderColor: accent }]}>
-                      <Text style={[styles.mapPinLabelText, { color: accent }]} numberOfLines={1}>
-                        {mk.spot}
-                      </Text>
-                    </View>
-                  </View>
-                  <View style={[styles.mapPinArrow, { borderTopColor: accent }]} />
-                </View>
-              </Marker>
-              </React.Fragment>
+              />
             );
           });
         })()}
@@ -1415,68 +1975,6 @@ export default function AIPlanScreen() {
 
       {/* Scanning overlay during Hang tight removed (no radar effect) */}
       <MapScanningOverlay visible={false} />
-
-      {/* Bump-style floating header — when plan is active */}
-      {dayPlan && dayPlan.length > 0 && !loading && (
-        <View style={[styles.bumpHeaderWrap, { top: insets.top + 12 }]}>
-          <View style={styles.bumpHeaderCard}>
-            <Ionicons name="location" size={18} color={colors.primary} />
-            <View style={styles.bumpHeaderTextWrap}>
-              <Text style={styles.bumpHeaderTitle}>
-                {selectedMarker ? selectedMarker.spot : 'Your Day in Bahrain'}
-              </Text>
-              <Text style={styles.bumpHeaderAddress} numberOfLines={1}>
-                {selectedMarker
-                  ? `${selectedMarker.time} · Stop ${(selectedMarker.idx || 0) + 1}`
-                  : `${dayPlan.length} stops · Full day itinerary`}
-              </Text>
-            </View>
-          </View>
-        </View>
-      )}
-
-      {/* Spot detail — Bump-style compact bottom card */}
-      {selectedMarker && (() => {
-        const isEat = selectedMarker.type === 'restaurant';
-        const isEvent = selectedMarker.type === 'event';
-        const timeCols = { Morning: colors.morning, Afternoon: colors.afternoon, Evening: colors.evening };
-        const accent = isEat ? colors.dining : isEvent ? colors.event : (timeCols[selectedMarker.time] || colors.textSecondary);
-        const stepNum = selectedMarker.idx + 1;
-        return (
-          <View style={[styles.bumpBottomCardWrap, { bottom: SCREEN_HEIGHT * SHEET_VISIBLE_PEEK + getAppTabBarHeight(insets) + 12 }]}>
-            <View style={styles.bumpBottomCard}>
-              <View style={styles.bumpBottomCardLeft}>
-                <Text style={styles.bumpBottomCardEta}>Stop {stepNum}</Text>
-                <Text style={styles.bumpBottomCardSub}>{selectedMarker.time}</Text>
-              </View>
-              <TouchableOpacity
-                style={[styles.bumpBottomCardStop, { backgroundColor: accent }]}
-                onPress={() => setSelectedMarker(null)}
-                activeOpacity={0.8}
-              >
-                <Text style={styles.bumpBottomCardStopText}>Close</Text>
-              </TouchableOpacity>
-            </View>
-            <TouchableOpacity
-              style={styles.bumpBottomCardExpand}
-              onPress={() => {
-                setSelectedMarker(null);
-                lastSnap.current = SNAP_POINTS[0];
-                Animated.spring(sheetAnim, {
-                  toValue: SNAP_POINTS[0],
-                  useNativeDriver: true,
-                  tension: 80,
-                  friction: 12,
-                }).start();
-              }}
-              activeOpacity={0.8}
-            >
-              <Text style={styles.bumpBottomCardExpandText}>{selectedMarker.spot}</Text>
-              <Ionicons name="chevron-up" size={16} color="#64748B" />
-            </TouchableOpacity>
-          </View>
-        );
-      })()}
 
       <Animated.View
         style={[
@@ -1498,19 +1996,17 @@ export default function AIPlanScreen() {
           <>
             <View style={styles.pastPlansHero}>
               <View style={styles.pastPlansHeroContent}>
-                <View style={styles.pastPlansHeroBadge}>
-                  <Ionicons name="map" size={16} color={themeColors.primary} />
-                  <Text style={styles.pastPlansHeroBadgeText}>AI-Powered</Text>
+                <View style={styles.pastPlansTitleRow}>
+                  <Text style={styles.pastPlansTitle}>Your Bahrain{'\n'}Adventure</Text>
+                  <TouchableOpacity style={styles.startAiButtonWrap} activeOpacity={0.85} onPress={startSetup}>
+                    <LinearGradient colors={[themeColors.primary, themeColors.primaryLight || '#E63950']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.startAiButton}>
+                      <Ionicons name="sparkles" size={20} color="#FFFFFF" />
+                      <Text style={styles.startAiButtonText}>Build my day</Text>
+                    </LinearGradient>
+                  </TouchableOpacity>
                 </View>
-                <Text style={styles.pastPlansTitle}>Your Bahrain{'\n'}Adventure</Text>
                 <Text style={styles.pastPlansSubtitle}>Let Khalid craft the perfect day — tailored to you</Text>
               </View>
-              <TouchableOpacity style={styles.startAiButtonWrap} activeOpacity={0.85} onPress={startSetup}>
-                <LinearGradient colors={[themeColors.primary, themeColors.primaryLight || '#E63950']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.startAiButton}>
-                  <Ionicons name="sparkles" size={20} color="#FFFFFF" />
-                  <Text style={styles.startAiButtonText}>Build my day</Text>
-                </LinearGradient>
-              </TouchableOpacity>
             </View>
             <ScrollView style={styles.pastPlansScroll} contentContainerStyle={styles.pastPlansContent} showsVerticalScrollIndicator={false}>
               {/* Surprise Me — premium card */}
@@ -1596,20 +2092,7 @@ export default function AIPlanScreen() {
                   <Text style={styles.loadingBumpTitle}>{loadingStatus || "Khalid's building your day…"}</Text>
                   <Text style={styles.loadingBumpSub}>Hang tight, habibi — almost there!</Text>
                   {spotPreviews.length > 0 && (
-                    <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.loadingSpotPreviews} contentContainerStyle={styles.loadingSpotPreviewsContent}>
-                      {spotPreviews.slice(0, 5).map((p) => (
-                        <View key={p.id} style={styles.loadingSpotPreviewItem}>
-                          {p.image ? (
-                            <Image source={{ uri: p.image }} style={styles.loadingSpotPreviewImg} resizeMode="cover" />
-                          ) : (
-                            <View style={styles.loadingSpotPreviewPlaceholder}>
-                              <Ionicons name={p.type === 'restaurant' ? 'restaurant' : 'location'} size={20} color={themeColors.primary} />
-                            </View>
-                          )}
-                          <Text style={styles.loadingSpotPreviewName} numberOfLines={1}>{p.name}</Text>
-                        </View>
-                      ))}
-                    </ScrollView>
+                    <SpotMarqueeBanner items={spotPreviews} itemWidth={64} itemGap={10} variant="sheet" />
                   )}
                   <View style={styles.loadingProgressBar}>
                     <View style={[styles.loadingProgressFill, (() => {
@@ -1656,37 +2139,27 @@ export default function AIPlanScreen() {
             ) : (
               <ScrollView style={styles.resultsScroll} contentContainerStyle={styles.resultsContent} showsVerticalScrollIndicator={false}>
 
-                {/* ═══ Bump-style fun summary card ═══ */}
+                {/* ═══ Summary — simple overview + Google Maps button ═══ */}
                 <View style={styles.bumpSummaryCard}>
-                  <LinearGradient colors={['rgba(200,16,46,0.06)', 'rgba(200,16,46,0.02)']} style={styles.bumpSummaryGradient}>
-                    <View style={styles.bumpSummaryBadge}>
-                      <Ionicons name="sparkles" size={14} color={themeColors.primary} />
-                      <Text style={styles.bumpSummaryBadgeText}>Your day is ready!</Text>
-                    </View>
-                    <View style={styles.bumpSummaryRow}>
-                      <View style={styles.bumpSummaryIconWrap}>
-                        <Ionicons name="map" size={22} color={colors.primary} />
-                      </View>
-                      <View style={styles.bumpSummaryText}>
-                        <Text style={styles.bumpSummaryTitle}>Bahrain · Full Day</Text>
-                        <Text style={styles.bumpSummarySub}>
-                          {dayPlan.length} stops · {dayPlan.filter(i => i.type === 'restaurant').length} meals · Yalla!
-                        </Text>
-                      </View>
-                      <View style={styles.bumpSummaryBudget}>
-                        <Text style={styles.bumpSummaryAmount}>
-                          {(() => {
-                            const meals = dayPlan.filter(i => i.type === 'restaurant').length;
-                            const places = dayPlan.filter(i => i.type !== 'restaurant').length;
-                            const low = meals * 3 + places * 2;
-                            const high = meals * 15 + places * 8;
-                            return `${low}–${high} BHD`;
-                          })()}
-                        </Text>
-                        <Text style={styles.bumpSummaryLabel}>Est. budget</Text>
-                      </View>
-                    </View>
-                  </LinearGradient>
+                  <View style={styles.bumpSummarySimple}>
+                    <Text style={styles.bumpSummaryTitle}>{dayPlan.length} stops · Full day in Bahrain</Text>
+                    <Text style={styles.bumpSummarySub}>{dayPlan.filter(i => i.type === 'restaurant').length} meals · Yalla!</Text>
+                    <TouchableOpacity
+                      style={styles.bumpSummaryMapBtn}
+                      onPress={handleOpenInGoogleMaps}
+                      disabled={openingMaps}
+                      activeOpacity={0.85}
+                    >
+                      {openingMaps ? (
+                        <ActivityIndicator size="small" color="#FFFFFF" />
+                      ) : (
+                        <>
+                          <Ionicons name="navigate" size={18} color="#FFFFFF" />
+                          <Text style={styles.bumpSummaryMapBtnText}>Open in Google Maps</Text>
+                        </>
+                      )}
+                    </TouchableOpacity>
+                  </View>
                 </View>
 
                 {/* ═══ Bump-style itinerary list — modern cards ═══ */}
@@ -1717,68 +2190,117 @@ export default function AIPlanScreen() {
                         </View>
                         {items.map((item, idx) => {
                           stopNum += 1;
+                          const thisStopNum = stopNum;
+                          const isExpanded = expandedStops.has(thisStopNum);
                           const isEat = item.type === 'restaurant';
                           const isEvent = item.type === 'event';
                           const accent = isEat ? themeColors.dining : isEvent ? themeColors.event : sec.color;
                           const hasImage = !!(item.image);
+                          const hasImages = (item.images && item.images.length > 0) || hasImage;
+                          const images = (item.images && item.images.length > 0) ? item.images : (item.image ? [item.image] : []);
                           const hasProfile = !!(item.clientId);
                           return (
-                            <TouchableOpacity
-                              key={idx}
-                              style={styles.bumpItinCard}
-                              activeOpacity={0.85}
-                              onPress={() => {
-                                const markers = buildMapMarkers(dayPlan);
-                                const mk = markers[stopNum - 1];
-                                if (mk) setSelectedMarker(mk);
-                              }}
-                            >
-                              {/* Image-first: hero image or placeholder */}
-                              <View style={styles.bumpItinImageWrap}>
-                                {hasImage ? (
-                                  <Image source={{ uri: item.image }} style={styles.bumpItinImage} resizeMode="cover" />
-                                ) : (
-                                  <View style={[styles.bumpItinImagePlaceholder, { backgroundColor: `${accent}20` }]}>
-                                    <Ionicons name={isEat ? 'restaurant' : isEvent ? 'calendar' : 'location'} size={28} color={accent} />
-                                  </View>
-                                )}
-                                <View style={[styles.bumpItinNumBadge, { backgroundColor: accent }]}>
-                                  <Text style={styles.bumpItinNumText}>{stopNum}</Text>
+                            <View key={`stop-${thisStopNum}`} style={[styles.bumpItinCard, isExpanded && styles.bumpItinCardExpanded]}>
+                              <TouchableOpacity
+                                style={styles.bumpItinRow}
+                                activeOpacity={0.85}
+                                onPress={() => {
+                                  toggleExpandStop(thisStopNum);
+                                  if (!isExpanded) {
+                                    const markers = buildMapMarkers(dayPlan);
+                                    const mk = markers[thisStopNum - 1];
+                                    if (mk) setSelectedMarker(mk);
+                                  }
+                                }}
+                              >
+                                <View style={[styles.bumpItinNumCircle, { backgroundColor: accent }]}>
+                                  <Text style={styles.bumpItinNumText}>{thisStopNum}</Text>
                                 </View>
-                                {item.rating != null && (
-                                  <View style={styles.bumpItinRatingBadge}>
-                                    <Ionicons name="star" size={12} color="#F59E0B" />
-                                    <Text style={styles.bumpItinRatingText}>{Number(item.rating).toFixed(1)}</Text>
-                                  </View>
-                                )}
-                              </View>
-                              <View style={styles.bumpItinContent}>
-                                <Text style={styles.bumpItinName}>{item.spot}</Text>
-                                <Text style={styles.bumpItinReason} numberOfLines={2}>{item.reason}</Text>
-                                <View style={styles.bumpItinActions}>
-                                  {item.lat != null && item.lng != null && (
-                                    <TouchableOpacity
-                                      style={styles.bumpItinNavBtn}
-                                      onPress={() => navigation.navigate('AR', { navigateTo: { lat: item.lat, lng: item.lng, name: item.spot } })}
-                                      activeOpacity={0.85}
-                                    >
-                                      <Ionicons name="navigate" size={14} color={colors.primary} />
-                                      <Text style={styles.bumpItinNavBtnText}>Open in AR</Text>
-                                    </TouchableOpacity>
+                                <View style={styles.bumpItinThumbWrap}>
+                                  {hasImages ? (
+                                    <PreviewImage uri={images[0] || item.image} style={styles.bumpItinThumb} />
+                                  ) : (
+                                    <View style={[styles.bumpItinThumbPlaceholder, { backgroundColor: `${accent}20` }]}>
+                                    <Ionicons name={isEat ? 'restaurant' : isEvent ? 'calendar' : 'location'} size={18} color={accent} />
+                                    </View>
                                   )}
-                                  {hasProfile && (
-                                    <TouchableOpacity
-                                      style={styles.bumpItinProfileBtn}
-                                      onPress={() => setProfileClientId(item.clientId)}
-                                      activeOpacity={0.85}
-                                    >
-                                      <Ionicons name="person-circle-outline" size={16} color={themeColors.primary} />
-                                      <Text style={styles.bumpItinProfileBtnText}>View profile</Text>
-                                    </TouchableOpacity>
+                                  {item.rating != null && (
+                                    <View style={styles.bumpItinRatingPill}>
+                                      <Ionicons name="star" size={10} color="#F59E0B" />
+                                      <Text style={styles.bumpItinRatingPillText}>{Number(item.rating).toFixed(1)}</Text>
+                                    </View>
                                   )}
                                 </View>
-                              </View>
-                            </TouchableOpacity>
+                                <View style={styles.bumpItinSummary}>
+                                  <Text style={styles.bumpItinName} numberOfLines={1}>{item.spot}</Text>
+                                  {!isExpanded && <Text style={styles.bumpItinReason} numberOfLines={2}>{item.reason}</Text>}
+                                  {!isExpanded && (
+                                    <View style={styles.bumpItinActionRow}>
+                                      {item.lat != null && item.lng != null && (
+                                        <TouchableOpacity style={styles.bumpItinActionIcon} onPress={(e) => { e.stopPropagation(); openInMaps(item.lat, item.lng, item.spot); }} activeOpacity={0.7}>
+                                          <Ionicons name="navigate" size={18} color={themeColors.primary} />
+                                        </TouchableOpacity>
+                                      )}
+                                      {hasProfile && (
+                                        <TouchableOpacity style={styles.bumpItinActionIcon} onPress={(e) => { e.stopPropagation(); setProfileClientId(item.clientId); }} activeOpacity={0.7}>
+                                          <Ionicons name="person-circle-outline" size={18} color={themeColors.primary} />
+                                        </TouchableOpacity>
+                                      )}
+                                      {item.lat != null && item.lng != null && (
+                                        <TouchableOpacity style={styles.bumpItinActionIcon} onPress={(e) => { e.stopPropagation(); navigation.navigate('AR', { navigateTo: { lat: item.lat, lng: item.lng, name: item.spot } }); }} activeOpacity={0.7}>
+                                          <Ionicons name="camera" size={18} color={themeColors.primary} />
+                                        </TouchableOpacity>
+                                      )}
+                                    </View>
+                                  )}
+                                </View>
+                                <Ionicons name={isExpanded ? 'chevron-down' : 'chevron-forward'} size={18} color="#94A3B8" style={styles.bumpItinChevron} />
+                              </TouchableOpacity>
+                              {isExpanded && (
+                                <View style={styles.bumpItinExpanded}>
+                                  <View style={styles.bumpItinExpandedImageWrap}>
+                                    {hasImages ? (
+                                      images.length > 1 ? (
+                                        <ScrollView horizontal pagingEnabled showsHorizontalScrollIndicator={false} style={styles.bumpItinExpandedScroll} contentContainerStyle={styles.bumpItinExpandedScrollContent}>
+                                          {images.map((img, i) => (
+                                            <View key={i} style={styles.bumpItinExpandedSlide}>
+                                              <PreviewImage uri={img} style={StyleSheet.absoluteFill} />
+                                            </View>
+                                          ))}
+                                        </ScrollView>
+                                      ) : (
+                                        <PreviewImage uri={images[0] || item.image} style={StyleSheet.absoluteFill} />
+                                      )
+                                    ) : (
+                                      <View style={[styles.bumpItinExpandedPlaceholder, { backgroundColor: `${accent}15` }]}>
+                                        <Ionicons name={isEat ? 'restaurant' : isEvent ? 'calendar' : 'location'} size={28} color={accent} />
+                                      </View>
+                                    )}
+                                  </View>
+                                  <Text style={styles.bumpItinExpandedReason}>{item.reason}</Text>
+                                  <View style={styles.bumpItinExpandedActions}>
+                                    {item.lat != null && item.lng != null && (
+                                      <>
+                                        <TouchableOpacity style={[styles.bumpItinExpandedBtn, styles.bumpItinExpandedBtnPrimary]} onPress={() => openInMaps(item.lat, item.lng, item.spot)} activeOpacity={0.85}>
+                                          <Ionicons name="navigate" size={16} color="#FFFFFF" />
+                                          <Text style={styles.bumpItinExpandedBtnPrimaryText}>Get directions</Text>
+                                        </TouchableOpacity>
+                                        <TouchableOpacity style={[styles.bumpItinExpandedBtn, styles.bumpItinExpandedBtnSecondary]} onPress={() => navigation.navigate('AR', { navigateTo: { lat: item.lat, lng: item.lng, name: item.spot } })} activeOpacity={0.85}>
+                                          <Ionicons name="camera" size={16} color={themeColors.primary} />
+                                          <Text style={styles.bumpItinExpandedBtnSecondaryText}>Open in AR</Text>
+                                        </TouchableOpacity>
+                                      </>
+                                    )}
+                                    {hasProfile && (
+                                      <TouchableOpacity style={[styles.bumpItinExpandedBtn, styles.bumpItinExpandedBtnSecondary]} onPress={() => setProfileClientId(item.clientId)} activeOpacity={0.85}>
+                                        <Ionicons name="person-circle-outline" size={16} color={themeColors.primary} />
+                                        <Text style={styles.bumpItinExpandedBtnSecondaryText}>Profile</Text>
+                                      </TouchableOpacity>
+                                    )}
+                                  </View>
+                                </View>
+                              )}
+                            </View>
                           );
                         })}
                       </View>
@@ -1786,15 +2308,9 @@ export default function AIPlanScreen() {
                   });
                 })()}
 
-                {/* ═══ Bump-style fun footer ═══ */}
+                {/* ═══ Footer — friendly close ═══ */}
                 <View style={styles.bumpFooter}>
-                  <View style={styles.bumpFooterEmoji}>
-                    <Text style={styles.bumpFooterEmojiText}>✨</Text>
-                  </View>
-                  <Text style={styles.bumpFooterText}>Yalla habibi — have the best day!</Text>
-                  <View style={styles.bumpFooterEmoji}>
-                    <Text style={styles.bumpFooterEmojiText}>🇧🇭</Text>
-                  </View>
+                  <Text style={styles.bumpFooterText}>Tap to expand for details. Tap again to collapse. Yalla!</Text>
                 </View>
               </ScrollView>
             )}
@@ -1981,6 +2497,15 @@ export default function AIPlanScreen() {
         </KeyboardAvoidingView>
       </Modal>
 
+      {/* Radial options menu when marker tapped — above sheet so it's visible */}
+      <RadialMarkerMenu
+        visible={!!selectedMarker}
+        position={radialMenuPosition}
+        marker={selectedMarker}
+        onAction={handleRadialAction}
+        onClose={closeRadialMenu}
+      />
+
       <ClientProfileModal
         visible={!!profileClientId}
         clientId={profileClientId}
@@ -2007,34 +2532,29 @@ const styles = StyleSheet.create({
     shadowColor: '#0F172A', shadowOffset: { width: 0, height: -8 }, shadowOpacity: 0.12, shadowRadius: 24, elevation: 16,
     overflow: 'hidden',
   },
-  grabberWrap: { alignItems: 'center', justifyContent: 'center', paddingVertical: 16, paddingHorizontal: 24 },
+  grabberWrap: { alignItems: 'center', justifyContent: 'center', paddingVertical: 10, paddingHorizontal: 24 },
   grabber: { width: 36, height: 4, borderRadius: 2, backgroundColor: '#E2E8F0' },
-  grabberHint: { marginTop: 8, fontSize: 12, color: '#94A3B8', fontWeight: '500' },
+  grabberHint: { marginTop: 4, fontSize: 11, color: '#94A3B8', fontWeight: '500' },
 
   // Past plans (step 0) — compact, Bump-style
   pastPlansHero: {
     paddingHorizontal: 20,
-    paddingTop: 6,
-    paddingBottom: 16,
+    paddingTop: 0,
+    paddingBottom: 12,
     borderBottomWidth: 1,
     borderBottomColor: '#F1F5F9',
   },
-  pastPlansHeroContent: { marginBottom: 14 },
-  pastPlansHeroBadge: {
+  pastPlansHeroContent: {},
+  pastPlansTitleRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    alignSelf: 'flex-start',
-    gap: 5,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: 999,
-    backgroundColor: themeColors.primaryMuted,
-    marginBottom: 10,
+    justifyContent: 'space-between',
+    gap: 12,
   },
-  pastPlansHeroBadgeText: { fontSize: 11, fontWeight: '700', color: themeColors.primary, letterSpacing: 0.5 },
-  pastPlansTitle: { fontSize: 24, fontWeight: '800', color: '#0F172A', letterSpacing: -0.5, lineHeight: 30 },
+  pastPlansTitle: { fontSize: 24, fontWeight: '800', color: '#0F172A', letterSpacing: -0.5, lineHeight: 30, flexShrink: 1 },
   pastPlansSubtitle: { fontSize: 14, color: '#64748B', marginTop: 6, fontWeight: '500', lineHeight: 20 },
   startAiButtonWrap: {
+    flexShrink: 0,
     borderRadius: 14,
     overflow: 'hidden',
     ...Platform.select({ ios: { shadowColor: themeColors.primary, shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.2, shadowRadius: 8 }, android: { elevation: 4 } }),
@@ -2188,7 +2708,7 @@ const styles = StyleSheet.create({
 
   // ── Results (step 3) ────────────────────────────────────────────
   resultsScroll: { flex: 1 },
-  resultsContent: { paddingBottom: 32, paddingHorizontal: 20 },
+  resultsContent: { paddingBottom: 32, paddingHorizontal: 16 },
 
   // Loading (sheet fallback) — Bump-style fun
   loadingWrap: {
@@ -2205,7 +2725,7 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(200,16,46,0.08)',
     ...Platform.select({ ios: { shadowColor: '#0F172A', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.08, shadowRadius: 16 }, android: { elevation: 6 } }),
   },
-  loadingSpotPreviews: { maxHeight: 76, marginBottom: 14 },
+  loadingSpotPreviews: { maxHeight: 76, marginBottom: 14, overflow: 'hidden', width: '100%' },
   loadingSpotPreviewsContent: { paddingHorizontal: 4, gap: 10 },
   loadingSpotPreviewItem: { width: 64, alignItems: 'center' },
   loadingSpotPreviewImg: { width: 52, height: 52, borderRadius: 10 },
@@ -2319,58 +2839,30 @@ const styles = StyleSheet.create({
   retryButtonText: { fontSize: 16, fontWeight: '700', color: themeColors.primary },
   emptyResults: { fontSize: 15, color: '#64748B', textAlign: 'center', paddingVertical: 32, fontWeight: '500' },
 
-  // ── Bump-style summary card — compact ──
+  // ── Summary card — simple ──
   bumpSummaryCard: {
     backgroundColor: '#FFFFFF',
-    borderRadius: 16,
-    marginBottom: 18,
-    overflow: 'hidden',
-    borderWidth: 1,
-    borderColor: 'rgba(200,16,46,0.08)',
-    ...Platform.select({
-      ios: { shadowColor: '#0F172A', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.06, shadowRadius: 12 },
-      android: { elevation: 4 },
-    }),
-  },
-  bumpSummaryGradient: {
+    borderRadius: 14,
+    marginBottom: 16,
     padding: 16,
-    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
   },
-  bumpSummaryBadge: {
+  bumpSummarySimple: { gap: 6 },
+  bumpSummaryTitle: { fontSize: 16, fontWeight: '700', color: '#0F172A' },
+  bumpSummarySub: { fontSize: 13, color: '#64748B', fontWeight: '500' },
+  bumpSummaryMapBtn: {
     flexDirection: 'row',
-    alignItems: 'center',
-    alignSelf: 'flex-start',
-    gap: 5,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: 999,
-    backgroundColor: themeColors.primaryMuted,
-    marginBottom: 10,
-  },
-  bumpSummaryBadgeText: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: themeColors.primary,
-  },
-  bumpSummaryIconWrap: {
-    width: 40,
-    height: 40,
-    borderRadius: 12,
-    backgroundColor: themeColors.primaryMuted,
     alignItems: 'center',
     justifyContent: 'center',
+    gap: 8,
+    marginTop: 12,
+    paddingVertical: 12,
+    paddingHorizontal: 20,
+    backgroundColor: themeColors.primary,
+    borderRadius: 12,
   },
-  bumpSummaryRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-  },
-  bumpSummaryText: { flex: 1 },
-  bumpSummaryTitle: { fontSize: 15, fontWeight: '700', color: '#0F172A' },
-  bumpSummarySub: { fontSize: 13, color: '#64748B', marginTop: 2, fontWeight: '500' },
-  bumpSummaryBudget: { alignItems: 'flex-end' },
-  bumpSummaryAmount: { fontSize: 15, fontWeight: '800', color: themeColors.primary },
-  bumpSummaryLabel: { fontSize: 10, color: '#94A3B8', marginTop: 2, fontWeight: '600' },
+  bumpSummaryMapBtnText: { fontSize: 15, fontWeight: '700', color: '#FFFFFF' },
 
   // ── Boarding pass hero (legacy) ──
   boardingPass: {
@@ -2407,34 +2899,34 @@ const styles = StyleSheet.create({
   },
   bpAdviceText: { fontSize: 15, color: '#92400E', lineHeight: 22, flex: 1, fontStyle: 'italic', fontWeight: '600' },
 
-  // ── Bump itinerary — compact ──
-  bumpItinSection: { marginBottom: 20 },
+  // ── Itinerary — simple, clean ──
+  bumpItinSection: { marginBottom: 16 },
   bumpItinSectionHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
-    marginBottom: 10,
-    paddingVertical: 10,
-    paddingHorizontal: 12,
-    borderRadius: 12,
+    gap: 8,
+    marginBottom: 8,
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    borderRadius: 10,
   },
   bumpItinSectionIconWrap: {
-    width: 30,
-    height: 30,
-    borderRadius: 8,
+    width: 28,
+    height: 28,
+    borderRadius: 7,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  bumpItinSectionTitle: { fontSize: 15, fontWeight: '800', flex: 1 },
+  bumpItinSectionTitle: { fontSize: 14, fontWeight: '700', flex: 1 },
   bumpItinSectionCountBadge: {
-    minWidth: 24,
-    height: 24,
-    borderRadius: 12,
+    minWidth: 20,
+    height: 20,
+    borderRadius: 10,
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 6,
   },
-  bumpItinSectionCountText: { fontSize: 12, fontWeight: '800', color: '#FFFFFF' },
+  bumpItinSectionCountText: { fontSize: 10, fontWeight: '800', color: '#FFFFFF' },
   bumpItinSectionCount: {
     fontSize: 13,
     color: '#94A3B8',
@@ -2443,81 +2935,121 @@ const styles = StyleSheet.create({
   },
   bumpItinCard: {
     backgroundColor: '#FFFFFF',
-    borderRadius: 14,
-    marginBottom: 12,
+    borderRadius: 12,
+    marginBottom: 8,
     overflow: 'hidden',
     borderWidth: 1,
-    borderColor: '#F1F5F9',
-    ...Platform.select({
-      ios: { shadowColor: '#0F172A', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.05, shadowRadius: 8 },
-      android: { elevation: 3 },
-    }),
+    borderColor: '#E2E8F0',
   },
-  bumpItinImageWrap: {
-    position: 'relative',
-    width: '100%',
-    height: 100,
-    backgroundColor: '#F1F5F9',
-  },
-  bumpItinImage: {
-    width: '100%',
-    height: '100%',
-  },
-  bumpItinImagePlaceholder: {
-    width: '100%',
-    height: '100%',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  bumpItinNumBadge: {
-    position: 'absolute',
-    top: 8,
-    left: 8,
-    width: 26,
-    height: 26,
-    borderRadius: 13,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  bumpItinRatingBadge: {
-    position: 'absolute',
-    bottom: 8,
-    right: 8,
+  bumpItinCardExpanded: { borderColor: 'rgba(200,16,46,0.2)' },
+  bumpItinRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 3,
-    paddingHorizontal: 6,
-    paddingVertical: 3,
-    borderRadius: 8,
-    backgroundColor: 'rgba(255,255,255,0.95)',
+    paddingVertical: 10,
+    paddingHorizontal: 12,
   },
-  bumpItinRatingText: { fontSize: 11, fontWeight: '700', color: '#0F172A' },
-  bumpItinNum: {
+  bumpItinNumCircle: {
     width: 26,
     height: 26,
     borderRadius: 13,
     alignItems: 'center',
     justifyContent: 'center',
+    marginRight: 10,
   },
   bumpItinNumText: { fontSize: 12, fontWeight: '800', color: '#FFFFFF' },
-  bumpItinContent: { padding: 12 },
-  bumpItinName: { fontSize: 15, fontWeight: '700', color: '#0F172A' },
-  bumpItinReason: { fontSize: 13, color: '#64748B', marginTop: 4, lineHeight: 18 },
-  bumpItinActions: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginTop: 10 },
-  bumpItinNavBtn: {
+  bumpItinThumbWrap: {
+    position: 'relative',
+    width: 44,
+    height: 44,
+    borderRadius: 8,
+    overflow: 'hidden',
+    marginRight: 10,
+  },
+  bumpItinThumb: {
+    width: '100%',
+    height: '100%',
+  },
+  bumpItinThumbPlaceholder: {
+    width: '100%',
+    height: '100%',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  bumpItinRatingPill: {
+    position: 'absolute',
+    bottom: 4,
+    paddingHorizontal: 4,
+    paddingVertical: 2,
+    borderRadius: 6,
+    backgroundColor: 'rgba(255,255,255,0.95)',
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
-    marginTop: 10,
-    alignSelf: 'flex-start',
+    gap: 2,
   },
-  bumpItinNavBtnText: { fontSize: 13, fontWeight: '600', color: themeColors.primary },
-  bumpItinProfileBtn: {
+  bumpItinRatingPillText: { fontSize: 9, fontWeight: '800', color: '#0F172A' },
+  bumpItinSummary: { flex: 1, minWidth: 0 },
+  bumpItinName: { fontSize: 14, fontWeight: '700', color: '#0F172A', marginBottom: 2 },
+  bumpItinReason: { fontSize: 12, color: '#64748B', lineHeight: 16 },
+  bumpItinActionRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 6 },
+  bumpItinActionIcon: { padding: 2 },
+  bumpItinChevron: { marginLeft: 4 },
+  bumpItinExpanded: {
+    borderTopWidth: 1,
+    borderTopColor: '#F1F5F9',
+    paddingHorizontal: 12,
+    paddingBottom: 12,
+    paddingTop: 10,
+  },
+  bumpItinExpandedImageWrap: {
+    width: '100%',
+    height: 100,
+    borderRadius: 10,
+    overflow: 'hidden',
+    backgroundColor: '#F8FAFC',
+    marginBottom: 10,
+  },
+  bumpItinExpandedScroll: { width: '100%', height: 100 },
+  bumpItinExpandedScrollContent: { flexGrow: 1 },
+  bumpItinExpandedSlide: {
+    width: SCREEN_WIDTH - 56,
+    height: 100,
+    position: 'relative',
+  },
+  bumpItinExpandedPlaceholder: {
+    width: '100%',
+    height: '100%',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  bumpItinExpandedReason: {
+    fontSize: 13,
+    color: '#64748B',
+    lineHeight: 20,
+    marginBottom: 10,
+  },
+  bumpItinExpandedActions: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+  },
+  bumpItinExpandedBtn: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
+    gap: 5,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 8,
   },
-  bumpItinProfileBtnText: { fontSize: 13, fontWeight: '600', color: themeColors.primary },
+  bumpItinExpandedBtnPrimary: {
+    backgroundColor: themeColors.primary,
+  },
+  bumpItinExpandedBtnPrimaryText: { fontSize: 13, fontWeight: '700', color: '#FFFFFF' },
+  bumpItinExpandedBtnSecondary: {
+    backgroundColor: 'rgba(200,16,46,0.08)',
+    borderWidth: 1,
+    borderColor: 'rgba(200,16,46,0.2)',
+  },
+  bumpItinExpandedBtnSecondaryText: { fontSize: 13, fontWeight: '600', color: themeColors.primary },
 
   // ── Itinerary section (legacy) ──
   itinSection: { marginBottom: 16 },
@@ -2581,25 +3113,17 @@ const styles = StyleSheet.create({
   },
   destARBtnText: { fontSize: 14, fontWeight: '700', color: themeColors.primary },
 
-  // ── Bump footer — compact, fun ──
+  // ── Bump footer — helpful hint ──
   bumpFooter: {
-    flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
     marginTop: 16,
-    paddingBottom: 8,
+    paddingVertical: 20,
+    paddingHorizontal: 24,
+    backgroundColor: 'rgba(248,250,252,0.8)',
+    borderRadius: 14,
+    marginBottom: 8,
   },
-  bumpFooterEmoji: {
-    width: 24,
-    height: 24,
-    borderRadius: 12,
-    backgroundColor: 'rgba(200,16,46,0.08)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  bumpFooterEmojiText: { fontSize: 14 },
-  bumpFooterText: { fontSize: 13, fontWeight: '600', color: '#64748B', fontStyle: 'italic' },
+  bumpFooterText: { fontSize: 13, fontWeight: '500', color: '#64748B', textAlign: 'center', lineHeight: 20 },
 
   // ── Passport stamp footer (legacy) ──
   stampFooter: { alignItems: 'center', marginTop: 28, paddingBottom: 12 },
@@ -2612,15 +3136,9 @@ const styles = StyleSheet.create({
   stampBottom: { fontSize: 9, fontWeight: '700', color: themeColors.primary, letterSpacing: 1.5, marginTop: 2 },
   stampTagline: { fontSize: 16, fontWeight: '600', color: '#475569', fontStyle: 'italic' },
 
-  // ── Map pins ──
-  mapPinWrap: {
-    alignItems: 'center',
-  },
-  mapPinRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-  },
+  // ── Map pins (legacy, kept for reference) ──
+  mapPinWrap: { alignItems: 'center' },
+  mapPinRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   mapPin: {
     flexDirection: 'row', alignItems: 'center', gap: 4,
     paddingHorizontal: 9, paddingVertical: 6, borderRadius: 16,
@@ -2628,22 +3146,119 @@ const styles = StyleSheet.create({
   },
   mapPinNum: { fontSize: 12, fontWeight: '800', color: '#FFFFFF' },
   mapPinLabel: {
-    maxWidth: 120,
+    maxWidth: 120, paddingHorizontal: 8, paddingVertical: 5, borderRadius: 10, borderWidth: 1.5,
+    backgroundColor: '#FFFFFF',
+    shadowColor: '#0F172A', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.15, shadowRadius: 4, elevation: 4,
+  },
+  mapPinLabelText: { fontSize: 12, fontWeight: '700' },
+  mapPinArrow: {
+    alignSelf: 'center', width: 0, height: 0,
+    borderLeftWidth: 6, borderRightWidth: 6, borderTopWidth: 8,
+    borderLeftColor: 'transparent', borderRightColor: 'transparent',
+  },
+
+  // ── Animated place markers (profile image + entrance animation) ──
+  animatedMarkerWrap: {
+    alignItems: 'center',
+  },
+  animatedMarkerPulseRing: {
+    position: 'absolute',
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    borderWidth: 3,
+    top: 2,
+  },
+  animatedMarkerAvatar: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    borderWidth: 3,
+    overflow: 'hidden',
+    backgroundColor: '#FFF',
+    shadowColor: '#0F172A',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.25,
+    shadowRadius: 8,
+    elevation: 8,
+  },
+  animatedMarkerImage: {
+    width: '100%',
+    height: '100%',
+    resizeMode: 'cover',
+  },
+  animatedMarkerIconBg: {
+    width: '100%',
+    height: '100%',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  animatedMarkerBadge: {
+    position: 'absolute',
+    bottom: -4,
+    right: -4,
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: '#FFF',
+  },
+  animatedMarkerBadgeText: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#FFF',
+  },
+  animatedMarkerLabel: {
+    marginTop: 6,
+    maxWidth: 110,
     paddingHorizontal: 8,
     paddingVertical: 5,
     borderRadius: 10,
     borderWidth: 1.5,
     backgroundColor: '#FFFFFF',
-    shadowColor: '#0F172A', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.15, shadowRadius: 4, elevation: 4,
+    shadowColor: '#0F172A',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.15,
+    shadowRadius: 4,
+    elevation: 4,
   },
-  mapPinLabelText: {
+  animatedMarkerLabelText: {
     fontSize: 12,
     fontWeight: '700',
   },
-  mapPinArrow: {
-    alignSelf: 'center', width: 0, height: 0,
-    borderLeftWidth: 6, borderRightWidth: 6, borderTopWidth: 8,
-    borderLeftColor: 'transparent', borderRightColor: 'transparent',
+  animatedMarkerArrow: {
+    alignSelf: 'center',
+    width: 0,
+    height: 0,
+    marginTop: 2,
+    borderLeftWidth: 6,
+    borderRightWidth: 6,
+    borderTopWidth: 8,
+    borderLeftColor: 'transparent',
+    borderRightColor: 'transparent',
+  },
+
+  // ── Radial marker menu (options surrounding pin) ──
+  radialMenuContainer: {
+    position: 'absolute',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  radialMenuBtn: {
+    position: 'absolute',
+    width: RADIAL_BTN,
+    height: RADIAL_BTN,
+    borderRadius: RADIAL_BTN / 2,
+    backgroundColor: themeColors.primary,
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#0F172A',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 8,
   },
 
   // ── Map scanning overlay (Hang tight) — route tracing + radar ──
@@ -2996,6 +3611,23 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  funSpinnerWrap: {
+    width: 88,
+    height: 88,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  funSpinnerDot: {
+    position: 'absolute',
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: '#FFFFFF',
+    ...Platform.select({
+      ios: { shadowColor: '#FFF', shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.8, shadowRadius: 6 },
+      android: { elevation: 4 },
+    }),
+  },
   planModalLoadingCenter: {
     position: 'relative',
     alignItems: 'center',
@@ -3015,11 +3647,15 @@ const styles = StyleSheet.create({
     width: 88,
     height: 88,
     borderRadius: 44,
-    backgroundColor: 'rgba(255,255,255,0.18)',
+    backgroundColor: 'rgba(255,255,255,0.12)',
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 2,
-    borderColor: 'rgba(255,255,255,0.4)',
+    borderColor: 'rgba(255,255,255,0.5)',
+    overflow: 'hidden',
+  },
+  planModalLoadingPulseGradient: {
+    borderRadius: 44,
   },
   planModalLoadingTitle: {
     fontSize: 26,
@@ -3093,15 +3729,35 @@ const styles = StyleSheet.create({
     fontWeight: '500',
   },
   planModalPreviewSection: {
-    marginTop: 20,
+    marginTop: 24,
     width: '100%',
   },
-  planModalPreviewTitle: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: 'rgba(255,255,255,0.9)',
-    marginBottom: 12,
+  planModalPreviewTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 14,
     paddingHorizontal: 4,
+  },
+  planModalMarqueeMask: {
+    width: '100%',
+    overflow: 'hidden',
+  },
+  planModalBannerWrap: {
+    width: '100%',
+    overflow: 'hidden',
+  },
+  planModalBannerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 4,
+  },
+  planModalPreviewTitle: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: 'rgba(255,255,255,0.95)',
+    marginBottom: 14,
+    paddingHorizontal: 4,
+    letterSpacing: 0.3,
   },
   planModalPreviewScroll: {
     paddingLeft: 4,
@@ -3110,27 +3766,35 @@ const styles = StyleSheet.create({
   },
   planModalPreviewCard: {
     width: 110,
-    borderRadius: 16,
+    borderRadius: 18,
     marginRight: 12,
-    backgroundColor: 'rgba(255,255,255,0.18)',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.3)',
+    backgroundColor: 'rgba(255,255,255,0.22)',
+    borderWidth: 1.5,
+    borderColor: 'rgba(255,255,255,0.4)',
     overflow: 'hidden',
     alignItems: 'center',
+    ...Platform.select({
+      ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.12, shadowRadius: 8 },
+      android: { elevation: 4 },
+    }),
   },
   planModalPreviewImage: {
     width: '100%',
-    height: 72,
-    backgroundColor: 'rgba(0,0,0,0.2)',
+    height: 76,
+    backgroundColor: 'rgba(255,255,255,0.15)',
+    borderTopLeftRadius: 18,
+    borderTopRightRadius: 18,
   },
   planModalPreviewIcon: {
-    width: 72,
-    height: 72,
-    backgroundColor: 'rgba(255,255,255,0.25)',
+    width: '100%',
+    height: 76,
+    backgroundColor: 'rgba(255,255,255,0.2)',
     alignItems: 'center',
     justifyContent: 'center',
+    borderTopLeftRadius: 18,
+    borderTopRightRadius: 18,
   },
-  planModalPreviewName: {
+  planModalBannerName: {
     fontSize: 12,
     fontWeight: '700',
     color: '#FFFFFF',
@@ -3138,7 +3802,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 8,
     paddingTop: 8,
   },
-  planModalPreviewTag: {
+  planModalBannerTag: {
     fontSize: 11,
     color: 'rgba(255,255,255,0.85)',
     marginTop: 4,
