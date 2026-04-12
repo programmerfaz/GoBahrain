@@ -4,25 +4,23 @@
  */
 
 export const colors = {
-  // Primary brand (Bahrain red — national identity)
   primary: '#C8102E',
   primaryLight: '#E63950',
+  primaryDark: '#9B0C23',
   primaryMuted: 'rgba(200, 16, 46, 0.12)',
 
-  // Neutrals
   background: '#F8FAFC',
   surface: '#FFFFFF',
   surfaceElevated: '#FFFFFF',
+  surfaceGlass: 'rgba(255, 255, 255, 0.85)',
   border: '#E2E8F0',
   borderLight: '#F1F5F9',
 
-  // Text
   textPrimary: '#0F172A',
   textSecondary: '#475569',
   textMuted: '#94A3B8',
   textInverse: '#FFFFFF',
 
-  // Semantic (muted, not bright)
   success: '#059669',
   successMuted: 'rgba(5, 150, 105, 0.12)',
   error: '#B91C1C',
@@ -30,26 +28,32 @@ export const colors = {
   warning: '#B45309',
   warningMuted: 'rgba(180, 83, 9, 0.1)',
 
-  // Time of day / categories (subdued)
   morning: '#B45309',
   afternoon: '#A61E32',
   evening: '#5B21B6',
   dining: '#B91C1C',
   event: '#9D174D',
 
-  // Map & transport
   route: '#C8102E',
   routeMuted: 'rgba(200, 16, 46, 0.2)',
-};
+
+  shimmerBase: '#E2E8F0',
+  shimmerHighlight: '#F1F5F9',
+
+  accent2: '#7C3AED',
+  accent3: '#0891B2',
+}
 
 export const colorsDark = {
   primary: '#E63950',
   primaryLight: '#F87171',
+  primaryDark: '#C8102E',
   primaryMuted: 'rgba(230, 57, 80, 0.2)',
 
   background: '#0F172A',
   surface: '#1E293B',
   surfaceElevated: '#334155',
+  surfaceGlass: 'rgba(15, 23, 42, 0.85)',
   border: '#334155',
   borderLight: '#475569',
 
@@ -73,7 +77,51 @@ export const colorsDark = {
 
   route: '#E63950',
   routeMuted: 'rgba(230, 57, 80, 0.3)',
-};
+
+  shimmerBase: '#1E293B',
+  shimmerHighlight: '#334155',
+
+  accent2: '#A78BFA',
+  accent3: '#22D3EE',
+}
+
+export const gradients = {
+  primaryButton: (isDark) => isDark
+    ? ['#E63950', '#C8102E']
+    : ['#E63950', '#C8102E'],
+  primarySoft: (isDark) => isDark
+    ? ['rgba(230,57,80,0.15)', 'rgba(230,57,80,0.05)']
+    : ['rgba(200,16,46,0.08)', 'rgba(200,16,46,0.02)'],
+  heroLight: ['#F8FAFC', '#EFF6FF', '#F8FAFC'],
+  heroDark: ['#0F172A', '#1A1033', '#0F172A'],
+  hero: (isDark) => isDark
+    ? ['#0F172A', '#1A1033', '#0F172A']
+    : ['#F8FAFC', '#EFF6FF', '#F8FAFC'],
+  cardGlow: (isDark) => isDark
+    ? ['rgba(230,57,80,0.12)', 'rgba(15,23,42,0)']
+    : ['rgba(200,16,46,0.06)', 'rgba(248,250,252,0)'],
+  avatarRing: ['#E63950', '#C8102E', '#7C3AED'],
+  onboardingBg: ['#0B1120', '#1A1033', '#0F172A'],
+  glassDark: ['rgba(30,41,59,0.8)', 'rgba(15,23,42,0.9)'],
+  glassLight: ['rgba(255,255,255,0.9)', 'rgba(248,250,252,0.95)'],
+}
+
+export const timing = {
+  fast: 150,
+  normal: 250,
+  slow: 400,
+  spring: { damping: 15, stiffness: 150 },
+  springBouncy: { damping: 12, stiffness: 180 },
+  springGentle: { damping: 20, stiffness: 100 },
+}
+
+export const radii = {
+  sm: 8,
+  md: 14,
+  lg: 20,
+  xl: 28,
+  full: 999,
+}
 
 export function getColors(isDark) {
   return isDark ? colorsDark : colors;

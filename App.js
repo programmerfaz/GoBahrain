@@ -1,33 +1,34 @@
-import { StatusBar } from 'expo-status-bar';
-import { GestureHandlerRootView } from 'react-native-gesture-handler';
-import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
-import { NavigationContainer } from '@react-navigation/native';
-import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
-import { createNativeStackNavigator } from '@react-navigation/native-stack';
-import { StyleSheet, View, ActivityIndicator, Text } from 'react-native';
-import HomeScreen from './src/screens/HomeScreen';
-import ExploreScreen from './src/screens/ExploreScreen';
-import AIPlanScreen from './src/screens/AIPlanScreen';
-import CommunitiesScreen from './src/screens/CommunitiesScreen';
-import ProfileScreen from './src/screens/ProfileScreen';
-import ARScreen from './src/screens/ARScreen';
-import OnboardingScreen from './src/screens/OnboardingScreen';
-import BottomControlBar from './src/components/BottomControlBar';
-import { ThemeProvider, useTheme } from './src/context/ThemeContext';
-import { UserPreferencesProvider, useUserPreferences } from './src/context/UserPreferencesContext';
-import { AuthProvider, useAuth } from './src/context/AuthContext';
-import { SavedPlacesProvider } from './src/context/SavedPlacesContext';
-import AuthScreen from './src/screens/AuthScreen';
+import React, { useRef, useEffect } from 'react'
+import { StatusBar } from 'expo-status-bar'
+import { GestureHandlerRootView } from 'react-native-gesture-handler'
+import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context'
+import { NavigationContainer } from '@react-navigation/native'
+import { createBottomTabNavigator } from '@react-navigation/bottom-tabs'
+import { createNativeStackNavigator } from '@react-navigation/native-stack'
+import { StyleSheet, View, Animated, Easing, Text } from 'react-native'
+import { LinearGradient } from 'expo-linear-gradient'
+import { Ionicons } from '@expo/vector-icons'
+import HomeScreen from './src/screens/HomeScreen'
+import ExploreScreen from './src/screens/ExploreScreen'
+import AIPlanScreen from './src/screens/AIPlanScreen'
+import CommunitiesScreen from './src/screens/CommunitiesScreen'
+import ProfileScreen from './src/screens/ProfileScreen'
+import ARScreen from './src/screens/ARScreen'
+import OnboardingScreen from './src/screens/OnboardingScreen'
+import BottomControlBar from './src/components/BottomControlBar'
+import { ThemeProvider, useTheme } from './src/context/ThemeContext'
+import { UserPreferencesProvider, useUserPreferences } from './src/context/UserPreferencesContext'
+import { AuthProvider, useAuth } from './src/context/AuthContext'
+import { SavedPlacesProvider } from './src/context/SavedPlacesContext'
+import AuthScreen from './src/screens/AuthScreen'
 
-const Tab = createBottomTabNavigator();
-const Stack = createNativeStackNavigator();
+const Tab = createBottomTabNavigator()
+const Stack = createNativeStackNavigator()
 
 function TabsNavigator() {
   return (
     <Tab.Navigator
-      screenOptions={{
-        headerShown: false,
-      }}
+      screenOptions={{ headerShown: false }}
       tabBar={(props) => <BottomControlBar {...props} />}
     >
       <Tab.Screen name="Home" component={HomeScreen} />
@@ -36,24 +37,65 @@ function TabsNavigator() {
       <Tab.Screen name="Community" component={CommunitiesScreen} />
       <Tab.Screen name="Profile" component={ProfileScreen} />
     </Tab.Navigator>
-  );
+  )
+}
+
+function SplashLoader() {
+  const { colors, isDark } = useTheme()
+  const pulse = useRef(new Animated.Value(0.4)).current
+  const logoScale = useRef(new Animated.Value(0.8)).current
+  const logoOpacity = useRef(new Animated.Value(0)).current
+
+  useEffect(() => {
+    Animated.parallel([
+      Animated.spring(logoScale, { toValue: 1, damping: 12, stiffness: 100, useNativeDriver: true }),
+      Animated.timing(logoOpacity, { toValue: 1, duration: 500, useNativeDriver: true }),
+    ]).start()
+
+    Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulse, { toValue: 1, duration: 800, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
+        Animated.timing(pulse, { toValue: 0.4, duration: 800, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
+      ])
+    ).start()
+  }, [pulse, logoScale, logoOpacity])
+
+  const bgColors = isDark
+    ? ['#0F172A', '#1A1033', '#0F172A']
+    : ['#F8FAFC', '#EFF6FF', '#F8FAFC']
+
+  return (
+    <View style={styles.loadingWrap}>
+      <LinearGradient colors={bgColors} style={StyleSheet.absoluteFill} />
+      <Animated.View style={{ transform: [{ scale: logoScale }], opacity: logoOpacity, alignItems: 'center' }}>
+        <View style={[styles.loadingLogo, { backgroundColor: `${colors.primary}15` }]}>
+          <Ionicons name="compass" size={36} color={colors.primary} />
+        </View>
+        <Text style={[styles.loadingBrand, { color: colors.primary }]}>Go Bahrain</Text>
+        <Animated.View style={{ opacity: pulse, marginTop: 20 }}>
+          <View style={[styles.loadingDots]}>
+            <View style={[styles.loadingDot, { backgroundColor: colors.primary }]} />
+            <View style={[styles.loadingDot, { backgroundColor: colors.primary, opacity: 0.6 }]} />
+            <View style={[styles.loadingDot, { backgroundColor: colors.primary, opacity: 0.3 }]} />
+          </View>
+        </Animated.View>
+      </Animated.View>
+    </View>
+  )
 }
 
 function AppContent() {
-  const { isAuthenticated, authLoading } = useAuth();
-  const { isOnboardingComplete, isLoading } = useUserPreferences();
-  const { isDark, colors } = useTheme();
+  const { isAuthenticated, authLoading } = useAuth()
+  const { isOnboardingComplete, isLoading } = useUserPreferences()
+  const { isDark } = useTheme()
 
   if (authLoading || isLoading) {
     return (
       <>
         <StatusBar style={isDark ? 'light' : 'dark'} />
-        <View style={[styles.loadingWrap, { backgroundColor: colors.background }]}>
-          <ActivityIndicator size="large" color={colors.primary} />
-          <Text style={[styles.loadingText, { color: colors.textSecondary }]}>Loading…</Text>
-        </View>
+        <SplashLoader />
       </>
-    );
+    )
   }
 
   if (!isAuthenticated) {
@@ -62,7 +104,7 @@ function AppContent() {
         <StatusBar style={isDark ? 'light' : 'dark'} />
         <AuthScreen />
       </>
-    );
+    )
   }
 
   if (!isOnboardingComplete) {
@@ -71,7 +113,7 @@ function AppContent() {
         <StatusBar style={isDark ? 'light' : 'dark'} />
         <OnboardingScreen />
       </>
-    );
+    )
   }
 
   return (
@@ -79,32 +121,35 @@ function AppContent() {
       <StatusBar style={isDark ? 'light' : 'dark'} />
       <Stack.Navigator screenOptions={{ headerShown: false }}>
         <Stack.Screen name="Tabs" component={TabsNavigator} />
-        <Stack.Screen name="AR" component={ARScreen} options={{ presentation: 'fullScreenModal' }} />
+        <Stack.Screen name="AR" component={ARScreen} options={({ route }) => ({
+          presentation: 'fullScreenModal',
+          animation: route.params?.fromExplore ? 'none' : 'default',
+        })} />
       </Stack.Navigator>
     </>
-  );
+  )
 }
 
 export default function App() {
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
-    <SafeAreaProvider>
-      <ThemeProvider>
-        <AuthProvider>
-          <SavedPlacesProvider>
-            <UserPreferencesProvider>
-              <SafeAreaView style={styles.safeArea} edges={['left', 'right']}>
-                <NavigationContainer>
-                  <AppContent />
-                </NavigationContainer>
-              </SafeAreaView>
-            </UserPreferencesProvider>
-          </SavedPlacesProvider>
-        </AuthProvider>
-      </ThemeProvider>
-    </SafeAreaProvider>
+      <SafeAreaProvider>
+        <ThemeProvider>
+          <AuthProvider>
+            <SavedPlacesProvider>
+              <UserPreferencesProvider>
+                <SafeAreaView style={styles.safeArea} edges={['left', 'right']}>
+                  <NavigationContainer>
+                    <AppContent />
+                  </NavigationContainer>
+                </SafeAreaView>
+              </UserPreferencesProvider>
+            </SavedPlacesProvider>
+          </AuthProvider>
+        </ThemeProvider>
+      </SafeAreaProvider>
     </GestureHandlerRootView>
-  );
+  )
 }
 
 const styles = StyleSheet.create({
@@ -113,9 +158,27 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    gap: 12,
   },
-  loadingText: {
-    fontSize: 15,
+  loadingLogo: {
+    width: 72,
+    height: 72,
+    borderRadius: 22,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 16,
   },
-});
+  loadingBrand: {
+    fontSize: 24,
+    fontWeight: '800',
+    letterSpacing: -0.5,
+  },
+  loadingDots: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  loadingDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
+})

@@ -300,7 +300,7 @@ const BAHRAIN_LANDMARKS = [
   { name: 'Bahrain World Trade Center', lat: 26.2394, lng: 50.5778, category: 'Landmark', description: 'Iconic twin towers with integrated wind turbines. First skyscraper to harness wind power.' },
   { name: 'Tree of Life', lat: 26.0444, lng: 50.5598, category: 'Natural Wonder', description: '400-year-old tree standing alone in the desert. A mysterious natural landmark.' },
   { name: 'Bab Al Bahrain', lat: 26.2333, lng: 50.5756, category: 'Heritage', description: 'Gateway to Manama Souq. Historic twin-arched entrance to the traditional marketplace.' },
-  { name: 'Bahrain International Circuit', lat: 26.0322, lng: 50.5099, category: 'Sports', description: 'First F1 Grand Prix in the Middle East. Sakhir Tower offers 360° track views.' },
+  { name: 'Al Areen Wildlife Park', lat: 25.9920, lng: 50.5185, category: 'Nature', description: 'Protected reserve with Arabian wildlife and desert landscapes — a calm family-friendly escape south of Manama.' },
   { name: 'Beit Al Quran', lat: 26.2233, lng: 50.5833, category: 'Museum', description: 'Houses one of the finest collections of ancient Qurans in the region.' },
   { name: 'Manama Souq', lat: 26.2283, lng: 50.5783, category: 'Heritage', description: 'Traditional marketplace with narrow streets, local crafts, and authentic Bahraini atmosphere.' },
   { name: 'Bahrain Pearling Trail', lat: 26.2333, lng: 50.5500, category: 'UNESCO Heritage', description: 'UNESCO World Heritage Site. Historic pearling tradition of the Gulf.' },
@@ -403,7 +403,7 @@ export async function fetchNearbyPOIs(userLat, userLng, mode = 'all', options = 
         cuisine_type: row.cuisine_type || row.cuisine,
       },
       _type,
-      _isLandmark: _type === 'landmark' || (row.category && ['UNESCO Heritage', 'Landmark', 'Museum', 'Heritage', 'Natural Wonder'].includes(row.category)),
+      _isLandmark: _type === 'landmark' || (row.category && ['UNESCO Heritage', 'Landmark', 'Museum', 'Heritage', 'Natural Wonder', 'Nature'].includes(row.category)),
     };
   };
 
@@ -455,7 +455,7 @@ export async function fetchNearbyPOIs(userLat, userLng, mode = 'all', options = 
         distanceKm: dist,
         bearing: bear,
         _type: type,
-        _isLandmark: item._isLandmark || (type === 'landmark') || (item.category && ['UNESCO Heritage', 'Landmark', 'Museum', 'Heritage', 'Natural Wonder'].includes(item.category)),
+        _isLandmark: item._isLandmark || (type === 'landmark') || (item.category && ['UNESCO Heritage', 'Landmark', 'Museum', 'Heritage', 'Natural Wonder', 'Nature'].includes(item.category)),
       };
     })
     .filter(Boolean)
@@ -567,6 +567,7 @@ For each stop return:
 - "reason": a warm 1-2 sentence description of WHY you chose this spot for this time. For events, mention the event vibe and timing.
 
 IMPORTANT: You MUST include "lat" and "lng" for every spot. Copy the Lat/Lng values exactly from the place data provided.
+Bahrain latitude is always ~26 (never ~50). Bahrain longitude is always ~50 (never ~26). Never swap lat and lng.
 
 Reply ONLY with a valid JSON array, NO markdown, NO extra text:
 [

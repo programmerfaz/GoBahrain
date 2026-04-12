@@ -378,16 +378,17 @@ Reply: 1-3 short sentences, friendly, and often end with an offer (e.g. "Want me
 export default function BottomControlBar({ state, navigation }) {
   const { colors, isDark } = useTheme();
   const themeStyles = React.useMemo(() => ({
-    wrapper: { backgroundColor: colors.background },
+    wrapper: { backgroundColor: 'transparent' },
     bar: {
-      backgroundColor: colors.surface,
-      borderTopColor: colors.border,
+      backgroundColor: isDark ? 'rgba(15,23,42,0.95)' : 'rgba(255,255,255,0.92)',
+      borderTopColor: isDark ? 'rgba(51,65,85,0.5)' : 'rgba(226,232,240,0.6)',
+      backdropFilter: 'blur(20px)',
     },
     navLabel: { color: colors.textMuted },
-    navLabelActive: { color: colors.primary },
+    navLabelActive: { color: colors.primary, fontWeight: '700' },
     fab: {
       backgroundColor: isDark ? colors.surfaceElevated : '#111827',
-      borderColor: colors.border,
+      borderColor: isDark ? 'rgba(51,65,85,0.6)' : 'rgba(255,255,255,0.9)',
     },
     fabLabel: { color: colors.textMuted },
     swipeUpRingTrack: { borderColor: colors.primaryMuted },
@@ -395,10 +396,10 @@ export default function BottomControlBar({ state, navigation }) {
     khalidCardLinkText: { color: colors.primary },
     khalidHeaderAvatar: {
       backgroundColor: colors.primary,
-      ...Platform.select({ ios: { shadowColor: colors.primary, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.2, shadowRadius: 8 }, android: { elevation: 4 } }),
+      ...Platform.select({ ios: { shadowColor: colors.primary, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.25, shadowRadius: 10 }, android: { elevation: 4 } }),
     },
-    khalidSendBtn: Platform.OS === 'ios' ? { shadowColor: colors.primary, shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.2, shadowRadius: 6 } : {},
-  }), [colors, isDark]);
+    khalidSendBtn: Platform.OS === 'ios' ? { shadowColor: colors.primary, shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.25, shadowRadius: 8 } : {},
+  }), [colors, isDark])
   const insets = useSafeAreaInsets();
   const currentRouteName = state.routes[state.index]?.name;
   const { generalLabels, activityLabels, foodLabels } = useUserPreferences();
@@ -938,7 +939,7 @@ export default function BottomControlBar({ state, navigation }) {
   const navItems = [
     { screen: 'Home', icon: 'home', label: 'Home' },
     { screen: 'Explore', icon: 'compass', label: 'Explore' },
-    null, // center slot for AI FAB (AI Plan)
+    null, // center slot for AI Plan
     { screen: 'Community', icon: 'people', label: 'Community' },
     { screen: 'Profile', icon: 'person-circle-outline', label: 'Profile' },
   ];
@@ -1008,7 +1009,7 @@ export default function BottomControlBar({ state, navigation }) {
                       <Image
                         source={require('../../assets/ai-button-logo.png')}
                         style={styles.aiIcon}
-                        resizeMode="contain"
+                        resizeMode="cover"
                       />
                     </View>
                   </View>

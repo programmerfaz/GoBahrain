@@ -1,60 +1,64 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import {
   StyleSheet,
   Text,
   View,
   TouchableOpacity,
   useWindowDimensions,
-  ActivityIndicator,
+  Dimensions,
   Platform,
   Modal,
   ScrollView,
   Linking,
   Animated,
+  Easing,
   Pressable,
   Share,
   Vibration,
-} from 'react-native';
-import Slider from '@react-native-community/slider';
-import { CameraView, useCameraPermissions } from 'expo-camera';
-import { BlurView } from 'expo-blur';
-import * as Location from 'expo-location';
-import { Ionicons } from '@expo/vector-icons';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useRoute } from '@react-navigation/native';
-import { fetchNearbyPOIs } from '../services/aiPipeline';
-import ClientProfileModal from '../components/ClientProfileModal';
-import { useSavedPlaces } from '../context/SavedPlacesContext';
-import { colors as themeColors } from '../theme/designTokens';
-import { useTheme } from '../context/ThemeContext';
-
-const FUN_HINTS = [
-  'Turn around — adventure awaits! 🧭',
-  'The arrow knows the way. Follow it!',
-  'Closer spots = quicker discoveries',
-  'Yalla! Point your camera and explore',
-  'Saved places show in the Saved tab',
-  'Quiet cafés have a cool blue glow',
-  'Busy now? Warm orange = lively spot',
-];
+} from 'react-native'
+import Slider from '@react-native-community/slider'
+import { CameraView, useCameraPermissions } from 'expo-camera'
+import { BlurView } from 'expo-blur'
+import { LinearGradient } from 'expo-linear-gradient'
+import * as Location from 'expo-location'
+import { Ionicons } from '@expo/vector-icons'
+import { useSafeAreaInsets } from 'react-native-safe-area-context'
+import { useRoute } from '@react-navigation/native'
+import { fetchNearbyPOIs, fetchEvents } from '../services/aiPipeline'
+import ClientProfileModal from '../components/ClientProfileModal'
+import { useSavedPlaces } from '../context/SavedPlacesContext'
+import { colors as themeColors } from '../theme/designTokens'
+import { useTheme } from '../context/ThemeContext'
 
 const C = {
   accent: themeColors.primary,
+  accentLight: '#E63950',
   text: '#FFFFFF',
   sub: 'rgba(255,255,255,0.85)',
-  card: 'rgba(0,0,0,0.75)',
-  cardBorder: 'rgba(255,255,255,0.3)',
-  glow: 'rgba(200, 16, 46, 0.4)',
-  busy: themeColors.morning,
-  quiet: themeColors.afternoon,
-};
+  dimText: 'rgba(255,255,255,0.45)',
+  card: 'rgba(12,12,18,0.88)',
+  cardBorder: 'rgba(255,255,255,0.10)',
+  glass: 'rgba(16,16,24,0.80)',
+  glassBorder: 'rgba(255,255,255,0.07)',
+  glow: 'rgba(230, 57, 80, 0.30)',
+  busy: '#F59E0B',
+  quiet: '#0EA5E9',
+  landmark: '#A78BFA',
+  event: '#F472B6',
+  food: '#F59E0B',
+  success: '#10B981',
+}
+
+const DOOR_W = Dimensions.get('window').width
+const DOOR_H = Dimensions.get('window').height
 
 const MODES = [
-  { id: 'landmarks', label: 'Landmarks', icon: 'business' },
-  { id: 'all', label: 'All', icon: 'compass' },
-  { id: 'food', label: 'Food & Events', icon: 'restaurant' },
-  { id: 'saved', label: 'Saved', icon: 'bookmark' },
-];
+  { id: 'all', label: 'All', icon: 'globe-outline', color: C.accentLight },
+  { id: 'places', label: 'Places', icon: 'business-outline', color: C.landmark },
+  { id: 'restaurants', label: 'Food', icon: 'restaurant-outline', color: C.food },
+  { id: 'events', label: 'Events', icon: 'calendar-outline', color: C.event },
+  { id: 'saved', label: 'Saved', icon: 'heart-outline', color: C.success },
+]
 
 const LANDMARK_HERITAGE = {
   'Bahrain Fort (Qal\'at al-Bahrain)': { fact: 'Ancient Dilmun capital and UNESCO World Heritage Site.', didYouKnow: 'Over 4,000 years of history — one of the most important archaeological sites in the Gulf.' },
@@ -66,325 +70,430 @@ const LANDMARK_HERITAGE = {
   'Manama Souq': { fact: 'Traditional marketplace in the heart of Manama.', didYouKnow: 'Narrow streets, local crafts, and the best place for authentic Bahraini atmosphere.' },
   'Bahrain Pearling Trail': { fact: 'UNESCO World Heritage Site.', didYouKnow: 'Celebrates the historic pearling tradition that shaped the Gulf economy.' },
   'Beit Al Quran': { fact: 'Museum of Islamic calligraphy and Qurans.', didYouKnow: 'One of the finest collections of ancient Qurans in the region.' },
-  'Bahrain International Circuit': { fact: 'Home of the F1 Gulf Air Bahrain Grand Prix.', didYouKnow: 'First F1 race in the Middle East; Sakhir Tower offers 360° track views.' },
-};
-
-const CAMERA_FOV_DEG = 55;
-
-function POIMarker({ poi, x, y, onPress, isNearest, index, isBusy }) {
-  const fadeAnim = useRef(new Animated.Value(0)).current;
-  const scaleAnim = useRef(new Animated.Value(0.85)).current;
-  const pulseAnim = useRef(new Animated.Value(1)).current;
-
-  useEffect(() => {
-    Animated.parallel([
-      Animated.timing(fadeAnim, {
-        toValue: 1,
-        duration: 280,
-        delay: index * 40,
-        useNativeDriver: true,
-      }),
-      Animated.spring(scaleAnim, {
-        toValue: 1,
-        friction: 8,
-        tension: 80,
-        delay: index * 40,
-        useNativeDriver: true,
-      }),
-    ]).start();
-  }, [fadeAnim, scaleAnim, index]);
-
-  useEffect(() => {
-    if (!isNearest) return;
-    const pulse = Animated.loop(
-      Animated.sequence([
-        Animated.timing(pulseAnim, { toValue: 1.06, duration: 1200, useNativeDriver: true }),
-        Animated.timing(pulseAnim, { toValue: 1, duration: 1200, useNativeDriver: true }),
-      ])
-    );
-    pulse.start();
-    return () => pulse.stop();
-  }, [isNearest, pulseAnim]);
-
-  const distText = poi.distanceKm < 1
-    ? `${Math.round(poi.distanceKm * 1000)}m`
-    : `${poi.distanceKm.toFixed(1)}km`;
-  const isLandmark = poi._isLandmark || poi._type === 'landmark';
-  const icon = poi._type === 'event' ? 'calendar' : poi._type === 'restaurant' ? 'restaurant' : isLandmark ? 'business' : 'location';
-
-  return (
-    <Animated.View
-      style={[
-        styles.markerWrap,
-        { left: x, top: y, opacity: fadeAnim, transform: [{ scale: isNearest ? pulseAnim : scaleAnim }] },
-      ]}
-    >
-      {isNearest && <View style={styles.markerGlow} />}
-      <TouchableOpacity
-        style={[
-          styles.marker,
-          isLandmark && styles.markerLandmark,
-          isNearest && styles.markerNearest,
-          isBusy && styles.markerBusy,
-          isBusy === false && styles.markerQuiet,
-        ]}
-        onPress={() => onPress?.(poi)}
-        activeOpacity={0.9}
-      >
-        {isNearest && (
-          <View style={styles.nearestBadge}>
-            <Ionicons name="navigate" size={10} color="#FFF" />
-            <Text style={styles.nearestBadgeText}>Nearest</Text>
-          </View>
-        )}
-        <View style={styles.markerRow}>
-          <View style={[styles.markerIcon, isLandmark && styles.markerIconLandmark]}>
-            <Ionicons name={icon} size={isLandmark ? 14 : 12} color={C.accent} />
-          </View>
-          <Text style={[styles.markerName, isLandmark && styles.markerNameLandmark]} numberOfLines={1}>{poi.name}</Text>
-        </View>
-        <Text style={styles.markerDist}>{distText}</Text>
-      </TouchableOpacity>
-    </Animated.View>
-  );
+  'Al Areen Wildlife Park': { fact: 'Protected reserve with native wildlife and desert scenery.', didYouKnow: 'A quiet contrast to the city — gazelles, oryx, and walking trails in the southern governorate.' },
 }
 
-function NavigateToBanner({ destination, userLat, userLng, heading, getWalkingTime, onDismiss }) {
-  if (!destination || userLat == null || userLng == null) return null;
-  const R = 6371;
-  const dLat = ((destination.lat - userLat) * Math.PI) / 180;
-  const dLon = ((destination.lng - userLng) * Math.PI) / 180;
-  const y = Math.sin(dLon) * Math.cos((destination.lat * Math.PI) / 180);
-  const x = Math.cos((userLat * Math.PI) / 180) * Math.sin((destination.lat * Math.PI) / 180) -
-    Math.sin((userLat * Math.PI) / 180) * Math.cos((destination.lat * Math.PI) / 180) * Math.cos(dLon);
-  const bearing = ((Math.atan2(y, x) * 180) / Math.PI + 360) % 360;
-  const distKm = R * 2 * Math.atan2(Math.sqrt(Math.sin(dLat / 2) ** 2 + Math.cos((userLat * Math.PI) / 180) * Math.cos((destination.lat * Math.PI) / 180) * Math.sin(dLon / 2) ** 2), Math.sqrt(1 - (Math.sin(dLat / 2) ** 2 + Math.cos((userLat * Math.PI) / 180) * Math.cos((destination.lat * Math.PI) / 180) * Math.sin(dLon / 2) ** 2)));
-  const relBearing = (bearing - heading + 360) % 360;
-  const inView = Math.min(relBearing, 360 - relBearing) <= CAMERA_FOV_DEG / 2;
+const CAMERA_FOV_DEG = 55
+
+const getPoiColor = (poi) => {
+  if (poi._isLandmark || poi._type === 'landmark') return C.landmark
+  if (poi._type === 'event') return C.event
+  if (poi._type === 'restaurant') return C.food
+  return C.accentLight
+}
+
+const getPoiIcon = (poi) => {
+  if (poi._type === 'event') return 'calendar'
+  if (poi._type === 'restaurant') return 'restaurant'
+  if (poi._isLandmark || poi._type === 'landmark') return 'business'
+  return 'location'
+}
+
+const getWalkingTime = (km) => {
+  const mins = Math.round((km / 5) * 60)
+  if (mins < 1) return '<1 min'
+  if (mins < 60) return `${mins} min`
+  return `${Math.floor(mins / 60)}h ${mins % 60}m`
+}
+
+const getDistText = (km) => km < 1 ? `${Math.round(km * 1000)}m` : `${km.toFixed(1)}km`
+
+const getIsBusy = (poi) => {
+  const hour = new Date().getHours()
+  if ((poi._type || '') !== 'restaurant') return null
+  if ((hour >= 11 && hour <= 14) || (hour >= 19 && hour <= 22)) return true
+  if (hour >= 14 && hour <= 17) return false
+  return Math.random() > 0.5
+}
+
+/* ─── Scanning Loader ─── */
+function ScanningLoader() {
+  const ring1 = useRef(new Animated.Value(0.4)).current
+  const ring2 = useRef(new Animated.Value(0.3)).current
+  const ring3 = useRef(new Animated.Value(0.2)).current
+  const iconSpin = useRef(new Animated.Value(0)).current
+
+  useEffect(() => {
+    const pulse = (anim, delay) => Animated.loop(Animated.sequence([
+      Animated.delay(delay),
+      Animated.timing(anim, { toValue: 1, duration: 1200, easing: Easing.out(Easing.ease), useNativeDriver: true }),
+      Animated.timing(anim, { toValue: 0.2, duration: 1200, easing: Easing.in(Easing.ease), useNativeDriver: true }),
+    ]))
+    pulse(ring1, 0).start()
+    pulse(ring2, 300).start()
+    pulse(ring3, 600).start()
+    Animated.loop(
+      Animated.timing(iconSpin, { toValue: 1, duration: 3000, easing: Easing.linear, useNativeDriver: true })
+    ).start()
+  }, [ring1, ring2, ring3, iconSpin])
+
+  const spin = iconSpin.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '360deg'] })
+
   return (
-    <View style={styles.navigateBanner}>
-      <View style={styles.navigateBannerInner}>
-        <View style={styles.navigateBannerArrowWrap}>
-          <Ionicons name="navigate" size={36} color={C.accent} style={{ transform: [{ rotate: `${relBearing}deg` }] }} />
-        </View>
-        <View style={styles.navigateBannerText}>
-          <Text style={styles.navigateBannerTitle}>{destination.name}</Text>
-          <Text style={styles.navigateBannerSub}>
-            {inView ? 'Walk toward the arrow on screen' : `Turn until you see the arrow (${Math.round(relBearing)}° ${relBearing > 180 ? 'left' : 'right'})`}
-          </Text>
-          <Text style={styles.navigateBannerDist}>{distKm < 1 ? `${Math.round(distKm * 1000)}m` : `${distKm.toFixed(1)}km`} · {getWalkingTime(distKm)}</Text>
-        </View>
-        {onDismiss ? (
-          <TouchableOpacity style={styles.navigateBannerClose} onPress={onDismiss} hitSlop={12}>
-            <Ionicons name="close" size={24} color={C.sub} />
-          </TouchableOpacity>
-        ) : null}
-      </View>
+    <View style={ls.wrap}>
+      <Animated.View style={[ls.ring, ls.ring3, { opacity: ring3, transform: [{ scale: ring3.interpolate({ inputRange: [0.2, 1], outputRange: [0.6, 1.3] }) }] }]} />
+      <Animated.View style={[ls.ring, ls.ring2, { opacity: ring2, transform: [{ scale: ring2.interpolate({ inputRange: [0.2, 1], outputRange: [0.7, 1.2] }) }] }]} />
+      <Animated.View style={[ls.ring, ls.ring1, { opacity: ring1, transform: [{ scale: ring1.interpolate({ inputRange: [0.2, 1], outputRange: [0.8, 1.1] }) }] }]} />
+      <Animated.View style={[ls.iconWrap, { transform: [{ rotate: spin }] }]}>
+        <Ionicons name="scan-outline" size={36} color={C.accent} />
+      </Animated.View>
+      <Text style={ls.title}>Scanning area</Text>
+      <Text style={ls.sub}>Discovering places around you</Text>
     </View>
-  );
+  )
 }
 
-function CompassRing({ heading, nearestOutOfView, centerY }) {
-  const size = 72;
-  const radius = size / 2;
-  const needleRotate = useRef(new Animated.Value(0)).current;
-  useEffect(() => {
-    Animated.timing(needleRotate, {
-      toValue: heading,
-      duration: 220,
-      useNativeDriver: true,
-    }).start();
-  }, [heading, needleRotate]);
+const ls = StyleSheet.create({
+  wrap: { ...StyleSheet.absoluteFillObject, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(0,0,0,0.6)' },
+  ring: { position: 'absolute', borderWidth: 1.5, borderColor: C.accent },
+  ring1: { width: 100, height: 100, borderRadius: 50 },
+  ring2: { width: 140, height: 140, borderRadius: 70 },
+  ring3: { width: 180, height: 180, borderRadius: 90 },
+  iconWrap: { marginBottom: 20 },
+  title: { color: '#FFF', fontSize: 17, fontWeight: '700', letterSpacing: 0.5 },
+  sub: { color: C.dimText, fontSize: 13, marginTop: 6 },
+})
 
-  const needleRotateInterpolate = needleRotate.interpolate({
-    inputRange: [0, 360],
-    outputRange: ['0deg', '360deg'],
-  });
+/* ─── POI Marker ─── */
+function POIMarker({ poi, x, y, onPress, isNearest, index, isBusy }) {
+  const anim = useRef(new Animated.Value(0)).current
+  const pulse = useRef(new Animated.Value(1)).current
+  const poiColor = getPoiColor(poi)
+  const icon = getPoiIcon(poi)
+
+  useEffect(() => {
+    Animated.spring(anim, { toValue: 1, damping: 14, stiffness: 120, delay: index * 40, useNativeDriver: true }).start()
+  }, [anim, index])
+
+  useEffect(() => {
+    if (!isNearest) return
+    const p = Animated.loop(Animated.sequence([
+      Animated.timing(pulse, { toValue: 1.06, duration: 900, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
+      Animated.timing(pulse, { toValue: 1, duration: 900, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
+    ]))
+    p.start()
+    return () => p.stop()
+  }, [isNearest, pulse])
+
+  const scale = anim.interpolate({ inputRange: [0, 1], outputRange: [0.5, 1] })
 
   return (
-    <View style={[styles.compassWrap, { left: 16, top: centerY - radius - 80 }]}>
-      <BlurView intensity={60} tint="dark" style={styles.compassBlur}>
-        <View style={[styles.compassCircle, { width: size, height: size, borderRadius: radius }]}>
-          <View style={[styles.compassN, { top: 4 }]}>
-            <Text style={styles.compassNText}>N</Text>
+    <Animated.View style={[mk.wrap, { left: x, top: y, opacity: anim, transform: [{ scale: isNearest ? pulse : scale }] }]}>
+      <TouchableOpacity style={[mk.card, isNearest && { borderColor: `${poiColor}60` }]} onPress={() => onPress?.(poi)} activeOpacity={0.85}>
+        <View style={[mk.iconBg, { backgroundColor: `${poiColor}20` }]}>
+          <Ionicons name={icon} size={11} color={poiColor} />
+        </View>
+        <Text style={mk.name} numberOfLines={1}>{poi.name}</Text>
+        <Text style={mk.dist}>{getDistText(poi.distanceKm)}</Text>
+      </TouchableOpacity>
+      <View style={[mk.stem, { backgroundColor: `${poiColor}30` }]} />
+    </Animated.View>
+  )
+}
+
+const mk = StyleSheet.create({
+  wrap: { position: 'absolute', alignItems: 'center' },
+  card: {
+    flexDirection: 'row', alignItems: 'center', gap: 5,
+    paddingVertical: 6, paddingHorizontal: 8,
+    backgroundColor: C.card, borderRadius: 10, borderWidth: 1, borderColor: C.glassBorder,
+    ...Platform.select({
+      ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.35, shadowRadius: 6 },
+      android: { elevation: 6 },
+    }),
+  },
+  iconBg: { width: 18, height: 18, borderRadius: 6, alignItems: 'center', justifyContent: 'center' },
+  name: { color: '#FFF', fontSize: 10, fontWeight: '700', maxWidth: 80 },
+  dist: { color: C.dimText, fontSize: 9, fontWeight: '600' },
+  stem: { width: 1, height: 8, opacity: 0.5 },
+})
+
+/* ─── Navigate Banner ─── */
+function NavigateToBanner({ destination, userLat, userLng, heading, onDismiss }) {
+  if (!destination || userLat == null || userLng == null) return null
+  const dLon = ((destination.lng - userLng) * Math.PI) / 180
+  const y2 = Math.sin(dLon) * Math.cos((destination.lat * Math.PI) / 180)
+  const x2 = Math.cos((userLat * Math.PI) / 180) * Math.sin((destination.lat * Math.PI) / 180) -
+    Math.sin((userLat * Math.PI) / 180) * Math.cos((destination.lat * Math.PI) / 180) * Math.cos(dLon)
+  const bearing = ((Math.atan2(y2, x2) * 180) / Math.PI + 360) % 360
+  const dLat = ((destination.lat - userLat) * Math.PI) / 180
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos((userLat * Math.PI) / 180) * Math.cos((destination.lat * Math.PI) / 180) * Math.sin(dLon / 2) ** 2
+  const distKm = 6371 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
+  const relBearing = (bearing - heading + 360) % 360
+  const inView = Math.min(relBearing, 360 - relBearing) <= CAMERA_FOV_DEG / 2
+
+  return (
+    <View style={nb.wrap}>
+      <BlurView intensity={Platform.OS === 'ios' ? 50 : 0} tint="dark" style={nb.blur}>
+        <View style={nb.inner}>
+          <View style={nb.arrowWrap}>
+            <LinearGradient colors={[`${C.accent}25`, 'transparent']} style={StyleSheet.absoluteFill} />
+            <Ionicons name="navigate" size={28} color={C.accent} style={{ transform: [{ rotate: `${relBearing}deg` }] }} />
           </View>
-          <Animated.View style={[styles.compassNeedle, { transform: [{ rotate: needleRotateInterpolate }] }]}>
-            <Ionicons name="navigate" size={22} color={C.accent} />
-          </Animated.View>
+          <View style={nb.textCol}>
+            <Text style={nb.title} numberOfLines={1}>{destination.name}</Text>
+            <Text style={nb.sub}>
+              {inView ? 'Walk toward the arrow' : `Turn ${Math.round(relBearing > 180 ? 360 - relBearing : relBearing)}° ${relBearing > 180 ? 'left' : 'right'}`}
+            </Text>
+            <View style={nb.pills}>
+              <View style={nb.pill}><Ionicons name="walk" size={11} color={C.accent} /><Text style={nb.pillText}>{getWalkingTime(distKm)}</Text></View>
+              <View style={nb.pill}><Ionicons name="navigate-outline" size={11} color={C.dimText} /><Text style={nb.pillText}>{getDistText(distKm)}</Text></View>
+            </View>
+          </View>
+          {onDismiss && (
+            <TouchableOpacity style={nb.closeBtn} onPress={onDismiss} hitSlop={12}>
+              <Ionicons name="close" size={18} color={C.dimText} />
+            </TouchableOpacity>
+          )}
         </View>
       </BlurView>
-      {nearestOutOfView && (
-        <View style={styles.compassHint}>
-          <Ionicons name="arrow-redo" size={12} color={C.sub} />
-          <Text style={styles.compassHintText} numberOfLines={1}>Turn to see {nearestOutOfView.name}</Text>
-        </View>
-      )}
     </View>
-  );
+  )
 }
 
-function POIDetailModal({ visible, poi, onClose, onRequestClose, insets, openDirections, getWalkingTime, onViewProfile, onToggleSave, isSaved, heritage }) {
-  if (!poi) return null;
-  const dismiss = onRequestClose || onClose;
-  const clientId = poi.client_a_uuid || poi.id;
-  const hasProfile = Boolean(clientId);
-  const m = poi.metadata || poi;
-  const isLandmark = poi._isLandmark || poi._type === 'landmark' || poi.category;
-  const typeLabel = poi._type === 'event' ? 'Event' : poi._type === 'restaurant' ? 'Restaurant' : isLandmark ? (m.category || poi.category || 'Landmark') : 'Place';
-  const typeIcon = poi._type === 'event' ? 'calendar' : poi._type === 'restaurant' ? 'restaurant' : isLandmark ? 'business' : 'compass';
-  const phone = m?.phone || poi?.phone || '';
-  const menuUrl = m?.menu_url || poi?.menu_url || m?.website || poi?.website || '';
-  const heritageInfo = heritage || LANDMARK_HERITAGE[poi.name];
+const nb = StyleSheet.create({
+  wrap: { position: 'absolute', top: 100, left: 12, right: 12, zIndex: 10 },
+  blur: { borderRadius: 18, overflow: 'hidden', borderWidth: 1, borderColor: `${C.accent}25` },
+  inner: { flexDirection: 'row', alignItems: 'center', padding: 12, backgroundColor: Platform.OS === 'android' ? C.glass : 'transparent' },
+  arrowWrap: { width: 48, height: 48, borderRadius: 14, alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
+  textCol: { flex: 1, marginLeft: 10 },
+  title: { color: '#FFF', fontSize: 15, fontWeight: '800', marginBottom: 2 },
+  sub: { color: C.sub, fontSize: 12 },
+  pills: { flexDirection: 'row', gap: 6, marginTop: 5 },
+  pill: { flexDirection: 'row', alignItems: 'center', gap: 3, backgroundColor: 'rgba(255,255,255,0.07)', paddingHorizontal: 7, paddingVertical: 2.5, borderRadius: 7 },
+  pillText: { color: C.sub, fontSize: 10, fontWeight: '600' },
+  closeBtn: { padding: 6, marginLeft: 2 },
+})
 
-  const handleShare = () => {
-    Share.share({
-      title: poi.name,
-      message: `${poi.name} — ${poi.distanceKm < 1 ? Math.round(poi.distanceKm * 1000) + 'm' : poi.distanceKm.toFixed(1) + 'km'} away. Explore with Go Bahrain!`,
-      url: `https://www.google.com/maps/search/?api=1&query=${poi.lat},${poi.lng}`,
-    }).catch(() => {});
-  };
-  const handleCall = () => {
-    const tel = phone.replace(/\D/g, '');
-    if (tel.length >= 8) Linking.openURL(`tel:${tel}`).catch(() => {});
-  };
-  const distText = poi.distanceKm < 1
-    ? `${Math.round(poi.distanceKm * 1000)}m away`
-    : `${poi.distanceKm.toFixed(1)} km away`;
-  const venue = m.venue || m.location || m.area || poi.location || '';
-  const desc = m.description || poi.description || '';
-  const cuisine = m.cuisine || m.cuisine_type || '';
-  const priceRange = m.price_range || '';
-  const rating = m.rating != null && m.rating !== '' ? Number(m.rating) : null;
-  const eventType = m.event_type || '';
-  const time = [m.start_time, m.end_time].filter(Boolean).join(' – ');
-  const date = m.start_date || m.end_date || '';
+/* ─── Radar Navigator ─── */
+function RadarNavigator({ heading, basePois, maxDistanceKm, onSelectPoi, topOffset }) {
+  const sweepAnim = useRef(new Animated.Value(0)).current
+  const centerPulse = useRef(new Animated.Value(1)).current
 
-  const RatingStars = () => {
-    if (rating == null || rating <= 0) return null;
-    const r = Math.min(5, Math.max(0, rating));
-    return (
-      <View style={styles.ratingRow}>
-        {[1, 2, 3, 4, 5].map((i) => (
-          <Ionicons
-            key={i}
-            name={r >= i ? 'star' : r >= i - 0.5 ? 'star-half' : 'star-outline'}
-            size={14}
-            color="#FBBF24"
+  useEffect(() => {
+    Animated.loop(
+      Animated.timing(sweepAnim, { toValue: 1, duration: 3500, easing: Easing.linear, useNativeDriver: true })
+    ).start()
+    Animated.loop(Animated.sequence([
+      Animated.timing(centerPulse, { toValue: 1.5, duration: 1200, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
+      Animated.timing(centerPulse, { toValue: 1, duration: 1200, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
+    ])).start()
+  }, [sweepAnim, centerPulse])
+
+  const SIZE = 100
+  const R = SIZE / 2
+  const PAD = 8
+  const LINE_H = R - PAD
+  const FOV_HALF = CAMERA_FOV_DEG / 2
+
+  const northAngle = ((-heading + 360) % 360) * (Math.PI / 180)
+  const northX = R + Math.sin(northAngle) * (R - 5)
+  const northY = R - Math.cos(northAngle) * (R - 5)
+
+  const dots = basePois
+    .filter(p => p.distanceKm <= maxDistanceKm)
+    .slice(0, 20)
+    .map((poi, i) => {
+      const rel = ((poi.bearing - heading + 360) % 360) * (Math.PI / 180)
+      const norm = Math.min(poi.distanceKm / maxDistanceKm, 1)
+      const d = norm * (R - PAD)
+      return {
+        poi, key: `rd-${poi.name}-${i}`,
+        x: R + Math.sin(rel) * d,
+        y: R - Math.cos(rel) * d,
+        sz: norm < 0.3 ? 6 : 4,
+        color: getPoiColor(poi),
+      }
+    })
+
+  const sweepRotate = sweepAnim.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '360deg'] })
+
+  return (
+    <View style={[rd.outer, { top: topOffset }]}>
+      <View style={[rd.radar, { width: SIZE, height: SIZE, borderRadius: R }]}>
+        {[0.33, 0.66, 1].map((ratio, i) => {
+          const s = (SIZE - PAD * 2) * ratio
+          return <View key={i} style={[rd.ring, { width: s, height: s, borderRadius: s / 2, left: R - s / 2, top: R - s / 2 }]} />
+        })}
+
+        <View style={[rd.crossH, { top: R, left: PAD, right: PAD }]} />
+        <View style={[rd.crossV, { left: R, top: PAD, bottom: PAD }]} />
+
+        <View style={[rd.fovLine, { left: R - 0.5, top: PAD, height: LINE_H, transform: [{ translateY: LINE_H / 2 }, { rotate: `${-FOV_HALF}deg` }, { translateY: -LINE_H / 2 }] }]} />
+        <View style={[rd.fovLine, { left: R - 0.5, top: PAD, height: LINE_H, transform: [{ translateY: LINE_H / 2 }, { rotate: `${FOV_HALF}deg` }, { translateY: -LINE_H / 2 }] }]} />
+
+        <Animated.View style={[rd.sweep, { left: R - 1, top: PAD, height: LINE_H, transform: [{ translateY: LINE_H / 2 }, { rotate: sweepRotate }, { translateY: -LINE_H / 2 }] }]}>
+          <LinearGradient colors={[`${C.accent}50`, 'transparent']} style={rd.sweepGrad} />
+        </Animated.View>
+
+        {dots.map(({ poi, x, y, sz, color, key }) => (
+          <TouchableOpacity key={key} onPress={() => onSelectPoi?.(poi)} hitSlop={8}
+            style={[rd.dot, { left: x - sz / 2, top: y - sz / 2, width: sz, height: sz, borderRadius: sz / 2, backgroundColor: color, shadowColor: color }]}
+            accessibilityLabel={`Navigate to ${poi.name}`}
           />
         ))}
-        <Text style={styles.ratingNum}>{rating.toFixed(1)}</Text>
+
+        <Animated.View style={[rd.centerGlow, { left: R - 7, top: R - 7, transform: [{ scale: centerPulse }] }]} />
+        <View style={[rd.centerDot, { left: R - 3.5, top: R - 3.5 }]} />
+
+        <View style={[rd.northBadge, { left: northX - 7, top: northY - 7 }]}>
+          <Text style={rd.northText}>N</Text>
+        </View>
       </View>
-    );
-  };
+    </View>
+  )
+}
+
+const rd = StyleSheet.create({
+  outer: { position: 'absolute', left: 12, alignItems: 'center', zIndex: 5 },
+  radar: {
+    backgroundColor: 'rgba(8,10,18,0.88)', borderWidth: 1, borderColor: C.glassBorder, overflow: 'hidden',
+    ...Platform.select({
+      ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.6, shadowRadius: 16 },
+      android: { elevation: 14 },
+    }),
+  },
+  ring: { position: 'absolute', borderWidth: 1, borderColor: 'rgba(255,255,255,0.05)' },
+  crossH: { position: 'absolute', height: StyleSheet.hairlineWidth, backgroundColor: 'rgba(255,255,255,0.04)' },
+  crossV: { position: 'absolute', width: StyleSheet.hairlineWidth, backgroundColor: 'rgba(255,255,255,0.04)' },
+  fovLine: { position: 'absolute', width: 1, backgroundColor: `${C.accent}25` },
+  sweep: { position: 'absolute', width: 2 },
+  sweepGrad: { flex: 1, width: 2, borderRadius: 1 },
+  dot: {
+    position: 'absolute', borderWidth: 1.5, borderColor: 'rgba(255,255,255,0.25)',
+    ...Platform.select({
+      ios: { shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.8, shadowRadius: 4 },
+      android: { elevation: 3 },
+    }),
+  },
+  centerGlow: { position: 'absolute', width: 14, height: 14, borderRadius: 7, backgroundColor: `${C.accent}20` },
+  centerDot: { position: 'absolute', width: 7, height: 7, borderRadius: 3.5, backgroundColor: C.accent, borderWidth: 1.5, borderColor: '#FFF' },
+  northBadge: { position: 'absolute', width: 14, height: 14, borderRadius: 7, backgroundColor: `${C.accent}30`, alignItems: 'center', justifyContent: 'center' },
+  northText: { color: C.accent, fontSize: 7, fontWeight: '900' },
+})
+
+/* ─── POI Detail Modal ─── */
+function POIDetailModal({ visible, poi, onClose, onRequestClose, insets, openDirections, onViewProfile, onToggleSave, isSaved, heritage }) {
+  if (!poi) return null
+  const dismiss = onRequestClose || onClose
+  const clientId = poi.client_a_uuid || poi.id
+  const hasProfile = Boolean(clientId)
+  const m = poi.metadata || poi
+  const isLandmark = poi._isLandmark || poi._type === 'landmark' || poi.category
+  const typeLabel = poi._type === 'event' ? 'Event' : poi._type === 'restaurant' ? 'Restaurant' : isLandmark ? (m.category || poi.category || 'Landmark') : 'Place'
+  const typeIcon = getPoiIcon(poi)
+  const poiColor = getPoiColor(poi)
+  const phone = m?.phone || poi?.phone || ''
+  const menuUrl = m?.menu_url || poi?.menu_url || m?.website || poi?.website || ''
+  const heritageInfo = heritage || LANDMARK_HERITAGE[poi.name]
+  const distText = poi.distanceKm < 1 ? `${Math.round(poi.distanceKm * 1000)}m away` : `${poi.distanceKm.toFixed(1)} km away`
+  const venue = m.venue || m.location || m.area || poi.location || ''
+  const desc = m.description || poi.description || ''
+  const cuisine = m.cuisine || m.cuisine_type || ''
+  const priceRange = m.price_range || ''
+  const rating = m.rating != null && m.rating !== '' ? Number(m.rating) : null
+  const eventType = m.event_type || ''
+  const time = [m.start_time, m.end_time].filter(Boolean).join(' – ')
+  const date = m.start_date || m.end_date || ''
+
+  const handleShare = () => {
+    Share.share({ title: poi.name, message: `${poi.name} — ${distText}. Explore with Go Bahrain!`, url: `https://www.google.com/maps/search/?api=1&query=${poi.lat},${poi.lng}` }).catch(() => {})
+  }
+  const handleCall = () => {
+    const tel = phone.replace(/\D/g, '')
+    if (tel.length >= 8) Linking.openURL(`tel:${tel}`).catch(() => {})
+  }
 
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={dismiss}>
-      <View style={styles.detailOverlay}>
+      <View style={dm.overlay}>
         <Pressable style={StyleSheet.absoluteFill} onPress={onClose} />
-        <View style={[styles.detailCard, { paddingBottom: (insets?.bottom ?? 0) + 24 }]}>
-          <View style={styles.detailHandle} />
-          <TouchableOpacity
-            style={styles.detailClose}
-            onPress={dismiss}
-            hitSlop={12}
-          >
-            <Ionicons name="close-circle" size={28} color="rgba(255,255,255,0.8)" />
+        <View style={[dm.card, { paddingBottom: (insets?.bottom ?? 0) + 20 }]}>
+          <View style={dm.handle} />
+          <TouchableOpacity style={dm.closeBtn} onPress={dismiss} hitSlop={12} accessibilityLabel="Close">
+            <BlurView intensity={40} tint="dark" style={dm.closeBtnBlur}>
+              <Ionicons name="close" size={16} color="rgba(255,255,255,0.8)" />
+            </BlurView>
           </TouchableOpacity>
-          <View style={styles.detailHeader}>
-            <View style={styles.detailTypeBadge}>
-              <Ionicons name={typeIcon} size={12} color="#FFF" />
-              <Text style={styles.detailTypeText}>{typeLabel}</Text>
-            </View>
-            <Text style={styles.detailTitle}>{poi.name}</Text>
-            <View style={styles.detailMetaRow}>
-              <View style={styles.detailMetaItem}>
-                <Ionicons name="navigate" size={14} color={C.accent} />
-                <Text style={styles.detailMetaText}>{distText}</Text>
+
+          <ScrollView showsVerticalScrollIndicator={false} style={dm.scroll} bounces={false}>
+            <View style={dm.header}>
+              <LinearGradient colors={[`${poiColor}20`, 'transparent']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={dm.typeBadge}>
+                <Ionicons name={typeIcon} size={11} color={poiColor} />
+                <Text style={[dm.typeText, { color: poiColor }]}>{typeLabel}</Text>
+              </LinearGradient>
+              <Text style={dm.title}>{poi.name}</Text>
+              <View style={dm.metaRow}>
+                <View style={dm.metaPill}><Ionicons name="navigate" size={12} color={C.accent} /><Text style={dm.metaText}>{distText}</Text></View>
+                <View style={dm.metaPill}><Ionicons name="walk" size={12} color={C.dimText} /><Text style={dm.metaText}>{getWalkingTime(poi.distanceKm)}</Text></View>
+                {rating != null && rating > 0 && (
+                  <View style={dm.metaPill}>
+                    <Ionicons name="star" size={12} color="#FBBF24" />
+                    <Text style={[dm.metaText, { color: '#FBBF24' }]}>{rating.toFixed(1)}</Text>
+                  </View>
+                )}
               </View>
-              {rating != null && rating > 0 && (
-                <View style={styles.detailMetaItem}>
-                  <RatingStars />
-                </View>
-              )}
             </View>
-          </View>
-          {(venue || cuisine || priceRange || eventType || date || time) ? (
-            <View style={styles.detailSection}>
-              {venue ? (
-                <View style={styles.detailRow}>
-                  <Ionicons name="location" size={16} color={C.accent} />
-                  <Text style={styles.detailText}>{venue}</Text>
-                </View>
-              ) : null}
-              {(cuisine || priceRange) ? (
-                <View style={styles.detailRow}>
-                  <Ionicons name="restaurant" size={16} color={C.accent} />
-                  <Text style={styles.detailText}>{[cuisine, priceRange].filter(Boolean).join(' · ')}</Text>
-                </View>
-              ) : null}
-              {(eventType || date || time) ? (
-                <View style={styles.detailRow}>
-                  <Ionicons name="calendar" size={16} color={C.accent} />
-                  <Text style={styles.detailText}>{[eventType, date, time].filter(Boolean).join(' · ')}</Text>
-                </View>
-              ) : null}
-            </View>
-          ) : null}
-          {heritageInfo?.didYouKnow ? (
-            <View style={styles.detailSection}>
-              <Text style={styles.detailSectionTitle}>Did you know?</Text>
-              <Text style={styles.detailDesc}>{heritageInfo.didYouKnow}</Text>
-            </View>
-          ) : null}
-          {desc ? (
-            <View style={styles.detailSection}>
-              <Text style={styles.detailSectionTitle}>{isLandmark ? 'Why visit' : 'About'}</Text>
-              <ScrollView style={styles.detailDescScroll} showsVerticalScrollIndicator={false}>
-                <Text style={styles.detailDesc}>{desc}</Text>
-              </ScrollView>
-            </View>
-          ) : null}
-          <View style={styles.detailActions}>
-            <TouchableOpacity
-              style={styles.directionsBtn}
-              onPress={() => openDirections(poi)}
-              activeOpacity={0.8}
-            >
-              <Ionicons name="navigate" size={18} color="#FFF" />
-              <Text style={styles.directionsBtnText}>Get directions</Text>
-              <Text style={styles.directionsBtnSub}>{getWalkingTime(poi.distanceKm)}</Text>
-            </TouchableOpacity>
-            {hasProfile ? (
-              <TouchableOpacity
-                style={styles.viewProfileBtn}
-                onPress={() => onViewProfile?.(clientId)}
-                activeOpacity={0.8}
-              >
-                <Ionicons name="person" size={18} color="#FFF" />
-                <Text style={styles.viewProfileBtnText}>View profile</Text>
-              </TouchableOpacity>
+
+            {(venue || cuisine || priceRange || eventType || date || time) && (
+              <View style={dm.infoSection}>
+                {venue ? <View style={dm.infoRow}><Ionicons name="location" size={14} color={C.accent} /><Text style={dm.infoText}>{venue}</Text></View> : null}
+                {(cuisine || priceRange) ? <View style={dm.infoRow}><Ionicons name="restaurant" size={14} color={C.food} /><Text style={dm.infoText}>{[cuisine, priceRange].filter(Boolean).join(' · ')}</Text></View> : null}
+                {(eventType || date || time) ? <View style={dm.infoRow}><Ionicons name="calendar" size={14} color={C.event} /><Text style={dm.infoText}>{[eventType, date, time].filter(Boolean).join(' · ')}</Text></View> : null}
+              </View>
+            )}
+
+            {heritageInfo?.didYouKnow && (
+              <View style={dm.heritageBox}>
+                <View style={dm.heritageHeader}><Ionicons name="sparkles" size={13} color="#FBBF24" /><Text style={dm.heritageTitle}>Did you know?</Text></View>
+                <Text style={dm.heritageText}>{heritageInfo.didYouKnow}</Text>
+              </View>
+            )}
+
+            {desc ? (
+              <View style={dm.descSection}>
+                <Text style={dm.descLabel}>{isLandmark ? 'Why visit' : 'About'}</Text>
+                <Text style={dm.descText}>{desc}</Text>
+              </View>
             ) : null}
-            <View style={styles.detailActionsRow}>
-              {onToggleSave ? (
-                <TouchableOpacity style={styles.detailActionIconBtn} onPress={() => onToggleSave(poi)} activeOpacity={0.8}>
-                  <Ionicons name={isSaved ? 'bookmark' : 'bookmark-outline'} size={22} color={isSaved ? C.accent : '#FFF'} />
-                  <Text style={styles.detailActionIconLabel}>{isSaved ? 'Saved' : 'Save'}</Text>
+          </ScrollView>
+
+          <View style={dm.actions}>
+            <TouchableOpacity style={dm.primaryBtn} onPress={() => openDirections(poi)} activeOpacity={0.85} accessibilityLabel="Get directions">
+              <LinearGradient colors={[C.accent, '#9B0C23']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={dm.primaryBtnGrad}>
+                <Ionicons name="navigate" size={17} color="#FFF" />
+                <Text style={dm.primaryBtnText}>Get directions</Text>
+                <Text style={dm.primaryBtnSub}>{getWalkingTime(poi.distanceKm)}</Text>
+              </LinearGradient>
+            </TouchableOpacity>
+
+            <View style={dm.quickRow}>
+              {hasProfile && (
+                <TouchableOpacity style={dm.quickBtn} onPress={() => onViewProfile?.(clientId)} activeOpacity={0.8}>
+                  <Ionicons name="person-outline" size={18} color="#FFF" />
+                  <Text style={dm.quickLabel}>Profile</Text>
                 </TouchableOpacity>
-              ) : null}
-              <TouchableOpacity style={styles.detailActionIconBtn} onPress={handleShare} activeOpacity={0.8}>
-                <Ionicons name="share-outline" size={22} color="#FFF" />
-                <Text style={styles.detailActionIconLabel}>Share</Text>
+              )}
+              {onToggleSave && (
+                <TouchableOpacity style={dm.quickBtn} onPress={() => onToggleSave(poi)} activeOpacity={0.8}>
+                  <Ionicons name={isSaved ? 'heart' : 'heart-outline'} size={18} color={isSaved ? C.accent : '#FFF'} />
+                  <Text style={[dm.quickLabel, isSaved && { color: C.accent }]}>{isSaved ? 'Saved' : 'Save'}</Text>
+                </TouchableOpacity>
+              )}
+              <TouchableOpacity style={dm.quickBtn} onPress={handleShare} activeOpacity={0.8}>
+                <Ionicons name="share-outline" size={18} color="#FFF" />
+                <Text style={dm.quickLabel}>Share</Text>
               </TouchableOpacity>
               {phone ? (
-                <TouchableOpacity style={styles.detailActionIconBtn} onPress={handleCall} activeOpacity={0.8}>
-                  <Ionicons name="call-outline" size={22} color="#FFF" />
-                  <Text style={styles.detailActionIconLabel}>Call</Text>
+                <TouchableOpacity style={dm.quickBtn} onPress={handleCall} activeOpacity={0.8}>
+                  <Ionicons name="call-outline" size={18} color="#FFF" />
+                  <Text style={dm.quickLabel}>Call</Text>
                 </TouchableOpacity>
               ) : null}
               {menuUrl ? (
-                <TouchableOpacity style={styles.detailActionIconBtn} onPress={() => Linking.openURL(menuUrl).catch(() => {})} activeOpacity={0.8}>
-                  <Ionicons name="restaurant-outline" size={22} color="#FFF" />
-                  <Text style={styles.detailActionIconLabel}>Menu</Text>
+                <TouchableOpacity style={dm.quickBtn} onPress={() => Linking.openURL(menuUrl).catch(() => {})} activeOpacity={0.8}>
+                  <Ionicons name="reader-outline" size={18} color="#FFF" />
+                  <Text style={dm.quickLabel}>Menu</Text>
                 </TouchableOpacity>
               ) : null}
             </View>
@@ -392,899 +501,465 @@ function POIDetailModal({ visible, poi, onClose, onRequestClose, insets, openDir
         </View>
       </View>
     </Modal>
-  );
+  )
 }
 
-function getIsBusy(poi) {
-  const hour = new Date().getHours();
-  const isRestaurant = (poi._type || '').toLowerCase() === 'restaurant';
-  if (!isRestaurant) return null;
-  if ((hour >= 11 && hour <= 14) || (hour >= 19 && hour <= 22)) return true;
-  if (hour >= 14 && hour <= 17) return false;
-  return Math.random() > 0.5;
-}
+const dm = StyleSheet.create({
+  overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
+  card: { backgroundColor: 'rgba(16,16,22,0.97)', borderTopLeftRadius: 26, borderTopRightRadius: 26, paddingHorizontal: 20, paddingTop: 10, maxHeight: '80%', borderWidth: 1, borderBottomWidth: 0, borderColor: C.glassBorder },
+  handle: { width: 36, height: 4, borderRadius: 2, backgroundColor: 'rgba(255,255,255,0.18)', alignSelf: 'center', marginBottom: 14 },
+  closeBtn: { position: 'absolute', top: 12, right: 16, zIndex: 1 },
+  closeBtnBlur: { width: 30, height: 30, borderRadius: 15, alignItems: 'center', justifyContent: 'center', overflow: 'hidden', borderWidth: 1, borderColor: C.glassBorder },
+  scroll: { marginBottom: 10 },
+  header: { marginBottom: 14 },
+  typeBadge: { flexDirection: 'row', alignItems: 'center', gap: 5, alignSelf: 'flex-start', paddingHorizontal: 9, paddingVertical: 4, borderRadius: 8, marginBottom: 10, borderWidth: 1, borderColor: 'rgba(255,255,255,0.05)' },
+  typeText: { fontSize: 10, fontWeight: '800', letterSpacing: 0.4 },
+  title: { color: '#FFF', fontSize: 22, fontWeight: '800', lineHeight: 28, marginBottom: 10, letterSpacing: -0.3 },
+  metaRow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 8 },
+  metaPill: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: 'rgba(255,255,255,0.06)', paddingHorizontal: 9, paddingVertical: 4, borderRadius: 8 },
+  metaText: { color: C.sub, fontSize: 12, fontWeight: '600' },
+  infoSection: { backgroundColor: 'rgba(255,255,255,0.03)', borderRadius: 14, padding: 12, marginBottom: 12, gap: 9, borderWidth: 1, borderColor: C.glassBorder },
+  infoRow: { flexDirection: 'row', alignItems: 'center', gap: 9 },
+  infoText: { color: C.sub, fontSize: 13, flex: 1, lineHeight: 19 },
+  heritageBox: { backgroundColor: 'rgba(251,191,36,0.06)', borderRadius: 14, padding: 12, marginBottom: 12, borderWidth: 1, borderColor: 'rgba(251,191,36,0.12)' },
+  heritageHeader: { flexDirection: 'row', alignItems: 'center', gap: 5, marginBottom: 5 },
+  heritageTitle: { color: '#FBBF24', fontSize: 11, fontWeight: '800' },
+  heritageText: { color: C.sub, fontSize: 13, lineHeight: 20 },
+  descSection: { marginBottom: 12 },
+  descLabel: { color: C.dimText, fontSize: 10, fontWeight: '700', letterSpacing: 0.4, marginBottom: 5, textTransform: 'uppercase' },
+  descText: { color: C.sub, fontSize: 13, lineHeight: 20 },
+  actions: { gap: 10, borderTopWidth: 1, borderTopColor: C.glassBorder, paddingTop: 12 },
+  primaryBtn: { borderRadius: 14, overflow: 'hidden', ...Platform.select({ ios: { shadowColor: C.accent, shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.3, shadowRadius: 8 }, android: { elevation: 5 } }) },
+  primaryBtnGrad: { flexDirection: 'row', alignItems: 'center', gap: 9, paddingVertical: 14, paddingHorizontal: 18, borderRadius: 14 },
+  primaryBtnText: { color: '#FFF', fontSize: 15, fontWeight: '700', flex: 1 },
+  primaryBtnSub: { color: 'rgba(255,255,255,0.7)', fontSize: 12 },
+  quickRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  quickBtn: { alignItems: 'center', justifyContent: 'center', paddingVertical: 9, paddingHorizontal: 12, backgroundColor: 'rgba(255,255,255,0.06)', borderRadius: 12, minWidth: 58, borderWidth: 1, borderColor: C.glassBorder },
+  quickLabel: { color: C.dimText, fontSize: 10, fontWeight: '600', marginTop: 3 },
+})
 
+/* ─── Main Screen ─── */
 export default function ARScreen({ navigation }) {
-  const { colors } = useTheme();
-  const route = useRoute();
-  const fromExplore = route.params?.fromExplore === true;
-  const [navigateToDest, setNavigateToDest] = useState(route.params?.navigateTo ?? null);
-  useEffect(() => {
-    if (route.params?.navigateTo) setNavigateToDest(route.params.navigateTo);
-  }, [route.params?.navigateTo]);
-  const { width, height } = useWindowDimensions();
-  const insets = useSafeAreaInsets();
-  const { savedIds, toggle: toggleSave, isSaved } = useSavedPlaces();
-  const [permission, requestPermission] = useCameraPermissions();
-  const [location, setLocation] = useState(null);
-  const [heading, setHeading] = useState(0);
-  const [pois, setPois] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
-  const [selectedPoi, setSelectedPoi] = useState(null);
-  const [profileClientId, setProfileClientId] = useState(null);
-  const [mode, setMode] = useState(route.params?.navigateTo ? 'all' : fromExplore ? 'all' : 'landmarks');
-  const [maxDistanceKm, setMaxDistanceKm] = useState(fromExplore ? 50 : 10);
-  const [showQuietHint, setShowQuietHint] = useState(false);
-  const [funHintIndex, setFunHintIndex] = useState(0);
-  const headingSub = useRef(null);
+  const { colors } = useTheme()
+  const route = useRoute()
+  const fromExplore = route.params?.fromExplore === true
+  const [navigateToDest, setNavigateToDest] = useState(route.params?.navigateTo ?? null)
+  useEffect(() => { if (route.params?.navigateTo) setNavigateToDest(route.params.navigateTo) }, [route.params?.navigateTo])
+  const { width, height } = useWindowDimensions()
+  const insets = useSafeAreaInsets()
+  const { savedIds, toggle: toggleSave, isSaved } = useSavedPlaces()
+  const [permission, requestPermission] = useCameraPermissions()
+  const [location, setLocation] = useState(null)
+  const [heading, setHeading] = useState(0)
+  const [pois, setPois] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState(null)
+  const [selectedPoi, setSelectedPoi] = useState(null)
+  const [profileClientId, setProfileClientId] = useState(null)
+  const [mode, setMode] = useState('all')
+  const [maxDistanceKm, setMaxDistanceKm] = useState(fromExplore ? 50 : 10)
+  const [showSlider, setShowSlider] = useState(false)
+  const headingSub = useRef(null)
 
-  useEffect(() => {
-    const id = setInterval(() => {
-      setFunHintIndex((i) => (i + 1) % FUN_HINTS.length);
-    }, 6000);
-    return () => clearInterval(id);
-  }, []);
+  const [doorVisible, setDoorVisible] = useState(fromExplore)
+  const doorLeft = useRef(new Animated.Value(0)).current
+  const doorRight = useRef(new Animated.Value(0)).current
+  const doorIconScale = useRef(new Animated.Value(1)).current
+  const doorIconOpacity = useRef(new Animated.Value(1)).current
+  const doorFade = useRef(new Animated.Value(1)).current
+  const doorOpenedRef = useRef(false)
 
-  let basePois = pois;
-  if (mode === 'saved' && savedIds.size > 0) {
-    basePois = pois.filter((p) => {
-      const id = p.client_a_uuid || p.id || `${p.name}-${p.lat}-${p.lng}`;
-      return savedIds.has(id);
-    });
-  } else if (navigateToDest && location) {
+  const modePois = useMemo(() => {
+    if (mode === 'all') return pois
+    if (mode === 'places') return pois.filter((p) => p._type === 'place' || p._type === 'landmark' || p._isLandmark)
+    if (mode === 'restaurants') return pois.filter((p) => p._type === 'restaurant')
+    if (mode === 'events') return pois.filter((p) => p._type === 'event')
+    if (mode === 'saved') return pois.filter((p) => { const id = p.client_a_uuid || p.id || `${p.name}-${p.lat}-${p.lng}`; return savedIds.has(id) })
+    return pois
+  }, [pois, mode, savedIds])
+
+  let basePois = modePois
+  if (navigateToDest && location) {
     basePois = [{ ...navigateToDest, distanceKm: 0, bearing: 0, name: navigateToDest.name || 'Destination', lat: navigateToDest.lat, lng: navigateToDest.lng }].map((p) => {
-      const R = 6371;
-      const dLat = ((p.lat - location.latitude) * Math.PI) / 180;
-      const dLon = ((p.lng - location.longitude) * Math.PI) / 180;
-      const a = Math.sin(dLat / 2) ** 2 + Math.cos((location.latitude * Math.PI) / 180) * Math.cos((p.lat * Math.PI) / 180) * Math.sin(dLon / 2) ** 2;
-      const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-      const distKm = R * c;
-      const y = Math.sin(dLon) * Math.cos((p.lat * Math.PI) / 180);
-      const x = Math.cos((location.latitude * Math.PI) / 180) * Math.sin((p.lat * Math.PI) / 180) - Math.sin((location.latitude * Math.PI) / 180) * Math.cos((p.lat * Math.PI) / 180) * Math.cos(dLon);
-      const bear = ((Math.atan2(y, x) * 180) / Math.PI + 360) % 360;
-      return { ...p, distanceKm: distKm, bearing: bear };
-    });
+      const dLat = ((p.lat - location.latitude) * Math.PI) / 180
+      const dLon = ((p.lng - location.longitude) * Math.PI) / 180
+      const a2 = Math.sin(dLat / 2) ** 2 + Math.cos((location.latitude * Math.PI) / 180) * Math.cos((p.lat * Math.PI) / 180) * Math.sin(dLon / 2) ** 2
+      const distKm = 6371 * 2 * Math.atan2(Math.sqrt(a2), Math.sqrt(1 - a2))
+      const y2 = Math.sin(dLon) * Math.cos((p.lat * Math.PI) / 180)
+      const x2 = Math.cos((location.latitude * Math.PI) / 180) * Math.sin((p.lat * Math.PI) / 180) - Math.sin((location.latitude * Math.PI) / 180) * Math.cos((p.lat * Math.PI) / 180) * Math.cos(dLon)
+      return { ...p, distanceKm: distKm, bearing: ((Math.atan2(y2, x2) * 180) / Math.PI + 360) % 360 }
+    })
   }
 
   const filteredPois = basePois.filter((p) => {
-    if (p.distanceKm > maxDistanceKm) return false;
-    const relBearing = (p.bearing - heading + 360) % 360;
-    const angleFromCenter = Math.min(relBearing, 360 - relBearing);
-    return angleFromCenter <= CAMERA_FOV_DEG / 2;
-  });
+    if (p.distanceKm > maxDistanceKm) return false
+    const relBearing = (p.bearing - heading + 360) % 360
+    return Math.min(relBearing, 360 - relBearing) <= CAMERA_FOV_DEG / 2
+  })
 
-  const nearestInView = filteredPois.length > 0 ? filteredPois.reduce((a, b) => a.distanceKm <= b.distanceKm ? a : b) : null;
-  const inViewIds = new Set((filteredPois || []).map((p) => p.name + p.lat));
-  const nearestOutOfView = basePois
-    .filter((p) => p.distanceKm <= maxDistanceKm && !inViewIds.has(p.name + p.lat))
-    .sort((a, b) => a.distanceKm - b.distanceKm)[0] || null;
+  const nearestInView = filteredPois.length > 0 ? filteredPois.reduce((a, b) => a.distanceKm <= b.distanceKm ? a : b) : null
+  const inViewIds = new Set(filteredPois.map((p) => p.name + p.lat))
+  const nearestOutOfView = basePois.filter((p) => p.distanceKm <= maxDistanceKm && !inViewIds.has(p.name + p.lat)).sort((a, b) => a.distanceKm - b.distanceKm)[0] || null
 
-  const clearNavigateTo = useCallback(() => setNavigateToDest(null), []);
+  const clearNavigateTo = useCallback(() => setNavigateToDest(null), [])
+  const centerX = width / 2
+  const centerY = height / 2 - 40
+  const viewRadius = Math.min(width, height) * 0.35
 
-  const centerX = width / 2;
-  const centerY = height / 2 - 40;
-  const radius = Math.min(width, height) * 0.35;
-
-  const loadNearby = useCallback(async (lat, lng, filterMode = mode) => {
+  const loadNearby = useCallback(async (lat, lng) => {
     try {
-      const data = await fetchNearbyPOIs(lat, lng, filterMode, fromExplore ? { allPlaces: true } : {});
-      setPois(data);
+      const [clientData, eventData] = await Promise.all([
+        fetchNearbyPOIs(lat, lng, 'all', { allPlaces: true }),
+        fetchEvents([]).catch(() => []),
+      ])
+      const eventPois = eventData
+        .map((ev) => {
+          const em = ev.metadata || {}
+          const evLat = parseFloat(em.lat ?? em.latitude ?? '')
+          const evLng = parseFloat(em.long ?? em.longitude ?? em.lng ?? '')
+          if (isNaN(evLat) || isNaN(evLng)) return null
+          const dLat2 = ((evLat - lat) * Math.PI) / 180
+          const dLon2 = ((evLng - lng) * Math.PI) / 180
+          const a2 = Math.sin(dLat2 / 2) ** 2 + Math.cos((lat * Math.PI) / 180) * Math.cos((evLat * Math.PI) / 180) * Math.sin(dLon2 / 2) ** 2
+          const distKm = 6371 * 2 * Math.atan2(Math.sqrt(a2), Math.sqrt(1 - a2))
+          const y2 = Math.sin(dLon2) * Math.cos((evLat * Math.PI) / 180)
+          const x2 = Math.cos((lat * Math.PI) / 180) * Math.sin((evLat * Math.PI) / 180) - Math.sin((lat * Math.PI) / 180) * Math.cos((evLat * Math.PI) / 180) * Math.cos(dLon2)
+          const bear = ((Math.atan2(y2, x2) * 180) / Math.PI + 360) % 360
+          const name = em.event_name || em.business_name || em.name || 'Event'
+          return { ...ev, name, lat: evLat, lng: evLng, distanceKm: distKm, bearing: bear, _type: 'event', _isLandmark: false, metadata: { ...em, place_name: name } }
+        })
+        .filter(Boolean)
+      const seen = new Set(clientData.map((p) => `${p.name}-${p.lat?.toFixed(4)}`))
+      const uniqueEvents = eventPois.filter((e) => { const key = `${e.name}-${e.lat?.toFixed(4)}`; if (seen.has(key)) return false; seen.add(key); return true })
+      setPois([...clientData, ...uniqueEvents].sort((a, b) => a.distanceKm - b.distanceKm))
     } catch (e) {
-      console.warn('[AR] fetchNearbyPOIs failed:', e?.message);
-      setPois([]);
+      console.warn('[AR] fetchNearbyPOIs failed:', e?.message)
+      setPois([])
     }
-  }, [mode, fromExplore]);
-
-  useEffect(() => {
-    if (location && !loading) {
-      loadNearby(location.latitude, location.longitude, mode);
-    }
-  }, [mode]);
+  }, [])
 
   useEffect(() => {
     let mounted = true;
     (async () => {
       if (!permission?.granted) {
-        const { status } = await requestPermission();
-        if (!mounted) return;
-        if (status !== 'granted') {
-          setError('Camera permission required');
-          setLoading(false);
-          return;
-        }
+        const { status } = await requestPermission()
+        if (!mounted) return
+        if (status !== 'granted') { setError('Camera permission required'); setLoading(false); return }
       }
       try {
-        const { status } = await Location.requestForegroundPermissionsAsync();
-        if (!mounted) return;
-        if (status !== 'granted') {
-          setError('Location permission required to discover nearby spots');
-          setLoading(false);
-          return;
-        }
-        const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-        if (!mounted) return;
-        setLocation(loc.coords);
-        await loadNearby(loc.coords.latitude, loc.coords.longitude, fromExplore ? 'all' : 'landmarks');
-      } catch (e) {
-        if (mounted) setError(e?.message || 'Could not get location');
-      } finally {
-        if (mounted) setLoading(false);
-      }
-    })();
-    return () => { mounted = false; };
-  }, [permission?.granted, requestPermission, loadNearby]);
+        const { status } = await Location.requestForegroundPermissionsAsync()
+        if (!mounted) return
+        if (status !== 'granted') { setError('Location permission required to discover nearby spots'); setLoading(false); return }
+        const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced })
+        if (!mounted) return
+        setLocation(loc.coords)
+        await loadNearby(loc.coords.latitude, loc.coords.longitude)
+      } catch (e) { if (mounted) setError(e?.message || 'Could not get location') }
+      finally { if (mounted) setLoading(false) }
+    })()
+    return () => { mounted = false }
+  }, [permission?.granted, requestPermission, loadNearby])
 
   useEffect(() => {
-    if (!location) return;
-    let cleaned = false;
-    Location.watchHeadingAsync((h) => {
-      setHeading(h.trueHeading >= 0 ? h.trueHeading : h.magHeading);
-    }).then((s) => {
-      if (cleaned) s.remove();
-      else headingSub.current = s;
-    });
-    return () => {
-      cleaned = true;
-      headingSub.current?.remove?.();
-      headingSub.current = null;
-    };
-  }, [location]);
+    if (!location) return
+    let cleaned = false
+    Location.watchHeadingAsync((h) => setHeading(h.trueHeading >= 0 ? h.trueHeading : h.magHeading))
+      .then((s) => { if (cleaned) s.remove(); else headingSub.current = s })
+    return () => { cleaned = true; headingSub.current?.remove?.(); headingSub.current = null }
+  }, [location])
 
+  useEffect(() => {
+    if (!fromExplore || doorOpenedRef.current) return
+    if (loading) return
+    doorOpenedRef.current = true
+    const delay = setTimeout(() => {
+      Animated.sequence([
+        Animated.delay(200),
+        Animated.parallel([
+          Animated.timing(doorIconOpacity, { toValue: 0, duration: 250, useNativeDriver: true }),
+          Animated.timing(doorIconScale, { toValue: 0.5, duration: 250, useNativeDriver: true }),
+        ]),
+        Animated.parallel([
+          Animated.timing(doorLeft, { toValue: -DOOR_W / 2, duration: 480, easing: Easing.bezier(0.4, 0, 0.2, 1), useNativeDriver: true }),
+          Animated.timing(doorRight, { toValue: DOOR_W / 2, duration: 480, easing: Easing.bezier(0.4, 0, 0.2, 1), useNativeDriver: true }),
+        ]),
+        Animated.timing(doorFade, { toValue: 0, duration: 150, useNativeDriver: true }),
+      ]).start(() => setDoorVisible(false))
+    }, 100)
+    return () => clearTimeout(delay)
+  }, [fromExplore, loading])
 
   const openDirections = useCallback((poi) => {
     const url = Platform.select({
       ios: `maps://app?daddr=${poi.lat},${poi.lng}`,
       android: `geo:0,0?q=${poi.lat},${poi.lng}(${encodeURIComponent(poi.name)})`,
       default: `https://www.google.com/maps/dir/?api=1&destination=${poi.lat},${poi.lng}`,
-    });
-    Linking.openURL(url).catch(() => Linking.openURL(`https://www.google.com/maps/dir/?api=1&destination=${poi.lat},${poi.lng}`));
-  }, []);
+    })
+    Linking.openURL(url).catch(() => Linking.openURL(`https://www.google.com/maps/dir/?api=1&destination=${poi.lat},${poi.lng}`))
+  }, [])
 
-  const getWalkingTime = (km) => {
-    const mins = Math.round((km / 5) * 60);
-    if (mins < 1) return '~1 min walk';
-    if (mins < 60) return `~${mins} min walk`;
-    return `~${Math.floor(mins / 60)} hr walk`;
-  };
-
-  const modalJustOpenedRef = useRef(false);
-  const closeModal = useCallback(() => {
-    if (modalJustOpenedRef.current) return;
-    setSelectedPoi(null);
-  }, []);
+  const modalJustOpenedRef = useRef(false)
+  const closeModal = useCallback(() => { if (modalJustOpenedRef.current) return; setSelectedPoi(null) }, [])
   const handleOpenPOI = useCallback((poi) => {
-    if (Platform.OS !== 'web') Vibration.vibrate(50);
-    setSelectedPoi(poi);
-    modalJustOpenedRef.current = true;
-    setTimeout(() => { modalJustOpenedRef.current = false; }, 400);
-  }, []);
-
-  const handleViewProfile = useCallback((clientId) => {
-    setSelectedPoi(null);
-    setProfileClientId(clientId);
-  }, []);
+    if (Platform.OS !== 'web') Vibration.vibrate(50)
+    setSelectedPoi(poi)
+    modalJustOpenedRef.current = true
+    setTimeout(() => { modalJustOpenedRef.current = false }, 400)
+  }, [])
+  const handleViewProfile = useCallback((clientId) => { setSelectedPoi(null); setProfileClientId(clientId) }, [])
 
   const getMarkerPosition = (poi) => {
-    const relBearing = ((poi.bearing - heading + 360) % 360) * (Math.PI / 180);
-    const x = centerX + Math.sin(relBearing) * radius - 50;
-    const y = centerY - Math.cos(relBearing) * radius - 40;
-    return { x: Math.max(10, Math.min(width - 110, x)), y: Math.max(10, Math.min(height - 90, y)) };
-  };
+    const relBearing = ((poi.bearing - heading + 360) % 360) * (Math.PI / 180)
+    const xPos = centerX + Math.sin(relBearing) * viewRadius - 65
+    const yPos = centerY - Math.cos(relBearing) * viewRadius - 35
+    return { x: Math.max(10, Math.min(width - 140, xPos)), y: Math.max(10, Math.min(height - 120, yPos)) }
+  }
 
+  const renderDoorOverlay = () => {
+    if (!doorVisible) return null
+    const TOOTH_COUNT = 5
+    const toothH = DOOR_H / TOOTH_COUNT
+    const toothW = DOOR_W * 0.12
+    return (
+      <Animated.View style={[s.doorOverlay, { opacity: doorFade }]} pointerEvents="box-none">
+        <Animated.View style={[s.doorHalf, s.doorL, { transform: [{ translateX: doorLeft }] }]}>
+          <View style={[StyleSheet.absoluteFill, { backgroundColor: '#FFFFFF' }]} />
+        </Animated.View>
+        <Animated.View style={[s.doorHalf, s.doorR, { transform: [{ translateX: doorRight }] }]}>
+          <View style={[StyleSheet.absoluteFill, { backgroundColor: '#CE1126' }]} />
+        </Animated.View>
+        <Animated.View style={[s.doorZigzag, { transform: [{ translateX: doorLeft }] }]}>
+          {Array.from({ length: TOOTH_COUNT }, (_, i) => (
+            <View key={i} style={{
+              width: 0, height: 0,
+              borderTopWidth: toothH / 2, borderBottomWidth: toothH / 2, borderLeftWidth: toothW,
+              borderTopColor: 'transparent', borderBottomColor: 'transparent', borderLeftColor: '#FFFFFF',
+            }} />
+          ))}
+        </Animated.View>
+        <Animated.View style={[s.doorCenter, { transform: [{ scale: doorIconScale }], opacity: doorIconOpacity }]}>
+          <View style={s.doorIconRing}>
+            <LinearGradient colors={['#CE1126', '#9B0C23']} style={s.doorIconGrad}>
+              <Ionicons name="scan" size={44} color="#FFF" />
+            </LinearGradient>
+          </View>
+          <Text style={s.doorLabel}>AR EXPLORER</Text>
+          <Text style={s.doorSubLabel}>Bahrain</Text>
+        </Animated.View>
+      </Animated.View>
+    )
+  }
+
+  /* ─── Error / Permission States ─── */
   if (error) {
     return (
-      <View style={styles.container}>
-        <View style={styles.errorWrap}>
-          <Ionicons name="alert-circle-outline" size={48} color={C.accent} />
-          <Text style={styles.errorText}>{error}</Text>
-          <TouchableOpacity style={styles.backBtn} onPress={() => navigation?.goBack()}>
-            <Ionicons name="arrow-back" size={20} color="#FFF" />
-            <Text style={styles.backBtnText}>Back</Text>
+      <View style={s.container}>
+        <LinearGradient colors={['#0F172A', '#1E1B4B']} style={StyleSheet.absoluteFill} />
+        <View style={s.errorWrap}>
+          <View style={s.errorIcon}><Ionicons name="alert-circle-outline" size={44} color={C.accent} /></View>
+          <Text style={s.errorTitle}>Something went wrong</Text>
+          <Text style={s.errorText}>{error}</Text>
+          <TouchableOpacity onPress={() => navigation?.goBack()} activeOpacity={0.85}>
+            <LinearGradient colors={[C.accent, '#9B0C23']} style={s.errorBtnGrad}>
+              <Ionicons name="arrow-back" size={16} color="#FFF" />
+              <Text style={s.errorBtnText}>Go back</Text>
+            </LinearGradient>
           </TouchableOpacity>
         </View>
+        {renderDoorOverlay()}
       </View>
-    );
+    )
   }
 
   if (!permission?.granted) {
     return (
-      <View style={styles.container}>
-        <View style={styles.errorWrap}>
-          <Text style={styles.errorText}>Camera access is needed for AR mode</Text>
-          <TouchableOpacity style={styles.backBtn} onPress={() => requestPermission()}>
-            <Text style={styles.backBtnText}>Grant Permission</Text>
+      <View style={s.container}>
+        <LinearGradient colors={['#0F172A', '#1E1B4B']} style={StyleSheet.absoluteFill} />
+        <View style={s.errorWrap}>
+          <View style={s.errorIcon}><Ionicons name="camera-outline" size={44} color={C.accent} /></View>
+          <Text style={s.errorTitle}>Camera access needed</Text>
+          <Text style={s.errorText}>AR mode needs your camera to overlay nearby places on the real world.</Text>
+          <TouchableOpacity onPress={() => requestPermission()} activeOpacity={0.85}>
+            <LinearGradient colors={[C.accent, '#9B0C23']} style={s.errorBtnGrad}>
+              <Ionicons name="shield-checkmark" size={16} color="#FFF" />
+              <Text style={s.errorBtnText}>Grant permission</Text>
+            </LinearGradient>
           </TouchableOpacity>
         </View>
+        {renderDoorOverlay()}
       </View>
-    );
+    )
   }
 
+  const emptyHint = mode === 'saved' ? 'Save places to see them here'
+    : mode === 'events' ? 'No events in this direction'
+    : mode === 'restaurants' ? 'No restaurants in this direction'
+    : mode === 'places' ? 'No places in this direction'
+    : 'Point your camera around'
+
   return (
-    <View style={styles.container}>
+    <View style={s.container}>
       <CameraView style={StyleSheet.absoluteFill} facing="back" />
-      {loading ? (
-        <View style={styles.loaderWrap}>
-          <ActivityIndicator size="large" color={C.accent} />
-          <Text style={styles.loaderText}>Finding nearby spots…</Text>
-        </View>
-      ) : (
+
+      {loading ? <ScanningLoader /> : (
         <>
           {navigateToDest && location && (
-            <NavigateToBanner
-              destination={navigateToDest}
-              userLat={location.latitude}
-              userLng={location.longitude}
-              heading={heading}
-              getWalkingTime={getWalkingTime}
-              onDismiss={clearNavigateTo}
-            />
+            <NavigateToBanner destination={navigateToDest} userLat={location.latitude} userLng={location.longitude} heading={heading} onDismiss={clearNavigateTo} />
           )}
           {filteredPois.map((poi, i) => {
-            const { x, y } = getMarkerPosition(poi);
-            const busy = getIsBusy(poi);
+            const { x, y } = getMarkerPosition(poi)
             return (
-              <POIMarker
-                key={`${poi.name}-${poi.lat}-${i}`}
-                poi={poi}
-                x={x}
-                y={y}
-                onPress={handleOpenPOI}
+              <POIMarker key={`${poi.name}-${poi.lat}-${i}`} poi={poi} x={x} y={y} onPress={handleOpenPOI}
                 isNearest={nearestInView && nearestInView.name === poi.name && nearestInView.lat === poi.lat}
-                index={i}
-                isBusy={busy}
+                index={i} isBusy={getIsBusy(poi)}
               />
-            );
+            )
           })}
-          <CompassRing heading={heading} nearestOutOfView={filteredPois.length === 0 ? nearestOutOfView : null} centerY={centerY} />
+
+          <RadarNavigator
+            heading={heading}
+            basePois={basePois}
+            maxDistanceKm={maxDistanceKm}
+            onSelectPoi={handleOpenPOI}
+            topOffset={insets.top + 56}
+          />
         </>
       )}
-      <BlurView intensity={70} tint="dark" style={[styles.headerBlur, { paddingTop: insets.top + 8, paddingBottom: 12 }]}>
-        <View style={styles.header}>
-          <TouchableOpacity
-            style={styles.headerBackBtn}
-            onPress={() => navigation?.goBack()}
-            activeOpacity={0.8}
-          >
-            <Ionicons name="arrow-back" size={22} color="#FFF" />
-            <Text style={styles.headerBackBtnText}>Back</Text>
+
+      {/* ─── Header ─── */}
+      <BlurView intensity={Platform.OS === 'ios' ? 55 : 0} tint="dark" style={[s.header, { paddingTop: insets.top + 4 }]}>
+        <View style={s.headerBg} />
+        <View style={s.headerRow}>
+          <TouchableOpacity style={s.headerBtn} onPress={() => navigation?.goBack()} activeOpacity={0.8} accessibilityLabel="Go back">
+            <Ionicons name="chevron-back" size={22} color="#FFF" />
           </TouchableOpacity>
-          <View style={styles.titleWrap}>
-            <Ionicons name="globe-outline" size={20} color={C.accent} />
-            <Text style={styles.title}>AR Explore</Text>
+          <View style={s.headerCenter}>
+            <Text style={s.headerTitle}>AR Explorer</Text>
           </View>
-          <View style={styles.placeholder} />
+          <TouchableOpacity style={s.headerBtn} onPress={() => setShowSlider((v) => !v)} activeOpacity={0.8} accessibilityLabel="Toggle range slider">
+            <Ionicons name={showSlider ? 'radio' : 'radio-outline'} size={20} color={showSlider ? C.accent : '#FFF'} />
+          </TouchableOpacity>
         </View>
       </BlurView>
-      <BlurView intensity={55} tint="dark" style={styles.controlsBlur}>
-        <View style={[styles.modeTabs, { paddingHorizontal: 16, paddingBottom: 8 }]}>
-          {MODES.map((m) => (
-            <TouchableOpacity
-              key={m.id}
-              style={[styles.modeTab, mode === m.id && styles.modeTabActive]}
-              onPress={() => setMode(m.id)}
-              activeOpacity={0.8}
-            >
-              <Ionicons name={m.icon} size={16} color={mode === m.id ? '#FFF' : 'rgba(255,255,255,0.6)'} />
-              <Text style={[styles.modeTabText, mode === m.id && styles.modeTabTextActive]}>{m.label}</Text>
-            </TouchableOpacity>
-          ))}
-        </View>
-        <View style={[styles.sliderWrap, { paddingHorizontal: 20 }]}>
-          <View style={styles.sliderRow}>
-            <Ionicons name="resize" size={16} color="rgba(255,255,255,0.7)" />
-            <Text style={styles.sliderLabel}>View distance</Text>
-            <Text style={styles.sliderValue}>
-              {maxDistanceKm < 1 ? `${Math.round(maxDistanceKm * 1000)}m` : `${maxDistanceKm}km`}
+
+      {/* ─── Bottom Panel ─── */}
+      <View style={[s.bottom, { paddingBottom: insets.bottom + 8 }]}>
+        <BlurView intensity={Platform.OS === 'ios' ? 55 : 0} tint="dark" style={s.bottomBlur}>
+          <View style={s.bottomBg} />
+
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.filterRow}>
+            {MODES.map((m2) => {
+              const active = mode === m2.id
+              return (
+                <TouchableOpacity
+                  key={m2.id}
+                  style={[s.filterChip, active && { backgroundColor: `${m2.color}15`, borderColor: `${m2.color}50` }]}
+                  onPress={() => setMode(m2.id)}
+                  activeOpacity={0.8}
+                  accessibilityLabel={`Filter: ${m2.label}`}
+                  accessibilityState={{ selected: active }}
+                >
+                  <Ionicons name={active ? m2.icon.replace('-outline', '') : m2.icon} size={13} color={active ? m2.color : C.dimText} />
+                  <Text style={[s.filterText, active && { color: m2.color }]}>{m2.label}</Text>
+                </TouchableOpacity>
+              )
+            })}
+          </ScrollView>
+
+          {showSlider && (
+            <View style={s.sliderWrap}>
+              <View style={s.sliderHeader}>
+                <Text style={s.sliderLabel}>Discovery range</Text>
+                <View style={s.sliderPill}><Text style={s.sliderValue}>{maxDistanceKm < 1 ? `${Math.round(maxDistanceKm * 1000)}m` : `${maxDistanceKm}km`}</Text></View>
+              </View>
+              <Slider
+                style={s.slider}
+                minimumValue={0.5}
+                maximumValue={25}
+                step={0.5}
+                value={maxDistanceKm}
+                onValueChange={setMaxDistanceKm}
+                minimumTrackTintColor={C.accent}
+                maximumTrackTintColor="rgba(255,255,255,0.12)"
+                thumbTintColor={C.accent}
+              />
+            </View>
+          )}
+
+          {filteredPois.length === 0 && !loading && (
+            <Text style={s.hint}>
+              {navigateToDest ? 'Turn toward your destination'
+                : nearestOutOfView ? `Turn to find ${nearestOutOfView.name}`
+                : pois.length > 0 ? emptyHint
+                : 'Scan your surroundings'}
             </Text>
-          </View>
-          <Slider
-            style={styles.slider}
-            minimumValue={0.5}
-            maximumValue={25}
-            step={0.5}
-            value={maxDistanceKm}
-            onValueChange={setMaxDistanceKm}
-            minimumTrackTintColor={C.accent}
-            maximumTrackTintColor="rgba(255,255,255,0.3)"
-            thumbTintColor={C.accent}
-          />
-        </View>
-        <View style={[styles.footer, { paddingBottom: insets.bottom + 12 }]}>
-          {mode === 'food' && (showQuietHint || filteredPois.some((p) => getIsBusy(p) === false)) ? (
-            <TouchableOpacity style={styles.hintChip} onPress={() => setShowQuietHint((s) => !s)} activeOpacity={0.8}>
-              <Ionicons name="cafe-outline" size={14} color={C.quiet} />
-              <Text style={styles.hintChipText}>{showQuietHint ? 'Showing quieter spots' : 'Looking for quiet cafés?'}</Text>
-            </TouchableOpacity>
-          ) : null}
-          <Text style={styles.hint}>
-            {navigateToDest
-              ? 'Turn until the arrow points at your destination, then walk'
-              : filteredPois.length === 0 && nearestOutOfView
-                ? `Turn to see ${nearestOutOfView.name} (${nearestOutOfView.distanceKm < 1 ? Math.round(nearestOutOfView.distanceKm * 1000) + 'm' : nearestOutOfView.distanceKm.toFixed(1) + 'km'})`
-                : filteredPois.length === 0 && pois.length > 0
-                  ? mode === 'saved' ? 'Save places from the detail card to see them here' : 'Point your camera toward places to see them'
-                  : filteredPois.length > 0 && nearestInView
-                    ? `${filteredPois.length} in view · Nearest: ${nearestInView.name}`
-                    : mode === 'landmarks'
-                      ? 'Discover famous buildings & heritage sites'
-                      : mode === 'food'
-                        ? 'Warm = busy now · Cool = quieter'
-                        : mode === 'saved'
-                          ? 'Your saved places nearby'
-                          : 'Explore landmarks, food & events'}
-          </Text>
-          <Text style={styles.funHint}>{FUN_HINTS[funHintIndex]}</Text>
-        </View>
-      </BlurView>
+          )}
+        </BlurView>
+      </View>
+
       <POIDetailModal
-        visible={!!selectedPoi}
-        poi={selectedPoi}
-        onClose={closeModal}
-        onRequestClose={() => setSelectedPoi(null)}
-        insets={insets}
-        openDirections={openDirections}
-        getWalkingTime={getWalkingTime}
-        onViewProfile={handleViewProfile}
-        onToggleSave={toggleSave}
-        isSaved={selectedPoi ? isSaved(selectedPoi) : false}
+        visible={!!selectedPoi} poi={selectedPoi} onClose={closeModal} onRequestClose={() => setSelectedPoi(null)}
+        insets={insets} openDirections={openDirections}
+        onViewProfile={handleViewProfile} onToggleSave={toggleSave} isSaved={selectedPoi ? isSaved(selectedPoi) : false}
       />
       <ClientProfileModal
-        visible={!!profileClientId}
-        clientId={profileClientId}
-        onClose={() => setProfileClientId(null)}
-        insets={insets}
-        onOpenARNavigate={(dest) => {
-          setProfileClientId(null);
-          setNavigateToDest(dest);
-        }}
+        visible={!!profileClientId} clientId={profileClientId} onClose={() => setProfileClientId(null)}
+        insets={insets} onOpenARNavigate={(dest) => { setProfileClientId(null); setNavigateToDest(dest) }}
       />
+
+      {renderDoorOverlay()}
     </View>
-  );
+  )
 }
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#000',
-  },
-  loaderWrap: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  loaderText: {
-    color: C.text,
-    fontSize: 16,
-    marginTop: 12,
-  },
-  errorWrap: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 24,
-  },
-  errorText: {
-    color: C.text,
-    fontSize: 16,
-    textAlign: 'center',
-    marginTop: 16,
-  },
-  backBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    marginTop: 24,
-    paddingVertical: 12,
-    paddingHorizontal: 20,
-    backgroundColor: C.accent,
-    borderRadius: 12,
-  },
-  backBtnText: {
-    color: '#FFF',
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-  },
-  headerBackBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    paddingVertical: 10,
-    paddingHorizontal: 12,
-    marginLeft: -4,
-    minHeight: 44,
-    justifyContent: 'center',
-  },
-  headerBackBtnText: {
-    color: '#FFF',
-    fontSize: 17,
-    fontWeight: '600',
-  },
-  titleWrap: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  title: {
-    color: C.text,
-    fontSize: 18,
-    fontWeight: '700',
-  },
-  placeholder: { width: 80 },
-  funHint: {
-    color: 'rgba(255,255,255,0.5)',
-    fontSize: 12,
-    fontStyle: 'italic',
-    marginTop: 6,
-    textAlign: 'center',
-  },
-  footer: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
-    alignItems: 'center',
-  },
-  hint: {
-    color: C.sub,
-    fontSize: 13,
-  },
-  headerBlur: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    borderBottomWidth: 1,
-    borderBottomColor: 'rgba(255,255,255,0.08)',
-  },
-  controlsBlur: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    bottom: 0,
-    overflow: 'hidden',
-    borderTopWidth: 1,
-    borderTopColor: 'rgba(255,255,255,0.08)',
-  },
-  markerWrap: {
-    position: 'absolute',
-    width: 120,
-  },
-  markerGlow: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: C.glow,
-    borderRadius: 16,
-    margin: -6,
-    opacity: 0.8,
-  },
-  marker: {
-    width: 110,
-    paddingVertical: 8,
-    paddingHorizontal: 10,
-    backgroundColor: C.card,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: C.cardBorder,
-  },
-  markerNearest: {
-    borderColor: C.accent,
-    borderWidth: 2,
-    minWidth: 120,
-  },
-  nearestBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    alignSelf: 'flex-start',
-    backgroundColor: C.accent,
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 6,
-    marginBottom: 6,
-  },
-  nearestBadgeText: {
-    color: '#FFF',
-    fontSize: 9,
-    fontWeight: '800',
-    letterSpacing: 0.3,
-  },
-  markerRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    marginBottom: 2,
-  },
-  markerIcon: {
-    width: 20,
-    height: 20,
-    borderRadius: 10,
-    backgroundColor: 'rgba(255,255,255,0.2)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  markerName: {
-    flex: 1,
-    color: C.text,
-    fontSize: 12,
-    fontWeight: '700',
-  },
-  markerDist: {
-    color: C.sub,
-    fontSize: 11,
-  },
-  markerLandmark: {
-    borderColor: C.accent,
-    borderWidth: 1.5,
-    minWidth: 120,
-  },
-  markerIconLandmark: {
-    width: 24,
-    height: 24,
-    borderRadius: 12,
-  },
-  markerNameLandmark: {
-    fontSize: 13,
-  },
-  markerBusy: {
-    borderColor: C.busy,
-    borderWidth: 1.5,
-  },
-  markerQuiet: {
-    borderColor: C.quiet,
-    borderWidth: 1.5,
-  },
-  navigateBanner: {
-    position: 'absolute',
-    top: 100,
-    left: 16,
-    right: 16,
-    zIndex: 10,
-  },
-  navigateBannerInner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: 'rgba(0,0,0,0.85)',
-    borderRadius: 16,
-    padding: 16,
-    borderWidth: 2,
-    borderColor: C.accent,
-  },
-  navigateBannerArrowWrap: {
-    width: 48,
-    height: 48,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  navigateBannerText: {
-    flex: 1,
-    marginLeft: 12,
-  },
-  navigateBannerTitle: {
-    color: C.text,
-    fontSize: 16,
-    fontWeight: '800',
-    marginBottom: 4,
-  },
-  navigateBannerSub: {
-    color: C.sub,
-    fontSize: 13,
-    marginBottom: 2,
-  },
-  navigateBannerDist: {
-    color: C.accent,
-    fontSize: 12,
-    fontWeight: '700',
-  },
-  navigateBannerClose: {
-    padding: 8,
-  },
-  detailActionsRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 12,
-    marginTop: 12,
-  },
-  detailActionIconBtn: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    backgroundColor: 'rgba(255,255,255,0.12)',
-    borderRadius: 12,
-    minWidth: 64,
-  },
-  detailActionIconLabel: {
-    color: C.sub,
-    fontSize: 11,
-    fontWeight: '600',
-    marginTop: 4,
-  },
-  hintChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    alignSelf: 'center',
-    gap: 6,
-    paddingVertical: 6,
-    paddingHorizontal: 12,
-    backgroundColor: 'rgba(14,165,233,0.2)',
-    borderRadius: 20,
-    marginBottom: 8,
-  },
-  hintChipText: {
-    color: C.quiet,
-    fontSize: 12,
-    fontWeight: '700',
-  },
-  sliderWrap: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    bottom: 100,
-  },
-  sliderRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    marginBottom: 4,
-  },
-  sliderLabel: {
-    color: 'rgba(255,255,255,0.8)',
-    fontSize: 12,
-    fontWeight: '600',
-    flex: 1,
-  },
-  sliderValue: {
-    color: C.accent,
-    fontSize: 13,
-    fontWeight: '700',
-  },
-  slider: {
-    width: '100%',
-    height: 28,
-  },
-  modeTabs: {
-    position: 'absolute',
-    bottom: 52,
-    left: 0,
-    right: 0,
-    flexDirection: 'row',
-    justifyContent: 'center',
-    gap: 8,
-  },
-  modeTab: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    paddingVertical: 8,
-    paddingHorizontal: 14,
-    borderRadius: 20,
-    backgroundColor: 'rgba(0,0,0,0.5)',
-  },
-  modeTabActive: {
-    backgroundColor: C.accent,
-  },
-  modeTabText: {
-    color: 'rgba(255,255,255,0.6)',
-    fontSize: 13,
-    fontWeight: '600',
-  },
-  modeTabTextActive: {
-    color: '#FFF',
-  },
-  compassWrap: {
-    position: 'absolute',
-    alignItems: 'flex-start',
-  },
-  compassBlur: {
-    borderRadius: 36,
-    overflow: 'hidden',
-  },
-  compassCircle: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.2)',
-  },
-  compassN: {
-    position: 'absolute',
-  },
-  compassNText: {
-    color: 'rgba(255,255,255,0.9)',
-    fontSize: 10,
-    fontWeight: '800',
-  },
-  compassNeedle: {
-    position: 'absolute',
-    left: 25,
-    top: 25,
-  },
-  compassHint: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    marginTop: 8,
-    maxWidth: 140,
-    paddingVertical: 6,
-    paddingHorizontal: 10,
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    borderRadius: 10,
-  },
-  compassHintText: {
-    color: C.sub,
-    fontSize: 11,
-    fontWeight: '600',
-    flex: 1,
-  },
-  detailActions: {
-    gap: 12,
-    marginTop: 16,
-  },
-  directionsBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    paddingVertical: 14,
-    paddingHorizontal: 18,
-    backgroundColor: C.accent,
-    borderRadius: 14,
-  },
-  directionsBtnText: {
-    color: '#FFF',
-    fontSize: 16,
-    fontWeight: '700',
-    flex: 1,
-  },
-  directionsBtnSub: {
-    color: 'rgba(255,255,255,0.9)',
-    fontSize: 13,
-  },
-  viewProfileBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 10,
-    paddingVertical: 14,
-    paddingHorizontal: 18,
-    backgroundColor: 'rgba(255,255,255,0.18)',
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.3)',
-  },
-  viewProfileBtnText: {
-    color: '#FFF',
-    fontSize: 16,
-    fontWeight: '700',
-  },
-  detailOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.6)',
-    justifyContent: 'flex-end',
-  },
-  detailCard: {
-    backgroundColor: 'rgba(28,25,23,0.95)',
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
-    padding: 20,
-    paddingTop: 12,
-    borderWidth: 1,
-    borderBottomWidth: 0,
-    borderColor: 'rgba(255,255,255,0.12)',
-    borderLeftWidth: 4,
-    borderLeftColor: C.accent,
-  },
-  detailHandle: {
-    width: 36,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: 'rgba(255,255,255,0.3)',
-    alignSelf: 'center',
-    marginBottom: 16,
-  },
-  detailClose: {
-    position: 'absolute',
-    top: 12,
-    right: 12,
-    zIndex: 1,
-  },
-  detailHeader: {
-    marginBottom: 16,
-  },
-  detailTypeBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    alignSelf: 'flex-start',
-    backgroundColor: C.accent,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: 8,
-    marginBottom: 10,
-  },
-  detailTypeText: {
-    color: '#FFF',
-    fontSize: 11,
-    fontWeight: '800',
-    letterSpacing: 0.5,
-  },
-  detailTitle: {
-    color: C.text,
-    fontSize: 22,
-    fontWeight: '800',
-    lineHeight: 28,
-    marginBottom: 10,
-  },
-  detailMetaRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    flexWrap: 'wrap',
-    gap: 16,
-  },
-  detailMetaItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-  },
-  detailMetaText: {
-    color: C.sub,
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  ratingRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 2,
-  },
-  ratingNum: {
-    color: '#FBBF24',
-    fontSize: 13,
-    fontWeight: '700',
-    marginLeft: 4,
-  },
-  detailSection: {
-    marginBottom: 16,
-  },
-  detailSectionTitle: {
-    color: 'rgba(255,255,255,0.5)',
-    fontSize: 11,
-    fontWeight: '700',
-    letterSpacing: 0.5,
-    marginBottom: 8,
-  },
-  detailRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    marginBottom: 8,
-  },
-  detailText: {
-    color: C.sub,
-    fontSize: 15,
-    flex: 1,
-    lineHeight: 22,
-  },
-  detailDescScroll: {
-    maxHeight: 120,
-  },
-  detailDesc: {
-    color: C.sub,
-    fontSize: 15,
-    lineHeight: 22,
-  },
-});
+const s = StyleSheet.create({
+  container: { flex: 1, backgroundColor: '#000' },
+
+  errorWrap: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 32 },
+  errorIcon: { width: 80, height: 80, borderRadius: 40, backgroundColor: `${C.accent}12`, alignItems: 'center', justifyContent: 'center', marginBottom: 20, borderWidth: 1, borderColor: `${C.accent}18` },
+  errorTitle: { color: '#FFF', fontSize: 20, fontWeight: '800', marginBottom: 6 },
+  errorText: { color: C.sub, fontSize: 14, textAlign: 'center', lineHeight: 21, marginBottom: 24 },
+  errorBtnGrad: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 13, paddingHorizontal: 24, borderRadius: 14 },
+  errorBtnText: { color: '#FFF', fontSize: 15, fontWeight: '700' },
+
+  header: { position: 'absolute', top: 0, left: 0, right: 0, overflow: 'hidden', borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: C.glassBorder, paddingBottom: 8 },
+  headerBg: { ...StyleSheet.absoluteFillObject, backgroundColor: Platform.OS === 'android' ? C.glass : 'transparent' },
+  headerRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 10 },
+  headerBtn: { width: 38, height: 38, borderRadius: 12, backgroundColor: 'rgba(255,255,255,0.07)', alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: C.glassBorder },
+  headerCenter: { flex: 1, alignItems: 'center' },
+  headerTitle: { color: '#FFF', fontSize: 16, fontWeight: '800', letterSpacing: 0.2 },
+
+  bottom: { position: 'absolute', left: 0, right: 0, bottom: 0 },
+  bottomBlur: { overflow: 'hidden', borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: C.glassBorder },
+  bottomBg: { ...StyleSheet.absoluteFillObject, backgroundColor: Platform.OS === 'android' ? C.glass : 'transparent' },
+
+  filterRow: { paddingHorizontal: 12, paddingTop: 8, paddingBottom: 4, gap: 6 },
+  filterChip: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingVertical: 6, paddingHorizontal: 10, borderRadius: 16, backgroundColor: 'rgba(255,255,255,0.04)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.06)' },
+  filterText: { color: C.dimText, fontSize: 11, fontWeight: '600' },
+
+  sliderWrap: { paddingHorizontal: 16, paddingTop: 2, paddingBottom: 0 },
+  sliderHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  sliderLabel: { color: C.dimText, fontSize: 10, fontWeight: '600' },
+  sliderPill: { backgroundColor: `${C.accent}15`, paddingHorizontal: 7, paddingVertical: 1.5, borderRadius: 5 },
+  sliderValue: { color: C.accent, fontSize: 10, fontWeight: '700' },
+  slider: { width: '100%', height: 24 },
+
+  hint: { color: C.dimText, fontSize: 11, fontWeight: '500', textAlign: 'center', paddingTop: 4, paddingBottom: 6 },
+
+  doorOverlay: { ...StyleSheet.absoluteFillObject, zIndex: 9999, elevation: 9999 },
+  doorHalf: { position: 'absolute', top: 0, bottom: 0, width: DOOR_W / 2, overflow: 'hidden' },
+  doorL: { left: 0 },
+  doorR: { right: 0 },
+  doorZigzag: { position: 'absolute', top: 0, left: DOOR_W / 2, bottom: 0, zIndex: 2 },
+  doorCenter: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, alignItems: 'center', justifyContent: 'center', zIndex: 10000 },
+  doorIconRing: {
+    width: 110, height: 110, borderRadius: 55, borderWidth: 4, borderColor: '#FFF', overflow: 'hidden',
+    ...Platform.select({
+      ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.4, shadowRadius: 16 },
+      android: { elevation: 14 },
+    }),
+  },
+  doorIconGrad: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  doorLabel: { marginTop: 14, fontSize: 18, fontWeight: '900', color: '#FFF', letterSpacing: 3, textShadowColor: 'rgba(0,0,0,0.4)', textShadowOffset: { width: 0, height: 2 }, textShadowRadius: 6 },
+  doorSubLabel: { marginTop: 4, fontSize: 13, fontWeight: '700', color: 'rgba(255,255,255,0.7)', letterSpacing: 2, textTransform: 'uppercase' },
+})

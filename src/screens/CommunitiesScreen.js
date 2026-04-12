@@ -39,30 +39,35 @@ import {
   fetchClients,
   fetchClientByQrPayload,
 } from '../services/community';
-import { colors as themeColors } from '../theme/designTokens';
-import { useTheme } from '../context/ThemeContext';
+import { colors as themeColors, colorsDark as themeColorsDark } from '../theme/designTokens'
+import { useTheme } from '../context/ThemeContext'
 
-const C = {
-  bg: '#FFFFFF',
-  card: '#FFFFFF',
-  text: '#111827',
-  sub: '#6B7280',
-  muted: '#9CA3AF',
-  border: 'rgba(209,213,219,0.7)',
-  red: themeColors.error,
-  redSoft: themeColors.errorMuted,
-  orange: themeColors.morning,
-  orangeSoft: themeColors.warningMuted,
-  blue: themeColors.afternoon,
-  blueSoft: themeColors.primaryMuted,
-  green: themeColors.success,
-  upvoteLight: themeColors.success,
-  upvoteDark: '#047857',
-  chip: '#F1F5F9',
-  chipActive: themeColors.textPrimary,
-  accent: themeColors.textSecondary,
-  warmGlow: themeColors.textMuted,
-};
+function getC(isDark) {
+  const tc = isDark ? themeColorsDark : themeColors
+  return {
+    bg: isDark ? '#0F172A' : '#FFFFFF',
+    card: isDark ? '#1E293B' : '#FFFFFF',
+    text: isDark ? '#F8FAFC' : '#111827',
+    sub: isDark ? '#CBD5E1' : '#6B7280',
+    muted: isDark ? '#94A3B8' : '#9CA3AF',
+    border: isDark ? 'rgba(51,65,85,0.7)' : 'rgba(209,213,219,0.7)',
+    red: tc.error,
+    redSoft: tc.errorMuted,
+    orange: tc.morning,
+    orangeSoft: tc.warningMuted,
+    blue: tc.afternoon,
+    blueSoft: tc.primaryMuted,
+    green: tc.success,
+    upvoteLight: tc.success,
+    upvoteDark: isDark ? '#10B981' : '#047857',
+    chip: isDark ? '#334155' : '#F1F5F9',
+    chipActive: tc.textPrimary,
+    accent: isDark ? '#CBD5E1' : tc.textSecondary,
+    warmGlow: tc.textMuted,
+  }
+}
+
+let C = getC(false)
 
 // Muted accent palette for review strips (modern, not rainbow)
 const REVIEW_ACCENT_COLORS = [
@@ -1110,8 +1115,9 @@ function RevolverFabOptions({ expanded, onOptionPress, children }) {
 }
 
 export default function CommunitiesScreen() {
-  const { colors } = useTheme();
-  const insets = useSafeAreaInsets();
+  const { colors, isDark } = useTheme()
+  C = getC(isDark)
+  const insets = useSafeAreaInsets()
   const route = useRoute();
   const navigation = useNavigation();
   const [posts, setPosts] = useState([]);

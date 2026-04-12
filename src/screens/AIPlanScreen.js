@@ -1,7 +1,8 @@
-import React, { useRef, useEffect, useState, useMemo } from 'react';
+import React, { useRef, useEffect, useState, useMemo, useCallback } from 'react';
 import {
   StyleSheet,
   Text,
+  TextInput,
   View,
   Dimensions,
   Animated,
@@ -9,6 +10,7 @@ import {
   Platform,
   TouchableOpacity,
   TouchableWithoutFeedback,
+  Pressable,
   ScrollView,
   ActivityIndicator,
   Modal,
@@ -16,9 +18,19 @@ import {
   Easing,
   Image,
   Linking,
-  LayoutAnimation,
   Alert,
+  Share,
 } from 'react-native';
+import * as Clipboard from 'expo-clipboard';
+import * as Haptics from 'expo-haptics';
+import Reanimated, {
+  FadeIn,
+  FadeOut,
+  FadeInDown,
+  FadeOutUp,
+  ZoomInEasyDown,
+  ZoomOutEasyDown,
+} from 'react-native-reanimated';
 import * as Location from 'expo-location';
 import { BlurView } from 'expo-blur';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -33,6 +45,27 @@ import { useTheme } from '../context/ThemeContext';
 import { supabase } from '../config/supabase';
 import ClientProfileModal from '../components/ClientProfileModal';
 import { ensureImageUrl } from '../utils/imageUrl';
+import { GLView } from 'expo-gl';
+import { Renderer } from 'expo-three';
+import {
+  Scene,
+  PerspectiveCamera,
+  AmbientLight,
+  DirectionalLight,
+  PointLight,
+  Mesh,
+  Group,
+  CylinderGeometry,
+  BoxGeometry,
+  SphereGeometry,
+  ConeGeometry,
+  TorusGeometry,
+  MeshStandardMaterial,
+  Color,
+  Fog,
+  RingGeometry,
+  DoubleSide,
+} from 'three';
 
 const { height: SCREEN_HEIGHT, width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -74,6 +107,170 @@ const openAllStopsInGoogleMaps = async (plan) => {
     Alert.alert('Location error', e?.message ?? 'Could not get your location. Enable location and try again.');
   }
 };
+
+/** Rich share / copy text for AI day plan (and invite when plan is empty). */
+function formatPlanShareMessage(plan) {
+  if (!plan || plan.length === 0) {
+    return {
+      message:
+        '🇧🇭 Plan an amazing day in Bahrain with Go Bahrain!\n\n' +
+        'AI-crafted itineraries — dining, culture, and events — tailored to you.\n\n' +
+        'Download the app and tap "Build my day". Yalla!',
+      title: 'Go Bahrain',
+    };
+  }
+  const meals = plan.filter((i) => i.type === 'restaurant').length;
+  const events = plan.filter((i) => i.type === 'event').length;
+  const other = Math.max(0, plan.length - meals - events);
+  const header =
+    `🇧🇭 My Bahrain day — ${plan.length} stops\n` +
+    `${meals} meal${meals !== 1 ? 's' : ''} · ${events} event${events !== 1 ? 's' : ''} · ${other} place${other !== 1 ? 's' : ''}\n`;
+  const lines = plan.map((item, i) => {
+    const icon = item.type === 'restaurant' ? '🍽' : item.type === 'event' ? '📅' : '📍';
+    const slot = item.time ? ` · ${item.time}` : '';
+    let block = `${i + 1}. ${icon} ${item.spot || 'Stop'}${slot}`;
+    if (item.reason && String(item.reason).trim()) {
+      const r = String(item.reason).replace(/\s+/g, ' ').trim();
+      const short = r.length > 100 ? `${r.slice(0, 97)}…` : r;
+      block += `\n   ${short}`;
+    }
+    return block;
+  });
+  return {
+    message: `${header}\n${lines.join('\n\n')}\n\n— Shared from Go Bahrain`,
+    title: 'My Bahrain itinerary',
+  };
+}
+
+/** Staggered spring entrance (Reanimated layout). */
+function AiStagger({ children, delay = 0, style }) {
+  return (
+    <Reanimated.View
+      entering={FadeInDown.springify()
+        .damping(17)
+        .stiffness(210)
+        .mass(0.65)
+        .delay(delay)}
+      style={style}
+    >
+      {children}
+    </Reanimated.View>
+  )
+}
+
+function PopIn({ delay = 0, trigger, children, style }) {
+  const scale = useRef(new Animated.Value(0.7)).current
+  const opacity = useRef(new Animated.Value(0)).current
+  const ty = useRef(new Animated.Value(14)).current
+
+  useEffect(() => {
+    scale.setValue(0.7)
+    opacity.setValue(0)
+    ty.setValue(14)
+    const timer = setTimeout(() => {
+      Animated.parallel([
+        Animated.spring(scale, { toValue: 1, tension: 170, friction: 8, useNativeDriver: true }),
+        Animated.timing(opacity, { toValue: 1, duration: 220, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
+        Animated.spring(ty, { toValue: 0, tension: 170, friction: 10, useNativeDriver: true }),
+      ]).start()
+    }, delay)
+    return () => clearTimeout(timer)
+  }, [trigger])
+
+  return (
+    <Animated.View style={[style, { transform: [{ scale }, { translateY: ty }], opacity }]}>
+      {children}
+    </Animated.View>
+  )
+}
+
+function PlanStepBubble({ step, children }) {
+  return (
+    <View style={styles.planModalPresenceLayer} key={step}>
+      {children}
+    </View>
+  )
+}
+
+const hexToRgba = (hex, alpha) => {
+  const raw = String(hex || '').replace('#', '')
+  const full = raw.length === 3 ? raw.split('').map((c) => c + c).join('') : raw
+  const n = parseInt(full, 16)
+  if (Number.isNaN(n) || full.length < 6) return `rgba(255,255,255,${alpha})`
+  const r = (n >> 16) & 255
+  const g = (n >> 8) & 255
+  const b = n & 255
+  return `rgba(${r},${g},${b},${alpha})`
+}
+
+function AnimatedOptionChip({ item, isSelected, onPress }) {
+  const scaleAnim = useRef(new Animated.Value(1)).current
+  const bounceAnim = useRef(new Animated.Value(0)).current
+
+  useEffect(() => {
+    if (isSelected) {
+      Animated.parallel([
+        Animated.spring(scaleAnim, { toValue: 1.06, tension: 280, friction: 8, useNativeDriver: true }),
+        Animated.sequence([
+          Animated.timing(bounceAnim, { toValue: -4, duration: 80, useNativeDriver: true }),
+          Animated.spring(bounceAnim, { toValue: 0, tension: 350, friction: 5, useNativeDriver: true }),
+        ]),
+      ]).start()
+    } else {
+      Animated.spring(scaleAnim, { toValue: 1, tension: 200, friction: 12, useNativeDriver: true }).start()
+    }
+  }, [isSelected, scaleAnim, bounceAnim])
+
+  return (
+    <Animated.View style={{ transform: [{ scale: scaleAnim }, { translateY: bounceAnim }] }}>
+      <TouchableOpacity
+        style={[
+          styles.pmChip,
+          isSelected && styles.pmChipSelected,
+          isSelected && {
+            backgroundColor: item.color,
+            borderColor: 'rgba(255,255,255,0.88)',
+            shadowColor: item.color,
+          },
+        ]}
+        activeOpacity={0.75}
+        onPress={onPress}
+        accessibilityRole="button"
+        accessibilityState={{ selected: isSelected }}
+        accessibilityLabel={item.label}
+      >
+        {isSelected && (
+          <LinearGradient
+            colors={['rgba(255,255,255,0.35)', 'rgba(255,255,255,0.06)']}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={[StyleSheet.absoluteFill, { borderRadius: 26 }]}
+            pointerEvents="none"
+          />
+        )}
+        <View
+          style={[
+            styles.pmChipIcon,
+            isSelected && { backgroundColor: 'rgba(255,255,255,0.28)' },
+            !isSelected && { backgroundColor: hexToRgba(item.color, 0.16) },
+          ]}
+        >
+          <Ionicons name={item.icon} size={17} color={isSelected ? '#FFFFFF' : item.color} />
+        </View>
+        <Text style={[styles.pmChipText, isSelected && styles.pmChipTextSelected]}>
+          {item.label}
+        </Text>
+        {isSelected && (
+          <View style={styles.pmChipCheck}>
+            <Ionicons name="checkmark" size={12} color="#FFFFFF" />
+          </View>
+        )}
+      </TouchableOpacity>
+    </Animated.View>
+  )
+}
+
+
 const APP_TAB_BAR_HEIGHT_IOS = 70;
 const getAppTabBarHeight = (insets) =>
   Platform.OS === 'ios' ? APP_TAB_BAR_HEIGHT_IOS : 60 + (insets?.bottom ?? 0);
@@ -118,6 +315,37 @@ function clampRegionToBahrain(region) {
     latitudeDelta,
     longitudeDelta,
   };
+}
+
+function isWithinBahrainBounds(lat, lng) {
+  return (
+    lat >= BAHRAIN_BOUNDS.minLat &&
+    lat <= BAHRAIN_BOUNDS.maxLat &&
+    lng >= BAHRAIN_BOUNDS.minLng &&
+    lng <= BAHRAIN_BOUNDS.maxLng
+  );
+}
+
+/** GPT sometimes swaps lat/lng; accept only pairs that fall inside Bahrain after optional swap */
+function unswapLatLng(lat, lng) {
+  const la = parseFloat(lat);
+  const ln = parseFloat(lng);
+  if (Number.isNaN(la) || Number.isNaN(ln) || (la === 0 && ln === 0)) return null;
+  if (isWithinBahrainBounds(la, ln)) return { lat: la, lng: ln };
+  if (isWithinBahrainBounds(ln, la)) return { lat: ln, lng: la };
+  return null;
+}
+
+function parsePlanItemCoords(item) {
+  if (!item) return null;
+  return unswapLatLng(item.lat, item.lng);
+}
+
+function parseCoordsFromPineconeMetadata(meta) {
+  if (!meta || typeof meta !== 'object') return null;
+  const la = parseFloat(meta.lat ?? meta.latitude ?? meta.Lat ?? '');
+  const ln = parseFloat(meta.long ?? meta.longitude ?? meta.lng ?? meta.Lng ?? '');
+  return unswapLatLng(la, ln);
 }
 
 import { PREFERENCES, FOOD_CATEGORIES } from '../constants/preferences';
@@ -342,29 +570,39 @@ function buildSpotPreviewsFromPlan(plan) {
   }));
 }
 
-// Match plan item to Pinecone match by spot name (fuzzy), extract image + clientId
+// Match plan item to Pinecone match by spot name (exact preferred, then fuzzy), extract image + clientId + canonical coords
 function matchPlanToPinecone(planItem, pineconeMatches) {
   if (!planItem || !pineconeMatches?.length) return null;
   const spotName = (planItem.spot || '').trim().toLowerCase();
   if (!spotName) return null;
   const norm = (s) => String(s || '').trim().toLowerCase().replace(/\s+/g, ' ');
+  let best = null;
+  let bestScore = -1;
   for (const m of pineconeMatches) {
     const meta = m.metadata || {};
-    const names = [
-      meta.business_name,
-      meta.event_name,
-      meta.name,
-      meta.place_name,
-    ].filter(Boolean);
-    const matched = names.some((n) => norm(n) === spotName || norm(n).includes(spotName) || spotName.includes(norm(n)));
-    if (matched) {
+    const names = [meta.business_name, meta.event_name, meta.name, meta.place_name].filter(Boolean);
+    let matchRank = 0;
+    for (const n of names) {
+      const nn = norm(n);
+      if (!nn) continue;
+      if (nn === spotName) {
+        matchRank = 2;
+        break;
+      }
+      if (nn.includes(spotName) || spotName.includes(nn)) matchRank = Math.max(matchRank, 1);
+    }
+    if (matchRank === 0) continue;
+    const coords = parseCoordsFromPineconeMetadata(meta);
+    const score = matchRank * 10 + (coords ? 1 : 0);
+    if (score > bestScore) {
+      bestScore = score;
       const image = meta.image_url || meta.thumbnail_url || meta.cover_image || meta.image || null;
       const clientId = meta.client_a_uuid || meta.id || m.id || null;
       const rating = meta.rating != null && meta.rating !== '' ? meta.rating : null;
-      return { image, clientId, rating };
+      best = { image, clientId, rating, coords };
     }
   }
-  return null;
+  return best;
 }
 
 // Normalize name for matching (lowercase, collapse spaces, remove common suffixes)
@@ -403,26 +641,41 @@ function matchPlanToClient(planItem, clients) {
 
 // Enrich plan items with client images from Supabase (Pinecone or direct client lookup)
 async function enrichPlanWithClientData(plan, pineconeMatches) {
-  // Step 1: Match from Pinecone when available
+  // Step 1: Match from Pinecone when available — prefer Pinecone metadata lat/lng over model output
   let enriched = plan.map((item) => {
     const match = matchPlanToPinecone(item, pineconeMatches);
+    const pine = match?.coords;
+    const gptFixed = pine ? null : parsePlanItemCoords(item);
     return {
       ...item,
       image: match?.image || null,
       clientId: match?.clientId || null,
       rating: match?.rating != null ? match.rating : null,
+      lat: pine ? pine.lat : gptFixed ? gptFixed.lat : item.lat,
+      lng: pine ? pine.lng : gptFixed ? gptFixed.lng : item.lng,
     };
   });
 
-  // Step 2: Fetch client images from Supabase (for matched clientIds)
+  // Step 2: Fetch client images from Supabase (for matched clientIds); backfill coords from DB when still missing/invalid
   const clientIds = [...new Set(enriched.map((i) => i.clientId).filter(Boolean))];
   let clientImageMap = {};
   if (clientIds.length > 0) {
-    const { data: clients } = await supabase.from('client').select('client_a_uuid, client_image').in('client_a_uuid', clientIds);
+    const { data: clients } = await supabase
+      .from('client')
+      .select('client_a_uuid, client_image, lat, long, latitude, longitude')
+      .in('client_a_uuid', clientIds);
+    const coordByClientId = {};
     (clients || []).forEach((c) => {
       if (c.client_a_uuid && c.client_image) {
         clientImageMap[c.client_a_uuid] = ensureImageUrl(String(c.client_image).trim()) || String(c.client_image).trim();
       }
+      const u = unswapLatLng(c.lat ?? c.latitude, c.long ?? c.longitude ?? c.lng);
+      if (u && c.client_a_uuid) coordByClientId[c.client_a_uuid] = u;
+    });
+    enriched = enriched.map((item) => {
+      const u = item.clientId ? coordByClientId[item.clientId] : null;
+      if (u) return { ...item, lat: u.lat, lng: u.lng };
+      return item;
     });
   }
 
@@ -431,7 +684,7 @@ async function enrichPlanWithClientData(plan, pineconeMatches) {
   if (needsImage.length > 0) {
     const { data: allClients } = await supabase
       .from('client')
-      .select('client_a_uuid, business_name, name, business_name_ar, client_image, rating')
+      .select('client_a_uuid, business_name, name, business_name_ar, client_image, rating, lat, long, latitude, longitude')
       .limit(300);
     const clientsList = allClients || [];
     enriched = enriched.map((item) => {
@@ -439,11 +692,13 @@ async function enrichPlanWithClientData(plan, pineconeMatches) {
       const client = matchPlanToClient(item, clientsList);
       if (client) {
         const img = client.client_image ? ensureImageUrl(String(client.client_image).trim()) || String(client.client_image).trim() : null;
+        const dbCoords = unswapLatLng(client.lat ?? client.latitude, client.long ?? client.longitude ?? client.lng);
         return {
           ...item,
           image: item.image || img,
           clientId: item.clientId || client.client_a_uuid,
           rating: item.rating != null ? item.rating : (client.rating != null ? client.rating : null),
+          ...(dbCoords ? { lat: dbCoords.lat, lng: dbCoords.lng } : {}),
         };
       }
       return item;
@@ -456,6 +711,24 @@ async function enrichPlanWithClientData(plan, pineconeMatches) {
         clientImageMap[cid] = ensureImageUrl(String(c.client_image).trim()) || String(c.client_image).trim();
       }
     }
+  }
+
+  const idsNeedingCoords = [...new Set(enriched.filter((i) => !parsePlanItemCoords(i) && i.clientId).map((i) => i.clientId))];
+  if (idsNeedingCoords.length > 0) {
+    const { data: locRows } = await supabase
+      .from('client')
+      .select('client_a_uuid, lat, long, latitude, longitude')
+      .in('client_a_uuid', idsNeedingCoords);
+    const coordById = {};
+    (locRows || []).forEach((c) => {
+      const u = unswapLatLng(c.lat ?? c.latitude, c.long ?? c.longitude ?? c.lng);
+      if (u && c.client_a_uuid) coordById[c.client_a_uuid] = u;
+    });
+    enriched = enriched.map((item) => {
+      if (parsePlanItemCoords(item)) return item;
+      const u = item.clientId ? coordById[item.clientId] : null;
+      return u ? { ...item, lat: u.lat, lng: u.lng } : item;
+    });
   }
 
   // Step 4: Fallback — fetch first post image when client_image is null
@@ -646,244 +919,712 @@ function PreviewImage({ uri, style }) {
   );
 }
 
-// Custom fun spinner — orbiting dots with subtle pulse
-function FunSpinner() {
-  const spin = useRef(new Animated.Value(0)).current;
-  const pulse = useRef(new Animated.Value(0)).current;
+const STOP_DIALOG_CARD_MAX = Math.min(560, SCREEN_WIDTH - 16)
+const STOP_DIALOG_SLIDE_WIDTH = STOP_DIALOG_CARD_MAX
+const STOP_DIALOG_IMAGE_H = Math.min(440, Math.round(SCREEN_HEIGHT * 0.46))
+
+/** Full-width hero gallery: auto-advances every 5s when there are multiple images */
+function StopDetailGallery({ images, singleUri, accent, isEat, isEvent, slideWidth, imageHeight }) {
+  const scrollRef = useRef(null)
+  const indexRef = useRef(0)
+  const [pageIdx, setPageIdx] = useState(0)
+  const list = useMemo(
+    () => (Array.isArray(images) && images.length > 0 ? images.filter(Boolean) : []),
+    [images]
+  )
+
   useEffect(() => {
-    Animated.loop(
-      Animated.timing(spin, { toValue: 1, duration: 1400, easing: Easing.linear, useNativeDriver: true })
-    ).start();
-  }, [spin]);
-  useEffect(() => {
-    Animated.loop(
-      Animated.sequence([
-        Animated.timing(pulse, { toValue: 1, duration: 600, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
-        Animated.timing(pulse, { toValue: 0, duration: 600, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
-      ])
-    ).start();
-  }, [pulse]);
-  const rotate = spin.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '360deg'] });
-  const pulseScale = pulse.interpolate({ inputRange: [0, 1], outputRange: [0.85, 1.15] });
-  const radius = 26;
-  const dotCount = 5;
-  const dots = [...Array(dotCount)].map((_, i) => {
-    const angle = (i / dotCount) * Math.PI * 2 - Math.PI / 2;
-    return { x: Math.cos(angle) * radius, y: Math.sin(angle) * radius };
-  });
+    indexRef.current = 0
+    setPageIdx(0)
+    requestAnimationFrame(() => {
+      scrollRef.current?.scrollTo({ x: 0, animated: false })
+    })
+    if (list.length < 2) return undefined
+    const id = setInterval(() => {
+      indexRef.current = (indexRef.current + 1) % list.length
+      const next = indexRef.current
+      setPageIdx(next)
+      scrollRef.current?.scrollTo({ x: next * slideWidth, animated: true })
+    }, 5000)
+    return () => clearInterval(id)
+  }, [list, slideWidth])
+
+  const handleMomentumEnd = (e) => {
+    if (list.length < 2) return
+    const x = e.nativeEvent.contentOffset.x
+    const i = Math.round(x / Math.max(1, slideWidth))
+    const clamped = Math.max(0, Math.min(list.length - 1, i))
+    indexRef.current = clamped
+    setPageIdx(clamped)
+  }
+
+  const primaryUri = list[0] || singleUri
+  if (!primaryUri) {
+    return (
+      <View
+        style={{
+          width: slideWidth,
+          height: imageHeight,
+          borderBottomLeftRadius: 0,
+          borderBottomRightRadius: 0,
+          overflow: 'hidden',
+          backgroundColor: `${accent}24`,
+          alignItems: 'center',
+          justifyContent: 'center',
+        }}
+      >
+        <Ionicons
+          name={isEat ? 'restaurant' : isEvent ? 'calendar' : 'location'}
+          size={56}
+          color={accent}
+        />
+      </View>
+    )
+  }
+
+  if (list.length < 2) {
+    return (
+      <View style={{ width: slideWidth, height: imageHeight, overflow: 'hidden', backgroundColor: '#E2E8F0' }}>
+        <PreviewImage uri={primaryUri} style={StyleSheet.absoluteFill} />
+      </View>
+    )
+  }
+
   return (
-    <Animated.View style={[styles.funSpinnerWrap, { transform: [{ rotate }, { scale: pulseScale }] }]}>
-      {dots.map((d, i) => (
-        <Animated.View key={i} style={[styles.funSpinnerDot, { transform: [{ translateX: d.x }, { translateY: d.y }] }]} />
-      ))}
-    </Animated.View>
-  );
+    <View style={{ width: slideWidth }}>
+      <ScrollView
+        ref={scrollRef}
+        horizontal
+        pagingEnabled
+        showsHorizontalScrollIndicator={false}
+        onMomentumScrollEnd={handleMomentumEnd}
+        decelerationRate="fast"
+        style={{ width: slideWidth, height: imageHeight }}
+        keyboardShouldPersistTaps="handled"
+      >
+        {list.map((img, i) => (
+          <View key={`${String(img)}-${i}`} style={{ width: slideWidth, height: imageHeight, backgroundColor: '#E2E8F0' }}>
+            <PreviewImage uri={img} style={StyleSheet.absoluteFill} />
+          </View>
+        ))}
+      </ScrollView>
+      <View
+        style={{
+          flexDirection: 'row',
+          justifyContent: 'center',
+          alignItems: 'center',
+          gap: 7,
+          paddingVertical: 12,
+          backgroundColor: 'rgba(15,23,42,0.04)',
+        }}
+      >
+        {list.map((_, i) => (
+          <View
+            key={i}
+            style={{
+              width: pageIdx === i ? 20 : 6,
+              height: 6,
+              borderRadius: 3,
+              backgroundColor: pageIdx === i ? accent : 'rgba(15,23,42,0.18)',
+            }}
+          />
+        ))}
+      </View>
+    </View>
+  )
 }
 
-// Animated loading view — fun bubbles, playful steps, infinite marquee
-function PlanModalLoadingView({ loadingStatus, showSuccess, spotPreviews }) {
-  const pulse = useRef(new Animated.Value(0)).current;
-  const fadeIn = useRef(new Animated.Value(0)).current;
-  const stepEntrance = useRef([new Animated.Value(0), new Animated.Value(0), new Animated.Value(0)]).current;
-  const stepCheck = useRef([new Animated.Value(0), new Animated.Value(0), new Animated.Value(0)]).current;
-  const successScale = useRef(new Animated.Value(0)).current;
-  const successOpacity = useRef(new Animated.Value(0)).current;
-  const bubble1 = useRef(new Animated.Value(0)).current;
-  const bubble2 = useRef(new Animated.Value(0)).current;
-  const bubble3 = useRef(new Animated.Value(0)).current;
-  const steps = [
-    { icon: 'compass-outline', text: 'Matching places to your vibe', key: 'places' },
-    { icon: 'restaurant-outline', text: 'Hunting perfect food spots', key: 'food' },
-    { icon: 'sparkles-outline', text: 'Khalid is stitching your plan', key: 'plan' },
-  ];
+const buildBahrainWTC = () => {
+  const group = new Group()
+  const towerMat = new MeshStandardMaterial({ color: new Color('#8EC8F8'), metalness: 0.7, roughness: 0.2 })
+  const glassMat = new MeshStandardMaterial({ color: new Color('#B0D8F5'), metalness: 0.9, roughness: 0.1, transparent: true, opacity: 0.85 })
 
-  const getCompletedSteps = () => {
-    if (showSuccess) return [0, 1, 2];
-    const s = (loadingStatus || '').toLowerCase();
-    if (s.includes('crafting') || s.includes('building') || s.includes('stitch')) return [0, 1];
-    if (s.includes('restaurant') || s.includes('food') || s.includes('breakfast') || s.includes('event')) return [0];
-    return [];
-  };
-  const completedSteps = getCompletedSteps();
+  const towerGeo = new CylinderGeometry(0.22, 0.28, 2.8, 16)
+  const tower1 = new Mesh(towerGeo, towerMat)
+  tower1.position.set(-0.35, 1.4, 0)
+  group.add(tower1)
+  const tower2 = new Mesh(towerGeo, towerMat)
+  tower2.position.set(0.35, 1.4, 0)
+  group.add(tower2)
 
-  const MOCK_PREVIEWS = [
-    { id: 'm1', name: 'Bahrain Fort', type: 'place', typeLabel: 'UNESCO Heritage' },
-    { id: 'm2', name: 'Manama Souq', type: 'place', typeLabel: 'Explore' },
-    { id: 'm3', name: 'Café Lilou', type: 'restaurant', typeLabel: 'Cafe' },
-    { id: 'm4', name: 'Bahrain National Museum', type: 'place', typeLabel: 'Cultural' },
-    { id: 'm5', name: 'City Centre', type: 'place', typeLabel: 'Shopping' },
-    { id: 'm6', name: 'Rasoi by Vineet', type: 'restaurant', typeLabel: 'Indian' },
-  ];
-  const rawPreviews = (spotPreviews && spotPreviews.length > 0) ? spotPreviews : MOCK_PREVIEWS;
-  const [displayPreviews, setDisplayPreviews] = useState(rawPreviews);
+  const bridgeGeo = new BoxGeometry(0.9, 0.04, 0.15)
+  const bridgeMat = new MeshStandardMaterial({ color: new Color('#E0E0E0'), metalness: 0.5, roughness: 0.3 })
+  ;[0.8, 1.5, 2.2].forEach((y) => {
+    const bridge = new Mesh(bridgeGeo, bridgeMat)
+    bridge.position.set(0, y, 0)
+    group.add(bridge)
+  })
+
+  const turbineGeo = new TorusGeometry(0.22, 0.015, 8, 16)
+  const turbineMat = new MeshStandardMaterial({ color: new Color('#FFFFFF'), metalness: 0.4, roughness: 0.5 })
+  ;[0.8, 1.5, 2.2].forEach((y) => {
+    const turbine = new Mesh(turbineGeo, turbineMat)
+    turbine.position.set(0, y, 0)
+    turbine.rotation.y = Math.PI / 2
+    group.add(turbine)
+  })
+
+  const topGeo = new ConeGeometry(0.15, 0.3, 12)
+  const topMat = new MeshStandardMaterial({ color: new Color('#C0D8E8'), metalness: 0.8, roughness: 0.15 })
+  const top1 = new Mesh(topGeo, topMat)
+  top1.position.set(-0.35, 2.95, 0)
+  group.add(top1)
+  const top2 = new Mesh(topGeo, topMat)
+  top2.position.set(0.35, 2.95, 0)
+  group.add(top2)
+
+  group.position.set(-2.5, 0, 0)
+  return group
+}
+
+const buildAlFatehMosque = () => {
+  const group = new Group()
+  const wallMat = new MeshStandardMaterial({ color: new Color('#F5F0E6'), metalness: 0.1, roughness: 0.8 })
+  const domeMat = new MeshStandardMaterial({ color: new Color('#F0E6D3'), metalness: 0.3, roughness: 0.5 })
+  const goldMat = new MeshStandardMaterial({ color: new Color('#D4AF37'), metalness: 0.9, roughness: 0.1 })
+
+  const base = new Mesh(new BoxGeometry(1.8, 0.7, 1.2), wallMat)
+  base.position.set(0, 0.35, 0)
+  group.add(base)
+
+  const dome = new Mesh(new SphereGeometry(0.6, 20, 20, 0, Math.PI * 2, 0, Math.PI / 2), domeMat)
+  dome.position.set(0, 0.7, 0)
+  group.add(dome)
+
+  const finialGeo = new ConeGeometry(0.04, 0.2, 8)
+  const finial = new Mesh(finialGeo, goldMat)
+  finial.position.set(0, 1.4, 0)
+  group.add(finial)
+
+  const minaretGeo = new CylinderGeometry(0.06, 0.08, 1.8, 10)
+  const minaretTopGeo = new ConeGeometry(0.08, 0.2, 10)
+  ;[[-1, 0.6], [1, 0.6], [-1, -0.6], [1, -0.6]].forEach(([x, z]) => {
+    const minaret = new Mesh(minaretGeo, wallMat)
+    minaret.position.set(x, 0.9, z)
+    group.add(minaret)
+    const mTop = new Mesh(minaretTopGeo, goldMat)
+    mTop.position.set(x, 1.95, z)
+    group.add(mTop)
+  })
+
+  group.position.set(0, 0, -1.5)
+  return group
+}
+
+const buildBahrainFort = () => {
+  const group = new Group()
+  const sandMat = new MeshStandardMaterial({ color: new Color('#D4A574'), metalness: 0.1, roughness: 0.9 })
+  const darkSandMat = new MeshStandardMaterial({ color: new Color('#B8956A'), metalness: 0.1, roughness: 0.95 })
+
+  const baseWall = new Mesh(new BoxGeometry(2, 0.6, 2), sandMat)
+  baseWall.position.set(0, 0.3, 0)
+  group.add(baseWall)
+
+  const innerWall = new Mesh(new BoxGeometry(1.4, 0.8, 1.4), darkSandMat)
+  innerWall.position.set(0, 0.7, 0)
+  group.add(innerWall)
+
+  const towerGeo = new CylinderGeometry(0.18, 0.2, 1.2, 10)
+  ;[[-1, -1], [1, -1], [-1, 1], [1, 1]].forEach(([x, z]) => {
+    const tower = new Mesh(towerGeo, sandMat)
+    tower.position.set(x, 0.6, z)
+    group.add(tower)
+    const cap = new Mesh(new ConeGeometry(0.2, 0.15, 10), darkSandMat)
+    cap.position.set(x, 1.25, z)
+    group.add(cap)
+  })
+
+  const keep = new Mesh(new BoxGeometry(0.6, 0.5, 0.6), darkSandMat)
+  keep.position.set(0, 1.35, 0)
+  group.add(keep)
+
+  group.position.set(2.5, 0, 0)
+  return group
+}
+
+const buildPearlMonument = () => {
+  const group = new Group()
+  const concreteMat = new MeshStandardMaterial({ color: new Color('#E8E0D8'), metalness: 0.15, roughness: 0.7 })
+  const pearlMat = new MeshStandardMaterial({ color: new Color('#F8F4F0'), metalness: 0.6, roughness: 0.2 })
+
+  ;[0, 1, 2, 3, 4, 5].forEach((i) => {
+    const angle = (i / 6) * Math.PI * 2
+    const pillar = new Mesh(new CylinderGeometry(0.08, 0.1, 2, 8), concreteMat)
+    pillar.position.set(Math.cos(angle) * 0.5, 1, Math.sin(angle) * 0.5)
+    group.add(pillar)
+  })
+
+  const platform = new Mesh(new CylinderGeometry(0.7, 0.7, 0.1, 24), concreteMat)
+  platform.position.set(0, 2.05, 0)
+  group.add(platform)
+
+  const pearl = new Mesh(new SphereGeometry(0.35, 20, 20), pearlMat)
+  pearl.position.set(0, 2.5, 0)
+  group.add(pearl)
+
+  const basePlatform = new Mesh(new CylinderGeometry(0.8, 0.9, 0.2, 24), concreteMat)
+  basePlatform.position.set(0, 0, 0)
+  group.add(basePlatform)
+
+  group.position.set(0, 0, 2)
+  return group
+}
+
+const buildTreeOfLife = () => {
+  const group = new Group()
+  const trunkMat = new MeshStandardMaterial({ color: new Color('#8B6914'), metalness: 0.1, roughness: 0.95 })
+  const leafMat = new MeshStandardMaterial({ color: new Color('#2D8B2D'), metalness: 0.05, roughness: 0.9 })
+
+  const trunk = new Mesh(new CylinderGeometry(0.08, 0.15, 1.2, 8), trunkMat)
+  trunk.position.set(0, 0.6, 0)
+  group.add(trunk)
+
+  const branch1 = new Mesh(new CylinderGeometry(0.03, 0.06, 0.6, 6), trunkMat)
+  branch1.position.set(0.2, 1.1, 0)
+  branch1.rotation.z = -0.5
+  group.add(branch1)
+
+  const branch2 = new Mesh(new CylinderGeometry(0.03, 0.06, 0.5, 6), trunkMat)
+  branch2.position.set(-0.15, 1, 0.1)
+  branch2.rotation.z = 0.4
+  group.add(branch2)
+
+  const canopy = new Mesh(new SphereGeometry(0.7, 12, 12), leafMat)
+  canopy.position.set(0, 1.6, 0)
+  canopy.scale.set(1, 0.7, 1)
+  group.add(canopy)
+
+  const canopy2 = new Mesh(new SphereGeometry(0.45, 10, 10), leafMat)
+  canopy2.position.set(0.3, 1.4, 0.2)
+  group.add(canopy2)
+
+  const canopy3 = new Mesh(new SphereGeometry(0.4, 10, 10), leafMat)
+  canopy3.position.set(-0.25, 1.5, -0.15)
+  group.add(canopy3)
+
+  const sandGeo = new CylinderGeometry(0.6, 0.7, 0.1, 16)
+  const sandMat = new MeshStandardMaterial({ color: new Color('#D4B896'), metalness: 0, roughness: 1 })
+  const sand = new Mesh(sandGeo, sandMat)
+  sand.position.set(0, 0, 0)
+  group.add(sand)
+
+  group.position.set(0, 0, 0)
+  return group
+}
+
+const buildGroundDisc = () => {
+  const geo = new RingGeometry(0, 5, 48)
+  const mat = new MeshStandardMaterial({
+    color: new Color('#1A1A2E'),
+    metalness: 0.3,
+    roughness: 0.8,
+    transparent: true,
+    opacity: 0.35,
+    side: DoubleSide,
+  })
+  const ground = new Mesh(geo, mat)
+  ground.rotation.x = -Math.PI / 2
+  ground.position.y = -0.05
+  return ground
+}
+
+function BahrainScene3D({ isVisible }) {
+  const glRef = useRef(null)
+  const rafRef = useRef(null)
+  const sceneRef = useRef(null)
+  const cameraRef = useRef(null)
+  const rendererRef = useRef(null)
+  const rotGroupRef = useRef(null)
+  const timeRef = useRef(0)
+  const fadeAnim = useRef(new Animated.Value(0)).current
+
   useEffect(() => {
-    const arr = [...rawPreviews];
-    for (let i = arr.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [arr[i], arr[j]] = [arr[j], arr[i]];
+    if (isVisible) {
+      Animated.timing(fadeAnim, { toValue: 1, duration: 800, easing: Easing.out(Easing.cubic), useNativeDriver: true }).start()
     }
-    setDisplayPreviews(arr);
-  }, [spotPreviews?.length ?? 0, spotPreviews?.map((p) => p.id).join(',') ?? '']);
-  const hasPreviews = displayPreviews.length > 0;
-  const fact = BAHRAIN_FACTS[Math.floor(Math.random() * BAHRAIN_FACTS.length)];
-  const funPhrase = LOADING_PHRASES[Math.floor(Math.random() * LOADING_PHRASES.length)];
+  }, [isVisible, fadeAnim])
 
-  useEffect(() => {
-    if (showSuccess) return;
-    const pulseLoop = Animated.loop(
-      Animated.sequence([
-        Animated.timing(pulse, { toValue: 1, duration: 1800, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
-        Animated.timing(pulse, { toValue: 0, duration: 1800, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
-      ])
-    );
-    pulseLoop.start();
-    return () => pulseLoop.stop();
-  }, [pulse, showSuccess]);
+  const handleContextCreate = useCallback((gl) => {
+    const scene = new Scene()
+    scene.background = null
+    scene.fog = new Fog(new Color('#0F172A'), 8, 18)
 
-  // Bump-style floating bubbles
-  useEffect(() => {
-    if (showSuccess) return;
-    const b1 = Animated.loop(Animated.sequence([
-      Animated.timing(bubble1, { toValue: 1, duration: 2000, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
-      Animated.timing(bubble1, { toValue: 0, duration: 2000, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
-    ]));
-    const b2 = Animated.loop(Animated.sequence([
-      Animated.timing(bubble2, { toValue: 1, duration: 2400, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
-      Animated.timing(bubble2, { toValue: 0, duration: 2400, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
-    ]));
-    const b3 = Animated.loop(Animated.sequence([
-      Animated.timing(bubble3, { toValue: 1, duration: 2200, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
-      Animated.timing(bubble3, { toValue: 0, duration: 2200, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
-    ]));
-    b1.start();
-    b2.start();
-    b3.start();
-    return () => { b1.stop(); b2.stop(); b3.stop(); };
-  }, [showSuccess, bubble1, bubble2, bubble3]);
+    const camera = new PerspectiveCamera(45, gl.drawingBufferWidth / gl.drawingBufferHeight, 0.1, 100)
+    camera.position.set(0, 4.5, 7.5)
+    camera.lookAt(0, 0.8, 0)
 
-  useEffect(() => {
-    Animated.parallel([
-      Animated.timing(fadeIn, { toValue: 1, duration: 400, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
-      ...stepEntrance.map((anim, i) =>
-        Animated.timing(anim, { toValue: 1, duration: 450, delay: i * 100, easing: Easing.out(Easing.back(1.2)), useNativeDriver: true })
-      ),
-    ]).start();
-  }, []);
+    const renderer = new Renderer({ gl })
+    renderer.setSize(gl.drawingBufferWidth, gl.drawingBufferHeight)
+    renderer.setClearColor(0x000000, 0)
 
-  const animatedChecks = useRef(new Set()).current;
-  useEffect(() => {
-    completedSteps.forEach((idx) => {
-      if (animatedChecks.has(idx)) return;
-      animatedChecks.add(idx);
-      Animated.spring(stepCheck[idx], { toValue: 1, tension: 180, friction: 7, useNativeDriver: true }).start();
-    });
-  }, [completedSteps.join(',')]);
+    const ambient = new AmbientLight(0xffffff, 0.6)
+    scene.add(ambient)
 
-  useEffect(() => {
-    if (showSuccess) {
-      Animated.parallel([
-        Animated.spring(successScale, { toValue: 1, tension: 120, friction: 10, useNativeDriver: true }),
-        Animated.timing(successOpacity, { toValue: 1, duration: 400, useNativeDriver: true }),
-      ]).start();
+    const dirLight = new DirectionalLight(0xffe4c4, 1.2)
+    dirLight.position.set(3, 8, 5)
+    scene.add(dirLight)
+
+    const accentLight = new PointLight(0xC8102E, 0.8, 15)
+    accentLight.position.set(-3, 3, 3)
+    scene.add(accentLight)
+
+    const blueLight = new PointLight(0x60A5FA, 0.5, 12)
+    blueLight.position.set(3, 2, -3)
+    scene.add(blueLight)
+
+    const rotGroup = new Group()
+    rotGroup.add(buildBahrainWTC())
+    rotGroup.add(buildAlFatehMosque())
+    rotGroup.add(buildBahrainFort())
+    rotGroup.add(buildPearlMonument())
+    rotGroup.add(buildTreeOfLife())
+    rotGroup.add(buildGroundDisc())
+    scene.add(rotGroup)
+
+    sceneRef.current = scene
+    cameraRef.current = camera
+    rendererRef.current = renderer
+    rotGroupRef.current = rotGroup
+    glRef.current = gl
+
+    const render = () => {
+      rafRef.current = requestAnimationFrame(render)
+      timeRef.current += 0.006
+
+      rotGroup.rotation.y = timeRef.current
+      rotGroup.children.forEach((child, i) => {
+        if (i < 5) {
+          child.position.y = child.position.y + Math.sin(timeRef.current * 2.5 + i * 1.3) * 0.001
+        }
+      })
+
+      camera.position.y = 4.5 + Math.sin(timeRef.current * 1.5) * 0.3
+      camera.lookAt(0, 0.8, 0)
+
+      renderer.render(scene, camera)
+      gl.endFrameEXP()
     }
-  }, [showSuccess]);
+    render()
+  }, [])
 
-
-  const pulseScale = pulse.interpolate({ inputRange: [0, 1], outputRange: [0.9, 1.12] });
-  const pulseOpacity = pulse.interpolate({ inputRange: [0, 1], outputRange: [0.35, 0.8] });
-  const by1 = bubble1.interpolate({ inputRange: [0, 1], outputRange: [0, -8] });
-  const by2 = bubble2.interpolate({ inputRange: [0, 1], outputRange: [0, 6] });
-  const by3 = bubble3.interpolate({ inputRange: [0, 1], outputRange: [0, -5] });
+  useEffect(() => {
+    return () => {
+      if (rafRef.current) cancelAnimationFrame(rafRef.current)
+    }
+  }, [])
 
   return (
-    <Animated.View style={[styles.planModalLoadingWrap, { opacity: fadeIn }]}>
-      {/* Bump-style floating friend bubbles */}
-      {!showSuccess && (
-        <>
-          <Animated.View style={[styles.planModalBubble, styles.planModalBubble1, { transform: [{ translateY: by1 }] }]}>
-            <Ionicons name="location" size={20} color="rgba(255,255,255,0.9)" />
-          </Animated.View>
-          <Animated.View style={[styles.planModalBubble, styles.planModalBubble2, { transform: [{ translateY: by2 }] }]}>
-            <Ionicons name="restaurant" size={18} color="rgba(255,255,255,0.9)" />
-          </Animated.View>
-          <Animated.View style={[styles.planModalBubble, styles.planModalBubble3, { transform: [{ translateY: by3 }] }]}>
-            <Ionicons name="sunny" size={18} color="rgba(255,255,255,0.9)" />
-          </Animated.View>
-        </>
-      )}
+    <Animated.View style={[styles.scene3dContainer, { opacity: fadeAnim }]}>
+      <GLView
+        style={styles.scene3dGl}
+        onContextCreate={handleContextCreate}
+        msaaSamples={4}
+      />
+      <LinearGradient
+        colors={['transparent', 'rgba(15,23,42,0.7)', 'rgba(15,23,42,0.95)']}
+        style={styles.scene3dFade}
+        pointerEvents="none"
+      />
+    </Animated.View>
+  )
+}
 
-      <View style={styles.planModalLoadingCenter}>
-        {!showSuccess && (
-          <Animated.View style={[styles.planModalLoadingPulseOuter, { opacity: pulseOpacity, transform: [{ scale: pulseScale }] }]} />
-        )}
-        <View style={[styles.planModalLoadingPulse, showSuccess && styles.planModalLoadingPulseSuccess]}>
-          {!showSuccess && (
-            <LinearGradient colors={['rgba(255,255,255,0.35)', 'rgba(255,255,255,0.08)']} style={[StyleSheet.absoluteFill, styles.planModalLoadingPulseGradient]} />
-          )}
-          {showSuccess ? (
-            <Animated.View style={{ transform: [{ scale: successScale }], opacity: successOpacity }}>
-              <Ionicons name="checkmark-circle" size={64} color={themeColors.success} />
+
+function LoadingStepCard({ step, index, isDone, isActive, isPending }) {
+  const barWidth = useRef(new Animated.Value(0)).current
+  const barShimmer = useRef(new Animated.Value(0)).current
+  const checkScale = useRef(new Animated.Value(0)).current
+  const checkRotate = useRef(new Animated.Value(0)).current
+  const ringScale = useRef(new Animated.Value(0)).current
+  const ringOpacity = useRef(new Animated.Value(0)).current
+  const cardGlow = useRef(new Animated.Value(0)).current
+  const entrance = useRef(new Animated.Value(0)).current
+  const doneFlash = useRef(new Animated.Value(0)).current
+  const prevDone = useRef(false)
+
+  useEffect(() => {
+    Animated.spring(entrance, { toValue: 1, tension: 80, friction: 10, delay: index * 150, useNativeDriver: true }).start()
+  }, [entrance, index])
+
+  useEffect(() => {
+    if (isActive) {
+      Animated.timing(barWidth, { toValue: 0.85, duration: 8000, easing: Easing.bezier(0.25, 0.1, 0.25, 1), useNativeDriver: false }).start()
+      Animated.loop(Animated.sequence([
+        Animated.timing(barShimmer, { toValue: 1, duration: 1400, easing: Easing.linear, useNativeDriver: true }),
+        Animated.timing(barShimmer, { toValue: 0, duration: 0, useNativeDriver: true }),
+      ])).start()
+      Animated.loop(Animated.sequence([
+        Animated.timing(cardGlow, { toValue: 1, duration: 1000, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
+        Animated.timing(cardGlow, { toValue: 0.3, duration: 1000, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
+      ])).start()
+    }
+  }, [isActive, barWidth, barShimmer, cardGlow])
+
+  useEffect(() => {
+    if (isDone && !prevDone.current) {
+      prevDone.current = true
+      barShimmer.stopAnimation()
+      cardGlow.stopAnimation()
+      Animated.timing(barWidth, { toValue: 1, duration: 400, easing: Easing.out(Easing.cubic), useNativeDriver: false }).start()
+      Animated.sequence([
+        Animated.parallel([
+          Animated.spring(checkScale, { toValue: 1.2, tension: 300, friction: 6, useNativeDriver: true }),
+          Animated.timing(checkRotate, { toValue: 1, duration: 400, easing: Easing.out(Easing.back(2)), useNativeDriver: true }),
+        ]),
+        Animated.spring(checkScale, { toValue: 1, tension: 200, friction: 8, useNativeDriver: true }),
+      ]).start()
+      Animated.sequence([
+        Animated.parallel([
+          Animated.timing(ringScale, { toValue: 1, duration: 500, easing: Easing.out(Easing.ease), useNativeDriver: true }),
+          Animated.timing(ringOpacity, { toValue: 0.6, duration: 100, useNativeDriver: true }),
+        ]),
+        Animated.timing(ringOpacity, { toValue: 0, duration: 400, easing: Easing.out(Easing.ease), useNativeDriver: true }),
+      ]).start()
+      Animated.sequence([
+        Animated.timing(doneFlash, { toValue: 1, duration: 150, useNativeDriver: true }),
+        Animated.timing(doneFlash, { toValue: 0, duration: 400, useNativeDriver: true }),
+      ]).start()
+    }
+  }, [isDone, barWidth, checkScale, checkRotate, ringScale, ringOpacity, doneFlash])
+
+  const shimmerX = barShimmer.interpolate({ inputRange: [0, 1], outputRange: [-80, SCREEN_WIDTH] })
+  const glowOp = cardGlow.interpolate({ inputRange: [0, 1], outputRange: [0.3, 0.8] })
+  const entryY = entrance.interpolate({ inputRange: [0, 1], outputRange: [30, 0] })
+  const entryOp = entrance.interpolate({ inputRange: [0, 0.5, 1], outputRange: [0, 0.7, 1] })
+  const entryScale = entrance.interpolate({ inputRange: [0, 1], outputRange: [0.92, 1] })
+  const doneFlashOp = doneFlash
+  const checkR = checkRotate.interpolate({ inputRange: [0, 1], outputRange: ['-180deg', '0deg'] })
+  const rScale = ringScale.interpolate({ inputRange: [0, 1], outputRange: [0.5, 2.5] })
+
+  const stepColors = [
+    { bar: [themeColors.primary, '#FF6B6B'], glow: themeColors.primary, done: '#10B981' },
+    { bar: ['#F59E0B', '#FBBF24'], glow: '#F59E0B', done: '#10B981' },
+    { bar: ['#8B5CF6', '#A78BFA'], glow: '#8B5CF6', done: '#10B981' },
+  ]
+  const colors = stepColors[index] || stepColors[0]
+
+  return (
+    <Animated.View style={[styles.lsCard, { transform: [{ translateY: entryY }, { scale: entryScale }], opacity: entryOp }]}>
+      {isActive && (
+        <Animated.View style={[styles.lsCardGlow, { backgroundColor: colors.glow, opacity: glowOp }]} pointerEvents="none" />
+      )}
+      {isDone && (
+        <Animated.View style={[StyleSheet.absoluteFill, { backgroundColor: '#FFF', borderRadius: 16, opacity: doneFlashOp }]} pointerEvents="none" />
+      )}
+      <View style={styles.lsCardTop}>
+        <View style={[styles.lsIconWrap, isDone && { backgroundColor: colors.done }, isActive && { backgroundColor: colors.glow }]}>
+          {isDone ? (
+            <Animated.View style={{ transform: [{ scale: checkScale }, { rotate: checkR }] }}>
+              <Ionicons name="checkmark-sharp" size={18} color="#FFF" />
             </Animated.View>
           ) : (
-            <View style={styles.planModalLoadingSpinnerWrap}>
-              <FunSpinner />
-            </View>
+            <Ionicons name={step.icon} size={16} color={isActive ? '#FFF' : 'rgba(255,255,255,0.4)'} />
+          )}
+          {isDone && (
+            <Animated.View style={[styles.lsRing, { borderColor: colors.done, transform: [{ scale: rScale }], opacity: ringOpacity }]} pointerEvents="none" />
           )}
         </View>
-      </View>
-
-      <Animated.View style={showSuccess && { opacity: successOpacity }}>
-        <Text style={styles.planModalLoadingTitle}>
-          {showSuccess ? "Your plan is ready!" : funPhrase}
-        </Text>
-        <Text style={styles.planModalLoadingSub}>
-          {showSuccess ? "Yalla, let's explore Bahrain!" : (loadingStatus || 'Building your perfect day…')}
-        </Text>
-      </Animated.View>
-
-      <View style={styles.planModalLoadingSteps}>
-        {steps.map((s, i) => {
-          const entrance = stepEntrance[i];
-          const check = stepCheck[i];
-          const isDone = completedSteps.includes(i);
-          return (
-            <Animated.View key={s.key} style={[styles.planModalLoadingStepRow, { opacity: entrance, transform: [{ translateX: entrance.interpolate({ inputRange: [0, 1], outputRange: [-24, 0] }) }] }]}>
-              <View style={[styles.planModalLoadingDot, isDone && styles.planModalLoadingDotDone]}>
-                {isDone ? (
-                  <Animated.View style={{ transform: [{ scale: check.interpolate({ inputRange: [0, 1], outputRange: [0.5, 1] }) }] }}>
-                    <Ionicons name="checkmark" size={26} color="#FFFFFF" />
-                  </Animated.View>
-                ) : (
-                  <Ionicons name={s.icon} size={18} color="rgba(255,255,255,0.9)" />
-                )}
-              </View>
-              <Text style={[styles.planModalLoadingStepText, isDone && styles.planModalLoadingStepTextDone]}>{s.text}</Text>
-            </Animated.View>
-          );
-        })}
-      </View>
-
-      {/* Infinite marquee — never stops */}
-      {hasPreviews && !showSuccess && (
-        <View style={styles.planModalPreviewSection}>
-          <View style={styles.planModalPreviewTitleRow}>
-            <Ionicons name="map" size={18} color="rgba(255,255,255,0.95)" style={{ marginRight: 8 }} />
-            <Text style={styles.planModalPreviewTitle}>Places we're considering…</Text>
-          </View>
-          <View style={styles.planModalMarqueeMask}>
-            <SpotMarqueeBanner items={displayPreviews} itemWidth={110} itemGap={12} variant="modal" />
-          </View>
+        <View style={styles.lsTextCol}>
+          <Text style={[styles.lsStepName, isDone && styles.lsStepNameDone, isActive && styles.lsStepNameActive]}>{step.text}</Text>
+          <Text style={[styles.lsStepStatus, isDone && { color: colors.done }]}>
+            {isDone ? 'Complete' : isActive ? 'In progress…' : 'Waiting'}
+          </Text>
         </View>
-      )}
-
-      {!showSuccess && (
-        <View style={styles.planModalFactWrap}>
-          <Ionicons name="information-circle-outline" size={16} color="#FACC15" />
-          <Text style={styles.planModalFactText}>{fact}</Text>
-        </View>
-      )}
+        {isDone && (
+          <Animated.View style={{ transform: [{ scale: checkScale }] }}>
+            <Ionicons name="checkmark-circle" size={22} color={colors.done} />
+          </Animated.View>
+        )}
+      </View>
+      <View style={styles.lsBarTrack}>
+        <Animated.View style={[styles.lsBarFillWrap, { width: barWidth.interpolate({ inputRange: [0, 1], outputRange: ['0%', '100%'] }) }]}>
+          <LinearGradient
+            colors={isDone ? [colors.done, '#34D399'] : colors.bar}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 0 }}
+            style={styles.lsBarFill}
+          />
+        </Animated.View>
+        {isActive && (
+          <Animated.View style={[styles.lsBarShimmer, { transform: [{ translateX: shimmerX }] }]} pointerEvents="none" />
+        )}
+      </View>
     </Animated.View>
-  );
+  )
+}
+
+function PlanModalLoadingView({ loadingStatus, showSuccess, spotPreviews }) {
+  const fadeIn = useRef(new Animated.Value(0)).current
+  const successScale = useRef(new Animated.Value(0)).current
+  const successOpacity = useRef(new Animated.Value(0)).current
+  const successConfetti = useRef([...Array(14)].map(() => new Animated.Value(0))).current
+  const stepsOpacity = useRef(new Animated.Value(1)).current
+  const stepsScale = useRef(new Animated.Value(1)).current
+  const celebrationReady = useRef(false)
+  const [showCelebration, setShowCelebration] = useState(false)
+
+  const steps = [
+    { icon: 'compass-outline', text: 'Discovering places', key: 'places' },
+    { icon: 'restaurant-outline', text: 'Finding food spots', key: 'food' },
+    { icon: 'sparkles-outline', text: 'Crafting your plan', key: 'plan' },
+  ]
+
+  const rawCompleted = (() => {
+    if (showSuccess) return [0, 1, 2]
+    const s = (loadingStatus || '').toLowerCase()
+    if (s.includes('crafting') || s.includes('building') || s.includes('stitch')) return [0, 1]
+    if (s.includes('restaurant') || s.includes('food') || s.includes('breakfast') || s.includes('event')) return [0]
+    return []
+  })()
+
+  const stepDoneAt = useRef([0, 0, 0])
+  const [completedSteps, setCompletedSteps] = useState([])
+  const MIN_STEP_MS = 1800
+
+  useEffect(() => {
+    const now = Date.now()
+    const pending = rawCompleted.filter((idx) => !completedSteps.includes(idx))
+    if (pending.length === 0) return
+
+    pending.forEach((idx) => {
+      if (stepDoneAt.current[idx] === 0) stepDoneAt.current[idx] = now
+    })
+
+    const nextIdx = pending[0]
+    const prevIdx = nextIdx - 1
+    const prevFinished = prevIdx < 0 || completedSteps.includes(prevIdx)
+    if (!prevFinished) return
+
+    const activeSince = stepDoneAt.current[nextIdx]
+    const elapsed = now - activeSince
+    const wait = Math.max(0, MIN_STEP_MS - elapsed)
+
+    const timer = setTimeout(() => {
+      setCompletedSteps((prev) => prev.includes(nextIdx) ? prev : [...prev, nextIdx].sort((a, b) => a - b))
+    }, wait)
+    return () => clearTimeout(timer)
+  }, [rawCompleted.join(','), completedSteps.join(',')])
+
+  const [factIdx] = useState(() => Math.floor(Math.random() * BAHRAIN_FACTS.length))
+  const [phraseIdx] = useState(() => Math.floor(Math.random() * LOADING_PHRASES.length))
+  const fact = BAHRAIN_FACTS[factIdx]
+  const funPhrase = LOADING_PHRASES[phraseIdx]
+
+  useEffect(() => {
+    Animated.timing(fadeIn, { toValue: 1, duration: 500, easing: Easing.out(Easing.cubic), useNativeDriver: true }).start()
+  }, [])
+
+  useEffect(() => {
+    if (!showSuccess || celebrationReady.current) return
+    if (completedSteps.length < 3) return
+    celebrationReady.current = true
+
+    Animated.parallel([
+      Animated.timing(stepsOpacity, { toValue: 0, duration: 300, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
+      Animated.timing(stepsScale, { toValue: 0.94, duration: 300, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
+    ]).start(() => {
+      setShowCelebration(true)
+      Animated.stagger(30, [
+        Animated.parallel([
+          Animated.spring(successScale, { toValue: 1, tension: 100, friction: 7, useNativeDriver: true }),
+          Animated.timing(successOpacity, { toValue: 1, duration: 250, useNativeDriver: true }),
+        ]),
+        ...successConfetti.map((a) => Animated.spring(a, { toValue: 1, tension: 160, friction: 5, useNativeDriver: true })),
+      ]).start()
+    })
+  }, [showSuccess, completedSteps.length, stepsOpacity, stepsScale, successScale, successOpacity, successConfetti])
+
+  const confettiColors = ['#FF6B6B', '#FACC15', '#4ADE80', '#60A5FA', '#F472B6', '#A78BFA', '#FB923C', '#34D399', '#FF6B6B', '#FACC15', '#4ADE80', '#60A5FA', '#FACC15', '#4ADE80']
+  const confettiPositions = useMemo(() => Array.from({ length: 14 }, (_, i) => {
+    const angle = (i / 14) * Math.PI * 2
+    return { x: Math.cos(angle) * (55 + Math.random() * 35), y: Math.sin(angle) * (45 + Math.random() * 30) }
+  }), [])
+
+  const isFinished = showSuccess || showCelebration
+  const displayTitle = isFinished ? 'Your route is ready' : funPhrase
+  const displaySub = isFinished
+    ? 'Swipe up the card below for stops, maps & share'
+    : (loadingStatus || 'Building your perfect day…')
+  const displayBadge = isFinished ? 'READY' : 'BUILDING YOUR DAY'
+
+  return (
+    <Animated.View style={[styles.ldWrap, { opacity: fadeIn }]}>
+      {!showCelebration && <BahrainScene3D isVisible />}
+
+      <ScrollView contentContainerStyle={styles.ldScrollContent} showsVerticalScrollIndicator={false} bounces={false}>
+        {/* Title */}
+        <View style={styles.ldTitleSection}>
+          <View style={styles.ldBadge}>
+            <View style={[styles.ldBadgeDot, isFinished && { backgroundColor: '#4ADE80' }]} />
+            <Text style={styles.ldBadgeText}>{displayBadge}</Text>
+          </View>
+          <Text style={styles.ldTitle}>{displayTitle}</Text>
+          <Text style={styles.ldSub}>{displaySub}</Text>
+        </View>
+
+        {/* Success celebration — appears after steps morph out */}
+        {showCelebration && (
+          <>
+            <View style={styles.ldSuccessCenter}>
+              {confettiPositions.map((pos, i) => (
+                <Animated.View key={i} style={{
+                  position: 'absolute', width: i % 3 === 0 ? 10 : 6, height: i % 2 === 0 ? 10 : 4, borderRadius: i % 2 === 0 ? 5 : 2,
+                  backgroundColor: confettiColors[i],
+                  transform: [
+                    { translateX: successConfetti[i].interpolate({ inputRange: [0, 1], outputRange: [0, pos.x] }) },
+                    { translateY: successConfetti[i].interpolate({ inputRange: [0, 1], outputRange: [0, pos.y] }) },
+                    { rotate: successConfetti[i].interpolate({ inputRange: [0, 1], outputRange: ['0deg', `${i * 26}deg`] }) },
+                  ],
+                  opacity: successConfetti[i].interpolate({ inputRange: [0, 0.4, 1], outputRange: [0, 1, 0.3] }),
+                }} />
+              ))}
+              <Animated.View style={{ transform: [{ scale: successScale }], opacity: successOpacity }}>
+                <View style={styles.successIconCircle}>
+                  <Ionicons name="checkmark" size={44} color="#FFFFFF" />
+                </View>
+              </Animated.View>
+            </View>
+            <Animated.View style={{ opacity: successOpacity, width: '100%', paddingHorizontal: 8 }}>
+              <View style={styles.ldSheetHintCard}>
+                <Ionicons name="chevron-up" size={26} color={themeColors.primary} />
+                <Text style={styles.ldSheetHintTitle}>Full itinerary is in the sheet</Text>
+                <Text style={styles.ldSheetHintSub}>
+                  Drag the handle up — you will see Today in Bahrain, your stops, and Maps
+                </Text>
+              </View>
+            </Animated.View>
+          </>
+        )}
+
+        {/* Step cards — morph out when done */}
+        {!showCelebration && (
+          <Animated.View style={[styles.lsSteps, { opacity: stepsOpacity, transform: [{ scale: stepsScale }] }]}>
+            {steps.map((s, i) => {
+              const isDone = completedSteps.includes(i)
+              const isActive = !isDone && completedSteps.length === i
+              const isPending = !isDone && !isActive
+              return <LoadingStepCard key={s.key} step={s} index={i} isDone={isDone} isActive={isActive} isPending={isPending} />
+            })}
+          </Animated.View>
+        )}
+
+        {/* Fun fact */}
+        {!showCelebration && (
+          <Animated.View style={{ opacity: stepsOpacity }}>
+            <View style={styles.ldFactCard}>
+              <View style={styles.ldFactIcon}>
+                <Ionicons name="bulb" size={16} color="#FACC15" />
+              </View>
+              <View style={styles.ldFactContent}>
+                <Text style={styles.ldFactLabel}>Did you know?</Text>
+                <Text style={styles.ldFactText}>{fact}</Text>
+              </View>
+            </View>
+          </Animated.View>
+        )}
+      </ScrollView>
+    </Animated.View>
+  )
 }
 
 // Animated map marker with profile image and entrance animation
@@ -1262,9 +2003,9 @@ function MapScanningOverlay({ visible }) {
 function buildMapMarkers(plan) {
   if (!plan) return [];
   return plan.map((item, idx) => {
-    const lat = parseFloat(item.lat);
-    const lng = parseFloat(item.lng);
-    if (isNaN(lat) || isNaN(lng) || lat === 0 || lng === 0) return null;
+    const fixed = parsePlanItemCoords(item);
+    if (!fixed) return null;
+    const { lat, lng } = fixed;
     const rawImg = item.image || (item.client_image ? parseStorageImageUrl(item.client_image) : null);
     const image = rawImg ? (ensureImageUrl(rawImg) || rawImg) : null;
     return {
@@ -1315,14 +2056,27 @@ export default function AIPlanScreen() {
   const [surprisePicked, setSurprisePicked] = useState(null);
   const [showPlanModal, setShowPlanModal] = useState(false);
   const [planModalStep, setPlanModalStep] = useState(1);
+  const [doorVisible, setDoorVisible] = useState(false);
+  const doorLeft = useRef(new Animated.Value(-SCREEN_WIDTH / 2)).current
+  const doorRight = useRef(new Animated.Value(SCREEN_WIDTH / 2)).current
+  const doorIconScale = useRef(new Animated.Value(0)).current
+  const doorIconOpacity = useRef(new Animated.Value(0)).current
+  const doorFade = useRef(new Animated.Value(1)).current
+  const skipOpenAnim = useRef(false)
   const [planGenerationSuccess, setPlanGenerationSuccess] = useState(false);
   const [spotPreviews, setSpotPreviews] = useState([]);
   const [profileClientId, setProfileClientId] = useState(null);
-  const [expandedStops, setExpandedStops] = useState(() => new Set());
+  const [stopDetailPayload, setStopDetailPayload] = useState(null);
   const [openingMaps, setOpeningMaps] = useState(false);
+  const [shareCopyHint, setShareCopyHint] = useState(false);
+  const shareCopyHintTimerRef = useRef(null);
   const [allPlaceMarkers, setAllPlaceMarkers] = useState([]);
   const [mapRegion, setMapRegion] = useState(BAHRAIN_REGION);
   const [radialMenuPosition, setRadialMenuPosition] = useState(null);
+  const [showSearchModal, setShowSearchModal] = useState(false);
+  const [searchModalClients, setSearchModalClients] = useState({ restaurants: [], places: [], events: [] });
+  const [searchModalLoading, setSearchModalLoading] = useState(false);
+  const [searchModalQuery, setSearchModalQuery] = useState('');
 
   const handleOpenInGoogleMaps = async () => {
     if (!dayPlan || openingMaps) return;
@@ -1334,26 +2088,62 @@ export default function AIPlanScreen() {
     }
   };
 
-  const toggleExpandStop = (stopNum) => {
-    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
-    setExpandedStops((prev) => {
-      const next = new Set(prev);
-      if (next.has(stopNum)) next.delete(stopNum);
-      else next.add(stopNum);
-      return next;
-    });
-  };
+  const closeStopDetailDialog = useCallback(() => {
+    setStopDetailPayload(null);
+  }, []);
+
+  useEffect(() => {
+    if (!dayPlan?.length) setStopDetailPayload(null);
+  }, [dayPlan]);
+
   const spinAnim = useRef(new Animated.Value(0)).current;
 
   // Plan modal animations (match Home AI overlay)
   const planModalBackdrop = useRef(new Animated.Value(0)).current;
   const planModalScale = useRef(new Animated.Value(0.92)).current;
   const planModalOpacity = useRef(new Animated.Value(0)).current;
-  const planModalTitleOpacity = useRef(new Animated.Value(0)).current;
-  const planModalTitleTranslateY = useRef(new Animated.Value(12)).current;
-  const planModalChipsOpacity = useRef(new Animated.Value(0)).current;
-  const planModalChipsTranslateY = useRef(new Animated.Value(14)).current;
   const sheetOpacity = useRef(new Animated.Value(1)).current;
+
+  // Fetch all clients when search modal opens — grouped by restaurants, places, events
+  useEffect(() => {
+    if (!showSearchModal) return;
+    let cancelled = false;
+    setSearchModalLoading(true);
+    (async () => {
+      try {
+        const { data: rows, error } = await supabase.from('client').select('*');
+        if (cancelled) return;
+        if (error || !rows?.length) {
+          setSearchModalClients({ restaurants: [], places: [], events: [] });
+          return;
+        }
+        const restaurants = [];
+        const places = [];
+        const events = [];
+        rows.forEach((c) => {
+          const ct = ((c.client_type || '').toLowerCase());
+          const item = {
+            ...c,
+            clientId: c.client_a_uuid,
+            name: (c.business_name || c.name || c.business_name_ar || 'Spot').trim(),
+          };
+          if (ct === 'restaurant') restaurants.push(item);
+          else if (ct === 'event') events.push(item);
+          else places.push(item);
+        });
+        if (!cancelled) setSearchModalClients({ restaurants, places, events });
+      } catch (e) {
+        if (!cancelled) setSearchModalClients({ restaurants: [], places: [], events: [] });
+      } finally {
+        if (!cancelled) setSearchModalLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [showSearchModal]);
+
+  useEffect(() => {
+    if (!showSearchModal) setSearchModalQuery('');
+  }, [showSearchModal]);
 
   // Fetch all clients with coordinates for pre-plan map markers
   useEffect(() => {
@@ -1525,20 +2315,94 @@ export default function AIPlanScreen() {
   };
 
   const startSetup = () => {
-    setPlanGenerationSuccess(false);
-    setRevealingPins(false);
-    setVisiblePinCount(0);
-    sheetOpacity.setValue(1);
-    setSelectedPreferences(Array.isArray(preferences?.activityIds) ? preferences.activityIds : []);
-    setSelectedFoodCategories(Array.isArray(preferences?.foodIds) ? preferences.foodIds : []);
-    setDayPlan(null);
-    setPineconeMatches([]);
-    setSelectedMarker(null);
-    setError(null);
-    setSpotPreviews([]);
-    setPlanModalStep(1);
-    setShowPlanModal(true);
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {})
+    setPlanGenerationSuccess(false)
+    setRevealingPins(false)
+    setVisiblePinCount(0)
+    sheetOpacity.setValue(1)
+    setSelectedPreferences(Array.isArray(preferences?.activityIds) ? preferences.activityIds : [])
+    setSelectedFoodCategories(Array.isArray(preferences?.foodIds) ? preferences.foodIds : [])
+    setDayPlan(null)
+    setPineconeMatches([])
+    setSelectedMarker(null)
+    setError(null)
+    setSpotPreviews([])
+    setPlanModalStep(1)
+
+    doorLeft.setValue(-SCREEN_WIDTH / 2)
+    doorRight.setValue(SCREEN_WIDTH / 2)
+    doorIconScale.setValue(0)
+    doorIconOpacity.setValue(0)
+    doorFade.setValue(1)
+    setDoorVisible(true)
+
+    planModalBackdrop.setValue(1)
+    planModalScale.setValue(1)
+    planModalOpacity.setValue(1)
+
+    Animated.sequence([
+      Animated.parallel([
+        Animated.spring(doorIconScale, { toValue: 1, tension: 120, friction: 8, useNativeDriver: true }),
+        Animated.timing(doorIconOpacity, { toValue: 1, duration: 200, useNativeDriver: true }),
+      ]),
+      Animated.delay(100),
+      Animated.parallel([
+        Animated.timing(doorLeft, { toValue: 0, duration: 380, easing: Easing.bezier(0.4, 0, 0.2, 1), useNativeDriver: true }),
+        Animated.timing(doorRight, { toValue: 0, duration: 380, easing: Easing.bezier(0.4, 0, 0.2, 1), useNativeDriver: true }),
+      ]),
+    ]).start(() => {
+      skipOpenAnim.current = true
+      setShowPlanModal(true)
+
+      requestAnimationFrame(() => {
+        Animated.parallel([
+          Animated.timing(doorIconOpacity, { toValue: 0, duration: 150, useNativeDriver: true }),
+          Animated.timing(doorIconScale, { toValue: 0.6, duration: 150, useNativeDriver: true }),
+        ]).start(() => {
+          Animated.parallel([
+            Animated.timing(doorLeft, { toValue: -SCREEN_WIDTH / 2, duration: 400, easing: Easing.bezier(0.4, 0, 0.2, 1), useNativeDriver: true }),
+            Animated.timing(doorRight, { toValue: SCREEN_WIDTH / 2, duration: 400, easing: Easing.bezier(0.4, 0, 0.2, 1), useNativeDriver: true }),
+          ]).start(() => {
+            setDoorVisible(false)
+          })
+        })
+      })
+    })
   };
+
+  const handleSharePlanWithFriends = useCallback(async () => {
+    const { message, title } = formatPlanShareMessage(dayPlan);
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+    try {
+      await Share.share(
+        Platform.OS === 'ios'
+          ? { message, title }
+          : { message, title: title || 'Go Bahrain' },
+      );
+    } catch (_) {
+      /* dismissed */
+    }
+  }, [dayPlan]);
+
+  const handleCopyShareText = useCallback(async () => {
+    const { message } = formatPlanShareMessage(dayPlan);
+    try {
+      await Clipboard.setStringAsync(message);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
+      if (shareCopyHintTimerRef.current) clearTimeout(shareCopyHintTimerRef.current);
+      setShareCopyHint(true);
+      shareCopyHintTimerRef.current = setTimeout(() => {
+        setShareCopyHint(false);
+        shareCopyHintTimerRef.current = null;
+      }, 2200);
+    } catch (_) {
+      Alert.alert('Could not copy', 'Please try again.');
+    }
+  }, [dayPlan]);
+
+  useEffect(() => () => {
+    if (shareCopyHintTimerRef.current) clearTimeout(shareCopyHintTimerRef.current);
+  }, []);
 
   useEffect(() => {
     const openPlanModal = route.params?.openPlanModal;
@@ -1548,37 +2412,42 @@ export default function AIPlanScreen() {
   }, [route.params?.openPlanModal]);
 
   const closePlanModal = (then) => {
-    Animated.parallel([
-      Animated.timing(planModalBackdrop, {
-        toValue: 0,
-        duration: 300,
-        easing: Easing.in(Easing.quad),
-        useNativeDriver: true,
-      }),
-      Animated.timing(planModalScale, {
-        toValue: 0.95,
-        duration: 300,
-        easing: Easing.in(Easing.quad),
-        useNativeDriver: true,
-      }),
-      Animated.timing(planModalOpacity, {
-        toValue: 0,
-        duration: 250,
-        easing: Easing.in(Easing.quad),
-        useNativeDriver: true,
-      }),
-    ]).start(() => {
-      setShowPlanModal(false);
-      setPlanGenerationSuccess(false);
-      then?.();
-    });
+    doorLeft.setValue(0)
+    doorRight.setValue(0)
+    doorIconScale.setValue(0)
+    doorIconOpacity.setValue(0)
+    doorFade.setValue(1)
+    setDoorVisible(true)
+
+    requestAnimationFrame(() => {
+      setShowPlanModal(false)
+      setPlanGenerationSuccess(false)
+      planModalBackdrop.setValue(0)
+      planModalScale.setValue(0.95)
+      planModalOpacity.setValue(0)
+
+      Animated.sequence([
+        Animated.parallel([
+          Animated.spring(doorIconScale, { toValue: 1, tension: 120, friction: 8, useNativeDriver: true }),
+          Animated.timing(doorIconOpacity, { toValue: 1, duration: 200, useNativeDriver: true }),
+        ]),
+        Animated.delay(200),
+        Animated.parallel([
+          Animated.timing(doorLeft, { toValue: -SCREEN_WIDTH / 2, duration: 420, easing: Easing.bezier(0.4, 0, 0.2, 1), useNativeDriver: true }),
+          Animated.timing(doorRight, { toValue: SCREEN_WIDTH / 2, duration: 420, easing: Easing.bezier(0.4, 0, 0.2, 1), useNativeDriver: true }),
+        ]),
+        Animated.parallel([
+          Animated.timing(doorIconScale, { toValue: 0, duration: 200, useNativeDriver: true }),
+          Animated.timing(doorIconOpacity, { toValue: 0, duration: 200, useNativeDriver: true }),
+        ]),
+      ]).start(() => {
+        setDoorVisible(false)
+        then?.()
+      })
+    })
   };
 
   const openPlanModalAnim = () => {
-    planModalTitleOpacity.setValue(0);
-    planModalTitleTranslateY.setValue(14);
-    planModalChipsOpacity.setValue(0);
-    planModalChipsTranslateY.setValue(16);
     Animated.parallel([
       Animated.timing(planModalBackdrop, {
         toValue: 1,
@@ -1706,7 +2575,7 @@ export default function AIPlanScreen() {
           setRevealingPins(true);
           setVisiblePinCount(0);
           sheetOpacity.setValue(0);
-        }, 1400);
+        }, 3200);
       } else {
         sheetOpacity.setValue(1);
         lastSnap.current = SNAP_POINTS[0];
@@ -1727,47 +2596,13 @@ export default function AIPlanScreen() {
   }, [sheetAnim]);
 
   useEffect(() => {
-    if (showPlanModal) openPlanModalAnim();
+    if (!showPlanModal) return
+    if (skipOpenAnim.current) {
+      skipOpenAnim.current = false
+      return
+    }
+    openPlanModalAnim()
   }, [showPlanModal]);
-
-  // Question page animations: step transition
-  useEffect(() => {
-    if (!showPlanModal || loading || planGenerationSuccess) return;
-    planModalTitleOpacity.setValue(0);
-    planModalTitleTranslateY.setValue(14);
-    planModalChipsOpacity.setValue(0);
-    planModalChipsTranslateY.setValue(16);
-    Animated.stagger(60, [
-      Animated.parallel([
-        Animated.timing(planModalTitleOpacity, {
-          toValue: 1,
-          duration: 340,
-          easing: Easing.out(Easing.cubic),
-          useNativeDriver: true,
-        }),
-        Animated.timing(planModalTitleTranslateY, {
-          toValue: 0,
-          duration: 340,
-          easing: Easing.out(Easing.cubic),
-          useNativeDriver: true,
-        }),
-      ]),
-      Animated.parallel([
-        Animated.timing(planModalChipsOpacity, {
-          toValue: 1,
-          duration: 320,
-          easing: Easing.out(Easing.cubic),
-          useNativeDriver: true,
-        }),
-        Animated.timing(planModalChipsTranslateY, {
-          toValue: 0,
-          duration: 320,
-          easing: Easing.out(Easing.cubic),
-          useNativeDriver: true,
-        }),
-      ]),
-    ]).start();
-  }, [planModalStep, showPlanModal]);
 
   // Pin reveal: show pins one by one, pan camera to each, then open sheet with fade
   useEffect(() => {
@@ -1896,7 +2731,8 @@ export default function AIPlanScreen() {
   const panResponder = useRef(
     PanResponder.create({
       onStartShouldSetPanResponder: () => true,
-      onMoveShouldSetPanResponder: (_, g) => Math.abs(g.dy) > 4,
+      onMoveShouldSetPanResponder: (_, g) =>
+        Math.abs(g.dy) > 6 && Math.abs(g.dy) > Math.abs(g.dx) * 0.85,
       onPanResponderGrant: () => { lastSnap.current = currentYRef.current; },
       onPanResponderMove: (_, g) => {
         const newY = lastSnap.current + g.dy;
@@ -1973,6 +2809,17 @@ export default function AIPlanScreen() {
         })()}
       </MapView>
 
+      {/* Search button — top right */}
+      <View style={[styles.topBarWrap, { paddingTop: insets.top + 8 }]} pointerEvents="box-none">
+        <TouchableOpacity
+          style={styles.searchButton}
+          activeOpacity={0.8}
+          onPress={() => setShowSearchModal(true)}
+        >
+          <Ionicons name="search" size={22} color={themeColors.primary} />
+        </TouchableOpacity>
+      </View>
+
       {/* Scanning overlay during Hang tight removed (no radar effect) */}
       <MapScanningOverlay visible={false} />
 
@@ -1986,108 +2833,236 @@ export default function AIPlanScreen() {
           },
         ]}
       >
-        <View style={styles.grabberWrap} {...panResponder.panHandlers}>
+        <View
+          style={styles.grabberWrap}
+          {...panResponder.panHandlers}
+          accessibilityRole="button"
+          accessibilityLabel="Drag up to expand your plan"
+        >
           <View style={styles.grabber} />
-          <Text style={styles.grabberHint}>{dayPlan ? 'Swipe up for full itinerary' : 'Drag up for more'}</Text>
         </View>
 
         {/* Step 0 — Past Plans (modern hero layout) */}
         {drawerStep === 0 && (
-          <>
-            <View style={styles.pastPlansHero}>
-              <View style={styles.pastPlansHeroContent}>
-                <View style={styles.pastPlansTitleRow}>
-                  <Text style={styles.pastPlansTitle}>Your Bahrain{'\n'}Adventure</Text>
-                  <TouchableOpacity style={styles.startAiButtonWrap} activeOpacity={0.85} onPress={startSetup}>
-                    <LinearGradient colors={[themeColors.primary, themeColors.primaryLight || '#E63950']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.startAiButton}>
-                      <Ionicons name="sparkles" size={20} color="#FFFFFF" />
-                      <Text style={styles.startAiButtonText}>Build my day</Text>
-                    </LinearGradient>
+          <View style={styles.pastPlansStepWrap}>
+            <ScrollView style={styles.pastPlansScroll} contentContainerStyle={styles.d0ScrollContent} showsVerticalScrollIndicator={false}>
+              {/* Build CTA */}
+              <AiStagger delay={0}>
+                <Pressable
+                  style={({ pressed }) => [styles.d0CtaRow, pressed && { opacity: 0.93, transform: [{ scale: 0.98 }] }]}
+                  onPress={startSetup}
+                >
+                  <LinearGradient
+                    colors={[themeColors.primary, '#E63950']}
+                    start={{ x: 0, y: 0 }}
+                    end={{ x: 1, y: 1 }}
+                    style={styles.d0CtaGradient}
+                  >
+                    <View style={styles.d0CtaLogoWrap}>
+                      <Image
+                        source={require('../../assets/ai-button-logo.png')}
+                        style={styles.d0CtaLogo}
+                        resizeMode="cover"
+                      />
+                    </View>
+                    <View style={styles.d0CtaLeft}>
+                      <Text style={styles.d0CtaTitle}>Build my day</Text>
+                      <Text style={styles.d0CtaSub}>AI plans your perfect Bahrain day</Text>
+                    </View>
+                    <Ionicons name="chevron-forward" size={20} color="rgba(255,255,255,0.7)" />
+                  </LinearGradient>
+                </Pressable>
+              </AiStagger>
+
+              {/* Quick feature pills */}
+              <AiStagger delay={80}>
+                <View style={styles.d0FeatureRow}>
+                  {[
+                    { icon: 'location', label: 'Top spots', color: '#EF4444' },
+                    { icon: 'restaurant', label: 'Food picks', color: '#F59E0B' },
+                    { icon: 'time', label: 'Timed plan', color: '#3B82F6' },
+                  ].map((f, i) => (
+                    <View key={f.label} style={styles.d0FeaturePill}>
+                      <View style={[styles.d0FeaturePillIcon, { backgroundColor: `${f.color}15` }]}>
+                        <Ionicons name={f.icon} size={16} color={f.color} />
+                      </View>
+                      <Text style={styles.d0FeaturePillText}>{f.label}</Text>
+                    </View>
+                  ))}
+                </View>
+              </AiStagger>
+
+              {/* Past plans section */}
+              {DUMMY_PAST_PLANS.length > 0 && (
+                <>
+                  <AiStagger delay={140}>
+                    <View style={styles.d0SectionHeader}>
+                      <Text style={styles.d0SectionTitle}>Recent plans</Text>
+                      <View style={styles.d0SectionCount}>
+                        <Text style={styles.d0SectionCountText}>{DUMMY_PAST_PLANS.length}</Text>
+                      </View>
+                    </View>
+                  </AiStagger>
+                  {DUMMY_PAST_PLANS.map((plan, idx) => (
+                    <AiStagger key={plan.id} delay={180 + idx * 50}>
+                      <TouchableOpacity style={styles.d0PlanCard} activeOpacity={0.8}>
+                        <View style={styles.d0PlanIconWrap}>
+                          <Ionicons name="map" size={20} color={themeColors.primary} />
+                        </View>
+                        <View style={styles.d0PlanInfo}>
+                          <Text style={styles.d0PlanName}>{plan.title}</Text>
+                          <Text style={styles.d0PlanMeta}>{plan.spots} stops · {plan.date}</Text>
+                        </View>
+                        <Ionicons name="chevron-forward" size={16} color="#CBD5E1" />
+                      </TouchableOpacity>
+                    </AiStagger>
+                  ))}
+                </>
+              )}
+
+              {/* Share row */}
+              <AiStagger delay={280}>
+                <View style={styles.d0ShareRow}>
+                  <TouchableOpacity style={styles.d0ShareBtn} activeOpacity={0.75} onPress={handleSharePlanWithFriends}>
+                    <Ionicons name="share-social-outline" size={18} color="#64748B" />
+                    <Text style={styles.d0ShareBtnText}>Share with friends</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity style={styles.d0ShareBtn} activeOpacity={0.75} onPress={handleCopyShareText}>
+                    <Ionicons name="copy-outline" size={18} color="#64748B" />
+                    <Text style={styles.d0ShareBtnText}>Copy link</Text>
                   </TouchableOpacity>
                 </View>
-                <Text style={styles.pastPlansSubtitle}>Let Khalid craft the perfect day — tailored to you</Text>
-              </View>
-            </View>
-            <ScrollView style={styles.pastPlansScroll} contentContainerStyle={styles.pastPlansContent} showsVerticalScrollIndicator={false}>
-              {/* Surprise Me — premium card */}
-              <View style={styles.surpriseCard}>
-                <LinearGradient colors={['rgba(200,16,46,0.06)', 'rgba(200,16,46,0.02)']} style={styles.surpriseCardGradient}>
-                  <View style={styles.surpriseHeader}>
-                    <View style={styles.surpriseIconWrap}>
-                      <Ionicons name="dice" size={24} color={themeColors.primary} />
-                    </View>
-                    <View style={styles.surpriseHeaderText}>
-                      <Text style={styles.surpriseTitle}>Feeling Lucky?</Text>
-                      <Text style={styles.surpriseDesc}>
-                        Let Khalid pick a theme and plan your entire day — zero decisions needed!
-                      </Text>
-                    </View>
-                  </View>
-                  <View style={styles.rouletteWrap}>
-                    <View style={[styles.rouletteBox, { borderColor: (surprisePicked || SURPRISE_THEMES[surpriseIndex]).color, backgroundColor: `${(surprisePicked || SURPRISE_THEMES[surpriseIndex]).color}12` }]}>
-                      <Ionicons name={(surprisePicked || SURPRISE_THEMES[surpriseIndex]).icon} size={26} color={(surprisePicked || SURPRISE_THEMES[surpriseIndex]).color} />
-                      <Text style={[styles.rouletteLabel, { color: (surprisePicked || SURPRISE_THEMES[surpriseIndex]).color }]}>
-                        {(surprisePicked || SURPRISE_THEMES[surpriseIndex]).label}
-                      </Text>
-                    </View>
-                  </View>
-                  <TouchableOpacity style={[styles.surpriseBtn, surpriseSpinning && styles.surpriseBtnDisabled]} activeOpacity={0.85} onPress={handleSurpriseMe} disabled={surpriseSpinning}>
-                    <Ionicons name={surpriseSpinning ? 'sync' : 'sparkles'} size={20} color="#FFF" />
-                    <Text style={styles.surpriseBtnText}>
-                      {surpriseSpinning ? 'Spinning…' : surprisePicked ? `Go with ${surprisePicked.label}!` : 'Surprise Me!'}
-                    </Text>
-                  </TouchableOpacity>
-                </LinearGradient>
-              </View>
-
-              <View style={styles.surpriseDivider}>
-                <View style={styles.surpriseDividerLine} />
-                <Text style={styles.surpriseDividerText}>or pick from past plans</Text>
-                <View style={styles.surpriseDividerLine} />
-              </View>
-
-              {DUMMY_PAST_PLANS.map((plan) => (
-                <TouchableOpacity key={plan.id} style={styles.pastPlanCard} activeOpacity={0.85}>
-                  <View style={styles.pastPlanIcon}>
-                    <Ionicons name="map" size={24} color={themeColors.primary} />
-                  </View>
-                  <View style={styles.pastPlanInfo}>
-                    <Text style={styles.pastPlanName}>{plan.title}</Text>
-                    <View style={styles.pastPlanMetaRow}>
-                      <View style={styles.pastPlanMetaDot} />
-                      <Text style={styles.pastPlanMeta}>{plan.spots} stops · {plan.date}</Text>
-                    </View>
-                  </View>
-                  <View style={styles.savedBadge}>
-                    <Text style={styles.savedBadgeText}>Saved</Text>
-                  </View>
-                  <Ionicons name="chevron-forward" size={18} color="#94A3B8" />
-                </TouchableOpacity>
-              ))}
+                {shareCopyHint ? <Text style={styles.d0CopyHint}>Copied to clipboard</Text> : null}
+              </AiStagger>
             </ScrollView>
-          </>
+          </View>
         )}
 
         {/* Step 3 — Day plan results (steps 1–2 now in modal) */}
         {drawerStep === 3 && (
-          <>
-            {/* Header — no plan/preparation text when loading */}
-            <View style={styles.drawerPageHeader}>
-              <TouchableOpacity style={styles.backButton} activeOpacity={0.8} onPress={() => { setDrawerStep(0); setDayPlan(null); setError(null); }}>
-                      <Ionicons name="chevron-back" size={20} color="#374151" />
-              </TouchableOpacity>
-              {!loading && (
-                <View style={styles.drawerPageTitleWrap}>
-                  <Text style={styles.drawerPageTitle}>Your Day in Bahrain</Text>
+          <View style={styles.planStep3Body}>
+            {loading || error || !dayPlan?.length ? (
+              <View style={styles.drawerPageHeader}>
+                <TouchableOpacity
+                  style={styles.backButton}
+                  activeOpacity={0.8}
+                  onPress={() => { setDrawerStep(0); setDayPlan(null); setError(null); }}
+                  accessibilityRole="button"
+                  accessibilityLabel="Back to plans"
+                >
+                  <Ionicons name="chevron-back" size={20} color="#374151" />
+                </TouchableOpacity>
+                <View style={styles.drawerPageHeaderCenter} pointerEvents="none">
+                  {loading ? (
+                    <Text style={styles.drawerPageHeaderTitle} numberOfLines={1}>
+                      Building your day
+                    </Text>
+                  ) : error ? (
+                    <Text style={styles.drawerPageHeaderTitle} numberOfLines={1}>
+                      Something went wrong
+                    </Text>
+                  ) : (
+                    <Text style={styles.drawerPageHeaderTitle} numberOfLines={1}>
+                      Your plan
+                    </Text>
+                  )}
                 </View>
-              )}
-            </View>
+                <View style={styles.drawerPageHeaderSpacer} />
+              </View>
+            ) : (
+              <View style={styles.planMastheadRoot}>
+                <View style={styles.planMastheadTopRow}>
+                  <TouchableOpacity
+                    style={styles.backButton}
+                    activeOpacity={0.8}
+                    onPress={() => { setDrawerStep(0); setDayPlan(null); setError(null); }}
+                    accessibilityRole="button"
+                    accessibilityLabel="Back to plans"
+                  >
+                    <Ionicons name="chevron-back" size={20} color="#374151" />
+                  </TouchableOpacity>
+                  <View style={styles.planMastheadTitleCol}>
+                    <Text style={styles.planMastheadKicker}>Khalid · AI</Text>
+                    <Text style={styles.planMastheadHeadline} accessibilityRole="header">
+                      <Text style={styles.planMastheadHeadlineLead}>Your day</Text>
+                      <Text style={styles.planMastheadHeadlineTrail}> in Bahrain</Text>
+                    </Text>
+                  </View>
+                </View>
+                <View style={styles.planMastheadStatsRow}>
+                  <Text style={styles.iv2StatsEm}>{dayPlan.length}</Text>
+                  <Text style={styles.iv2StatsWord}>stops</Text>
+                  <Text style={styles.iv2StatsSep}>·</Text>
+                  <Text style={styles.iv2StatsEm}>{dayPlan.filter((i) => i.type === 'restaurant').length}</Text>
+                  <Text style={styles.iv2StatsWord}>meals</Text>
+                  <Text style={styles.iv2StatsSep}>·</Text>
+                  <Text style={styles.iv2StatsEm}>1</Text>
+                  <Text style={styles.iv2StatsWord}>day</Text>
+                </View>
+                <Text style={styles.planMastheadHint}>Tap a stop for details, photos & directions</Text>
+                <View style={styles.planMastheadActions}>
+                  <TouchableOpacity
+                    style={styles.iv2MapOutline}
+                    onPress={handleOpenInGoogleMaps}
+                    disabled={openingMaps}
+                    activeOpacity={0.85}
+                    accessibilityRole="button"
+                    accessibilityLabel="Open route in Google Maps"
+                  >
+                    {openingMaps ? (
+                      <ActivityIndicator size="small" color={themeColors.primary} />
+                    ) : (
+                      <>
+                        <Ionicons name="navigate-outline" size={18} color={themeColors.primary} />
+                        <Text style={styles.iv2MapOutlineText}>Maps</Text>
+                      </>
+                    )}
+                  </TouchableOpacity>
+                  <View style={styles.iv2Seg}>
+                    <TouchableOpacity
+                      style={styles.iv2SegBtn}
+                      activeOpacity={0.75}
+                      onPress={handleSharePlanWithFriends}
+                      accessibilityRole="button"
+                      accessibilityLabel="Share plan"
+                    >
+                      <Ionicons name="share-outline" size={18} color="#0f172a" />
+                    </TouchableOpacity>
+                    <View style={styles.iv2SegDivider} />
+                    <TouchableOpacity
+                      style={styles.iv2SegBtn}
+                      activeOpacity={0.75}
+                      onPress={handleCopyShareText}
+                      accessibilityRole="button"
+                      accessibilityLabel="Copy plan text"
+                    >
+                      <Ionicons name="copy-outline" size={18} color="#0f172a" />
+                    </TouchableOpacity>
+                  </View>
+                </View>
+                {shareCopyHint ? <Text style={styles.iv2CopyToast}>Copied</Text> : null}
+              </View>
+            )}
 
             {loading ? (
-              <View style={styles.loadingWrap}>
-                <LinearGradient colors={['#FFF5F6', '#FFFFFF']} style={styles.loadingBumpCard}>
-                  <View style={styles.loadingBumpPulse}>
-                    <ActivityIndicator size="large" color={themeColors.primary} />
+              <Reanimated.View
+                style={[styles.planContentFill, styles.loadingWrap]}
+                entering={FadeInDown.duration(400).springify().damping(17).stiffness(200).mass(0.85)}
+              >
+                <View style={styles.loadingBumpCard}>
+                  <LinearGradient colors={['#FFF0F2', '#FFF8F9', '#FFFFFF']} style={StyleSheet.absoluteFill} />
+                  <View style={styles.loadingBumpIllustration}>
+                    <LinearGradient
+                      colors={[`${themeColors.primary}20`, `${themeColors.primary}08`]}
+                      style={styles.loadingBumpIllustrationBg}
+                    >
+                      <Ionicons name="airplane" size={28} color={themeColors.primary} />
+                    </LinearGradient>
+                    <View style={styles.loadingBumpIllustrationTrail}>
+                      {[0, 1, 2].map((i) => (
+                        <View key={i} style={[styles.loadingBumpTrailDot, { opacity: 0.3 + i * 0.2, width: 4 + i * 2 }]} />
+                      ))}
+                    </View>
                   </View>
                   <Text style={styles.loadingBumpTitle}>{loadingStatus || "Khalid's building your day…"}</Text>
                   <Text style={styles.loadingBumpSub}>Hang tight, habibi — almost there!</Text>
@@ -2095,31 +3070,43 @@ export default function AIPlanScreen() {
                     <SpotMarqueeBanner items={spotPreviews} itemWidth={64} itemGap={10} variant="sheet" />
                   )}
                   <View style={styles.loadingProgressBar}>
-                    <View style={[styles.loadingProgressFill, (() => {
-                      const s = (loadingStatus || '').toLowerCase();
-                      if (s.includes('crafting') || s.includes('stitch')) return { width: '100%' };
-                      if (s.includes('food') || s.includes('restaurant')) return { width: '66%' };
-                      return { width: '33%' };
-                    })()]} />
+                    <LinearGradient
+                      colors={[themeColors.primary, '#E63950']}
+                      start={{ x: 0, y: 0 }}
+                      end={{ x: 1, y: 0 }}
+                      style={[styles.loadingProgressFill, (() => {
+                        const s = (loadingStatus || '').toLowerCase()
+                        if (s.includes('crafting') || s.includes('stitch')) return { width: '100%' }
+                        if (s.includes('food') || s.includes('restaurant')) return { width: '66%' }
+                        return { width: '33%' }
+                      })()]}
+                    />
                   </View>
                   <View style={styles.loadingBumpSteps}>
-                    {['Finding spots', 'Picking food', 'Stitching plan'].map((step, i) => {
-                      const s = (loadingStatus || '').toLowerCase();
-                      const isDone = (i === 0 && (s.includes('food') || s.includes('restaurant') || s.includes('crafting') || s.includes('stitch'))) || (i === 1 && (s.includes('crafting') || s.includes('stitch')));
+                    {[
+                      { text: 'Finding spots', icon: 'compass-outline' },
+                      { text: 'Picking food', icon: 'restaurant-outline' },
+                      { text: 'Stitching plan', icon: 'sparkles-outline' },
+                    ].map((step, i) => {
+                      const s = (loadingStatus || '').toLowerCase()
+                      const isDone = (i === 0 && (s.includes('food') || s.includes('restaurant') || s.includes('crafting') || s.includes('stitch'))) || (i === 1 && (s.includes('crafting') || s.includes('stitch')))
                       return (
-                        <View key={step} style={styles.loadingBumpStep}>
+                        <AiStagger key={step.text} delay={100 + i * 90} style={styles.loadingBumpStep}>
                           <View style={[styles.loadingBumpDot, isDone && styles.loadingBumpDotDone]}>
-                            {isDone ? <Ionicons name="checkmark" size={14} color="#FFFFFF" /> : <Ionicons name="ellipse" size={8} color={themeColors.primary} />}
+                            {isDone ? <Ionicons name="checkmark" size={14} color="#FFFFFF" /> : <Ionicons name={step.icon} size={14} color={themeColors.primary} />}
                           </View>
-                          <Text style={[styles.loadingBumpStepText, isDone && styles.loadingBumpStepTextDone]}>{step}</Text>
-                        </View>
-                      );
+                          <Text style={[styles.loadingBumpStepText, isDone && styles.loadingBumpStepTextDone]}>{step.text}</Text>
+                        </AiStagger>
+                      )
                     })}
                   </View>
-                </LinearGradient>
-              </View>
+                </View>
+              </Reanimated.View>
             ) : error ? (
-              <View style={styles.errorWrap}>
+              <Reanimated.View
+                style={[styles.planContentFill, styles.errorWrap]}
+                entering={ZoomInEasyDown.duration(360).springify().damping(16).stiffness(220)}
+              >
                 <View style={styles.errorCard}>
                   <View style={styles.errorIconWrap}>
                     <Ionicons name="alert-circle" size={28} color="#DC2626" />
@@ -2131,38 +3118,29 @@ export default function AIPlanScreen() {
                   <Ionicons name="refresh" size={20} color={themeColors.primary} />
                   <Text style={styles.retryButtonText}>Try again</Text>
                 </TouchableOpacity>
-              </View>
+              </Reanimated.View>
             ) : !dayPlan || dayPlan.length === 0 ? (
-              <View style={{ paddingHorizontal: 20, flex: 1, justifyContent: 'center' }}>
+              <Reanimated.View
+                style={[styles.planContentFill, { paddingHorizontal: 20, justifyContent: 'center' }]}
+                entering={FadeIn.duration(320)}
+              >
                 <Text style={styles.emptyResults}>No plan generated.</Text>
-              </View>
+              </Reanimated.View>
             ) : (
-              <ScrollView style={styles.resultsScroll} contentContainerStyle={styles.resultsContent} showsVerticalScrollIndicator={false}>
+              <Reanimated.View
+                style={styles.planContentFill}
+                entering={FadeInDown.duration(380).springify().damping(18).stiffness(200)}
+              >
+              <ScrollView
+                style={styles.resultsScroll}
+                contentContainerStyle={styles.resultsContent}
+                showsVerticalScrollIndicator={false}
+                nestedScrollEnabled
+                keyboardShouldPersistTaps="handled"
+                bounces
+              >
 
-                {/* ═══ Summary — simple overview + Google Maps button ═══ */}
-                <View style={styles.bumpSummaryCard}>
-                  <View style={styles.bumpSummarySimple}>
-                    <Text style={styles.bumpSummaryTitle}>{dayPlan.length} stops · Full day in Bahrain</Text>
-                    <Text style={styles.bumpSummarySub}>{dayPlan.filter(i => i.type === 'restaurant').length} meals · Yalla!</Text>
-                    <TouchableOpacity
-                      style={styles.bumpSummaryMapBtn}
-                      onPress={handleOpenInGoogleMaps}
-                      disabled={openingMaps}
-                      activeOpacity={0.85}
-                    >
-                      {openingMaps ? (
-                        <ActivityIndicator size="small" color="#FFFFFF" />
-                      ) : (
-                        <>
-                          <Ionicons name="navigate" size={18} color="#FFFFFF" />
-                          <Text style={styles.bumpSummaryMapBtnText}>Open in Google Maps</Text>
-                        </>
-                      )}
-                    </TouchableOpacity>
-                  </View>
-                </View>
-
-                {/* ═══ Bump-style itinerary list — modern cards ═══ */}
+                {/* ═══ Itinerary — masthead lives in fixed sheet header above ═══ */}
                 {(() => {
                   const sections = {
                     Morning:   { color: colors.morning, icon: 'sunny-outline', label: 'Morning' },
@@ -2174,149 +3152,290 @@ export default function AIPlanScreen() {
                   dayPlan.forEach((item) => { if (!grouped[item.time]) grouped[item.time] = []; grouped[item.time].push(item); });
                   let stopNum = 0;
 
-                  return order.filter(t => grouped[t]).map((time) => {
+                  return order.filter(t => grouped[t]).map((time, secIdx) => {
                     const sec = sections[time];
                     const items = grouped[time];
+                    let base = stopNum
+                    const withStops = items.map((item) => {
+                      base += 1
+                      return { item, thisStopNum: base }
+                    })
+                    stopNum = base
+
                     return (
-                      <View key={time} style={styles.bumpItinSection}>
-                        <View style={[styles.bumpItinSectionHeader, { backgroundColor: `${sec.color}12` }]}>
-                          <View style={[styles.bumpItinSectionIconWrap, { backgroundColor: sec.color }]}>
-                            <Ionicons name={sec.icon} size={14} color="#FFFFFF" />
+                      <AiStagger key={time} delay={100 + secIdx * 105} style={styles.bumpItinSection}>
+                        <View style={styles.iv2SectionHeadGrid}>
+                          <View style={[styles.iv2SectionIconSq, { backgroundColor: sec.color }]}>
+                            <Ionicons name={sec.icon} size={16} color="#FFFFFF" />
                           </View>
-                          <Text style={[styles.bumpItinSectionTitle, { color: sec.color }]}>{sec.label}</Text>
-                          <View style={[styles.bumpItinSectionCountBadge, { backgroundColor: sec.color }]}>
-                            <Text style={styles.bumpItinSectionCountText}>{items.length}</Text>
+                          <View style={styles.iv2SectionHeadGridText}>
+                            <Text style={styles.iv2SectionGridTitle}>{sec.label}</Text>
+                            <Text style={styles.iv2SectionGridMeta}>
+                              {items.length} {items.length === 1 ? 'stop' : 'stops'}
+                            </Text>
                           </View>
                         </View>
-                        {items.map((item, idx) => {
-                          stopNum += 1;
-                          const thisStopNum = stopNum;
-                          const isExpanded = expandedStops.has(thisStopNum);
-                          const isEat = item.type === 'restaurant';
-                          const isEvent = item.type === 'event';
-                          const accent = isEat ? themeColors.dining : isEvent ? themeColors.event : sec.color;
-                          const hasImage = !!(item.image);
-                          const hasImages = (item.images && item.images.length > 0) || hasImage;
-                          const images = (item.images && item.images.length > 0) ? item.images : (item.image ? [item.image] : []);
-                          const hasProfile = !!(item.clientId);
-                          return (
-                            <View key={`stop-${thisStopNum}`} style={[styles.bumpItinCard, isExpanded && styles.bumpItinCardExpanded]}>
+                        {(() => {
+                          const useSlider = items.length > 2;
+                          const tileW = useSlider ? ITIN_SLIDER_TILE : ITIN_GRID_TILE;
+                          const snapInterval = tileW + ITIN_GRID_GAP;
+                          const emptyIconSize = useSlider ? 26 : 28;
+                          const renderTile = ({ item, thisStopNum }) => {
+                            const isExpanded = stopDetailPayload?.thisStopNum === thisStopNum;
+                            const isEat = item.type === 'restaurant';
+                            const isEvent = item.type === 'event';
+                            const accent = isEat ? themeColors.dining : isEvent ? themeColors.event : sec.color;
+                            const hasImage = !!(item.image);
+                            const hasImages = (item.images && item.images.length > 0) || hasImage;
+                            const images = (item.images && item.images.length > 0) ? item.images : (item.image ? [item.image] : []);
+                            const hasProfile = !!(item.clientId);
+                            return (
                               <TouchableOpacity
-                                style={styles.bumpItinRow}
-                                activeOpacity={0.85}
+                                key={`stop-${thisStopNum}`}
+                                style={[styles.iv2GridTile, { width: tileW }]}
+                                activeOpacity={0.88}
                                 onPress={() => {
-                                  toggleExpandStop(thisStopNum);
-                                  if (!isExpanded) {
-                                    const markers = buildMapMarkers(dayPlan);
-                                    const mk = markers[thisStopNum - 1];
-                                    if (mk) setSelectedMarker(mk);
+                                  if (stopDetailPayload?.thisStopNum === thisStopNum) {
+                                    setStopDetailPayload(null);
+                                    return;
                                   }
+                                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+                                  setStopDetailPayload({
+                                    item,
+                                    thisStopNum,
+                                    accent,
+                                    isEat,
+                                    isEvent,
+                                    hasImages,
+                                    images,
+                                    hasProfile,
+                                  });
+                                  const markers = buildMapMarkers(dayPlan);
+                                  const mk = markers[thisStopNum - 1];
+                                  if (mk) setSelectedMarker(mk);
                                 }}
+                                accessibilityRole="button"
+                                accessibilityState={{ expanded: isExpanded }}
+                                accessibilityLabel={`${item.spot}, stop ${thisStopNum}`}
                               >
-                                <View style={[styles.bumpItinNumCircle, { backgroundColor: accent }]}>
-                                  <Text style={styles.bumpItinNumText}>{thisStopNum}</Text>
-                                </View>
-                                <View style={styles.bumpItinThumbWrap}>
+                                <View style={styles.iv2GridTileInner}>
                                   {hasImages ? (
-                                    <PreviewImage uri={images[0] || item.image} style={styles.bumpItinThumb} />
+                                    <PreviewImage uri={images[0] || item.image} style={styles.iv2GridTileImg} />
                                   ) : (
-                                    <View style={[styles.bumpItinThumbPlaceholder, { backgroundColor: `${accent}20` }]}>
-                                    <Ionicons name={isEat ? 'restaurant' : isEvent ? 'calendar' : 'location'} size={18} color={accent} />
+                                    <View style={[styles.iv2GridTileImg, styles.iv2GridTileImgEmpty, { backgroundColor: `${accent}28` }]}>
+                                      <Ionicons name={isEat ? 'restaurant' : isEvent ? 'calendar' : 'location'} size={emptyIconSize} color={accent} />
                                     </View>
                                   )}
-                                  {item.rating != null && (
-                                    <View style={styles.bumpItinRatingPill}>
-                                      <Ionicons name="star" size={10} color="#F59E0B" />
-                                      <Text style={styles.bumpItinRatingPillText}>{Number(item.rating).toFixed(1)}</Text>
+                                  <LinearGradient
+                                    colors={['transparent', 'rgba(0,0,0,0.08)', 'rgba(0,0,0,0.82)']}
+                                    locations={[0, 0.45, 1]}
+                                    style={StyleSheet.absoluteFill}
+                                    pointerEvents="none"
+                                  />
+                                  <View style={styles.iv2GridTileTopRow}>
+                                    <View style={[styles.iv2GridTileNumBadge, { backgroundColor: accent }]}>
+                                      <Text style={styles.iv2GridTileNumBadgeText}>{thisStopNum}</Text>
                                     </View>
-                                  )}
-                                </View>
-                                <View style={styles.bumpItinSummary}>
-                                  <Text style={styles.bumpItinName} numberOfLines={1}>{item.spot}</Text>
-                                  {!isExpanded && <Text style={styles.bumpItinReason} numberOfLines={2}>{item.reason}</Text>}
-                                  {!isExpanded && (
-                                    <View style={styles.bumpItinActionRow}>
-                                      {item.lat != null && item.lng != null && (
-                                        <TouchableOpacity style={styles.bumpItinActionIcon} onPress={(e) => { e.stopPropagation(); openInMaps(item.lat, item.lng, item.spot); }} activeOpacity={0.7}>
-                                          <Ionicons name="navigate" size={18} color={themeColors.primary} />
-                                        </TouchableOpacity>
-                                      )}
-                                      {hasProfile && (
-                                        <TouchableOpacity style={styles.bumpItinActionIcon} onPress={(e) => { e.stopPropagation(); setProfileClientId(item.clientId); }} activeOpacity={0.7}>
-                                          <Ionicons name="person-circle-outline" size={18} color={themeColors.primary} />
-                                        </TouchableOpacity>
-                                      )}
-                                      {item.lat != null && item.lng != null && (
-                                        <TouchableOpacity style={styles.bumpItinActionIcon} onPress={(e) => { e.stopPropagation(); navigation.navigate('AR', { navigateTo: { lat: item.lat, lng: item.lng, name: item.spot } }); }} activeOpacity={0.7}>
-                                          <Ionicons name="camera" size={18} color={themeColors.primary} />
-                                        </TouchableOpacity>
-                                      )}
-                                    </View>
-                                  )}
-                                </View>
-                                <Ionicons name={isExpanded ? 'chevron-down' : 'chevron-forward'} size={18} color="#94A3B8" style={styles.bumpItinChevron} />
-                              </TouchableOpacity>
-                              {isExpanded && (
-                                <View style={styles.bumpItinExpanded}>
-                                  <View style={styles.bumpItinExpandedImageWrap}>
-                                    {hasImages ? (
-                                      images.length > 1 ? (
-                                        <ScrollView horizontal pagingEnabled showsHorizontalScrollIndicator={false} style={styles.bumpItinExpandedScroll} contentContainerStyle={styles.bumpItinExpandedScrollContent}>
-                                          {images.map((img, i) => (
-                                            <View key={i} style={styles.bumpItinExpandedSlide}>
-                                              <PreviewImage uri={img} style={StyleSheet.absoluteFill} />
-                                            </View>
-                                          ))}
-                                        </ScrollView>
-                                      ) : (
-                                        <PreviewImage uri={images[0] || item.image} style={StyleSheet.absoluteFill} />
-                                      )
-                                    ) : (
-                                      <View style={[styles.bumpItinExpandedPlaceholder, { backgroundColor: `${accent}15` }]}>
-                                        <Ionicons name={isEat ? 'restaurant' : isEvent ? 'calendar' : 'location'} size={28} color={accent} />
+                                    {item.rating != null && (
+                                      <View style={styles.iv2GridTileRating}>
+                                        <Ionicons name="star" size={10} color="#F59E0B" />
+                                        <Text style={styles.iv2GridTileRatingText}>{Number(item.rating).toFixed(1)}</Text>
                                       </View>
                                     )}
                                   </View>
-                                  <Text style={styles.bumpItinExpandedReason}>{item.reason}</Text>
-                                  <View style={styles.bumpItinExpandedActions}>
-                                    {item.lat != null && item.lng != null && (
-                                      <>
-                                        <TouchableOpacity style={[styles.bumpItinExpandedBtn, styles.bumpItinExpandedBtnPrimary]} onPress={() => openInMaps(item.lat, item.lng, item.spot)} activeOpacity={0.85}>
-                                          <Ionicons name="navigate" size={16} color="#FFFFFF" />
-                                          <Text style={styles.bumpItinExpandedBtnPrimaryText}>Get directions</Text>
-                                        </TouchableOpacity>
-                                        <TouchableOpacity style={[styles.bumpItinExpandedBtn, styles.bumpItinExpandedBtnSecondary]} onPress={() => navigation.navigate('AR', { navigateTo: { lat: item.lat, lng: item.lng, name: item.spot } })} activeOpacity={0.85}>
-                                          <Ionicons name="camera" size={16} color={themeColors.primary} />
-                                          <Text style={styles.bumpItinExpandedBtnSecondaryText}>Open in AR</Text>
-                                        </TouchableOpacity>
-                                      </>
-                                    )}
-                                    {hasProfile && (
-                                      <TouchableOpacity style={[styles.bumpItinExpandedBtn, styles.bumpItinExpandedBtnSecondary]} onPress={() => setProfileClientId(item.clientId)} activeOpacity={0.85}>
-                                        <Ionicons name="person-circle-outline" size={16} color={themeColors.primary} />
-                                        <Text style={styles.bumpItinExpandedBtnSecondaryText}>Profile</Text>
-                                      </TouchableOpacity>
-                                    )}
+                                  <View style={styles.iv2GridTileBottom}>
+                                    <Text style={styles.iv2GridTileSpot} numberOfLines={2}>{item.spot}</Text>
+                                  </View>
+                                  <View style={styles.iv2GridTileExpandHint}>
+                                    <Ionicons name={isExpanded ? 'chevron-up' : 'expand-outline'} size={16} color="rgba(255,255,255,0.85)" />
                                   </View>
                                 </View>
-                              )}
+                              </TouchableOpacity>
+                            );
+                          };
+                          if (useSlider) {
+                            return (
+                              <ScrollView
+                                horizontal
+                                showsHorizontalScrollIndicator={false}
+                                decelerationRate="fast"
+                                snapToInterval={snapInterval}
+                                snapToAlignment="start"
+                                disableIntervalMomentum
+                                nestedScrollEnabled
+                                directionalLockEnabled
+                                keyboardShouldPersistTaps="handled"
+                                contentContainerStyle={styles.iv2SliderContent}
+                              >
+                                {withStops.map((w) => renderTile(w))}
+                              </ScrollView>
+                            );
+                          }
+                          return (
+                            <View style={styles.iv2Grid}>
+                              {withStops.map((w) => renderTile(w))}
                             </View>
                           );
-                        })}
-                      </View>
+                        })()}
+                      </AiStagger>
                     );
                   });
                 })()}
 
                 {/* ═══ Footer — friendly close ═══ */}
-                <View style={styles.bumpFooter}>
-                  <Text style={styles.bumpFooterText}>Tap to expand for details. Tap again to collapse. Yalla!</Text>
-                </View>
+                <AiStagger delay={320}>
+                  <View style={styles.iv2Footer}>
+                    <Ionicons name="information-circle-outline" size={16} color="#94a3b8" />
+                    <Text style={styles.iv2FooterText}>
+                      Tap a stop for details · Swipe time rows with 3+ places · Pinch the map to explore
+                    </Text>
+                  </View>
+                </AiStagger>
               </ScrollView>
+              </Reanimated.View>
             )}
-          </>
+          </View>
         )}
       </Animated.View>
+
+      {/* Stop detail — centered dialog over map / sheet */}
+      <Modal
+        visible={!!stopDetailPayload}
+        transparent
+        animationType="fade"
+        onRequestClose={closeStopDetailDialog}
+      >
+        {stopDetailPayload ? (
+          <KeyboardAvoidingView
+            style={styles.stopDialogKb}
+            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          >
+            <View style={styles.stopDialogRoot}>
+              <TouchableOpacity
+                style={styles.stopDialogDim}
+                activeOpacity={1}
+                onPress={closeStopDetailDialog}
+                accessibilityLabel="Dismiss"
+                accessibilityRole="button"
+              />
+              <View
+                style={[styles.stopDialogCard, { width: STOP_DIALOG_SLIDE_WIDTH, maxWidth: '100%' }]}
+                accessibilityViewIsModal
+              >
+                <View style={styles.stopDialogHero}>
+                  <StopDetailGallery
+                    images={Array.isArray(stopDetailPayload.images) ? stopDetailPayload.images : []}
+                    singleUri={
+                      stopDetailPayload.hasImages
+                        ? (stopDetailPayload.images[0] || stopDetailPayload.item.image)
+                        : (stopDetailPayload.item.image || null)
+                    }
+                    accent={stopDetailPayload.accent}
+                    isEat={stopDetailPayload.isEat}
+                    isEvent={stopDetailPayload.isEvent}
+                    slideWidth={STOP_DIALOG_SLIDE_WIDTH}
+                    imageHeight={STOP_DIALOG_IMAGE_H}
+                  />
+                </View>
+                <ScrollView
+                  style={styles.stopDialogBodyScroll}
+                  contentContainerStyle={styles.stopDialogScrollContent}
+                  showsVerticalScrollIndicator={false}
+                  bounces={false}
+                >
+                  <View style={styles.stopDialogHeader}>
+                    <View style={styles.stopDialogHeaderMain}>
+                      <View style={[styles.stopDialogNumBadge, { backgroundColor: stopDetailPayload.accent }]}>
+                        <Text style={styles.stopDialogNumText}>{stopDetailPayload.thisStopNum}</Text>
+                      </View>
+                      <View style={styles.stopDialogTitleCol}>
+                        <Text style={styles.stopDialogSpotTitle} numberOfLines={3}>
+                          {stopDetailPayload.item.spot}
+                        </Text>
+                        {stopDetailPayload.item.rating != null && (
+                          <View style={styles.stopDialogRatingRow}>
+                            <Ionicons name="star" size={14} color="#F59E0B" />
+                            <Text style={styles.stopDialogRatingText}>
+                              {Number(stopDetailPayload.item.rating).toFixed(1)}
+                            </Text>
+                          </View>
+                        )}
+                      </View>
+                    </View>
+                    <TouchableOpacity
+                      style={styles.stopDialogClose}
+                      onPress={closeStopDetailDialog}
+                      accessibilityRole="button"
+                      accessibilityLabel="Close"
+                    >
+                      <Ionicons name="close-circle" size={34} color="#94A3B8" />
+                    </TouchableOpacity>
+                  </View>
+
+                  <Text style={styles.stopDialogSectionLabel}>About this stop</Text>
+                  <View style={styles.stopDialogDescBox}>
+                    <Text style={styles.stopDialogDescText}>{stopDetailPayload.item.reason}</Text>
+                  </View>
+
+                  <View style={styles.stopDialogActions}>
+                    {stopDetailPayload.item.lat != null && stopDetailPayload.item.lng != null && (
+                      <>
+                        <TouchableOpacity
+                          style={[styles.stopDialogBtn, styles.stopDialogBtnPrimary]}
+                          activeOpacity={0.88}
+                          onPress={() => {
+                            openInMaps(stopDetailPayload.item.lat, stopDetailPayload.item.lng, stopDetailPayload.item.spot);
+                            closeStopDetailDialog();
+                          }}
+                          accessibilityRole="button"
+                          accessibilityLabel="Get directions"
+                        >
+                          <Ionicons name="navigate" size={18} color="#FFFFFF" />
+                          <Text style={styles.stopDialogBtnPrimaryText}>Directions</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          style={[styles.stopDialogBtn, styles.stopDialogBtnGhost]}
+                          activeOpacity={0.88}
+                          onPress={() => {
+                            navigation.navigate('AR', {
+                              navigateTo: {
+                                lat: stopDetailPayload.item.lat,
+                                lng: stopDetailPayload.item.lng,
+                                name: stopDetailPayload.item.spot,
+                              },
+                            });
+                            closeStopDetailDialog();
+                          }}
+                          accessibilityRole="button"
+                          accessibilityLabel="Open in AR"
+                        >
+                          <Ionicons name="camera" size={18} color={themeColors.primary} />
+                          <Text style={styles.stopDialogBtnGhostText}>AR</Text>
+                        </TouchableOpacity>
+                      </>
+                    )}
+                    {stopDetailPayload.hasProfile && (
+                      <TouchableOpacity
+                        style={[styles.stopDialogBtn, styles.stopDialogBtnGhost]}
+                        activeOpacity={0.88}
+                        onPress={() => {
+                          setProfileClientId(stopDetailPayload.item.clientId);
+                          closeStopDetailDialog();
+                        }}
+                        accessibilityRole="button"
+                        accessibilityLabel="Open profile"
+                      >
+                        <Ionicons name="person-circle-outline" size={18} color={themeColors.primary} />
+                        <Text style={styles.stopDialogBtnGhostText}>Profile</Text>
+                      </TouchableOpacity>
+                    )}
+                  </View>
+                </ScrollView>
+              </View>
+            </View>
+          </KeyboardAvoidingView>
+        ) : null}
+      </Modal>
 
       {/* Plan modal — Home AI design (blur overlay, question block, glass options) */}
       <Modal visible={showPlanModal} transparent animationType="none">
@@ -2326,11 +3445,10 @@ export default function AIPlanScreen() {
         >
           <Animated.View style={[styles.planModalBackdropWrap, { opacity: planModalBackdrop }]}>
             <LinearGradient
-              colors={['#1a0a0d', '#2d1519', '#1a0a0d']}
+              colors={['#B80E21', '#CE1126', '#9E0B1C', '#CE1126', '#B80E21']}
+              locations={[0, 0.25, 0.5, 0.75, 1]}
               style={StyleSheet.absoluteFill}
             />
-            <BlurView intensity={30} tint="dark" style={StyleSheet.absoluteFill} />
-            <View style={styles.planModalBackdropDim} />
             <TouchableOpacity
               style={StyleSheet.absoluteFill}
               activeOpacity={1}
@@ -2348,150 +3466,167 @@ export default function AIPlanScreen() {
               },
             ]}
           >
-            {/* Loading state — animated, smooth */}
             {loading || planGenerationSuccess ? (
-              <PlanModalLoadingView
-                loadingStatus={loadingStatus}
-                showSuccess={planGenerationSuccess}
-                spotPreviews={spotPreviews}
-              />
-            ) : (
-              <>
-                {/* Question block — modern step indicator */}
-                <Animated.View
-                  style={[
-                    styles.planModalQuestionBlock,
-                    {
-                      opacity: planModalTitleOpacity,
-                      transform: [{ translateY: planModalTitleTranslateY }],
-                    },
-                  ]}
-                >
-                  <View style={styles.planModalStepIndicator}>
-                    <View style={[styles.planModalStepDot, planModalStep >= 1 && styles.planModalStepDotActive]} />
-                    <View style={[styles.planModalStepLine, planModalStep >= 2 && styles.planModalStepLineActive]} />
-                    <View style={[styles.planModalStepDot, planModalStep >= 2 && styles.planModalStepDotActive]} />
-                  </View>
-                  <View style={styles.planModalQuestionInner}>
-                    <Text style={styles.planModalQuestionTitle}>
-                      {planModalStep === 1 ? 'What kind of experiences do you prefer?' : 'What do you prefer to eat?'}
-                    </Text>
-                    <View style={styles.planModalQuestionAccent} />
-                    <Text style={styles.planModalQuestionSub}>
-                      {planModalStep === 1 ? 'Tap a few that describe your Bahrain trip' : 'Pick your food vibes for this trip'}
-                    </Text>
-                  </View>
-                </Animated.View>
-
-                {/* Glass-style options */}
-                <Animated.View
-                  style={[
-                    styles.planModalOptionsWrap,
-                    {
-                      opacity: planModalChipsOpacity,
-                      transform: [{ translateY: planModalChipsTranslateY }],
-                    },
-                  ]}
-                >
-                  <ScrollView
-                style={styles.planModalScroll}
-                contentContainerStyle={styles.planModalScrollContent}
-                showsVerticalScrollIndicator={false}
-              >
-                <View style={styles.planModalOptionsGrid}>
-                  {(() => {
-                    const items = planModalStep === 1 ? PREFERENCES : FOOD_CATEGORIES;
-                    const isSelected = (item) =>
-                      planModalStep === 1
-                        ? selectedPreferences.includes(item.id)
-                        : selectedFoodCategories.includes(item.id);
-                    const onPress = (item) =>
-                      planModalStep === 1 ? togglePreference(item.id) : toggleFoodCategory(item.id);
-                    const rows = [];
-                    for (let i = 0; i < items.length; i += 2) {
-                      rows.push(items.slice(i, i + 2));
-                    }
-                    return rows.map((row, rowIdx) => (
-                      <View key={rowIdx} style={styles.planModalOptionsRow}>
-                        {row.map((item) => {
-                          const sel = isSelected(item);
-                          return (
-                            <TouchableOpacity
-                              key={item.id}
-                              style={[
-                                styles.planModalOptionBlock,
-                                sel && styles.planModalOptionBlockSelected,
-                                sel && { borderColor: item.color, backgroundColor: item.color, borderWidth: 2 },
-                              ]}
-                              activeOpacity={0.85}
-                              onPress={() => onPress(item)}
-                            >
-                              <View style={[styles.planModalOptionIconWrap, sel && { backgroundColor: 'rgba(255,255,255,0.25)' }]}>
-                                <Ionicons name={item.icon} size={18} color={sel ? '#FFFFFF' : 'rgba(255,255,255,0.95)'} />
-                              </View>
-                              <Text style={[styles.planModalOptionText, sel && styles.planModalOptionTextSelected]}>
-                                {item.label}
-                              </Text>
-                            </TouchableOpacity>
-                          );
-                        })}
-                        {row.length === 1 && <View style={styles.planModalOptionSpacer} />}
-                      </View>
-                    ));
-                  })()}
-                </View>
-              </ScrollView>
-
-              {/* Action row */}
-              <View style={styles.planModalActionRow}>
-                {planModalStep === 1 ? (
-                  <>
-                    <TouchableOpacity
-                      style={styles.planModalBackBtn}
-                      activeOpacity={0.8}
-                      onPress={() => closePlanModal()}
-                    >
-                      <Ionicons name="close" size={20} color="#FFFFFF" />
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      style={styles.planModalContinueBtn}
-                      activeOpacity={0.8}
-                      onPress={() => {
-                        const prefLabels = selectedPreferences
-                          .map((id) => PREFERENCES.find((p) => p.id === id)?.label)
-                          .filter(Boolean);
-                        startBackgroundPrefetch(prefLabels);
-                        setPlanModalStep(2);
-                      }}
-                    >
-                      <Text style={styles.planModalContinueBtnText}>Continue</Text>
-                      <Ionicons name="arrow-forward" size={20} color="#FFFFFF" />
-                    </TouchableOpacity>
-                  </>
-                ) : (
-                  <>
-                    <TouchableOpacity
-                      style={styles.planModalBackBtn}
-                      activeOpacity={0.8}
-                      onPress={() => setPlanModalStep(1)}
-                    >
-                      <Ionicons name="chevron-back" size={22} color="#FFFFFF" />
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      style={styles.planModalGenerateBtn}
-                      activeOpacity={0.8}
-                      onPress={() => {
-                        handleGenerate(() => closePlanModal());
-                      }}
-                    >
-                      <Ionicons name="sparkles" size={20} color="#FFFFFF" />
-                      <Text style={styles.planModalGenerateBtnText}>Generate</Text>
-                    </TouchableOpacity>
-                  </>
-                )}
+              <View style={styles.planModalPresenceLayer}>
+                <PlanModalLoadingView
+                  loadingStatus={loadingStatus}
+                  showSuccess={planGenerationSuccess}
+                  spotPreviews={spotPreviews}
+                />
               </View>
-            </Animated.View>
-              </>
+            ) : (
+              <View style={styles.planModalPresenceLayer}>
+                <PlanStepBubble step={planModalStep}>
+                      {/* Hero question area */}
+                      <View style={styles.pmHero}>
+                        <PopIn delay={60} trigger={planModalStep}>
+                          <View style={styles.pmStepBadge}>
+                            <Text style={styles.pmStepBadgeText}>
+                              {planModalStep === 1 ? 'STEP 1 OF 2' : 'STEP 2 OF 2'}
+                            </Text>
+                            <View style={styles.pmStepDots}>
+                              <View style={[styles.pmStepDotSmall, styles.pmStepDotSmallActive]} />
+                              <View style={[styles.pmStepDotSmall, planModalStep === 2 && styles.pmStepDotSmallActive]} />
+                            </View>
+                          </View>
+                        </PopIn>
+
+                        <PopIn delay={140} trigger={planModalStep}>
+                          <Text style={styles.pmTitle}>
+                            {planModalStep === 1
+                              ? 'What excites you?'
+                              : 'What are you craving?'}
+                          </Text>
+                        </PopIn>
+                        <PopIn delay={200} trigger={planModalStep}>
+                          <Text style={styles.pmSub}>
+                            {planModalStep === 1
+                              ? 'Pick the vibes that match your Bahrain trip'
+                              : 'Choose your food mood for the day'}
+                          </Text>
+                        </PopIn>
+
+                        {(planModalStep === 1 ? selectedPreferences.length : selectedFoodCategories.length) > 0 && (
+                          <PopIn delay={240} trigger={planModalStep}>
+                            <View style={styles.pmSelectedPill}>
+                              <Ionicons name="checkmark-circle" size={14} color="#FFFFFF" />
+                              <Text style={styles.pmSelectedText}>
+                                {planModalStep === 1
+                                  ? `${selectedPreferences.length} picked`
+                                  : `${selectedFoodCategories.length} picked`}
+                              </Text>
+                            </View>
+                          </PopIn>
+                        )}
+                      </View>
+
+                      {/* Chip options (flex-wrap tag cloud) */}
+                      <View style={styles.pmChipsWrap}>
+                        <ScrollView
+                          style={styles.pmChipsScroll}
+                          contentContainerStyle={styles.pmChipsScrollContent}
+                          showsVerticalScrollIndicator={false}
+                        >
+                          <View style={styles.pmChipsPanel}>
+                            <View style={styles.pmChipsGrid}>
+                            {(() => {
+                              const items = planModalStep === 1 ? PREFERENCES : FOOD_CATEGORIES
+                              const isSelectedFn = (item) =>
+                                planModalStep === 1
+                                  ? selectedPreferences.includes(item.id)
+                                  : selectedFoodCategories.includes(item.id)
+                              const handlePressItem = (item) => {
+                                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {})
+                                return planModalStep === 1 ? togglePreference(item.id) : toggleFoodCategory(item.id)
+                              }
+                              return items.map((item, idx) => (
+                                <PopIn key={`${planModalStep}-${item.id}`} delay={280 + idx * 30} trigger={planModalStep}>
+                                  <AnimatedOptionChip
+                                    item={item}
+                                    isSelected={isSelectedFn(item)}
+                                    onPress={() => handlePressItem(item)}
+                                  />
+                                </PopIn>
+                              ))
+                            })()}
+                            </View>
+                          </View>
+                        </ScrollView>
+
+                        <PopIn delay={500} trigger={planModalStep}>
+                        <View style={styles.planModalActionRow}>
+                          {planModalStep === 1 ? (
+                            <>
+                              <TouchableOpacity
+                                style={styles.planModalBackBtn}
+                                activeOpacity={0.7}
+                                onPress={() => closePlanModal()}
+                                accessibilityLabel="Close"
+                                accessibilityRole="button"
+                              >
+                                <Ionicons name="close" size={20} color="rgba(255,255,255,0.9)" />
+                              </TouchableOpacity>
+                              <TouchableOpacity
+                                style={styles.planModalContinueBtn}
+                                activeOpacity={0.85}
+                                onPress={() => {
+                                  const prefLabels = selectedPreferences
+                                    .map((id) => PREFERENCES.find((p) => p.id === id)?.label)
+                                    .filter(Boolean)
+                                  startBackgroundPrefetch(prefLabels)
+                                  setPlanModalStep(2)
+                                }}
+                                accessibilityLabel="Continue to food preferences"
+                                accessibilityRole="button"
+                              >
+                                <LinearGradient
+                                  colors={['#FFFFFF', '#F0F0F0']}
+                                  start={{ x: 0, y: 0 }}
+                                  end={{ x: 1, y: 0 }}
+                                  style={styles.planModalBtnGradient}
+                                >
+                                  <Text style={[styles.planModalContinueBtnText, { color: '#B80E21' }]}>Continue</Text>
+                                  <Ionicons name="arrow-forward" size={20} color="#B80E21" />
+                                </LinearGradient>
+                              </TouchableOpacity>
+                            </>
+                          ) : (
+                            <>
+                              <TouchableOpacity
+                                style={styles.planModalBackBtn}
+                                activeOpacity={0.7}
+                                onPress={() => setPlanModalStep(1)}
+                                accessibilityLabel="Go back"
+                                accessibilityRole="button"
+                              >
+                                <Ionicons name="chevron-back" size={22} color="rgba(255,255,255,0.9)" />
+                              </TouchableOpacity>
+                              <TouchableOpacity
+                                style={styles.planModalGenerateBtn}
+                                activeOpacity={0.85}
+                                onPress={() => {
+                                  handleGenerate(() => closePlanModal())
+                                }}
+                                accessibilityLabel="Generate your plan"
+                                accessibilityRole="button"
+                              >
+                                <LinearGradient
+                                  colors={['#FFFFFF', '#F0F0F0']}
+                                  start={{ x: 0, y: 0 }}
+                                  end={{ x: 1, y: 0 }}
+                                  style={styles.planModalBtnGradient}
+                                >
+                                  <Ionicons name="sparkles" size={20} color="#B80E21" />
+                                  <Text style={[styles.planModalGenerateBtnText, { color: '#B80E21' }]}>Generate My Plan</Text>
+                                </LinearGradient>
+                              </TouchableOpacity>
+                            </>
+                          )}
+                        </View>
+                        </PopIn>
+                      </View>
+                    </PlanStepBubble>
+              </View>
             )}
           </Animated.View>
         </KeyboardAvoidingView>
@@ -2506,6 +3641,137 @@ export default function AIPlanScreen() {
         onClose={closeRadialMenu}
       />
 
+      {/* Clients search modal — all clients by Restaurants, Places, Events */}
+      <Modal
+        visible={showSearchModal}
+        animationType="slide"
+        presentationStyle="pageSheet"
+        onRequestClose={() => setShowSearchModal(false)}
+      >
+        <View style={[styles.searchModalRoot, { paddingTop: insets.top + 4 }]}>
+          {searchModalLoading ? (
+            <View style={styles.searchModalLoading}>
+              <ActivityIndicator size="large" color={themeColors.primary} />
+              <Text style={styles.searchModalLoadingText}>Loading clients…</Text>
+            </View>
+          ) : (
+            <>
+              <View style={styles.searchModalHeadingWrap}>
+                <Text style={styles.searchModalHeading}>Browse Clients</Text>
+              </View>
+              <View style={styles.searchModalHeaderRow}>
+                <View style={styles.searchModalSearchWrap}>
+                  <Ionicons name="search" size={20} color={themeColors.primary} style={styles.searchModalSearchIcon} />
+                  <TextInput
+                    style={styles.searchModalSearchInput}
+                    placeholder="Search restaurants, places, events…"
+                    placeholderTextColor="#94A3B8"
+                    value={searchModalQuery}
+                    onChangeText={setSearchModalQuery}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    returnKeyType="search"
+                  />
+                  {searchModalQuery.length > 0 && (
+                    <TouchableOpacity
+                      onPress={() => setSearchModalQuery('')}
+                      style={styles.searchModalSearchClear}
+                      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                    >
+                      <Ionicons name="close-circle" size={20} color="#94A3B8" />
+                    </TouchableOpacity>
+                  )}
+                </View>
+                <TouchableOpacity
+                  style={styles.searchModalCloseBtn}
+                  activeOpacity={0.8}
+                  onPress={() => setShowSearchModal(false)}
+                >
+                  <Ionicons name="close" size={20} color={themeColors.primary} />
+                </TouchableOpacity>
+              </View>
+              <ScrollView
+                style={styles.searchModalScroll}
+                contentContainerStyle={styles.searchModalContent}
+                showsVerticalScrollIndicator={false}
+                keyboardShouldPersistTaps="handled"
+              >
+                {['restaurants', 'places', 'events'].map((key) => {
+                  const sectionLabel = key === 'restaurants' ? 'Restaurants' : key === 'places' ? 'Places' : 'Events';
+                  const rawItems = searchModalClients[key] || [];
+                  const q = (searchModalQuery || '').trim().toLowerCase();
+                  const items = q
+                    ? rawItems.filter(
+                        (c) =>
+                          (c.name || c.business_name || '').toLowerCase().includes(q) ||
+                          (c.business_name_ar || '').toLowerCase().includes(q)
+                      )
+                    : rawItems;
+                const accent = key === 'restaurants' ? colors.dining : key === 'events' ? colors.event : colors.textSecondary;
+                if (q && items.length === 0) return null;
+                return (
+                  <View key={key} style={styles.searchModalSection}>
+                    <View style={styles.searchModalSectionHeader}>
+                      <View style={[styles.searchModalSectionIcon, { backgroundColor: `${accent}18` }]}>
+                        <Ionicons
+                          name={key === 'restaurants' ? 'restaurant' : key === 'events' ? 'calendar' : 'location'}
+                          size={20}
+                          color={accent}
+                        />
+                      </View>
+                      <Text style={[styles.searchModalSectionTitle, { color: accent }]}>{sectionLabel}</Text>
+                    </View>
+                    {items.length === 0 ? (
+                      <Text style={styles.searchModalEmpty}>
+                        {q ? `No ${sectionLabel.toLowerCase()} match "${searchModalQuery.trim()}"` : `No ${sectionLabel.toLowerCase()} yet`}
+                      </Text>
+                    ) : (
+                      <ScrollView
+                        horizontal
+                        showsHorizontalScrollIndicator={false}
+                        contentContainerStyle={styles.searchModalHorizontalContent}
+                      >
+                        {items.map((client) => {
+                          const rawImg = client.client_image ? parseStorageImageUrl(client.client_image) : null;
+                          const imageUrl = rawImg ? (ensureImageUrl(rawImg) || rawImg) : null;
+                          return (
+                            <TouchableOpacity
+                              key={client.client_a_uuid || client.clientId}
+                              style={styles.searchModalClientCard}
+                              activeOpacity={0.7}
+                              onPress={() => {
+                                setShowSearchModal(false);
+                                setProfileClientId(client.client_a_uuid || client.clientId);
+                              }}
+                            >
+                              <View style={[styles.searchModalClientCircle, { borderColor: accent }]}>
+                                {imageUrl ? (
+                                  <Image source={{ uri: imageUrl }} style={styles.searchModalClientImage} />
+                                ) : (
+                                  <Ionicons
+                                    name={key === 'restaurants' ? 'restaurant' : key === 'events' ? 'calendar' : 'location'}
+                                    size={32}
+                                    color={accent}
+                                  />
+                                )}
+                              </View>
+                              <Text style={styles.searchModalClientName} numberOfLines={2}>
+                                {client.name || client.business_name || 'Spot'}
+                              </Text>
+                            </TouchableOpacity>
+                          );
+                        })}
+                      </ScrollView>
+                    )}
+                  </View>
+                );
+              })}
+              </ScrollView>
+            </>
+          )}
+        </View>
+      </Modal>
+
       <ClientProfileModal
         visible={!!profileClientId}
         clientId={profileClientId}
@@ -2518,155 +3784,455 @@ export default function AIPlanScreen() {
           }
         }}
       />
+
+      {doorVisible && (() => {
+        const TOOTH_COUNT = 5
+        const toothH = SCREEN_HEIGHT / TOOTH_COUNT
+        const toothW = SCREEN_WIDTH * 0.12
+        return (
+          <Animated.View style={[styles.doorOverlay, { opacity: doorFade }]} pointerEvents="box-none">
+            <Animated.View style={[styles.doorHalf, styles.doorLeft, { transform: [{ translateX: doorLeft }] }]}>
+              <View style={[StyleSheet.absoluteFill, { backgroundColor: '#FFFFFF' }]} />
+            </Animated.View>
+            <Animated.View style={[styles.doorHalf, styles.doorRight, { transform: [{ translateX: doorRight }] }]}>
+              <View style={[StyleSheet.absoluteFill, { backgroundColor: '#CE1126' }]} />
+            </Animated.View>
+            <Animated.View style={[styles.doorZigzag, { transform: [{ translateX: doorLeft }] }]}>
+              {Array.from({ length: TOOTH_COUNT }, (_, i) => (
+                <View key={i} style={{
+                  width: 0,
+                  height: 0,
+                  borderTopWidth: toothH / 2,
+                  borderBottomWidth: toothH / 2,
+                  borderLeftWidth: toothW,
+                  borderTopColor: 'transparent',
+                  borderBottomColor: 'transparent',
+                  borderLeftColor: '#FFFFFF',
+                }} />
+              ))}
+            </Animated.View>
+            <Animated.View style={[styles.doorIconWrap, { transform: [{ scale: doorIconScale }], opacity: doorIconOpacity }]}>
+              <View style={styles.doorLogoShadow}>
+                <Image
+                  source={require('../../assets/ai-button-logo.png')}
+                  style={styles.doorLogoImage}
+                  resizeMode="cover"
+                />
+              </View>
+              <Text style={styles.doorFlagLabel}>GoBahrain</Text>
+            </Animated.View>
+          </Animated.View>
+        )
+      })()}
     </View>
   );
 }
 
 const TILE_WIDTH = (SCREEN_WIDTH - 48 - 24) / 3;
 
+const ITIN_GRID_GAP = 10
+const ITIN_CONTENT_GUTTER = 32
+const ITIN_GRID_TILE = Math.floor(((SCREEN_WIDTH - ITIN_CONTENT_GUTTER - ITIN_GRID_GAP) / 2) * 0.88)
+const ITIN_SLIDER_TILE = Math.floor((SCREEN_WIDTH - ITIN_CONTENT_GUTTER) * 0.38)
+
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#F8FAFC' },
+  topBarWrap: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    paddingHorizontal: 16,
+    paddingBottom: 8,
+    zIndex: 100,
+  },
+  searchButton: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    ...Platform.select({ ios: { shadowColor: '#0F172A', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.1, shadowRadius: 8 }, android: { elevation: 4 } }),
+  },
+  searchModalRoot: {
+    flex: 1,
+    backgroundColor: '#FFFFFF',
+  },
+  searchModalHeadingWrap: {
+    paddingHorizontal: 16,
+    paddingTop: 4,
+    paddingBottom: 4,
+    alignItems: 'center',
+  },
+  searchModalHeading: {
+    fontSize: 20,
+    fontWeight: '800',
+    color: '#0F172A',
+    letterSpacing: -0.3,
+    textAlign: 'center',
+  },
+  searchModalHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingTop: 8,
+    paddingBottom: 12,
+    gap: 10,
+  },
+  searchModalSearchWrap: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    backgroundColor: '#F8FAFC',
+    borderRadius: 14,
+    borderWidth: 1.5,
+    borderColor: '#E2E8F0',
+    ...Platform.select({
+      ios: { shadowColor: '#0F172A', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.04, shadowRadius: 4 },
+      android: { elevation: 2 },
+    }),
+  },
+  searchModalSearchIcon: {
+    marginRight: 10,
+  },
+  searchModalSearchInput: {
+    flex: 1,
+    fontSize: 16,
+    color: '#0F172A',
+    paddingVertical: 0,
+    minHeight: 22,
+  },
+  searchModalSearchClear: {
+    padding: 2,
+    marginLeft: 4,
+  },
+  searchModalCloseBtn: {
+    width: 44,
+    height: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 12,
+    backgroundColor: '#F1F5F9',
+    flexShrink: 0,
+  },
+  searchModalLoading: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 12,
+  },
+  searchModalLoadingText: {
+    fontSize: 15,
+    color: '#64748B',
+    fontWeight: '500',
+  },
+  searchModalScroll: { flex: 1 },
+  searchModalContent: {
+    paddingHorizontal: 16,
+    paddingBottom: 40,
+    paddingTop: 8,
+  },
+  searchModalSection: {
+    marginBottom: 24,
+  },
+  searchModalSectionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 12,
+  },
+  searchModalSectionIcon: {
+    width: 32,
+    height: 32,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  searchModalSectionTitle: {
+    fontSize: 15,
+    fontWeight: '800',
+    letterSpacing: 0.2,
+  },
+  searchModalEmpty: {
+    fontSize: 14,
+    color: '#94A3B8',
+    fontWeight: '500',
+    fontStyle: 'italic',
+  },
+  searchModalHorizontalContent: {
+    flexDirection: 'row',
+    gap: 14,
+    paddingRight: 16,
+  },
+  searchModalClientCard: {
+    alignItems: 'center',
+    width: 76,
+  },
+  searchModalClientCircle: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    borderWidth: 2,
+    overflow: 'hidden',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#FAFBFC',
+    ...Platform.select({
+      ios: { shadowColor: '#0F172A', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.08, shadowRadius: 8 },
+      android: { elevation: 3 },
+    }),
+  },
+  searchModalClientImage: {
+    width: '100%',
+    height: '100%',
+  },
+  searchModalClientName: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#334155',
+    textAlign: 'center',
+    marginTop: 6,
+    maxWidth: 76,
+    lineHeight: 14,
+  },
   sheet: {
-    position: 'absolute', left: 0, right: 0, bottom: 0, height: SHEET_HEIGHT,
-    backgroundColor: '#FFFFFF', borderTopLeftRadius: 28, borderTopRightRadius: 28,
-    shadowColor: '#0F172A', shadowOffset: { width: 0, height: -8 }, shadowOpacity: 0.12, shadowRadius: 24, elevation: 16,
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    height: SHEET_HEIGHT,
+    flexDirection: 'column',
+    backgroundColor: '#FFFFFF',
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
+    shadowColor: '#0F172A',
+    shadowOffset: { width: 0, height: -8 },
+    shadowOpacity: 0.12,
+    shadowRadius: 24,
+    elevation: 16,
     overflow: 'hidden',
   },
-  grabberWrap: { alignItems: 'center', justifyContent: 'center', paddingVertical: 10, paddingHorizontal: 24 },
-  grabber: { width: 36, height: 4, borderRadius: 2, backgroundColor: '#E2E8F0' },
-  grabberHint: { marginTop: 4, fontSize: 11, color: '#94A3B8', fontWeight: '500' },
+  grabberWrap: { alignItems: 'center', justifyContent: 'center', paddingVertical: 6, paddingHorizontal: 20 },
+  grabber: { width: 40, height: 5, borderRadius: 3, backgroundColor: '#CBD5E1' },
 
   // Past plans (step 0) — compact, Bump-style
-  pastPlansHero: {
-    paddingHorizontal: 20,
-    paddingTop: 0,
-    paddingBottom: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: '#F1F5F9',
+  pastPlansStepWrap: { flex: 1, minHeight: 0 },
+  pastPlansScroll: { flex: 1, minHeight: 0 },
+  d0ScrollContent: { paddingHorizontal: 20, paddingBottom: 20, paddingTop: 8 },
+  d0CtaRow: {
+    borderRadius: 20,
+    overflow: 'hidden',
+    marginBottom: 14,
+    ...Platform.select({
+      ios: { shadowColor: themeColors.primary, shadowOffset: { width: 0, height: 5 }, shadowOpacity: 0.28, shadowRadius: 14 },
+      android: { elevation: 7 },
+    }),
   },
-  pastPlansHeroContent: {},
-  pastPlansTitleRow: {
+  d0CtaGradient: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 16,
+    paddingHorizontal: 18,
+    borderRadius: 20,
+  },
+  d0CtaLogoWrap: {
+    width: 44,
+    height: 44,
+    borderRadius: 12,
+    borderWidth: 2,
+    borderColor: 'rgba(255,255,255,0.4)',
+    overflow: 'hidden',
+    marginRight: 14,
+  },
+  d0CtaLogo: {
+    width: 40,
+    height: 40,
+  },
+  d0CtaLeft: { flex: 1 },
+  d0CtaTitle: {
+    fontSize: 18,
+    fontWeight: '900',
+    color: '#FFF',
+    letterSpacing: -0.4,
+    marginBottom: 2,
+  },
+  d0CtaSub: {
+    fontSize: 13,
+    fontWeight: '500',
+    color: 'rgba(255,255,255,0.8)',
+  },
+  d0CtaArrow: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    backgroundColor: 'rgba(255,255,255,0.2)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginLeft: 12,
+  },
+  d0FeatureRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: 24,
+  },
+  d0FeaturePill: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingVertical: 10,
+    paddingHorizontal: 10,
+    borderRadius: 16,
+    backgroundColor: 'rgba(255,255,255,0.97)',
+    borderWidth: 1,
+    borderColor: 'rgba(206,17,38,0.12)',
+    ...Platform.select({
+      ios: { shadowColor: '#0F172A', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.05, shadowRadius: 6 },
+      android: { elevation: 2 },
+    }),
+  },
+  d0FeaturePillIcon: {
+    width: 28,
+    height: 28,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  d0FeaturePillText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#475569',
+  },
+  d0SectionHeader: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    gap: 12,
+    marginBottom: 10,
   },
-  pastPlansTitle: { fontSize: 24, fontWeight: '800', color: '#0F172A', letterSpacing: -0.5, lineHeight: 30, flexShrink: 1 },
-  pastPlansSubtitle: { fontSize: 14, color: '#64748B', marginTop: 6, fontWeight: '500', lineHeight: 20 },
-  startAiButtonWrap: {
-    flexShrink: 0,
-    borderRadius: 14,
-    overflow: 'hidden',
-    ...Platform.select({ ios: { shadowColor: themeColors.primary, shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.2, shadowRadius: 8 }, android: { elevation: 4 } }),
+  d0SectionTitle: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#0F172A',
+    letterSpacing: -0.3,
   },
-  startAiButton: {
-    flexDirection: 'row',
+  d0SectionCount: {
+    width: 24,
+    height: 24,
+    borderRadius: 8,
+    backgroundColor: '#F1F5F9',
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 14,
-    paddingHorizontal: 22,
-    gap: 8,
-    borderRadius: 14,
   },
-  startAiButtonText: { fontSize: 15, fontWeight: '700', color: '#FFFFFF', letterSpacing: 0.2 },
-  pastPlansScroll: { flex: 1 },
-  pastPlansContent: { paddingHorizontal: 20, paddingBottom: 20, paddingTop: 14, gap: 10 },
-  pastPlanCard: {
+  d0SectionCountText: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#64748B',
+  },
+  d0PlanCard: {
     flexDirection: 'row',
     alignItems: 'center',
+    gap: 12,
     backgroundColor: '#FFFFFF',
-    paddingVertical: 12,
+    paddingVertical: 14,
     paddingHorizontal: 14,
     borderRadius: 14,
     borderWidth: 1,
     borderColor: '#F1F5F9',
-    ...Platform.select({ ios: { shadowColor: '#0F172A', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.04, shadowRadius: 8 }, android: { elevation: 2 } }),
+    marginBottom: 8,
+    ...Platform.select({
+      ios: { shadowColor: '#0F172A', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.03, shadowRadius: 6 },
+      android: { elevation: 1 },
+    }),
   },
-  pastPlanIcon: {
-    width: 40,
-    height: 40,
-    borderRadius: 12,
-    backgroundColor: themeColors.primaryMuted,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 12,
-  },
-  pastPlanInfo: { flex: 1 },
-  pastPlanName: { fontSize: 15, fontWeight: '700', color: '#0F172A', marginBottom: 2 },
-  pastPlanMetaRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  pastPlanMetaDot: { width: 4, height: 4, borderRadius: 2, backgroundColor: '#94A3B8' },
-  pastPlanMeta: { fontSize: 14, color: '#64748B', fontWeight: '500' },
-  savedBadge: { paddingHorizontal: 10, paddingVertical: 5, borderRadius: 999, backgroundColor: themeColors.successMuted, marginRight: 12 },
-  savedBadgeText: { fontSize: 11, fontWeight: '700', color: themeColors.success },
-
-  // Surprise Me — compact, fun
-  surpriseCard: {
-    borderRadius: 16,
-    overflow: 'hidden',
-    marginBottom: 6,
-    ...Platform.select({ ios: { shadowColor: '#0F172A', shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.06, shadowRadius: 12 }, android: { elevation: 4 } }),
-  },
-  surpriseCardGradient: {
-    padding: 16,
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: 'rgba(200,16,46,0.08)',
-  },
-  surpriseHeader: { flexDirection: 'row', alignItems: 'flex-start', gap: 12, marginBottom: 14 },
-  surpriseIconWrap: {
-    width: 40,
-    height: 40,
-    borderRadius: 12,
-    backgroundColor: 'rgba(200,16,46,0.12)',
+  d0PlanIconWrap: {
+    width: 38,
+    height: 38,
+    borderRadius: 10,
+    backgroundColor: `${themeColors.primary}10`,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  surpriseHeaderText: { flex: 1 },
-  surpriseTitle: { fontSize: 17, fontWeight: '800', color: '#0F172A', marginBottom: 4 },
-  surpriseDesc: { fontSize: 13, color: '#64748B', lineHeight: 19, fontWeight: '500' },
-  rouletteWrap: { alignItems: 'center', marginBottom: 14 },
-  rouletteBox: {
+  d0PlanInfo: { flex: 1 },
+  d0PlanName: { fontSize: 15, fontWeight: '700', color: '#0F172A', marginBottom: 2 },
+  d0PlanMeta: { fontSize: 13, color: '#94A3B8', fontWeight: '500' },
+  d0ShareRow: {
     flexDirection: 'row',
-    alignItems: 'center',
     gap: 10,
-    paddingVertical: 14,
-    paddingHorizontal: 20,
-    borderRadius: 14,
-    borderWidth: 2,
-    minWidth: 180,
-    justifyContent: 'center',
+    marginTop: 20,
   },
-  rouletteLabel: { fontSize: 16, fontWeight: '800', letterSpacing: 0.2 },
-  surpriseBtn: {
+  d0ShareBtn: {
+    flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 8,
-    backgroundColor: themeColors.primary,
-    borderRadius: 14,
-    paddingVertical: 14,
-    ...Platform.select({ ios: { shadowColor: themeColors.primary, shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.2, shadowRadius: 8 }, android: { elevation: 4 } }),
+    paddingVertical: 12,
+    borderRadius: 12,
+    backgroundColor: '#F8FAFC',
+    borderWidth: 1,
+    borderColor: '#F1F5F9',
   },
-  surpriseBtnDisabled: { opacity: 0.7 },
-  surpriseBtnText: { color: '#FFF', fontSize: 14, fontWeight: '700' },
-  surpriseDivider: {
+  d0ShareBtnText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#64748B',
+  },
+  d0CopyHint: {
+    textAlign: 'center',
+    fontSize: 13,
+    fontWeight: '800',
+    color: themeColors.primary,
+    marginTop: 8,
+  },
+
+  // Drawer page header — three-column row so center title is truly centered
+  drawerPageHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginVertical: 14,
-    paddingHorizontal: 4,
+    paddingHorizontal: 12,
+    paddingTop: 4,
+    paddingBottom: 4,
+    marginBottom: 8,
+    minHeight: 48,
   },
-  surpriseDividerLine: { flex: 1, height: 1, backgroundColor: '#E2E8F0' },
-  surpriseDividerText: { fontSize: 13, color: '#94A3B8', marginHorizontal: 14, fontWeight: '600' },
-
-  // Drawer page header
-  drawerPageHeader: {
-    flexDirection: 'row', alignItems: 'flex-start', paddingHorizontal: 24, marginBottom: 16, gap: 8,
+  backButton: {
+    width: 40,
+    height: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 12,
+    backgroundColor: '#F1F5F9',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(15,23,42,0.06)',
   },
-  backButton: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center', marginRight: 4, borderRadius: 12, backgroundColor: '#F1F5F9' },
-  drawerPageTitleWrap: { flex: 1 },
-  drawerPageTitle: { fontSize: 20, fontWeight: '800', color: '#0F172A', marginBottom: 6, letterSpacing: -0.3 },
-  drawerPageTitleSingle: { fontSize: 20, fontWeight: '800', color: '#0F172A', flex: 1 },
-  drawerPageSubtitle: { fontSize: 15, color: '#64748B', lineHeight: 21, fontWeight: '500' },
+  drawerPageHeaderCenter: {
+    flex: 1,
+    minWidth: 0,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 6,
+  },
+  drawerPageHeaderSpacer: { width: 40, height: 40 },
+  drawerPageHeaderTitle: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#0F172A',
+    letterSpacing: -0.35,
+    textAlign: 'center',
+  },
+  drawerPageHeaderMeta: {
+    marginTop: 2,
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#94A3B8',
+    textAlign: 'center',
+    letterSpacing: 0.15,
+  },
 
   // Grid tiles for preferences + food
   gridScroll: { flex: 1 },
@@ -2706,24 +4272,55 @@ const styles = StyleSheet.create({
   generateButtonDisabled: { opacity: 0.8 },
   generateButtonText: { fontSize: 16, fontWeight: '700', color: '#FFFFFF' },
 
-  // ── Results (step 3) ────────────────────────────────────────────
-  resultsScroll: { flex: 1 },
-  resultsContent: { paddingBottom: 32, paddingHorizontal: 16 },
+  // ── Results (step 3) — tinted canvas so new layout is obvious vs plain white ──
+  resultsScroll: {
+    flex: 1,
+    backgroundColor: '#F3EBED',
+  },
+  resultsContent: {
+    flexGrow: 1,
+    paddingBottom: 36,
+    paddingHorizontal: 16,
+    paddingTop: 0,
+    backgroundColor: '#F3EBED',
+  },
 
   // Loading (sheet fallback) — Bump-style fun
   loadingWrap: {
     flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 24, paddingBottom: 40,
   },
   loadingBumpCard: {
-    borderRadius: 16,
-    padding: 20,
+    borderRadius: 20,
+    padding: 24,
     alignItems: 'center',
     width: '100%',
-    maxWidth: 300,
+    maxWidth: 320,
     overflow: 'hidden',
     borderWidth: 1,
-    borderColor: 'rgba(200,16,46,0.08)',
-    ...Platform.select({ ios: { shadowColor: '#0F172A', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.08, shadowRadius: 16 }, android: { elevation: 6 } }),
+    borderColor: 'rgba(200,16,46,0.1)',
+    ...Platform.select({ ios: { shadowColor: '#0F172A', shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.1, shadowRadius: 24 }, android: { elevation: 8 } }),
+  },
+  loadingBumpIllustration: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  loadingBumpIllustrationBg: {
+    width: 60,
+    height: 60,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  loadingBumpIllustrationTrail: {
+    flexDirection: 'row',
+    gap: 3,
+    marginLeft: 6,
+  },
+  loadingBumpTrailDot: {
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: themeColors.primary,
   },
   loadingSpotPreviews: { maxHeight: 76, marginBottom: 14, overflow: 'hidden', width: '100%' },
   loadingSpotPreviewsContent: { paddingHorizontal: 4, gap: 10 },
@@ -2751,27 +4348,19 @@ const styles = StyleSheet.create({
     borderRadius: 2,
     backgroundColor: themeColors.primary,
   },
-  loadingBumpPulse: {
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    backgroundColor: themeColors.primaryMuted,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 12,
-  },
   loadingBumpTitle: {
-    fontSize: 16,
-    fontWeight: '700',
+    fontSize: 17,
+    fontWeight: '800',
     color: '#0F172A',
     textAlign: 'center',
     marginBottom: 4,
+    letterSpacing: -0.2,
   },
   loadingBumpSub: {
     fontSize: 13,
     color: '#64748B',
     fontWeight: '600',
-    marginBottom: 16,
+    marginBottom: 18,
   },
   loadingBumpSteps: { gap: 10, width: '100%', paddingHorizontal: 4 },
   loadingBumpStep: { flexDirection: 'row', alignItems: 'center', gap: 10 },
@@ -2839,30 +4428,508 @@ const styles = StyleSheet.create({
   retryButtonText: { fontSize: 16, fontWeight: '700', color: themeColors.primary },
   emptyResults: { fontSize: 15, color: '#64748B', textAlign: 'center', paddingVertical: 32, fontWeight: '500' },
 
-  // ── Summary card — simple ──
-  bumpSummaryCard: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 14,
-    marginBottom: 16,
-    padding: 16,
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
+  successIconCircle: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    backgroundColor: themeColors.success,
+    alignItems: 'center',
+    justifyContent: 'center',
+    ...Platform.select({
+      ios: { shadowColor: '#10B981', shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.5, shadowRadius: 20 },
+      android: { elevation: 12 },
+    }),
   },
-  bumpSummarySimple: { gap: 6 },
-  bumpSummaryTitle: { fontSize: 16, fontWeight: '700', color: '#0F172A' },
-  bumpSummarySub: { fontSize: 13, color: '#64748B', fontWeight: '500' },
-  bumpSummaryMapBtn: {
+  planStep3Body: {
+    flex: 1,
+    minHeight: 0,
+  },
+  planContentFill: {
+    flex: 1,
+    minHeight: 0,
+  },
+  planMastheadRoot: {
+    flexShrink: 0,
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 14,
+    paddingTop: 6,
+    paddingBottom: 10,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#E2E8F0',
+  },
+  planMastheadTopRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+  },
+  planMastheadTitleCol: {
+    flex: 1,
+    minWidth: 0,
+    paddingTop: 2,
+    justifyContent: 'center',
+  },
+  planMastheadKicker: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#94A3B8',
+    letterSpacing: 1.2,
+    textTransform: 'uppercase',
+  },
+  planMastheadHeadline: {
+    marginTop: 2,
+  },
+  planMastheadHeadlineLead: {
+    fontSize: 19,
+    fontWeight: '900',
+    color: '#0F172A',
+    letterSpacing: -0.5,
+  },
+  planMastheadHeadlineTrail: {
+    fontSize: 17,
+    fontWeight: '700',
+    color: '#64748B',
+    letterSpacing: -0.35,
+  },
+  planMastheadStatsRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'baseline',
+    marginTop: 8,
+    gap: 5,
+  },
+  planMastheadHint: {
+    marginTop: 6,
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#94A3B8',
+    lineHeight: 15,
+  },
+  planMastheadActions: {
+    flexDirection: 'row',
+    alignItems: 'stretch',
+    gap: 8,
+    marginTop: 8,
+  },
+  iv2Eyebrow: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#94a3b8',
+    letterSpacing: 1.4,
+    textTransform: 'uppercase',
+  },
+  iv2Headline: {
+    marginTop: 4,
+    fontSize: 24,
+    fontWeight: '800',
+    letterSpacing: -0.65,
+    lineHeight: 28,
+  },
+  iv2HeadlineLead: {
+    color: '#0f172a',
+    fontWeight: '900',
+    letterSpacing: -0.65,
+    fontSize: 24,
+  },
+  iv2HeadlineTrail: {
+    color: '#64748b',
+    fontWeight: '700',
+    fontSize: 22,
+    letterSpacing: -0.45,
+  },
+  iv2StatsLine: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'baseline',
+    marginTop: 10,
+    gap: 5,
+  },
+  iv2StatsEm: {
+    fontSize: 17,
+    fontWeight: '900',
+    color: themeColors.primary,
+    letterSpacing: -0.4,
+  },
+  iv2StatsWord: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#64748b',
+    marginRight: 2,
+  },
+  iv2StatsSep: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#cbd5e1',
+    marginHorizontal: 2,
+  },
+  iv2Hint: {
+    marginTop: 10,
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#94a3b8',
+    lineHeight: 15,
+  },
+  iv2ActionRow: {
+    flexDirection: 'row',
+    alignItems: 'stretch',
+    gap: 10,
+    marginTop: 12,
+  },
+  iv2MapOutline: {
+    flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 8,
-    marginTop: 12,
-    paddingVertical: 12,
-    paddingHorizontal: 20,
-    backgroundColor: themeColors.primary,
+    paddingVertical: 10,
     borderRadius: 12,
+    borderWidth: 2,
+    borderColor: themeColors.primary,
+    backgroundColor: '#FFFFFF',
   },
-  bumpSummaryMapBtnText: { fontSize: 15, fontWeight: '700', color: '#FFFFFF' },
+  iv2MapOutlineText: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: themeColors.primary,
+    letterSpacing: 0.2,
+  },
+  iv2Seg: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+    backgroundColor: 'rgba(255,255,255,0.85)',
+    overflow: 'hidden',
+  },
+  iv2SegBtn: {
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  iv2SegDivider: {
+    width: 1,
+    alignSelf: 'stretch',
+    backgroundColor: '#e2e8f0',
+  },
+  iv2CopyToast: {
+    marginTop: 12,
+    fontSize: 12,
+    fontWeight: '800',
+    color: themeColors.primary,
+    letterSpacing: 0.3,
+  },
+
+  iv2SectionHeadGrid: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginBottom: 10,
+    marginTop: 0,
+    paddingBottom: 8,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: 'rgba(15,23,42,0.08)',
+  },
+  iv2SectionIconSq: {
+    width: 34,
+    height: 34,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    ...Platform.select({
+      ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.12, shadowRadius: 6 },
+      android: { elevation: 3 },
+    }),
+  },
+  iv2SectionHeadGridText: {
+    flex: 1,
+    minWidth: 0,
+  },
+  iv2SectionGridTitle: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: '#0f172a',
+    letterSpacing: -0.25,
+  },
+  iv2SectionGridMeta: {
+    marginTop: 1,
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#94a3b8',
+    letterSpacing: 0.1,
+  },
+
+  iv2Grid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: ITIN_GRID_GAP,
+  },
+  iv2SliderContent: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: ITIN_GRID_GAP,
+    paddingRight: 24,
+  },
+  iv2GridTile: {
+    aspectRatio: 1,
+    borderRadius: 14,
+    overflow: 'hidden',
+    backgroundColor: '#FFFFFF',
+    ...Platform.select({
+      ios: { shadowColor: '#0F172A', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.1, shadowRadius: 10 },
+      android: { elevation: 4 },
+    }),
+  },
+  iv2GridTileInner: {
+    flex: 1,
+    borderRadius: 14,
+    overflow: 'hidden',
+    position: 'relative',
+  },
+  iv2GridTileImg: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  iv2GridTileImgEmpty: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  iv2GridTileTopRow: {
+    position: 'absolute',
+    top: 8,
+    left: 8,
+    right: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    zIndex: 2,
+  },
+  iv2GridTileNumBadge: {
+    minWidth: 28,
+    height: 28,
+    paddingHorizontal: 8,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  iv2GridTileNumBadgeText: {
+    fontSize: 13,
+    fontWeight: '900',
+    color: '#FFFFFF',
+  },
+  iv2GridTileRating: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 10,
+    backgroundColor: 'rgba(255,255,255,0.95)',
+  },
+  iv2GridTileRatingText: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#0f172a',
+  },
+  iv2GridTileBottom: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    paddingHorizontal: 10,
+    paddingBottom: 10,
+    paddingTop: 28,
+    zIndex: 2,
+  },
+  iv2GridTileSpot: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#FFFFFF',
+    letterSpacing: -0.2,
+    lineHeight: 17,
+    textShadowColor: 'rgba(0,0,0,0.35)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 4,
+  },
+  iv2GridTileExpandHint: {
+    position: 'absolute',
+    bottom: 10,
+    right: 10,
+    zIndex: 3,
+  },
+
+  stopDialogKb: {
+    flex: 1,
+  },
+  stopDialogRoot: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingVertical: 12,
+    paddingHorizontal: 6,
+  },
+  stopDialogDim: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(15,23,42,0.58)',
+  },
+  stopDialogCard: {
+    maxHeight: SCREEN_HEIGHT * 0.94,
+    zIndex: 2,
+    borderRadius: 22,
+    backgroundColor: '#FFFFFF',
+    overflow: 'hidden',
+    ...Platform.select({
+      ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 14 }, shadowOpacity: 0.28, shadowRadius: 32 },
+      android: { elevation: 18 },
+    }),
+  },
+  stopDialogHero: {
+    width: '100%',
+    alignSelf: 'stretch',
+    backgroundColor: '#0f172a',
+  },
+  stopDialogBodyScroll: {
+    maxHeight: SCREEN_HEIGHT * 0.52,
+  },
+  stopDialogScrollContent: {
+    paddingBottom: 22,
+    paddingHorizontal: 18,
+    paddingTop: 18,
+  },
+  stopDialogHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 12,
+    marginBottom: 14,
+  },
+  stopDialogHeaderMain: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 12,
+    minWidth: 0,
+  },
+  stopDialogNumBadge: {
+    width: 36,
+    height: 36,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  stopDialogNumText: {
+    fontSize: 15,
+    fontWeight: '900',
+    color: '#FFFFFF',
+  },
+  stopDialogTitleCol: {
+    flex: 1,
+    minWidth: 0,
+  },
+  stopDialogSpotTitle: {
+    fontSize: 22,
+    fontWeight: '900',
+    color: '#0f172a',
+    letterSpacing: -0.45,
+    lineHeight: 27,
+  },
+  stopDialogRatingRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    marginTop: 6,
+  },
+  stopDialogRatingText: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#475569',
+  },
+  stopDialogClose: {
+    marginTop: -4,
+    marginRight: -4,
+    padding: 4,
+  },
+  stopDialogSectionLabel: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#94a3b8',
+    letterSpacing: 1.4,
+    textTransform: 'uppercase',
+    marginBottom: 8,
+  },
+  stopDialogDescBox: {
+    backgroundColor: '#F8FAFC',
+    borderRadius: 14,
+    paddingVertical: 14,
+    paddingHorizontal: 14,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    marginBottom: 18,
+  },
+  stopDialogDescText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#334155',
+    lineHeight: 24,
+  },
+  stopDialogActions: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+    marginBottom: 4,
+  },
+  stopDialogBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: 14,
+    minHeight: 48,
+  },
+  stopDialogBtnPrimary: {
+    flexGrow: 1,
+    flexShrink: 1,
+    minWidth: 120,
+    backgroundColor: themeColors.primary,
+    ...Platform.select({
+      ios: { shadowColor: themeColors.primary, shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.25, shadowRadius: 8 },
+      android: { elevation: 4 },
+    }),
+  },
+  stopDialogBtnPrimaryText: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: '#FFFFFF',
+  },
+  stopDialogBtnGhost: {
+    borderWidth: 1.5,
+    borderColor: 'rgba(200,16,46,0.35)',
+    backgroundColor: 'rgba(200,16,46,0.06)',
+  },
+  stopDialogBtnGhostText: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: themeColors.primary,
+  },
+
+  iv2Footer: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+    marginTop: 20,
+    marginBottom: 12,
+    paddingHorizontal: 4,
+    paddingVertical: 12,
+  },
+  iv2FooterText: {
+    flex: 1,
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#94a3b8',
+    lineHeight: 16,
+    letterSpacing: 0.15,
+  },
 
   // ── Boarding pass hero (legacy) ──
   boardingPass: {
@@ -2899,54 +4966,13 @@ const styles = StyleSheet.create({
   },
   bpAdviceText: { fontSize: 15, color: '#92400E', lineHeight: 22, flex: 1, fontStyle: 'italic', fontWeight: '600' },
 
-  // ── Itinerary — simple, clean ──
-  bumpItinSection: { marginBottom: 16 },
-  bumpItinSectionHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    marginBottom: 8,
-    paddingVertical: 8,
-    paddingHorizontal: 10,
-    borderRadius: 10,
-  },
-  bumpItinSectionIconWrap: {
-    width: 28,
-    height: 28,
-    borderRadius: 7,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  bumpItinSectionTitle: { fontSize: 14, fontWeight: '700', flex: 1 },
-  bumpItinSectionCountBadge: {
-    minWidth: 20,
-    height: 20,
-    borderRadius: 10,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 6,
-  },
-  bumpItinSectionCountText: { fontSize: 10, fontWeight: '800', color: '#FFFFFF' },
-  bumpItinSectionCount: {
-    fontSize: 13,
-    color: '#94A3B8',
-    fontWeight: '600',
-    marginLeft: 4,
-  },
-  bumpItinCard: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 12,
-    marginBottom: 8,
-    overflow: 'hidden',
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
-  },
-  bumpItinCardExpanded: { borderColor: 'rgba(200,16,46,0.2)' },
+  // ── Itinerary list (flat rows + iv2 masthead / sections) ──
+  bumpItinSection: { marginBottom: 14 },
   bumpItinRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: 10,
-    paddingHorizontal: 12,
+    paddingVertical: 14,
+    paddingHorizontal: 4,
   },
   bumpItinNumCircle: {
     width: 26,
@@ -2959,11 +4985,11 @@ const styles = StyleSheet.create({
   bumpItinNumText: { fontSize: 12, fontWeight: '800', color: '#FFFFFF' },
   bumpItinThumbWrap: {
     position: 'relative',
-    width: 44,
-    height: 44,
-    borderRadius: 8,
+    width: 50,
+    height: 50,
+    borderRadius: 25,
     overflow: 'hidden',
-    marginRight: 10,
+    marginRight: 0,
   },
   bumpItinThumb: {
     width: '100%',
@@ -2988,7 +5014,7 @@ const styles = StyleSheet.create({
   },
   bumpItinRatingPillText: { fontSize: 9, fontWeight: '800', color: '#0F172A' },
   bumpItinSummary: { flex: 1, minWidth: 0 },
-  bumpItinName: { fontSize: 14, fontWeight: '700', color: '#0F172A', marginBottom: 2 },
+  bumpItinName: { fontSize: 15, fontWeight: '800', color: '#0F172A', marginBottom: 3, letterSpacing: -0.2 },
   bumpItinReason: { fontSize: 12, color: '#64748B', lineHeight: 16 },
   bumpItinActionRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 6 },
   bumpItinActionIcon: { padding: 2 },
@@ -3011,7 +5037,7 @@ const styles = StyleSheet.create({
   bumpItinExpandedScroll: { width: '100%', height: 100 },
   bumpItinExpandedScrollContent: { flexGrow: 1 },
   bumpItinExpandedSlide: {
-    width: SCREEN_WIDTH - 56,
+    width: SCREEN_WIDTH - 32,
     height: 100,
     position: 'relative',
   },
@@ -3112,18 +5138,6 @@ const styles = StyleSheet.create({
     borderRadius: 12,
   },
   destARBtnText: { fontSize: 14, fontWeight: '700', color: themeColors.primary },
-
-  // ── Bump footer — helpful hint ──
-  bumpFooter: {
-    alignItems: 'center',
-    marginTop: 16,
-    paddingVertical: 20,
-    paddingHorizontal: 24,
-    backgroundColor: 'rgba(248,250,252,0.8)',
-    borderRadius: 14,
-    marginBottom: 8,
-  },
-  bumpFooterText: { fontSize: 13, fontWeight: '500', color: '#64748B', textAlign: 'center', lineHeight: 20 },
 
   // ── Passport stamp footer (legacy) ──
   stampFooter: { alignItems: 'center', marginTop: 28, paddingBottom: 12 },
@@ -3511,232 +5525,410 @@ const styles = StyleSheet.create({
   planModalBackdropDim: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.12)' },
   planModalContentWrap: {
     flex: 1,
-    paddingHorizontal: 20,
-    paddingTop: 48,
-    paddingBottom: 24,
+    paddingHorizontal: 16,
+    paddingTop: Platform.OS === 'ios' ? 56 : 44,
+    paddingBottom: 20,
     alignItems: 'stretch',
   },
-  planModalQuestionBlock: {
-    marginBottom: 18,
-    paddingVertical: 16,
-    paddingHorizontal: 16,
+  planModalPresenceLayer: { flex: 1, width: '100%', alignSelf: 'stretch' },
+  // ── Plan modal hero & chips ──
+  pmHero: {
     alignItems: 'center',
+    paddingTop: 12,
+    paddingBottom: 8,
+    paddingHorizontal: 16,
   },
-  planModalStepIndicator: {
+  pmStepBadge: {
     flexDirection: 'row',
     alignItems: 'center',
+    gap: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 6,
+    borderRadius: 20,
+    backgroundColor: 'rgba(255,255,255,0.18)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.3)',
     marginBottom: 16,
-    gap: 6,
   },
-  planModalStepDot: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
+  pmStepBadgeText: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: 'rgba(255,255,255,0.78)',
+    letterSpacing: 1.5,
+  },
+  pmStepDots: {
+    flexDirection: 'row',
+    gap: 4,
+  },
+  pmStepDotSmall: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
     backgroundColor: 'rgba(255,255,255,0.35)',
   },
-  planModalStepDotActive: {
-    backgroundColor: themeColors.primary,
-    width: 12,
-    height: 12,
-    borderRadius: 6,
+  pmStepDotSmallActive: {
+    backgroundColor: '#FFFFFF',
+    ...Platform.select({
+      ios: { shadowColor: '#FFF', shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.5, shadowRadius: 4 },
+      android: {},
+    }),
   },
-  planModalStepLine: {
-    width: 32,
-    height: 3,
-    borderRadius: 2,
-    backgroundColor: 'rgba(255,255,255,0.2)',
-  },
-  planModalStepLineActive: {
-    backgroundColor: 'rgba(255,255,255,0.5)',
-  },
-  planModalQuestionInner: { alignItems: 'center', maxWidth: 320 },
-  planModalQuestionTitle: {
-    fontSize: 22,
-    fontWeight: '800',
-    color: PLAN_COLORS.overlayQuestionTitle,
+  pmTitle: {
+    fontSize: 28,
+    fontWeight: '900',
+    color: '#FFFFFF',
     textAlign: 'center',
-    lineHeight: 28,
-    letterSpacing: 0.3,
-    marginBottom: 10,
+    letterSpacing: -0.8,
+    lineHeight: 34,
+    marginBottom: 8,
     ...Platform.select({
       ios: {
-        textShadowColor: 'rgba(0,0,0,0.25)',
+        textShadowColor: 'rgba(0,0,0,0.4)',
         textShadowOffset: { width: 0, height: 2 },
-        textShadowRadius: 6,
+        textShadowRadius: 14,
       },
       android: { elevation: 2 },
     }),
   },
-  planModalQuestionAccent: {
-    width: 56,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: themeColors.primary,
-    opacity: 0.95,
-    marginBottom: 16,
-  },
-  planModalQuestionSub: {
-    fontSize: 14,
+  pmSub: {
+    fontSize: 15,
     fontWeight: '500',
-    color: PLAN_COLORS.overlayQuestionSub,
+    color: 'rgba(255,255,255,0.65)',
     textAlign: 'center',
-    letterSpacing: 0.3,
-    lineHeight: 20,
+    lineHeight: 21,
+    letterSpacing: 0.1,
+    marginBottom: 12,
+    maxWidth: 280,
   },
-  planModalLoadingWrap: {
+  pmSelectedPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: 12,
+    paddingVertical: 5,
+    borderRadius: 14,
+    backgroundColor: 'rgba(255,255,255,0.22)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.42)',
+  },
+  pmSelectedText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#FFFFFF',
+  },
+  pmChipsWrap: {
     flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 32,
-    paddingBottom: 48,
-    position: 'relative',
+    width: '100%',
+    maxWidth: 400,
+    alignSelf: 'center',
   },
-  planModalBubble: {
-    position: 'absolute',
-    width: 44,
-    height: 44,
+  pmChipsScroll: { flex: 1 },
+  pmChipsScrollContent: { paddingBottom: 16, paddingHorizontal: 2 },
+  pmChipsPanel: {
+    width: '100%',
     borderRadius: 22,
-    backgroundColor: 'rgba(255,255,255,0.25)',
-    borderWidth: 2,
-    borderColor: 'rgba(255,255,255,0.4)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  planModalBubble1: { top: 60, left: 40 },
-  planModalBubble2: { top: 100, right: 50 },
-  planModalBubble3: { bottom: 180, left: 50 },
-  planModalLoadingSpinnerWrap: {
-    width: 88,
-    height: 88,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  funSpinnerWrap: {
-    width: 88,
-    height: 88,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  funSpinnerDot: {
-    position: 'absolute',
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-    backgroundColor: '#FFFFFF',
+    paddingVertical: 14,
+    paddingHorizontal: 10,
+    backgroundColor: 'rgba(0,0,0,0.14)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.22)',
     ...Platform.select({
-      ios: { shadowColor: '#FFF', shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.8, shadowRadius: 6 },
+      ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.2, shadowRadius: 20 },
       android: { elevation: 4 },
     }),
   },
-  planModalLoadingCenter: {
-    position: 'relative',
-    alignItems: 'center',
+  pmChipsGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
     justifyContent: 'center',
-    marginBottom: 28,
+    gap: 10,
   },
-  planModalLoadingPulseOuter: {
-    position: 'absolute',
-    width: 120,
-    height: 120,
-    borderRadius: 60,
-    borderWidth: 3,
-    borderColor: 'rgba(255,255,255,0.5)',
-    backgroundColor: 'transparent',
-  },
-  planModalLoadingPulse: {
-    width: 88,
-    height: 88,
-    borderRadius: 44,
-    backgroundColor: 'rgba(255,255,255,0.12)',
+  pmChip: {
+    flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 2,
-    borderColor: 'rgba(255,255,255,0.5)',
-    overflow: 'hidden',
-  },
-  planModalLoadingPulseGradient: {
-    borderRadius: 44,
-  },
-  planModalLoadingTitle: {
-    fontSize: 26,
-    fontWeight: '800',
-    color: '#FFFFFF',
-    marginBottom: 10,
-    letterSpacing: -0.4,
+    gap: 9,
+    paddingVertical: 11,
+    paddingHorizontal: 15,
+    borderRadius: 26,
+    backgroundColor: 'rgba(255,255,255,0.97)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.65)',
     ...Platform.select({
-      ios: {
-        textShadowColor: 'rgba(0,0,0,0.3)',
-        textShadowOffset: { width: 0, height: 2 },
-        textShadowRadius: 10,
-      },
+      ios: { shadowColor: '#1e0a0c', shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.18, shadowRadius: 8 },
+      android: { elevation: 3 },
     }),
   },
-  planModalLoadingSub: {
-    fontSize: 16,
-    color: 'rgba(255,255,255,0.95)',
-    textAlign: 'center',
-    marginBottom: 36,
-    fontWeight: '600',
-    lineHeight: 22,
+  pmChipSelected: {
+    borderWidth: 2,
+    ...Platform.select({
+      ios: { shadowOffset: { width: 0, height: 5 }, shadowOpacity: 0.35, shadowRadius: 14 },
+      android: { elevation: 8 },
+    }),
   },
-  planModalLoadingSteps: { gap: 18, width: '100%', paddingHorizontal: 12 },
-  planModalLoadingStepRow: { flexDirection: 'row', alignItems: 'center', gap: 16 },
-  planModalLoadingDot: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: 'rgba(255,255,255,0.2)',
+  pmChipIcon: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: 'rgba(15,23,42,0.06)',
     alignItems: 'center',
     justifyContent: 'center',
-    borderWidth: 1.5,
+  },
+  pmChipText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#1e293b',
+    letterSpacing: 0.1,
+  },
+  pmChipTextSelected: {
+    color: '#FFFFFF',
+    fontWeight: '800',
+  },
+  pmChipCheck: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: 'rgba(0,0,0,0.18)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginLeft: -2,
+    borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.35)',
   },
-  planModalLoadingDotActive: {
-    backgroundColor: 'rgba(200,16,46,0.5)',
-    borderColor: 'rgba(255,255,255,0.6)',
-    borderWidth: 2,
-  },
-  planModalLoadingDotDone: {
-    backgroundColor: themeColors.success,
-    borderColor: 'rgba(255,255,255,0.5)',
-    borderWidth: 2,
-  },
-  planModalLoadingStepText: {
-    fontSize: 16,
-    color: 'rgba(255,255,255,0.9)',
-    fontWeight: '600',
-  },
-  planModalLoadingStepTextActive: {
-    color: '#FFFFFF',
-    fontWeight: '700',
-  },
-  planModalLoadingStepTextDone: {
-    color: 'rgba(255,255,255,0.85)',
-    fontWeight: '600',
-  },
-  planModalFactWrap: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 8,
-    marginTop: 8,
-    paddingHorizontal: 16,
-  },
-  planModalFactText: {
+  ldWrap: {
     flex: 1,
-    fontSize: 14,
-    color: 'rgba(255,255,255,0.9)',
-    lineHeight: 20,
-    fontWeight: '500',
-  },
-  planModalPreviewSection: {
-    marginTop: 24,
     width: '100%',
   },
-  planModalPreviewTitleRow: {
+  ldScrollContent: {
+    paddingHorizontal: 24,
+    paddingTop: SCREEN_HEIGHT * 0.3,
+    paddingBottom: 40,
+    alignItems: 'center',
+  },
+  ldTitleSection: {
+    alignItems: 'center',
+    marginBottom: 24,
+  },
+  ldBadge: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 14,
-    paddingHorizontal: 4,
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 20,
+    backgroundColor: 'rgba(255,255,255,0.18)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.3)',
+    marginBottom: 16,
+  },
+  ldBadgeDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: '#4ADE80',
+  },
+  ldBadgeText: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: 'rgba(255,255,255,0.8)',
+    letterSpacing: 1.5,
+  },
+  ldTitle: {
+    fontSize: 32,
+    fontWeight: '900',
+    color: '#FFFFFF',
+    textAlign: 'center',
+    letterSpacing: -0.8,
+    lineHeight: 38,
+    marginBottom: 8,
+    ...Platform.select({
+      ios: { textShadowColor: 'rgba(0,0,0,0.3)', textShadowOffset: { width: 0, height: 2 }, textShadowRadius: 12 },
+    }),
+  },
+  ldSub: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: 'rgba(255,255,255,0.75)',
+    textAlign: 'center',
+    lineHeight: 21,
+  },
+  scene3dContainer: {
+    width: '100%',
+    height: SCREEN_HEIGHT * 0.38,
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    zIndex: 0,
+  },
+  scene3dGl: {
+    flex: 1,
+    backgroundColor: 'transparent',
+  },
+  scene3dFade: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    height: 100,
+  },
+  ldSuccessCenter: {
+    width: 160,
+    height: 160,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 16,
+  },
+  ldSheetHintCard: {
+    width: '100%',
+    maxWidth: 340,
+    alignSelf: 'center',
+    alignItems: 'center',
+    paddingVertical: 18,
+    paddingHorizontal: 20,
+    borderRadius: 20,
+    backgroundColor: 'rgba(255,255,255,0.96)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.7)',
+    marginBottom: 20,
+    gap: 8,
+    ...Platform.select({
+      ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.12, shadowRadius: 20 },
+      android: { elevation: 8 },
+    }),
+  },
+  ldSheetHintTitle: {
+    fontSize: 17,
+    fontWeight: '900',
+    color: '#0f172a',
+    textAlign: 'center',
+    letterSpacing: -0.4,
+  },
+  ldSheetHintSub: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#64748b',
+    textAlign: 'center',
+    lineHeight: 19,
+  },
+  lsSteps: {
+    width: '100%',
+    gap: 12,
+    marginBottom: 24,
+  },
+  lsCard: {
+    borderRadius: 16,
+    backgroundColor: 'rgba(255,255,255,0.14)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.22)',
+    padding: 14,
+    overflow: 'hidden',
+    position: 'relative',
+  },
+  lsCardGlow: {
+    position: 'absolute',
+    top: -20,
+    left: -20,
+    right: -20,
+    bottom: -20,
+    borderRadius: 30,
+    ...Platform.select({
+      ios: { shadowColor: '#C8102E', shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.4, shadowRadius: 20 },
+    }),
+  },
+  lsCardTop: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    marginBottom: 10,
+  },
+  lsIconWrap: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    backgroundColor: 'rgba(255,255,255,0.1)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'relative',
+  },
+  lsRing: {
+    position: 'absolute',
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    borderWidth: 2,
+  },
+  lsTextCol: { flex: 1 },
+  lsStepName: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: 'rgba(255,255,255,0.45)',
+    marginBottom: 1,
+  },
+  lsStepNameDone: { color: '#FFFFFF' },
+  lsStepNameActive: { color: '#FFFFFF', fontWeight: '800' },
+  lsStepStatus: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: 'rgba(255,255,255,0.3)',
+  },
+  lsBarTrack: {
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: 'rgba(255,255,255,0.2)',
+    overflow: 'hidden',
+    position: 'relative',
+  },
+  lsBarFillWrap: {
+    height: '100%',
+    borderRadius: 3,
+    overflow: 'hidden',
+  },
+  lsBarFill: {
+    flex: 1,
+    borderRadius: 3,
+  },
+  lsBarShimmer: {
+    position: 'absolute',
+    top: 0,
+    bottom: 0,
+    width: 60,
+    backgroundColor: 'rgba(255,255,255,0.25)',
+    borderRadius: 3,
+  },
+  ldFactCard: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 12,
+    width: '100%',
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    backgroundColor: 'rgba(255,255,255,0.12)',
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.2)',
+  },
+  ldFactIcon: {
+    width: 28,
+    height: 28,
+    borderRadius: 8,
+    backgroundColor: 'rgba(255,255,255,0.18)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 2,
+  },
+  ldFactContent: { flex: 1 },
+  ldFactLabel: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#FACC15',
+    letterSpacing: 0.5,
+    marginBottom: 4,
+  },
+  ldFactText: {
+    fontSize: 13,
+    color: 'rgba(255,255,255,0.75)',
+    lineHeight: 18,
+    fontWeight: '500',
   },
   planModalMarqueeMask: {
     width: '100%',
@@ -3751,14 +5943,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingHorizontal: 4,
   },
-  planModalPreviewTitle: {
-    fontSize: 15,
-    fontWeight: '800',
-    color: 'rgba(255,255,255,0.95)',
-    marginBottom: 14,
-    paddingHorizontal: 4,
-    letterSpacing: 0.3,
-  },
   planModalPreviewScroll: {
     paddingLeft: 4,
     paddingRight: 24,
@@ -3768,14 +5952,14 @@ const styles = StyleSheet.create({
     width: 110,
     borderRadius: 18,
     marginRight: 12,
-    backgroundColor: 'rgba(255,255,255,0.22)',
+    backgroundColor: 'rgba(255,255,255,0.15)',
     borderWidth: 1.5,
-    borderColor: 'rgba(255,255,255,0.4)',
+    borderColor: 'rgba(255,255,255,0.3)',
     overflow: 'hidden',
     alignItems: 'center',
     ...Platform.select({
-      ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.12, shadowRadius: 8 },
-      android: { elevation: 4 },
+      ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.2, shadowRadius: 12 },
+      android: { elevation: 6 },
     }),
   },
   planModalPreviewImage: {
@@ -3886,101 +6070,131 @@ const styles = StyleSheet.create({
     color: 'rgba(15,23,42,0.65)',
     fontWeight: '600',
   },
-  planModalLoadingPulseSuccess: {
-    backgroundColor: 'rgba(16,185,129,0.2)',
-    borderColor: 'rgba(16,185,129,0.5)',
-  },
   planModalOptionsWrap: { flex: 1, width: '100%', maxWidth: 400, alignSelf: 'center' },
-  planModalScroll: { flex: 1 },
-  planModalScrollContent: { paddingBottom: 20 },
-  planModalOptionsGrid: {
-    width: '100%',
-  },
-  planModalOptionsRow: {
-    flexDirection: 'row',
-    gap: 10,
-    marginBottom: 10,
-  },
-  planModalOptionSpacer: {
-    flex: 1,
-  },
-  planModalOptionBlock: {
-    flex: 1,
-    minHeight: 52,
-    backgroundColor: PLAN_COLORS.overlayBlockBg,
-    borderRadius: 12,
-    borderWidth: 1.5,
-    borderColor: PLAN_COLORS.overlayBlockBorder,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 10,
-    paddingVertical: 12,
-    paddingHorizontal: 12,
-  },
-  planModalOptionIconWrap: {
-    width: 32,
-    height: 32,
-    borderRadius: 10,
-    backgroundColor: 'rgba(255,255,255,0.15)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  planModalOptionBlockSelected: {
-    borderWidth: 2,
-  },
-  planModalOptionText: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: PLAN_COLORS.overlayBlockText,
-  },
-  planModalOptionTextSelected: {
-    color: '#FFFFFF',
-    fontWeight: '700',
-    fontSize: 15,
-  },
   planModalActionRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    gap: 10,
-    marginTop: 14,
-    paddingTop: 14,
+    gap: 12,
+    marginTop: 16,
+    paddingTop: 16,
     borderTopWidth: 1,
-    borderTopColor: 'rgba(255,255,255,0.2)',
+    borderTopColor: 'rgba(255,255,255,0.28)',
   },
   planModalBackBtn: {
-    width: 44,
-    height: 44,
-    borderRadius: 12,
-    backgroundColor: 'rgba(255,255,255,0.2)',
+    width: 48,
+    height: 48,
+    borderRadius: 14,
+    backgroundColor: 'rgba(255,255,255,0.22)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.38)',
     alignItems: 'center',
     justifyContent: 'center',
   },
   planModalContinueBtn: {
     flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 6,
-    height: 44,
-    borderRadius: 12,
-    backgroundColor: themeColors.primary,
+    height: 52,
+    borderRadius: 16,
+    overflow: 'hidden',
+    ...Platform.select({
+      ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.15, shadowRadius: 12 },
+      android: { elevation: 6 },
+    }),
   },
-  planModalContinueBtnText: { fontSize: 14, fontWeight: '700', color: '#FFFFFF' },
-  planModalGenerateBtn: {
+  planModalBtnGradient: {
     flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 6,
-    height: 44,
-    borderRadius: 12,
-    backgroundColor: themeColors.primary,
+    gap: 8,
+  },
+  planModalContinueBtnText: { fontSize: 16, fontWeight: '800', color: '#FFFFFF', letterSpacing: 0.3 },
+  planModalGenerateBtn: {
+    flex: 1,
+    height: 52,
+    borderRadius: 16,
+    overflow: 'hidden',
     ...Platform.select({
-      ios: { shadowColor: themeColors.primary, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.2, shadowRadius: 8 },
-      android: { elevation: 6 },
+      ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.15, shadowRadius: 16 },
+      android: { elevation: 8 },
     }),
   },
-  planModalGenerateBtnText: { fontSize: 14, fontWeight: '700', color: '#FFFFFF' },
+  planModalGenerateBtnText: { fontSize: 15, fontWeight: '800', color: '#FFFFFF', letterSpacing: 0.3 },
+  optionCheckBadge: {
+    position: 'absolute',
+    top: -4,
+    right: -4,
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: 'rgba(255,255,255,0.3)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1.5,
+    borderColor: 'rgba(255,255,255,0.5)',
+  },
+  doorOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 9999,
+    elevation: 9999,
+  },
+  doorHalf: {
+    position: 'absolute',
+    top: 0,
+    bottom: 0,
+    width: SCREEN_WIDTH / 2,
+    overflow: 'hidden',
+  },
+  doorLeft: {
+    left: 0,
+  },
+  doorRight: {
+    right: 0,
+  },
+  doorZigzag: {
+    position: 'absolute',
+    top: 0,
+    left: SCREEN_WIDTH / 2,
+    bottom: 0,
+    zIndex: 2,
+  },
+  doorIconWrap: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 10000,
+  },
+  doorLogoShadow: {
+    width: 124,
+    height: 124,
+    borderRadius: 62,
+    borderWidth: 4,
+    borderColor: '#FFFFFF',
+    overflow: 'hidden',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.4,
+    shadowRadius: 16,
+    elevation: 14,
+  },
+  doorLogoImage: {
+    width: 116,
+    height: 116,
+    borderRadius: 58,
+  },
+  doorFlagLabel: {
+    marginTop: 16,
+    fontSize: 20,
+    fontWeight: '900',
+    color: '#FFFFFF',
+    letterSpacing: 3,
+    textTransform: 'uppercase',
+    textShadowColor: 'rgba(0,0,0,0.4)',
+    textShadowOffset: { width: 0, height: 2 },
+    textShadowRadius: 6,
+  },
 });
