@@ -12,18 +12,55 @@ import HomeScreen from './src/screens/HomeScreen'
 import ExploreScreen from './src/screens/ExploreScreen'
 import AIPlanScreen from './src/screens/AIPlanScreen'
 import CommunitiesScreen from './src/screens/CommunitiesScreen'
+import CommunityPostDetailScreen from './src/screens/CommunityPostDetailScreen'
 import ProfileScreen from './src/screens/ProfileScreen'
+import MyReviewsScreen from './src/screens/MyReviewsScreen'
 import ARScreen from './src/screens/ARScreen'
 import OnboardingScreen from './src/screens/OnboardingScreen'
 import BottomControlBar from './src/components/BottomControlBar'
 import { ThemeProvider, useTheme } from './src/context/ThemeContext'
 import { UserPreferencesProvider, useUserPreferences } from './src/context/UserPreferencesContext'
+import { DoorTransitionProvider } from './src/context/DoorTransitionContext'
 import { AuthProvider, useAuth } from './src/context/AuthContext'
 import { SavedPlacesProvider } from './src/context/SavedPlacesContext'
 import AuthScreen from './src/screens/AuthScreen'
 
 const Tab = createBottomTabNavigator()
 const Stack = createNativeStackNavigator()
+const ProfileStack = createNativeStackNavigator()
+const CommunityStack = createNativeStackNavigator()
+
+function CommunityStackNavigator() {
+  return (
+    <CommunityStack.Navigator screenOptions={{ headerShown: false }}>
+      <CommunityStack.Screen name="CommunityMain" component={CommunitiesScreen} />
+      <CommunityStack.Screen
+        name="CommunityPostDetail"
+        component={CommunityPostDetailScreen}
+        options={{
+          headerShown: true,
+          headerBackTitleVisible: false,
+        }}
+      />
+    </CommunityStack.Navigator>
+  )
+}
+
+function ProfileStackNavigator() {
+  return (
+    <ProfileStack.Navigator screenOptions={{ headerShown: false }}>
+      <ProfileStack.Screen name="ProfileMain" component={ProfileScreen} />
+      <ProfileStack.Screen
+        name="MyReviews"
+        component={MyReviewsScreen}
+        options={{
+          headerShown: true,
+          title: 'My reviews',
+        }}
+      />
+    </ProfileStack.Navigator>
+  )
+}
 
 function TabsNavigator() {
   return (
@@ -34,8 +71,8 @@ function TabsNavigator() {
       <Tab.Screen name="Home" component={HomeScreen} />
       <Tab.Screen name="Explore" component={ExploreScreen} />
       <Tab.Screen name="AI Plan" component={AIPlanScreen} />
-      <Tab.Screen name="Community" component={CommunitiesScreen} />
-      <Tab.Screen name="Profile" component={ProfileScreen} />
+      <Tab.Screen name="Community" component={CommunityStackNavigator} />
+      <Tab.Screen name="Profile" component={ProfileStackNavigator} />
     </Tab.Navigator>
   )
 }
@@ -138,11 +175,13 @@ export default function App() {
           <AuthProvider>
             <SavedPlacesProvider>
               <UserPreferencesProvider>
-                <SafeAreaView style={styles.safeArea} edges={['left', 'right']}>
-                  <NavigationContainer>
-                    <AppContent />
-                  </NavigationContainer>
-                </SafeAreaView>
+                <DoorTransitionProvider>
+                  <SafeAreaView style={styles.safeArea} edges={['left', 'right']}>
+                    <NavigationContainer>
+                      <AppContent />
+                    </NavigationContainer>
+                  </SafeAreaView>
+                </DoorTransitionProvider>
               </UserPreferencesProvider>
             </SavedPlacesProvider>
           </AuthProvider>

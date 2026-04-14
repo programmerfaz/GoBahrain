@@ -24,6 +24,7 @@ import { fetchEvents } from '../services/aiPipeline'
 import { FadeInView, ShimmerPlaceholder, AnimatedPressable, PulseView } from '../components/AnimatedUI'
 
 const TAB_BAR_HEIGHT = Platform.OS === 'ios' ? 70 : 60
+const AnimatedScrollView = Animated.createAnimatedComponent(ScrollView)
 const { width: SCREEN_W, height: SCREEN_H } = Dimensions.get('window')
 
 function getEventImage(m) {
@@ -42,16 +43,127 @@ function getTimeOfDay() {
   return { label: 'night', greeting: 'Good evening', icon: 'moon', gradient: ['#0F172A', '#1E1B4B', '#312E81'] }
 }
 
-const DISCOVER_CHIPS = [
-  { id: 'events', label: 'Events', icon: 'calendar', color: '#E63950' },
-  { id: 'restaurants', label: 'Restaurants', icon: 'restaurant', color: '#F59E0B' },
-  { id: 'beaches', label: 'Beaches', icon: 'water', color: '#0891B2' },
-  { id: 'culture', label: 'Culture', icon: 'library', color: '#7C3AED' },
-  { id: 'nightlife', label: 'Nightlife', icon: 'moon', color: '#EC4899' },
-  { id: 'shopping', label: 'Shopping', icon: 'bag', color: '#10B981' },
-]
-
 const CARD_GAP = 16
+
+function HeroAmbientLayer({ accent, isDark }) {
+  const drift = useRef(new Animated.Value(0)).current
+  const driftB = useRef(new Animated.Value(0)).current
+
+  useEffect(() => {
+    const a = Animated.loop(
+      Animated.sequence([
+        Animated.timing(drift, { toValue: 1, duration: 5200, easing: Easing.inOut(Easing.sin), useNativeDriver: true }),
+        Animated.timing(drift, { toValue: 0, duration: 5200, easing: Easing.inOut(Easing.sin), useNativeDriver: true }),
+      ])
+    )
+    const b = Animated.loop(
+      Animated.sequence([
+        Animated.timing(driftB, { toValue: 1, duration: 6400, easing: Easing.inOut(Easing.sin), useNativeDriver: true }),
+        Animated.timing(driftB, { toValue: 0, duration: 6400, easing: Easing.inOut(Easing.sin), useNativeDriver: true }),
+      ])
+    )
+    a.start()
+    b.start()
+    return () => {
+      a.stop()
+      b.stop()
+    }
+  }, [drift, driftB])
+
+  const orb1Y = drift.interpolate({ inputRange: [0, 1], outputRange: [0, -14] })
+  const orb1X = drift.interpolate({ inputRange: [0, 1], outputRange: [0, 10] })
+  const orb1Scale = drift.interpolate({ inputRange: [0, 1], outputRange: [1, 1.12] })
+  const orb2Y = driftB.interpolate({ inputRange: [0, 1], outputRange: [0, 18] })
+  const orb2X = driftB.interpolate({ inputRange: [0, 1], outputRange: [0, -16] })
+  const orb2Opacity = driftB.interpolate({ inputRange: [0, 1], outputRange: [0.12, 0.22] })
+
+  return (
+    <View style={ambientStyles.wrap} pointerEvents="none">
+      <Animated.View
+        style={[
+          ambientStyles.orb,
+          {
+            backgroundColor: `${accent}${isDark ? '35' : '22'}`,
+            top: -40,
+            right: -30,
+            width: 160,
+            height: 160,
+            borderRadius: 80,
+            opacity: isDark ? 0.45 : 0.7,
+            transform: [{ translateX: orb1X }, { translateY: orb1Y }, { scale: orb1Scale }],
+          },
+        ]}
+      />
+      <Animated.View
+        style={[
+          ambientStyles.orb,
+          {
+            backgroundColor: isDark ? 'rgba(124,58,237,0.25)' : 'rgba(124,58,237,0.14)',
+            bottom: -50,
+            left: -40,
+            width: 200,
+            height: 200,
+            borderRadius: 100,
+            transform: [{ translateX: orb2X }, { translateY: orb2Y }],
+            opacity: orb2Opacity,
+          },
+        ]}
+      />
+    </View>
+  )
+}
+
+const ambientStyles = StyleSheet.create({
+  wrap: { ...StyleSheet.absoluteFillObject, overflow: 'visible' },
+  orb: { position: 'absolute' },
+})
+
+function LivePulseDot({ color }) {
+  return (
+    <View style={liveDotStyles.wrap} accessibilityLabel="Live updates">
+      <PulseView pulseScale={1.45} duration={1400}>
+        <View style={[liveDotStyles.dot, { backgroundColor: color }]} />
+      </PulseView>
+    </View>
+  )
+}
+
+const liveDotStyles = StyleSheet.create({
+  wrap: { marginRight: 10, marginTop: 6, width: 10, height: 10, alignItems: 'center', justifyContent: 'center' },
+  dot: { width: 8, height: 8, borderRadius: 4 },
+})
+
+function SectionTitleAccent({ accent }) {
+  const slide = useRef(new Animated.Value(0)).current
+  useEffect(() => {
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(slide, { toValue: 1, duration: 2200, easing: Easing.inOut(Easing.sin), useNativeDriver: true }),
+        Animated.timing(slide, { toValue: 0, duration: 2200, easing: Easing.inOut(Easing.sin), useNativeDriver: true }),
+      ])
+    )
+    loop.start()
+    return () => loop.stop()
+  }, [slide])
+  const translateX = slide.interpolate({ inputRange: [0, 1], outputRange: [-6, 6] })
+  return (
+    <View style={accentLineStyles.track}>
+      <Animated.View style={{ transform: [{ translateX }], width: '42%' }}>
+        <LinearGradient
+          colors={[`${accent}00`, accent, `${accent}00`]}
+          start={{ x: 0, y: 0.5 }}
+          end={{ x: 1, y: 0.5 }}
+          style={accentLineStyles.grad}
+        />
+      </Animated.View>
+    </View>
+  )
+}
+
+const accentLineStyles = StyleSheet.create({
+  track: { height: 3, marginTop: 8, borderRadius: 2, overflow: 'hidden', maxWidth: 120 },
+  grad: { height: 3, borderRadius: 2 },
+})
 
 function CinematicEventCard({ item, index, cardWidth, cardHeight, scrollX, onPress }) {
   const m = item?.metadata || {}
@@ -78,10 +190,15 @@ function CinematicEventCard({ item, index, cardWidth, cardHeight, scrollX, onPre
     outputRange: [40, 0, -40],
     extrapolate: 'clamp',
   })
+  const cardOpacity = scrollX.interpolate({
+    inputRange: [(index - 1) * itemWidth, index * itemWidth, (index + 1) * itemWidth],
+    outputRange: [0.72, 1, 0.72],
+    extrapolate: 'clamp',
+  })
 
   return (
     <TouchableOpacity activeOpacity={1} onPress={() => onPress?.(item)} style={{ width: cardWidth }}>
-      <Animated.View style={[cs.card, { width: cardWidth, height: cardHeight, transform: [{ scale }, { translateY }] }]}>
+      <Animated.View style={[cs.card, { width: cardWidth, height: cardHeight, opacity: cardOpacity, transform: [{ scale }, { translateY }] }]}>
         <View style={[cs.cardImageWrap, { height: cardHeight }]}>
           <Animated.View style={[cs.cardImageInner, { height: cardHeight, width: cardWidth + 80, transform: [{ translateX: imageTranslateX }] }]}>
             <ImageBackground
@@ -277,7 +394,7 @@ const counterStyles = StyleSheet.create({
 export default function ExploreScreen({ navigation }) {
   const { colors, isDark } = useTheme()
   const insets = useSafeAreaInsets()
-  const { width, height } = useWindowDimensions()
+  const { width = 375, height = 667 } = useWindowDimensions()
   const bottomPadding = TAB_BAR_HEIGHT + (Platform.OS === 'android' ? insets.bottom : 0)
 
   const timeOfDay = useMemo(() => getTimeOfDay(), [])
@@ -290,17 +407,76 @@ export default function ExploreScreen({ navigation }) {
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [activeIndex, setActiveIndex] = useState(0)
-  const [activeChip, setActiveChip] = useState('events')
+  const [progressTrackW, setProgressTrackW] = useState(0)
   const scrollX = useRef(new Animated.Value(0)).current
+  const scrollY = useRef(new Animated.Value(0)).current
   const headerOpacity = useRef(new Animated.Value(0)).current
   const headerTranslateY = useRef(new Animated.Value(20)).current
+  const titlePop = useRef(new Animated.Value(0.88)).current
+  const rock = useRef(new Animated.Value(0)).current
+  const fillW = useRef(new Animated.Value(0)).current
+
+  const heroParallaxY = scrollY.interpolate({
+    inputRange: [0, 180],
+    outputRange: [0, -42],
+    extrapolate: 'clamp',
+  })
+  const heroParallaxScale = scrollY.interpolate({
+    inputRange: [0, 220],
+    outputRange: [1, 0.965],
+    extrapolate: 'clamp',
+  })
+  const heroScrollOpacity = scrollY.interpolate({
+    inputRange: [0, 140],
+    outputRange: [1, 0.9],
+    extrapolate: 'clamp',
+  })
+  const headerTranslateCombined = Animated.add(headerTranslateY, heroParallaxY)
+  const heroOpacityCombined = Animated.multiply(headerOpacity, heroScrollOpacity)
+
+  const rockDeg = rock.interpolate({ inputRange: [0, 1], outputRange: ['-8deg', '8deg'] })
 
   useEffect(() => {
     Animated.parallel([
-      Animated.timing(headerOpacity, { toValue: 1, duration: 600, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
-      Animated.timing(headerTranslateY, { toValue: 0, duration: 600, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
+      Animated.timing(headerOpacity, { toValue: 1, duration: 680, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
+      Animated.timing(headerTranslateY, { toValue: 0, duration: 680, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
     ]).start()
   }, [headerOpacity, headerTranslateY])
+
+  useEffect(() => {
+    Animated.spring(titlePop, {
+      toValue: 1,
+      friction: 7,
+      tension: 78,
+      delay: 200,
+      useNativeDriver: true,
+    }).start()
+  }, [titlePop])
+
+  useEffect(() => {
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(rock, { toValue: 1, duration: 2600, easing: Easing.inOut(Easing.sin), useNativeDriver: true }),
+        Animated.timing(rock, { toValue: 0, duration: 2600, easing: Easing.inOut(Easing.sin), useNativeDriver: true }),
+      ])
+    )
+    loop.start()
+    return () => loop.stop()
+  }, [rock])
+
+  useEffect(() => {
+    if (loading || events.length === 0 || progressTrackW <= 0) {
+      if (events.length === 0) fillW.setValue(0)
+      return
+    }
+    const target = Math.max(((activeIndex + 1) / events.length) * progressTrackW, 8)
+    Animated.spring(fillW, {
+      toValue: target,
+      friction: 8,
+      tension: 72,
+      useNativeDriver: false,
+    }).start()
+  }, [activeIndex, events.length, progressTrackW, loading, fillW])
 
   const loadEvents = useCallback(async () => {
     try {
@@ -316,6 +492,11 @@ export default function ExploreScreen({ navigation }) {
   }, [])
 
   useEffect(() => { loadEvents() }, [loadEvents])
+
+  useEffect(() => {
+    if (events.length === 0) return
+    setActiveIndex((idx) => (idx >= events.length ? events.length - 1 : idx))
+  }, [events.length])
 
   const onRefresh = useCallback(() => {
     setRefreshing(true)
@@ -355,6 +536,10 @@ export default function ExploreScreen({ navigation }) {
   const doorIconOpacity = useRef(new Animated.Value(0)).current
   const doorFade = useRef(new Animated.Value(1)).current
 
+  const handleProgressTrackLayout = useCallback((e) => {
+    setProgressTrackW(e.nativeEvent.layout.width)
+  }, [])
+
   const openAR = () => {
     if (Platform.OS !== 'web') Vibration.vibrate(40)
 
@@ -382,87 +567,79 @@ export default function ExploreScreen({ navigation }) {
     })
   }
 
-  const heroGradient = isDark
-    ? ['#0F172A', '#0F172A']
-    : [colors.background, colors.background]
-
   return (
     <View style={[s.root, { backgroundColor: colors.background, paddingBottom: bottomPadding }]}>
-      <ScrollView
+      <AnimatedScrollView
         style={s.scroll}
         contentContainerStyle={[s.scrollContent, { paddingTop: insets.top + 8 }]}
         showsVerticalScrollIndicator={false}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />}
+        onScroll={Animated.event(
+          [{ nativeEvent: { contentOffset: { y: scrollY } } }],
+          { useNativeDriver: false }
+        )}
+        scrollEventThrottle={16}
       >
         {/* Immersive Header */}
-        <Animated.View style={[s.heroSection, { opacity: headerOpacity, transform: [{ translateY: headerTranslateY }] }]}>
+        <Animated.View
+          style={[
+            s.heroSection,
+            {
+              opacity: heroOpacityCombined,
+              transform: [
+                { translateY: headerTranslateCombined },
+                { scale: heroParallaxScale },
+              ],
+            },
+          ]}
+        >
+          <HeroAmbientLayer accent={colors.primary} isDark={isDark} />
           <View style={s.heroTopRow}>
-            <View>
-              <Text style={[s.heroGreeting, { color: colors.textMuted }]}>{timeOfDay.greeting}</Text>
-              <Text style={[s.heroTitle, { color: colors.textPrimary }]}>Explore</Text>
+            <View style={s.heroTextCol}>
+              <FadeInView delay={40} from={20} duration={520}>
+                <View style={s.heroGreetingRow}>
+                  <Animated.View style={{ transform: [{ rotate: rockDeg }] }}>
+                    <Ionicons name={timeOfDay.icon} size={20} color={colors.primary} />
+                  </Animated.View>
+                  <Text style={[s.heroGreeting, { color: colors.textMuted }]}>{timeOfDay.greeting}</Text>
+                </View>
+              </FadeInView>
+              <FadeInView delay={120} from={22} duration={560}>
+                <Animated.Text style={[s.heroTitle, { color: colors.textPrimary, transform: [{ scale: titlePop }] }]}>
+                  Explore
+                </Animated.Text>
+              </FadeInView>
+              <FadeInView delay={200} from={14} duration={480}>
+                <Text style={[s.heroSub, { color: colors.textSecondary }]}>
+                  Discover what Bahrain has to offer
+                </Text>
+              </FadeInView>
             </View>
-            <AnimatedPressable onPress={openAR} scaleDown={0.9}>
-              <LinearGradient
-                colors={[colors.primary, isDark ? '#C8102E' : '#9B0C23']}
-                start={{ x: 0, y: 0 }}
-                end={{ x: 1, y: 1 }}
-                style={s.arPill}
-              >
-                <Ionicons name="scan" size={18} color="#FFF" />
-                <Text style={s.arPillText}>AR View</Text>
-              </LinearGradient>
-            </AnimatedPressable>
+            <FadeInView delay={160} from={28} duration={520} style={s.heroArWrap}>
+              <AnimatedPressable onPress={openAR} scaleDown={0.9}>
+                <LinearGradient
+                  colors={[colors.primary, isDark ? '#C8102E' : '#9B0C23']}
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 1, y: 1 }}
+                  style={s.arPill}
+                >
+                  <Ionicons name="scan" size={18} color="#FFF" />
+                  <Text style={s.arPillText}>AR View</Text>
+                </LinearGradient>
+              </AnimatedPressable>
+            </FadeInView>
           </View>
-
-          <Text style={[s.heroSub, { color: colors.textSecondary }]}>
-            Discover what Bahrain has to offer
-          </Text>
         </Animated.View>
 
-        {/* Discover Chips */}
-        <FadeInView delay={150} from={12}>
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={s.chipsScroll}
-          >
-            {DISCOVER_CHIPS.map((chip, i) => {
-              const active = chip.id === activeChip
-              return (
-                <AnimatedPressable
-                  key={chip.id}
-                  onPress={() => setActiveChip(chip.id)}
-                  scaleDown={0.93}
-                >
-                  <View style={[
-                    s.chip,
-                    { borderColor: active ? chip.color : isDark ? 'rgba(51,65,85,0.6)' : 'rgba(226,232,240,0.8)' },
-                    active && { backgroundColor: `${chip.color}15` },
-                    !active && { backgroundColor: isDark ? 'rgba(30,41,59,0.5)' : 'rgba(255,255,255,0.8)' },
-                  ]}>
-                    <View style={[s.chipIconWrap, { backgroundColor: `${chip.color}${active ? '25' : '12'}` }]}>
-                      <Ionicons name={chip.icon} size={16} color={active ? chip.color : colors.textMuted} />
-                    </View>
-                    <Text style={[
-                      s.chipLabel,
-                      { color: active ? chip.color : colors.textSecondary },
-                      active && { fontWeight: '700' },
-                    ]}>
-                      {chip.label}
-                    </Text>
-                    {active && <View style={[s.chipActiveDot, { backgroundColor: chip.color }]} />}
-                  </View>
-                </AnimatedPressable>
-              )
-            })}
-          </ScrollView>
-        </FadeInView>
-
         {/* Events Section */}
-        <FadeInView delay={250} from={16}>
+        <FadeInView delay={220} from={18} duration={480}>
           <View style={s.eventsHeader}>
-            <View>
-              <Text style={[s.eventsTitle, { color: colors.textPrimary }]}>Happening now</Text>
+            <View style={s.eventsTitleBlock}>
+              <View style={s.eventsTitleRow}>
+                {!loading && events.length > 0 ? <LivePulseDot color={colors.primary} /> : <View style={s.liveDotSpacer} />}
+                <Text style={[s.eventsTitle, { color: colors.textPrimary }]}>Happening now</Text>
+              </View>
+              <SectionTitleAccent accent={colors.primary} />
               <Text style={[s.eventsSub, { color: colors.textMuted }]}>Live events across Bahrain</Text>
             </View>
             {!loading && events.length > 0 && (
@@ -503,7 +680,7 @@ export default function ExploreScreen({ navigation }) {
             </View>
           </FadeInView>
         ) : (
-          <FadeInView delay={300} from={20}>
+          <FadeInView delay={280} from={22} duration={520}>
             <FlatList
               data={events}
               renderItem={renderCard}
@@ -525,17 +702,11 @@ export default function ExploreScreen({ navigation }) {
 
             {/* Progress Bar */}
             <View style={s.progressWrap}>
-              <View style={[s.progressTrack, { backgroundColor: isDark ? 'rgba(51,65,85,0.4)' : 'rgba(226,232,240,0.6)' }]}>
-                <Animated.View
-                  style={[
-                    s.progressFill,
-                    {
-                      width: events.length > 1
-                        ? `${((activeIndex + 1) / events.length) * 100}%`
-                        : '100%',
-                    },
-                  ]}
-                >
+              <View
+                style={[s.progressTrack, { backgroundColor: isDark ? 'rgba(51,65,85,0.4)' : 'rgba(226,232,240,0.6)' }]}
+                onLayout={handleProgressTrackLayout}
+              >
+                <Animated.View style={[s.progressFill, { width: fillW }]}>
                   <LinearGradient
                     colors={[colors.primary, '#9B0C23']}
                     start={{ x: 0, y: 0 }}
@@ -547,67 +718,7 @@ export default function ExploreScreen({ navigation }) {
             </View>
           </FadeInView>
         )}
-
-        {/* Quick Actions */}
-        <FadeInView delay={450} from={16}>
-          <View style={s.quickActionsSection}>
-            <Text style={[s.quickActionsTitle, { color: colors.textPrimary }]}>Quick actions</Text>
-            <View style={s.quickActionsGrid}>
-              <AnimatedPressable onPress={openAR} scaleDown={0.95} style={{ width: (width - 48 - 12) / 2 }}>
-                <LinearGradient
-                  colors={isDark ? ['#1E293B', '#334155'] : ['#FFFFFF', '#F8FAFC']}
-                  style={[s.quickActionCard, { borderColor: isDark ? 'rgba(51,65,85,0.6)' : 'rgba(226,232,240,0.8)' }]}
-                >
-                  <LinearGradient colors={['rgba(230,57,80,0.15)', 'rgba(230,57,80,0.05)']} style={s.quickActionIconWrap}>
-                    <Ionicons name="scan" size={22} color={colors.primary} />
-                  </LinearGradient>
-                  <Text style={[s.quickActionLabel, { color: colors.textPrimary }]}>AR Explorer</Text>
-                  <Text style={[s.quickActionDesc, { color: colors.textMuted }]}>Point & discover</Text>
-                </LinearGradient>
-              </AnimatedPressable>
-
-              <AnimatedPressable onPress={() => setActiveChip('restaurants')} scaleDown={0.95} style={{ width: (width - 48 - 12) / 2 }}>
-                <LinearGradient
-                  colors={isDark ? ['#1E293B', '#334155'] : ['#FFFFFF', '#F8FAFC']}
-                  style={[s.quickActionCard, { borderColor: isDark ? 'rgba(51,65,85,0.6)' : 'rgba(226,232,240,0.8)' }]}
-                >
-                  <LinearGradient colors={['rgba(245,158,11,0.15)', 'rgba(245,158,11,0.05)']} style={s.quickActionIconWrap}>
-                    <Ionicons name="restaurant" size={22} color="#F59E0B" />
-                  </LinearGradient>
-                  <Text style={[s.quickActionLabel, { color: colors.textPrimary }]}>Top Eats</Text>
-                  <Text style={[s.quickActionDesc, { color: colors.textMuted }]}>Trending spots</Text>
-                </LinearGradient>
-              </AnimatedPressable>
-
-              <AnimatedPressable onPress={() => setActiveChip('beaches')} scaleDown={0.95} style={{ width: (width - 48 - 12) / 2 }}>
-                <LinearGradient
-                  colors={isDark ? ['#1E293B', '#334155'] : ['#FFFFFF', '#F8FAFC']}
-                  style={[s.quickActionCard, { borderColor: isDark ? 'rgba(51,65,85,0.6)' : 'rgba(226,232,240,0.8)' }]}
-                >
-                  <LinearGradient colors={['rgba(8,145,178,0.15)', 'rgba(8,145,178,0.05)']} style={s.quickActionIconWrap}>
-                    <Ionicons name="water" size={22} color="#0891B2" />
-                  </LinearGradient>
-                  <Text style={[s.quickActionLabel, { color: colors.textPrimary }]}>Beaches</Text>
-                  <Text style={[s.quickActionDesc, { color: colors.textMuted }]}>Sun & sand</Text>
-                </LinearGradient>
-              </AnimatedPressable>
-
-              <AnimatedPressable onPress={() => setActiveChip('culture')} scaleDown={0.95} style={{ width: (width - 48 - 12) / 2 }}>
-                <LinearGradient
-                  colors={isDark ? ['#1E293B', '#334155'] : ['#FFFFFF', '#F8FAFC']}
-                  style={[s.quickActionCard, { borderColor: isDark ? 'rgba(51,65,85,0.6)' : 'rgba(226,232,240,0.8)' }]}
-                >
-                  <LinearGradient colors={['rgba(124,58,237,0.15)', 'rgba(124,58,237,0.05)']} style={s.quickActionIconWrap}>
-                    <Ionicons name="library" size={22} color="#7C3AED" />
-                  </LinearGradient>
-                  <Text style={[s.quickActionLabel, { color: colors.textPrimary }]}>Heritage</Text>
-                  <Text style={[s.quickActionDesc, { color: colors.textMuted }]}>History & art</Text>
-                </LinearGradient>
-              </AnimatedPressable>
-            </View>
-          </View>
-        </FadeInView>
-      </ScrollView>
+      </AnimatedScrollView>
 
       {doorVisible && (() => {
         const TOOTH_COUNT = 5
@@ -651,11 +762,21 @@ const s = StyleSheet.create({
   scroll: { flex: 1 },
   scrollContent: { paddingBottom: 32 },
 
-  heroSection: { paddingHorizontal: 24, paddingTop: 8, marginBottom: 20 },
-  heroTopRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 },
-  heroGreeting: { fontSize: 14, fontWeight: '600', letterSpacing: 0.3, marginBottom: 2 },
+  heroSection: {
+    position: 'relative',
+    overflow: 'visible',
+    paddingHorizontal: 24,
+    paddingTop: 8,
+    marginBottom: 22,
+    minHeight: 120,
+  },
+  heroTopRow: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 },
+  heroTextCol: { flex: 1, minWidth: 0 },
+  heroGreetingRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 4 },
+  heroGreeting: { fontSize: 14, fontWeight: '600', letterSpacing: 0.3, flex: 1 },
   heroTitle: { fontSize: 34, fontWeight: '900', letterSpacing: -1 },
-  heroSub: { fontSize: 15, lineHeight: 22, marginTop: 4 },
+  heroSub: { fontSize: 15, lineHeight: 22, marginTop: 6 },
+  heroArWrap: { alignSelf: 'flex-start', marginTop: 2 },
   arPill: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -670,21 +791,6 @@ const s = StyleSheet.create({
   },
   arPillText: { fontSize: 13, fontWeight: '800', color: '#FFF', letterSpacing: 0.3 },
 
-  chipsScroll: { paddingHorizontal: 20, gap: 10, paddingBottom: 4, marginBottom: 24 },
-  chip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    paddingVertical: 10,
-    paddingHorizontal: 14,
-    paddingRight: 16,
-    borderRadius: 20,
-    borderWidth: 1.5,
-  },
-  chipIconWrap: { width: 30, height: 30, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
-  chipLabel: { fontSize: 14, fontWeight: '600' },
-  chipActiveDot: { width: 5, height: 5, borderRadius: 2.5, marginLeft: -2 },
-
   eventsHeader: {
     flexDirection: 'row',
     alignItems: 'flex-end',
@@ -692,8 +798,11 @@ const s = StyleSheet.create({
     paddingHorizontal: 24,
     marginBottom: 18,
   },
-  eventsTitle: { fontSize: 22, fontWeight: '800', letterSpacing: -0.3 },
-  eventsSub: { fontSize: 13, marginTop: 2 },
+  eventsTitleBlock: { flex: 1, minWidth: 0, marginRight: 8 },
+  eventsTitleRow: { flexDirection: 'row', alignItems: 'center' },
+  liveDotSpacer: { width: 18, marginRight: 10 },
+  eventsTitle: { fontSize: 22, fontWeight: '800', letterSpacing: -0.3, flexShrink: 1 },
+  eventsSub: { fontSize: 13, marginTop: 6 },
 
   progressWrap: { paddingHorizontal: 24, marginTop: 18, marginBottom: 8 },
   progressTrack: { height: 3, borderRadius: 1.5, overflow: 'hidden' },
@@ -731,30 +840,6 @@ const s = StyleSheet.create({
     }),
   },
   emptyCtaText: { fontSize: 15, fontWeight: '700', color: '#FFF' },
-
-  quickActionsSection: { paddingHorizontal: 24, marginTop: 28 },
-  quickActionsTitle: { fontSize: 20, fontWeight: '800', letterSpacing: -0.3, marginBottom: 14 },
-  quickActionsGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 12, justifyContent: 'space-between' },
-  quickActionCard: {
-    paddingVertical: 18,
-    paddingHorizontal: 16,
-    borderRadius: 20,
-    borderWidth: 1,
-    ...Platform.select({
-      ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.06, shadowRadius: 8 },
-      android: { elevation: 2 },
-    }),
-  },
-  quickActionIconWrap: {
-    width: 44,
-    height: 44,
-    borderRadius: 14,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 12,
-  },
-  quickActionLabel: { fontSize: 15, fontWeight: '700', marginBottom: 2 },
-  quickActionDesc: { fontSize: 12 },
 
   doorOverlay: { ...StyleSheet.absoluteFillObject, zIndex: 9999, elevation: 9999 },
   doorHalf: { position: 'absolute', top: 0, bottom: 0, width: SCREEN_W / 2, overflow: 'hidden' },

@@ -9,7 +9,6 @@ import {
   PanResponder,
   Platform,
   TouchableOpacity,
-  TouchableWithoutFeedback,
   Pressable,
   ScrollView,
   ActivityIndicator,
@@ -30,44 +29,73 @@ import Reanimated, {
   FadeOutUp,
   ZoomInEasyDown,
   ZoomOutEasyDown,
+  useSharedValue,
+  useAnimatedStyle,
+  withSpring,
 } from 'react-native-reanimated';
 import * as Location from 'expo-location';
 import { BlurView } from 'expo-blur';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useRoute, useNavigation } from '@react-navigation/native';
+import { useRoute, useNavigation, useNavigationState } from '@react-navigation/native';
 import MapView, { Marker, Circle } from 'react-native-maps';
 import { Ionicons } from '@expo/vector-icons';
-import { fetchPlaces, fetchRestaurants, fetchBreakfastSpots, fetchEvents, generateDayPlan, getMockDayPlan, fetchClientsWithLocation } from '../services/aiPipeline';
+import DraggableFlatList, { ScaleDecorator } from 'react-native-draggable-flatlist';
+import {
+  fetchPlaces,
+  fetchRestaurants,
+  fetchBreakfastSpots,
+  fetchEvents,
+  generateDayPlan,
+  getMockDayPlan,
+  fetchClientsWithLocation,
+  enhancePlanStopAtIndex,
+} from '../services/aiPipeline';
 import { useUserPreferences } from '../context/UserPreferencesContext';
 import { colors as themeColors } from '../theme/designTokens';
+import styles from './AIPlanScreen.styles';
 import { useTheme } from '../context/ThemeContext';
 import { supabase } from '../config/supabase';
 import ClientProfileModal from '../components/ClientProfileModal';
-import { ensureImageUrl } from '../utils/imageUrl';
-import { GLView } from 'expo-gl';
-import { Renderer } from 'expo-three';
-import {
-  Scene,
-  PerspectiveCamera,
-  AmbientLight,
-  DirectionalLight,
-  PointLight,
-  Mesh,
-  Group,
-  CylinderGeometry,
-  BoxGeometry,
-  SphereGeometry,
-  ConeGeometry,
-  TorusGeometry,
-  MeshStandardMaterial,
-  Color,
-  Fog,
-  RingGeometry,
-  DoubleSide,
-} from 'three';
+import { ensureImageUrl, parseStorageImageUrl, resolvePublicImageUrl } from '../utils/imageUrl';
 
 const { height: SCREEN_HEIGHT, width: SCREEN_WIDTH } = Dimensions.get('window');
+
+/** Animated wrapper for stop rows - pops in when isVisible becomes true */
+const AnimatedStopRow = ({ isVisible, children, style }) => {
+  const scale = useSharedValue(0)
+  const opacity = useSharedValue(0)
+  
+  React.useEffect(() => {
+    if (isVisible) {
+      scale.value = withSpring(1, { damping: 12, stiffness: 200, mass: 0.7 })
+      opacity.value = withSpring(1, { damping: 12, stiffness: 200, mass: 0.7 })
+    } else {
+      scale.value = 0
+      opacity.value = 0
+    }
+  }, [isVisible])
+  
+  const animatedStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: scale.value }],
+    opacity: opacity.value,
+  }))
+  
+  return (
+    <Reanimated.View style={[style, animatedStyle]}>
+      {children}
+    </Reanimated.View>
+  )
+}
+
+/** Stable keys for draggable list rows (persist across reorder; replace on enhance). */
+function attachPlanRowKeys(plan) {
+  if (!Array.isArray(plan)) return plan
+  return plan.map((item, idx) => ({
+    ...item,
+    _planRowKey: item._planRowKey || `rk-${idx}-${Math.random().toString(36).slice(2, 11)}`,
+  }))
+}
 
 const openInMaps = (lat, lng, name) => {
   const label = encodeURIComponent(name || 'Destination');
@@ -143,16 +171,14 @@ function formatPlanShareMessage(plan) {
 }
 
 /** Staggered spring entrance (Reanimated layout). */
-function AiStagger({ children, delay = 0, style }) {
+function AiStagger({ children, delay = 0, style, entering }) {
+  const defaultEntering = FadeInDown.springify()
+    .damping(17)
+    .stiffness(210)
+    .mass(0.65)
+    .delay(delay)
   return (
-    <Reanimated.View
-      entering={FadeInDown.springify()
-        .damping(17)
-        .stiffness(210)
-        .mass(0.65)
-        .delay(delay)}
-      style={style}
-    >
+    <Reanimated.View entering={entering ?? defaultEntering} style={style}>
       {children}
     </Reanimated.View>
   )
@@ -271,13 +297,26 @@ function AnimatedOptionChip({ item, isSelected, onPress }) {
 }
 
 
-const APP_TAB_BAR_HEIGHT_IOS = 70;
-const getAppTabBarHeight = (insets) =>
-  Platform.OS === 'ios' ? APP_TAB_BAR_HEIGHT_IOS : 60 + (insets?.bottom ?? 0);
+/**
+ * Bottom inset for plan sheet / marker sheet. AI Plan hides the tab bar, so only safe area + comfort margin.
+ */
+const getPlanSheetBottomPadding = (insets) => {
+  const bottomInset = Math.max(insets?.bottom ?? 0, 12)
+  return bottomInset + 24
+}
+
+const PLAN_MINI_NAV = [
+  { key: 'Home', screen: 'Home', icon: 'home-outline', iconActive: 'home', label: 'Home' },
+  { key: 'Explore', screen: 'Explore', icon: 'compass-outline', iconActive: 'compass', label: 'Explore' },
+  { key: 'AI Plan', screen: 'AI Plan', isLogo: true, label: 'AI Plan' },
+  { key: 'Community', screen: 'Community', icon: 'people-outline', iconActive: 'people', label: 'Community' },
+  { key: 'Profile', screen: 'Profile', icon: 'person-circle-outline', iconActive: 'person-circle', label: 'Profile' },
+]
 
 const SHEET_VISIBLE_PEEK = 0.28;
 const SHEET_VISIBLE_MID = 0.75;
-const SHEET_VISIBLE_EXPANDED = 0.9;
+/** Fraction of screen height for the sheet (list + masthead). Higher = taller plan container */
+const SHEET_VISIBLE_EXPANDED = 0.94;
 
 const SHEET_HEIGHT = SCREEN_HEIGHT * SHEET_VISIBLE_EXPANDED;
 const SHEET_TOP_EXPANDED = SCREEN_HEIGHT - SHEET_HEIGHT;
@@ -348,6 +387,14 @@ function parseCoordsFromPineconeMetadata(meta) {
   return unswapLatLng(la, ln);
 }
 
+function parseCoordsFromClientRow(row) {
+  if (!row || typeof row !== 'object') return null;
+  return unswapLatLng(
+    row.lat ?? row.latitude,
+    row.long ?? row.longitude ?? row.lng
+  );
+}
+
 import { PREFERENCES, FOOD_CATEGORIES } from '../constants/preferences';
 
 const SURPRISE_THEMES = [
@@ -409,7 +456,7 @@ function buildSpotPreviews(places, restaurants, events) {
         meta.cover_image ||
         meta.image ||
         null;
-      const image = ensureImageUrl(rawImage) || rawImage;
+      const image = resolvePublicImageUrl(rawImage);
       const clientId = meta.client_a_uuid || meta.id || m.id || null;
       const rating = meta.rating != null && meta.rating !== '' ? meta.rating : null;
 
@@ -434,36 +481,6 @@ function buildSpotPreviews(places, restaurants, events) {
   return previews;
 }
 
-// Parse storage image (post_image or client_image) to full URL — handles string path, JSON array, or full URL
-function parseStorageImageUrl(raw) {
-  if (raw == null) return null;
-  let str = null;
-  if (typeof raw === 'string') {
-    const trimmed = raw.trim();
-    if (!trimmed) return null;
-    if (trimmed.startsWith('[') || trimmed.startsWith('{')) {
-      try {
-        const parsed = JSON.parse(trimmed);
-        const arr = Array.isArray(parsed) ? parsed : [parsed];
-        const first = arr[0];
-        str = first?.url || (typeof first === 'string' ? first : null);
-      } catch { return null; }
-    } else {
-      str = trimmed;
-    }
-  } else if (typeof raw === 'object' && raw?.url) {
-    str = raw.url;
-  } else if (Array.isArray(raw) && raw[0]) {
-    str = raw[0]?.url || (typeof raw[0] === 'string' ? raw[0] : null);
-  }
-  if (!str || typeof str !== 'string') return null;
-  str = str.trim();
-  if (!str) return null;
-  if (str.startsWith('http://') || str.startsWith('https://')) return str;
-  const cleanPath = str.startsWith('gobahrain-post-images/') ? str.replace('gobahrain-post-images/', '') : str;
-  return `https://zonhaprelkjyjugpqfdn.supabase.co/storage/v1/object/public/gobahrain-post-images/${cleanPath}`;
-}
-
 // Fetch "Places we're considering" from Supabase — uses POSTS table (post_image) + CLIENT table (business_name)
 // Posts have images; client has names. Same source as HomeScreen feed.
 async function fetchSpotPreviewsFromSupabase() {
@@ -473,7 +490,7 @@ async function fetchSpotPreviewsFromSupabase() {
     .not('post_image', 'is', null)
     .not('client_a_uuid', 'is', null)
     .order('created_at', { ascending: false })
-    .limit(60);
+    .limit(140);
 
   if (postErr || !postRows?.length) {
     if (postErr) console.warn('[AIPlan] fetchSpotPreviews posts error:', postErr?.message);
@@ -481,47 +498,154 @@ async function fetchSpotPreviewsFromSupabase() {
   }
 
   const clientIds = [...new Set(postRows.map((r) => r.client_a_uuid).filter(Boolean))];
-  const { data: clients, error: clientErr } = await supabase
+  const { data: clients } = await supabase
     .from('client')
     .select('client_a_uuid, business_name, name, client_type')
     .in('client_a_uuid', clientIds);
 
   const nameByClient = {};
+  const typeByClient = {};
   (clients || []).forEach((c) => {
     if (c.client_a_uuid) {
       nameByClient[c.client_a_uuid] = (c.business_name || c.name || 'Spot').trim();
+      typeByClient[c.client_a_uuid] = ((c.client_type || '').toLowerCase());
     }
   });
 
-  const seen = new Set();
-  const arr = [];
+  const shuffleInPlace = (list) => {
+    for (let i = list.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [list[i], list[j]] = [list[j], list[i]];
+    }
+    return list;
+  };
+
+  const buckets = { place: [], restaurant: [], event: [] };
+  const seenUrl = new Set();
+
   for (const row of postRows) {
-    const key = `${row.client_a_uuid}-${row.post_image}`;
-    if (seen.has(key)) continue;
-    let image = parseStorageImageUrl(row.post_image) || ensureImageUrl(String(row.post_image).trim()) || (row.post_image ? String(row.post_image).trim() : null);
-    if (!image) continue;
-    seen.add(key);
-    const name = nameByClient[row.client_a_uuid] || 'Spot';
-    const ct = ((clients || []).find((c) => c.client_a_uuid === row.client_a_uuid)?.client_type || '').toLowerCase();
+    const image =
+      parseStorageImageUrl(row.post_image) ||
+      ensureImageUrl(String(row.post_image).trim()) ||
+      (row.post_image ? String(row.post_image).trim() : null);
+    if (!image || seenUrl.has(image)) continue;
+    seenUrl.add(image);
+    const ct = typeByClient[row.client_a_uuid] || '';
     const type = ct === 'restaurant' ? 'restaurant' : ct === 'event' ? 'event' : 'place';
+    const name = nameByClient[row.client_a_uuid] || 'Spot';
     const typeLabel = type === 'restaurant' ? 'Food & drinks' : type === 'event' ? 'Event' : 'Explore';
-    arr.push({
-      id: `${row.client_a_uuid}-${arr.length}`,
+    buckets[type].push({
+      id: `${row.client_a_uuid}-${image.slice(-24)}`,
       name,
       type,
       typeLabel,
       image,
       clientId: row.client_a_uuid,
     });
-    if (arr.length >= 12) break;
   }
 
-  for (let i = arr.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [arr[i], arr[j]] = [arr[j], arr[i]];
+  shuffleInPlace(buckets.place);
+  shuffleInPlace(buckets.restaurant);
+  shuffleInPlace(buckets.event);
+
+  const order = ['place', 'restaurant', 'event'];
+  const merged = [];
+  let guard = 0;
+  while (merged.length < 18 && guard < 400) {
+    guard += 1;
+    let added = false;
+    for (const t of order) {
+      if (buckets[t].length > 0) {
+        merged.push(buckets[t].shift());
+        added = true;
+        if (merged.length >= 18) break;
+      }
+    }
+    if (!added) break;
   }
-  arr.forEach((p) => p.image && Image.prefetch(p.image).catch(() => {}));
-  return arr.slice(0, 12);
+
+  shuffleInPlace(merged);
+  merged.forEach((p) => p.image && Image.prefetch(p.image).catch(() => {}));
+  return merged;
+}
+
+/** Smaller / faster post fetch for first paint (same shape as fetchSpotPreviewsFromSupabase). */
+async function getCachedFeedImages() {
+  try {
+    const { data: postRows, error: postErr } = await supabase
+      .from('posts')
+      .select('client_a_uuid, post_image')
+      .not('post_image', 'is', null)
+      .not('client_a_uuid', 'is', null)
+      .order('created_at', { ascending: false })
+      .limit(48);
+    if (postErr || !postRows?.length) return [];
+    const clientIds = [...new Set(postRows.map((r) => r.client_a_uuid).filter(Boolean))];
+    const { data: clients } = await supabase
+      .from('client')
+      .select('client_a_uuid, business_name, name, client_type')
+      .in('client_a_uuid', clientIds);
+    const nameByClient = {};
+    const typeByClient = {};
+    (clients || []).forEach((c) => {
+      if (c.client_a_uuid) {
+        nameByClient[c.client_a_uuid] = (c.business_name || c.name || 'Spot').trim();
+        typeByClient[c.client_a_uuid] = (c.client_type || '').toLowerCase();
+      }
+    });
+    const shuffleInPlace = (list) => {
+      for (let i = list.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [list[i], list[j]] = [list[j], list[i]];
+      }
+      return list;
+    };
+    const buckets = { place: [], restaurant: [], event: [] };
+    const seenUrl = new Set();
+    for (const row of postRows) {
+      const image =
+        parseStorageImageUrl(row.post_image) ||
+        ensureImageUrl(String(row.post_image).trim()) ||
+        (row.post_image ? String(row.post_image).trim() : null);
+      if (!image || seenUrl.has(image)) continue;
+      seenUrl.add(image);
+      const ct = typeByClient[row.client_a_uuid] || '';
+      const type = ct === 'restaurant' ? 'restaurant' : ct === 'event' ? 'event' : 'place';
+      const name = nameByClient[row.client_a_uuid] || 'Spot';
+      const typeLabel = type === 'restaurant' ? 'Food & drinks' : type === 'event' ? 'Event' : 'Explore';
+      buckets[type].push({
+        id: `${row.client_a_uuid}-${image.slice(-24)}`,
+        name,
+        type,
+        typeLabel,
+        image,
+        clientId: row.client_a_uuid,
+      });
+    }
+    shuffleInPlace(buckets.place);
+    shuffleInPlace(buckets.restaurant);
+    shuffleInPlace(buckets.event);
+    const order = ['place', 'restaurant', 'event'];
+    const merged = [];
+    let guard = 0;
+    while (merged.length < 12 && guard < 200) {
+      guard += 1;
+      let added = false;
+      for (const t of order) {
+        if (buckets[t].length > 0) {
+          merged.push(buckets[t].shift());
+          added = true;
+          if (merged.length >= 12) break;
+        }
+      }
+      if (!added) break;
+    }
+    shuffleInPlace(merged);
+    merged.forEach((p) => p.image && Image.prefetch(p.image).catch(() => {}));
+    return merged;
+  } catch {
+    return [];
+  }
 }
 
 // Enrich spot previews: client_image only (no post images) — used when we have Pinecone IDs
@@ -541,7 +665,8 @@ async function enrichSpotPreviewsWithClientImages(previews) {
     if (c.client_a_uuid) {
       nameByClientId[c.client_a_uuid] = c.business_name || c.name || '';
       if (c.client_image) {
-        imageByClientId[c.client_a_uuid] = ensureImageUrl(String(c.client_image).trim()) || String(c.client_image).trim();
+        const u = resolvePublicImageUrl(String(c.client_image).trim());
+        if (u) imageByClientId[c.client_a_uuid] = u;
       }
     }
   });
@@ -596,7 +721,8 @@ function matchPlanToPinecone(planItem, pineconeMatches) {
     const score = matchRank * 10 + (coords ? 1 : 0);
     if (score > bestScore) {
       bestScore = score;
-      const image = meta.image_url || meta.thumbnail_url || meta.cover_image || meta.image || null;
+      const rawImg = meta.image_url || meta.thumbnail_url || meta.cover_image || meta.image || null;
+      const image = resolvePublicImageUrl(rawImg);
       const clientId = meta.client_a_uuid || meta.id || m.id || null;
       const rating = meta.rating != null && meta.rating !== '' ? meta.rating : null;
       best = { image, clientId, rating, coords };
@@ -640,19 +766,45 @@ function matchPlanToClient(planItem, clients) {
 }
 
 // Enrich plan items with client images from Supabase (Pinecone or direct client lookup)
-async function enrichPlanWithClientData(plan, pineconeMatches) {
-  // Step 1: Match from Pinecone when available — prefer Pinecone metadata lat/lng over model output
+function resolveCoordsFromLoadedCache(item, loadedClientMarkers) {
+  if (!item || !Array.isArray(loadedClientMarkers) || loadedClientMarkers.length === 0) return null;
+
+  if (item.clientId) {
+    const byId = loadedClientMarkers.find((m) => m.clientId === item.clientId);
+    if (byId) return unswapLatLng(byId.lat, byId.lng);
+  }
+
+  const spotNorm = normName(item.spot || '');
+  if (!spotNorm) return null;
+
+  for (const marker of loadedClientMarkers) {
+    const markerNorm = normName(marker.spot || '');
+    if (!markerNorm) continue;
+    if (markerNorm === spotNorm || markerNorm.includes(spotNorm) || spotNorm.includes(markerNorm)) {
+      const coords = unswapLatLng(marker.lat, marker.lng);
+      if (coords) return coords;
+    }
+  }
+
+  return null;
+}
+
+async function enrichPlanWithClientData(plan, pineconeMatches, loadedClientMarkers = []) {
+  // Step 1: Match from Pinecone for identity/image hints only (NOT coordinates).
+  // Coordinates for map pins must come strictly from Supabase.
   let enriched = plan.map((item) => {
     const match = matchPlanToPinecone(item, pineconeMatches);
-    const pine = match?.coords;
-    const gptFixed = pine ? null : parsePlanItemCoords(item);
+    const cachedCoords = resolveCoordsFromLoadedCache(
+      { ...item, clientId: match?.clientId || item.clientId || null },
+      loadedClientMarkers
+    );
     return {
       ...item,
       image: match?.image || null,
       clientId: match?.clientId || null,
       rating: match?.rating != null ? match.rating : null,
-      lat: pine ? pine.lat : gptFixed ? gptFixed.lat : item.lat,
-      lng: pine ? pine.lng : gptFixed ? gptFixed.lng : item.lng,
+      lat: cachedCoords ? cachedCoords.lat : null,
+      lng: cachedCoords ? cachedCoords.lng : null,
     };
   });
 
@@ -667,7 +819,8 @@ async function enrichPlanWithClientData(plan, pineconeMatches) {
     const coordByClientId = {};
     (clients || []).forEach((c) => {
       if (c.client_a_uuid && c.client_image) {
-        clientImageMap[c.client_a_uuid] = ensureImageUrl(String(c.client_image).trim()) || String(c.client_image).trim();
+        const u = resolvePublicImageUrl(String(c.client_image).trim());
+        if (u) clientImageMap[c.client_a_uuid] = u;
       }
       const u = unswapLatLng(c.lat ?? c.latitude, c.long ?? c.longitude ?? c.lng);
       if (u && c.client_a_uuid) coordByClientId[c.client_a_uuid] = u;
@@ -679,41 +832,51 @@ async function enrichPlanWithClientData(plan, pineconeMatches) {
     });
   }
 
-  // Step 3: ALWAYS fetch clients from Supabase and match by business_name for items without images
-  const needsImage = enriched.filter((i) => !i.image || !ensureImageUrl(i.image));
-  if (needsImage.length > 0) {
-    const { data: allClients } = await supabase
-      .from('client')
-      .select('client_a_uuid, business_name, name, business_name_ar, client_image, rating, lat, long, latitude, longitude')
-      .limit(300);
-    const clientsList = allClients || [];
-    enriched = enriched.map((item) => {
-      if (item.image && ensureImageUrl(item.image)) return item;
-      const client = matchPlanToClient(item, clientsList);
-      if (client) {
-        const img = client.client_image ? ensureImageUrl(String(client.client_image).trim()) || String(client.client_image).trim() : null;
-        const dbCoords = unswapLatLng(client.lat ?? client.latitude, client.long ?? client.longitude ?? client.lng);
-        return {
-          ...item,
-          image: item.image || img,
-          clientId: item.clientId || client.client_a_uuid,
-          rating: item.rating != null ? item.rating : (client.rating != null ? client.rating : null),
-          ...(dbCoords ? { lat: dbCoords.lat, lng: dbCoords.lng } : {}),
-        };
-      }
-      return item;
-    });
-    const newIds = [...new Set(enriched.map((i) => i.clientId).filter(Boolean))];
-    for (const cid of newIds) {
-      if (clientImageMap[cid]) continue;
-      const c = (clientsList || []).find((x) => x.client_a_uuid === cid);
-      if (c?.client_image) {
-        clientImageMap[cid] = ensureImageUrl(String(c.client_image).trim()) || String(c.client_image).trim();
-      }
+  // Step 3: Fetch clients from Supabase and force DB lat/long whenever we can match a client.
+  // This avoids wrong map pins from model/Pinecone coords drift.
+  const { data: allClients } = await supabase
+    .from('client')
+    .select('client_a_uuid, business_name, name, business_name_ar, client_image, rating, lat, long, latitude, longitude')
+    .limit(600);
+  const clientsList = allClients || [];
+  const clientById = new Map(clientsList.map((c) => [c.client_a_uuid, c]));
+  enriched = enriched.map((item) => {
+    let client = item.clientId ? clientById.get(item.clientId) : null;
+    if (!client) {
+      client = matchPlanToClient(item, clientsList);
+    }
+    if (!client) return item;
+    const img = client.client_image ? resolvePublicImageUrl(String(client.client_image).trim()) : null;
+    const dbCoords = parseCoordsFromClientRow(client);
+    return {
+      ...item,
+      image: resolvePublicImageUrl(item.image) || img,
+      clientId: item.clientId || client.client_a_uuid,
+      rating: item.rating != null ? item.rating : (client.rating != null ? client.rating : null),
+      ...(dbCoords ? { lat: dbCoords.lat, lng: dbCoords.lng } : {}),
+    };
+  });
+  const newIds = [...new Set(enriched.map((i) => i.clientId).filter(Boolean))];
+  for (const cid of newIds) {
+    if (clientImageMap[cid]) continue;
+    const c = clientById.get(cid);
+    if (c?.client_image) {
+      const u = resolvePublicImageUrl(String(c.client_image).trim());
+      if (u) clientImageMap[cid] = u;
     }
   }
 
-  const idsNeedingCoords = [...new Set(enriched.filter((i) => !parsePlanItemCoords(i) && i.clientId).map((i) => i.clientId))];
+  let unresolved = enriched.filter((i) => !parsePlanItemCoords(i));
+  if (unresolved.length > 0 && loadedClientMarkers.length > 0) {
+    enriched = enriched.map((item) => {
+      if (parsePlanItemCoords(item)) return item;
+      const u = resolveCoordsFromLoadedCache(item, loadedClientMarkers);
+      return u ? { ...item, lat: u.lat, lng: u.lng } : item;
+    });
+    unresolved = enriched.filter((i) => !parsePlanItemCoords(i));
+  }
+
+  const idsNeedingCoords = [...new Set(unresolved.filter((i) => i.clientId).map((i) => i.clientId))];
   if (idsNeedingCoords.length > 0) {
     const { data: locRows } = await supabase
       .from('client')
@@ -721,7 +884,7 @@ async function enrichPlanWithClientData(plan, pineconeMatches) {
       .in('client_a_uuid', idsNeedingCoords);
     const coordById = {};
     (locRows || []).forEach((c) => {
-      const u = unswapLatLng(c.lat ?? c.latitude, c.long ?? c.longitude ?? c.lng);
+      const u = parseCoordsFromClientRow(c);
       if (u && c.client_a_uuid) coordById[c.client_a_uuid] = u;
     });
     enriched = enriched.map((item) => {
@@ -731,8 +894,16 @@ async function enrichPlanWithClientData(plan, pineconeMatches) {
     });
   }
 
-  // Step 4: Fallback — fetch first post image when client_image is null
-  const stillNoImage = enriched.filter((i) => !i.image && i.clientId);
+  // Step 4: Strict source-of-truth guard for map coordinates.
+  // If a stop has no Supabase-backed coords, keep it off the map by leaving lat/lng null.
+  enriched = enriched.map((item) => {
+    const fixed = parsePlanItemCoords(item);
+    if (!fixed) return { ...item, lat: null, lng: null };
+    return item;
+  });
+
+  // Step 5: Fallback — fetch first post image when client_image is null
+  const stillNoImage = enriched.filter((i) => !resolvePublicImageUrl(i.image) && i.clientId);
   if (stillNoImage.length > 0) {
     const postIds = [...new Set(stillNoImage.map((i) => i.clientId))];
     for (const cid of postIds) {
@@ -754,7 +925,7 @@ async function enrichPlanWithClientData(plan, pineconeMatches) {
           url = arr[0]?.url || (typeof arr[0] === 'string' ? arr[0] : raw);
         } catch { /* keep url */ }
       }
-      const fullUrl = ensureImageUrl(String(url)) || (typeof url === 'string' && url.startsWith('http') ? url : null);
+      const fullUrl = resolvePublicImageUrl(String(url));
       if (fullUrl) clientImageMap[cid] = fullUrl;
     }
   }
@@ -779,7 +950,7 @@ async function enrichPlanWithClientData(plan, pineconeMatches) {
           url = (Array.isArray(parsed) && parsed[0]?.url) ? parsed[0].url : (typeof parsed[0] === 'string' ? parsed[0] : url);
         } catch { /* keep */ }
       }
-      url = ensureImageUrl(String(url)) || (typeof url === 'string' && url.startsWith('http') ? url : null);
+      url = resolvePublicImageUrl(String(url));
       if (url) {
         if (!postImagesByClient[row.client_a_uuid]) postImagesByClient[row.client_a_uuid] = [];
         if (!postImagesByClient[row.client_a_uuid].includes(url)) postImagesByClient[row.client_a_uuid].push(url);
@@ -788,11 +959,19 @@ async function enrichPlanWithClientData(plan, pineconeMatches) {
   }
 
   return enriched.map((item) => {
-    const primary = ensureImageUrl(item.image) || (item.clientId ? clientImageMap[item.clientId] : null) || null;
+    const primaryRaw =
+      item.image ||
+      (item.clientId ? clientImageMap[item.clientId] : null) ||
+      null;
+    const primary = resolvePublicImageUrl(primaryRaw);
     const postUrls = (item.clientId ? postImagesByClient[item.clientId] : null) || [];
-    const allImages = [primary, ...postUrls].filter(Boolean);
+    const allImages = [primary, ...postUrls.map((u) => resolvePublicImageUrl(u)).filter(Boolean)].filter(Boolean);
     const seen = new Set();
-    const images = allImages.filter((u) => { if (seen.has(u)) return false; seen.add(u); return true; });
+    const images = allImages.filter((u) => {
+      if (!u || seen.has(u)) return false;
+      seen.add(u);
+      return true;
+    });
     return {
       ...item,
       image: primary,
@@ -801,7 +980,7 @@ async function enrichPlanWithClientData(plan, pineconeMatches) {
   });
 }
 
-// Fun facts about Bahrain, used while loading
+// Bahrain trivia while the plan modal is generating
 const BAHRAIN_FACTS = [
   'Bahrain was once the heart of the ancient Dilmun civilization, a key trading hub for thousands of years.',
   'Locals love evening walks along the corniche – the skyline and sea breeze are perfect after sunset.',
@@ -809,84 +988,21 @@ const BAHRAIN_FACTS = [
   'Manama Souq is one of the best places to feel the old-meets-new soul of Bahrain in a single walk.',
   'Pearling was once Bahrain’s main industry – the Pearling Trail in Muharraq is now a UNESCO site.',
   'Bahrain has a vibrant cafe culture – from hidden specialty coffee spots to seaside shisha lounges.',
-];
-
-// Fun loading messages
-const LOADING_PHRASES = [
-  "Khalid's on it!",
-  'Finding your spots…',
-  'Building your map…',
-  'Almost there, habibi!',
-  'Stitching the perfect day…',
-  'Yalla, one sec…',
-  'Magic in progress ✨',
-  'Curating your adventure…',
-  'Scouting the best of Bahrain…',
-  'One moment, greatness loading…',
-];
-
-// Reusable right-to-left marquee banner for spot previews (shuffled, as fetched)
-function SpotMarqueeBanner({ items, itemWidth = 88, itemGap = 10, variant = 'modal' }) {
-  const bannerScrollX = useRef(new Animated.Value(0)).current;
-  const content = useMemo(() => (items || []).filter((p) => p.image || p.name), [items?.length, items?.map((p) => p.id).join(',') ?? '']);
-  const bannerWidth = content.length * (itemWidth + itemGap);
-
-  // Prefetch images so they appear faster when banner renders
-  const imageUrls = useMemo(() => content.filter((p) => p.image).map((p) => p.image), [content]);
-  useEffect(() => {
-    imageUrls.forEach((uri) => Image.prefetch(uri).catch(() => {}));
-  }, [imageUrls.join(',')]);
-  // Seamless infinite scroll — never stops, instant reset when duplicate set is fully scrolled
-  useEffect(() => {
-    if (content.length === 0) return;
-    const duration = Math.max(12000, content.length * 2200);
-    const anim = Animated.loop(
-      Animated.sequence([
-        Animated.timing(bannerScrollX, {
-          toValue: -bannerWidth,
-          duration,
-          easing: Easing.linear,
-          useNativeDriver: true,
-        }),
-        Animated.timing(bannerScrollX, { toValue: 0, duration: 0, useNativeDriver: true }),
-      ])
-    );
-    anim.start();
-    return () => anim.stop();
-  }, [content.length, bannerWidth]);
-  if (content.length === 0) return null;
-  const isSheet = variant === 'sheet';
-  const cardStyle = isSheet ? styles.loadingSpotPreviewItem : [styles.planModalPreviewCard, { width: itemWidth, marginRight: itemGap }];
-  const imgStyle = isSheet ? styles.loadingSpotPreviewImg : styles.planModalPreviewImage;
-  const nameStyle = isSheet ? styles.loadingSpotPreviewName : styles.planModalBannerName;
-  const tagStyle = isSheet ? null : styles.planModalBannerTag;
-  const iconStyle = isSheet ? styles.loadingSpotPreviewPlaceholder : styles.planModalPreviewIcon;
-  return (
-    <View style={isSheet ? styles.loadingSpotPreviews : styles.planModalBannerWrap}>
-      <Animated.View style={[styles.planModalBannerRow, { transform: [{ translateX: bannerScrollX }] }]}>
-        {[...content, ...content].map((p, idx) => (
-          <View key={`${p.id}-${idx}`} style={[cardStyle, isSheet && { width: itemWidth, marginRight: itemGap }]}>
-            {p.image ? (
-              <PreviewImage uri={p.image} style={imgStyle} />
-            ) : (
-              <View style={iconStyle}>
-                <Ionicons name={p.type === 'restaurant' ? 'restaurant' : p.type === 'event' ? 'calendar' : 'location'} size={isSheet ? 20 : 22} color={themeColors.primary} />
-              </View>
-            )}
-            <Text style={nameStyle} numberOfLines={1}>{p.name}</Text>
-            {tagStyle && <Text style={tagStyle} numberOfLines={1}>{p.typeLabel}</Text>}
-          </View>
-        ))}
-      </Animated.View>
-    </View>
-  );
-}
+]
 
 // Smooth image with shimmer placeholder — avoids empty flash while loading
 function PreviewImage({ uri, style }) {
-  const [loaded, setLoaded] = useState(false);
-  const fadeAnim = useRef(new Animated.Value(0)).current;
-  const shimmerAnim = useRef(new Animated.Value(0)).current;
+  const resolvedUri = useMemo(() => resolvePublicImageUrl(uri), [uri])
+  
+  const [loaded, setLoaded] = useState(false)
+  const [failed, setFailed] = useState(false)
+  const fadeAnim = useRef(new Animated.Value(0)).current
+  const shimmerAnim = useRef(new Animated.Value(0)).current
+  useEffect(() => {
+    setLoaded(false);
+    setFailed(false);
+    fadeAnim.setValue(0);
+  }, [resolvedUri, fadeAnim]);
   useEffect(() => {
     if (loaded) {
       Animated.timing(fadeAnim, { toValue: 1, duration: 220, useNativeDriver: true }).start();
@@ -899,10 +1015,13 @@ function PreviewImage({ uri, style }) {
         Animated.timing(shimmerAnim, { toValue: 0, duration: 1200, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
       ])
     );
-    if (!loaded) loop.start();
+    if (!loaded && !failed && resolvedUri) loop.start();
     return () => loop.stop();
-  }, [loaded, shimmerAnim]);
-  if (!uri) return null;
+  }, [loaded, failed, resolvedUri, shimmerAnim]);
+  if (!resolvedUri) return null;
+  if (failed) {
+    return <View style={[style, { backgroundColor: '#E8ECF1', overflow: 'hidden' }]} />;
+  }
   const shimmerOpacity = shimmerAnim.interpolate({ inputRange: [0, 1], outputRange: [0.3, 0.7] });
   return (
     <View style={[style, { overflow: 'hidden' }]}>
@@ -913,10 +1032,257 @@ function PreviewImage({ uri, style }) {
         </Animated.View>
       )}
       <Animated.View style={[StyleSheet.absoluteFill, { opacity: fadeAnim }]}>
-        <Image source={{ uri, ...(Platform.OS === 'ios' && { cache: 'force-cache' }) }} style={StyleSheet.absoluteFill} resizeMode="cover" onLoad={() => setLoaded(true)} />
+        <Image
+          source={{ uri: resolvedUri }}
+          style={StyleSheet.absoluteFill}
+          resizeMode="cover"
+          onLoad={() => setLoaded(true)}
+          onLoadEnd={() => setLoaded(true)}
+          onError={() => {
+            setFailed(true);
+            setLoaded(true);
+          }}
+        />
       </Animated.View>
     </View>
   );
+}
+
+/** Overlapping "deck" layout with radial entry trajectories */
+function getScoutMosaicLayout(variant, boxW, boxH) {
+  if (variant === 'sheet') {
+    return [
+      { l: boxW * 0.02, t: boxH * 0.48, d: boxW * 0.30, z: 1, rot: '-12deg', sc: 0.80, el: 1, from: 'left' },
+      { l: boxW * 0.34, t: boxH * 0.44, d: boxW * 0.32, z: 2, rot: '5deg', sc: 0.84, el: 2, from: 'bottom' },
+      { l: boxW * 0.62, t: boxH * 0.46, d: boxW * 0.28, z: 1, rot: '10deg', sc: 0.80, el: 1, from: 'right' },
+      { l: boxW * 0.06, t: boxH * 0.04, d: boxW * 0.26, z: 5, rot: '-6deg', sc: 0.90, el: 5, from: 'topLeft' },
+      { l: boxW * 0.18, t: boxH * 0.10, d: boxW * 0.52, z: 12, rot: '-1deg', sc: 1, el: 12, from: 'top' },
+    ]
+  }
+  return [
+    { l: boxW * 0.02, t: boxH * 0.52, d: boxW * 0.30, z: 1, rot: '-14deg', sc: 0.76, el: 1, from: 'left' },
+    { l: boxW * 0.34, t: boxH * 0.48, d: boxW * 0.32, z: 2, rot: '5deg', sc: 0.80, el: 2, from: 'bottom' },
+    { l: boxW * 0.64, t: boxH * 0.50, d: boxW * 0.28, z: 1, rot: '12deg', sc: 0.76, el: 1, from: 'right' },
+    { l: boxW * 0.06, t: boxH * 0.06, d: boxW * 0.26, z: 5, rot: '-8deg', sc: 0.88, el: 5, from: 'topLeft' },
+    { l: boxW * 0.66, t: boxH * 0.04, d: boxW * 0.26, z: 4, rot: '10deg', sc: 0.88, el: 4, from: 'topRight' },
+    { l: boxW * 0.16, t: boxH * 0.12, d: boxW * 0.56, z: 12, rot: '-2deg', sc: 1, el: 16, from: 'top' },
+  ]
+}
+
+function FlyingPhotoCard({ spec, item, sliceKey, idx, isSheet }) {
+  const slideX = useRef(new Animated.Value(0)).current
+  const slideY = useRef(new Animated.Value(0)).current
+  const opacity = useRef(new Animated.Value(0)).current
+  const scale = useRef(new Animated.Value(0.3)).current
+  const rotate = useRef(new Animated.Value(0)).current
+
+  const r = spec.d / 2
+  const finalRot = parseFloat(spec.rot) || 0
+
+  const getEntryOffset = () => {
+    const dist = SCREEN_WIDTH * 1.2
+    switch (spec.from) {
+      case 'top': return { x: 0, y: -dist }
+      case 'bottom': return { x: 0, y: dist }
+      case 'left': return { x: -dist, y: 0 }
+      case 'right': return { x: dist, y: 0 }
+      case 'topLeft': return { x: -dist * 0.7, y: -dist * 0.7 }
+      case 'topRight': return { x: dist * 0.7, y: -dist * 0.7 }
+      case 'bottomLeft': return { x: -dist * 0.7, y: dist * 0.7 }
+      case 'bottomRight': return { x: dist * 0.7, y: dist * 0.7 }
+      default: return { x: 0, y: -dist }
+    }
+  }
+
+  useEffect(() => {
+    const offset = getEntryOffset()
+    slideX.setValue(offset.x)
+    slideY.setValue(offset.y)
+    rotate.setValue(finalRot + (Math.random() - 0.5) * 60)
+    opacity.setValue(0)
+    scale.setValue(0.3)
+
+    const delay = 120 + idx * 85
+    Animated.parallel([
+      Animated.timing(slideX, {
+        toValue: 0,
+        delay,
+        duration: 650,
+        easing: Easing.bezier(0.25, 0.46, 0.45, 0.94),
+        useNativeDriver: true,
+      }),
+      Animated.timing(slideY, {
+        toValue: 0,
+        delay,
+        duration: 680,
+        easing: Easing.bezier(0.34, 1.2, 0.64, 1),
+        useNativeDriver: true,
+      }),
+      Animated.timing(opacity, {
+        toValue: 1,
+        delay,
+        duration: 320,
+        easing: Easing.out(Easing.ease),
+        useNativeDriver: true,
+      }),
+      Animated.spring(scale, {
+        toValue: 1,
+        delay: delay + 80,
+        tension: 180,
+        friction: 16,
+        useNativeDriver: true,
+      }),
+      Animated.spring(rotate, {
+        toValue: finalRot,
+        delay: delay + 50,
+        tension: 120,
+        friction: 14,
+        useNativeDriver: true,
+      }),
+    ]).start()
+  }, [sliceKey, idx, item.image])
+
+  return (
+    <Animated.View
+      key={`${sliceKey}-${idx}-${item.image}`}
+      style={{
+        position: 'absolute',
+        left: spec.l,
+        top: spec.t,
+        width: spec.d,
+        height: spec.d,
+        zIndex: spec.z,
+        elevation: spec.el,
+        opacity,
+        transform: [
+          { translateX: slideX },
+          { translateY: slideY },
+        ],
+      }}
+    >
+      <Animated.View
+        style={[
+          styles.scoutMosaicCell,
+          isSheet && styles.scoutMosaicCellSheet,
+          spec.z >= 10 && (isSheet ? styles.scoutMosaicCellHeroSheet : styles.scoutMosaicCellHero),
+          spec.z <= 2 && (isSheet ? styles.scoutMosaicCellBackSheet : styles.scoutMosaicCellBack),
+          {
+            position: 'relative',
+            width: '100%',
+            height: '100%',
+            borderRadius: r,
+            transform: [
+              { rotate: rotate.interpolate({ inputRange: [-360, 360], outputRange: ['-360deg', '360deg'] }) },
+              { scale: Animated.multiply(scale, spec.sc != null ? spec.sc : 1) },
+            ],
+            ...(Platform.OS === 'android' ? { elevation: 0 } : {}),
+          },
+        ]}
+      >
+        <PreviewImage uri={item.image} style={{ width: '100%', height: '100%', borderRadius: r }} />
+        <LinearGradient
+          colors={['rgba(255,255,255,0.35)', 'transparent', 'rgba(0,0,0,0.12)']}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={[styles.scoutMosaicCellShine, { borderRadius: r }]}
+        />
+      </Animated.View>
+    </Animated.View>
+  )
+}
+function KhalidScoutPhotoMosaic({ spotPreviews, variant }) {
+  const isSheet = variant === 'sheet'
+  const boxW = isSheet ? Math.min(SCREEN_WIDTH - 40, 360) : Math.min(SCREEN_WIDTH - 24, 400)
+  const boxH = isSheet ? 176 : 300
+  const layout = useMemo(() => {
+    const raw = getScoutMosaicLayout(variant, boxW, boxH)
+    return [...raw].sort((a, b) => a.z - b.z)
+  }, [variant, boxW, boxH])
+
+  const pool = useMemo(() => {
+    const arr = [...(spotPreviews || [])].filter((p) => p?.image)
+    for (let i = arr.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [arr[i], arr[j]] = [arr[j], arr[i]]
+    }
+    return arr
+  }, [spotPreviews])
+
+  const poolKey = useMemo(
+    () =>
+      (spotPreviews || [])
+        .filter((p) => p?.image)
+        .map((p) => `${p?.id || ''}:${p?.image || ''}`)
+        .sort()
+        .join('|'),
+    [spotPreviews],
+  )
+
+  const slotCount = layout.length
+  const pickSlice = useCallback(() => {
+    if (pool.length === 0) return []
+    if (pool.length <= slotCount) return pool.slice(0, slotCount)
+    const start = Math.floor(Math.random() * pool.length)
+    return Array.from({ length: slotCount }, (_, k) => pool[(start + k) % pool.length])
+  }, [pool, slotCount])
+
+  const [slice, setSlice] = useState([])
+
+  const applySlice = useCallback((rows) => {
+    setSlice(rows || [])
+    const imgs = (rows || []).map((p) => p?.image).filter(Boolean)
+    imgs.forEach((u) => {
+      void Image.prefetch(u).catch(() => {})
+    })
+  }, [])
+
+  useEffect(() => {
+    applySlice(pickSlice())
+  }, [poolKey, pickSlice, applySlice])
+
+  useEffect(() => {
+    const urls = (spotPreviews || []).map((p) => p?.image).filter(Boolean)
+    urls.forEach((u) => {
+      void Image.prefetch(u).catch(() => {})
+    })
+  }, [spotPreviews])
+
+  useEffect(() => {
+    if (pool.length === 0) return undefined
+    const id = setInterval(() => {
+      applySlice(pickSlice())
+    }, 9000)
+    return () => clearInterval(id)
+  }, [poolKey, pool.length, pickSlice, applySlice])
+
+  const sliceKey = slice.map((s) => s?.id).join('-')
+
+  return (
+    <View style={[styles.scoutMosaicInner, { width: boxW, height: boxH }]}>
+      {layout.map((spec, idx) => {
+        const item = slice[idx % Math.max(1, slice.length)]
+        if (!item?.image) return null
+        return (
+          <FlyingPhotoCard
+            key={`${sliceKey}-${idx}-${item.image}`}
+            spec={spec}
+            item={item}
+            sliceKey={sliceKey}
+            idx={idx}
+            isSheet={isSheet}
+          />
+        )
+      })}
+    </View>
+  )
+}
+
+function KhalidScoutPlanVisual({ spotPreviews, variant }) {
+  return (
+    <View style={styles.scoutMosaicStage} accessibilityLabel="Live photo previews from the community feed">
+      <KhalidScoutPhotoMosaic spotPreviews={spotPreviews} variant={variant} />
+    </View>
+  )
 }
 
 const STOP_DIALOG_CARD_MAX = Math.min(560, SCREEN_WIDTH - 16)
@@ -1034,305 +1400,11 @@ function StopDetailGallery({ images, singleUri, accent, isEat, isEvent, slideWid
   )
 }
 
-const buildBahrainWTC = () => {
-  const group = new Group()
-  const towerMat = new MeshStandardMaterial({ color: new Color('#8EC8F8'), metalness: 0.7, roughness: 0.2 })
-  const glassMat = new MeshStandardMaterial({ color: new Color('#B0D8F5'), metalness: 0.9, roughness: 0.1, transparent: true, opacity: 0.85 })
-
-  const towerGeo = new CylinderGeometry(0.22, 0.28, 2.8, 16)
-  const tower1 = new Mesh(towerGeo, towerMat)
-  tower1.position.set(-0.35, 1.4, 0)
-  group.add(tower1)
-  const tower2 = new Mesh(towerGeo, towerMat)
-  tower2.position.set(0.35, 1.4, 0)
-  group.add(tower2)
-
-  const bridgeGeo = new BoxGeometry(0.9, 0.04, 0.15)
-  const bridgeMat = new MeshStandardMaterial({ color: new Color('#E0E0E0'), metalness: 0.5, roughness: 0.3 })
-  ;[0.8, 1.5, 2.2].forEach((y) => {
-    const bridge = new Mesh(bridgeGeo, bridgeMat)
-    bridge.position.set(0, y, 0)
-    group.add(bridge)
-  })
-
-  const turbineGeo = new TorusGeometry(0.22, 0.015, 8, 16)
-  const turbineMat = new MeshStandardMaterial({ color: new Color('#FFFFFF'), metalness: 0.4, roughness: 0.5 })
-  ;[0.8, 1.5, 2.2].forEach((y) => {
-    const turbine = new Mesh(turbineGeo, turbineMat)
-    turbine.position.set(0, y, 0)
-    turbine.rotation.y = Math.PI / 2
-    group.add(turbine)
-  })
-
-  const topGeo = new ConeGeometry(0.15, 0.3, 12)
-  const topMat = new MeshStandardMaterial({ color: new Color('#C0D8E8'), metalness: 0.8, roughness: 0.15 })
-  const top1 = new Mesh(topGeo, topMat)
-  top1.position.set(-0.35, 2.95, 0)
-  group.add(top1)
-  const top2 = new Mesh(topGeo, topMat)
-  top2.position.set(0.35, 2.95, 0)
-  group.add(top2)
-
-  group.position.set(-2.5, 0, 0)
-  return group
-}
-
-const buildAlFatehMosque = () => {
-  const group = new Group()
-  const wallMat = new MeshStandardMaterial({ color: new Color('#F5F0E6'), metalness: 0.1, roughness: 0.8 })
-  const domeMat = new MeshStandardMaterial({ color: new Color('#F0E6D3'), metalness: 0.3, roughness: 0.5 })
-  const goldMat = new MeshStandardMaterial({ color: new Color('#D4AF37'), metalness: 0.9, roughness: 0.1 })
-
-  const base = new Mesh(new BoxGeometry(1.8, 0.7, 1.2), wallMat)
-  base.position.set(0, 0.35, 0)
-  group.add(base)
-
-  const dome = new Mesh(new SphereGeometry(0.6, 20, 20, 0, Math.PI * 2, 0, Math.PI / 2), domeMat)
-  dome.position.set(0, 0.7, 0)
-  group.add(dome)
-
-  const finialGeo = new ConeGeometry(0.04, 0.2, 8)
-  const finial = new Mesh(finialGeo, goldMat)
-  finial.position.set(0, 1.4, 0)
-  group.add(finial)
-
-  const minaretGeo = new CylinderGeometry(0.06, 0.08, 1.8, 10)
-  const minaretTopGeo = new ConeGeometry(0.08, 0.2, 10)
-  ;[[-1, 0.6], [1, 0.6], [-1, -0.6], [1, -0.6]].forEach(([x, z]) => {
-    const minaret = new Mesh(minaretGeo, wallMat)
-    minaret.position.set(x, 0.9, z)
-    group.add(minaret)
-    const mTop = new Mesh(minaretTopGeo, goldMat)
-    mTop.position.set(x, 1.95, z)
-    group.add(mTop)
-  })
-
-  group.position.set(0, 0, -1.5)
-  return group
-}
-
-const buildBahrainFort = () => {
-  const group = new Group()
-  const sandMat = new MeshStandardMaterial({ color: new Color('#D4A574'), metalness: 0.1, roughness: 0.9 })
-  const darkSandMat = new MeshStandardMaterial({ color: new Color('#B8956A'), metalness: 0.1, roughness: 0.95 })
-
-  const baseWall = new Mesh(new BoxGeometry(2, 0.6, 2), sandMat)
-  baseWall.position.set(0, 0.3, 0)
-  group.add(baseWall)
-
-  const innerWall = new Mesh(new BoxGeometry(1.4, 0.8, 1.4), darkSandMat)
-  innerWall.position.set(0, 0.7, 0)
-  group.add(innerWall)
-
-  const towerGeo = new CylinderGeometry(0.18, 0.2, 1.2, 10)
-  ;[[-1, -1], [1, -1], [-1, 1], [1, 1]].forEach(([x, z]) => {
-    const tower = new Mesh(towerGeo, sandMat)
-    tower.position.set(x, 0.6, z)
-    group.add(tower)
-    const cap = new Mesh(new ConeGeometry(0.2, 0.15, 10), darkSandMat)
-    cap.position.set(x, 1.25, z)
-    group.add(cap)
-  })
-
-  const keep = new Mesh(new BoxGeometry(0.6, 0.5, 0.6), darkSandMat)
-  keep.position.set(0, 1.35, 0)
-  group.add(keep)
-
-  group.position.set(2.5, 0, 0)
-  return group
-}
-
-const buildPearlMonument = () => {
-  const group = new Group()
-  const concreteMat = new MeshStandardMaterial({ color: new Color('#E8E0D8'), metalness: 0.15, roughness: 0.7 })
-  const pearlMat = new MeshStandardMaterial({ color: new Color('#F8F4F0'), metalness: 0.6, roughness: 0.2 })
-
-  ;[0, 1, 2, 3, 4, 5].forEach((i) => {
-    const angle = (i / 6) * Math.PI * 2
-    const pillar = new Mesh(new CylinderGeometry(0.08, 0.1, 2, 8), concreteMat)
-    pillar.position.set(Math.cos(angle) * 0.5, 1, Math.sin(angle) * 0.5)
-    group.add(pillar)
-  })
-
-  const platform = new Mesh(new CylinderGeometry(0.7, 0.7, 0.1, 24), concreteMat)
-  platform.position.set(0, 2.05, 0)
-  group.add(platform)
-
-  const pearl = new Mesh(new SphereGeometry(0.35, 20, 20), pearlMat)
-  pearl.position.set(0, 2.5, 0)
-  group.add(pearl)
-
-  const basePlatform = new Mesh(new CylinderGeometry(0.8, 0.9, 0.2, 24), concreteMat)
-  basePlatform.position.set(0, 0, 0)
-  group.add(basePlatform)
-
-  group.position.set(0, 0, 2)
-  return group
-}
-
-const buildTreeOfLife = () => {
-  const group = new Group()
-  const trunkMat = new MeshStandardMaterial({ color: new Color('#8B6914'), metalness: 0.1, roughness: 0.95 })
-  const leafMat = new MeshStandardMaterial({ color: new Color('#2D8B2D'), metalness: 0.05, roughness: 0.9 })
-
-  const trunk = new Mesh(new CylinderGeometry(0.08, 0.15, 1.2, 8), trunkMat)
-  trunk.position.set(0, 0.6, 0)
-  group.add(trunk)
-
-  const branch1 = new Mesh(new CylinderGeometry(0.03, 0.06, 0.6, 6), trunkMat)
-  branch1.position.set(0.2, 1.1, 0)
-  branch1.rotation.z = -0.5
-  group.add(branch1)
-
-  const branch2 = new Mesh(new CylinderGeometry(0.03, 0.06, 0.5, 6), trunkMat)
-  branch2.position.set(-0.15, 1, 0.1)
-  branch2.rotation.z = 0.4
-  group.add(branch2)
-
-  const canopy = new Mesh(new SphereGeometry(0.7, 12, 12), leafMat)
-  canopy.position.set(0, 1.6, 0)
-  canopy.scale.set(1, 0.7, 1)
-  group.add(canopy)
-
-  const canopy2 = new Mesh(new SphereGeometry(0.45, 10, 10), leafMat)
-  canopy2.position.set(0.3, 1.4, 0.2)
-  group.add(canopy2)
-
-  const canopy3 = new Mesh(new SphereGeometry(0.4, 10, 10), leafMat)
-  canopy3.position.set(-0.25, 1.5, -0.15)
-  group.add(canopy3)
-
-  const sandGeo = new CylinderGeometry(0.6, 0.7, 0.1, 16)
-  const sandMat = new MeshStandardMaterial({ color: new Color('#D4B896'), metalness: 0, roughness: 1 })
-  const sand = new Mesh(sandGeo, sandMat)
-  sand.position.set(0, 0, 0)
-  group.add(sand)
-
-  group.position.set(0, 0, 0)
-  return group
-}
-
-const buildGroundDisc = () => {
-  const geo = new RingGeometry(0, 5, 48)
-  const mat = new MeshStandardMaterial({
-    color: new Color('#1A1A2E'),
-    metalness: 0.3,
-    roughness: 0.8,
-    transparent: true,
-    opacity: 0.35,
-    side: DoubleSide,
-  })
-  const ground = new Mesh(geo, mat)
-  ground.rotation.x = -Math.PI / 2
-  ground.position.y = -0.05
-  return ground
-}
-
-function BahrainScene3D({ isVisible }) {
-  const glRef = useRef(null)
-  const rafRef = useRef(null)
-  const sceneRef = useRef(null)
-  const cameraRef = useRef(null)
-  const rendererRef = useRef(null)
-  const rotGroupRef = useRef(null)
-  const timeRef = useRef(0)
-  const fadeAnim = useRef(new Animated.Value(0)).current
-
-  useEffect(() => {
-    if (isVisible) {
-      Animated.timing(fadeAnim, { toValue: 1, duration: 800, easing: Easing.out(Easing.cubic), useNativeDriver: true }).start()
-    }
-  }, [isVisible, fadeAnim])
-
-  const handleContextCreate = useCallback((gl) => {
-    const scene = new Scene()
-    scene.background = null
-    scene.fog = new Fog(new Color('#0F172A'), 8, 18)
-
-    const camera = new PerspectiveCamera(45, gl.drawingBufferWidth / gl.drawingBufferHeight, 0.1, 100)
-    camera.position.set(0, 4.5, 7.5)
-    camera.lookAt(0, 0.8, 0)
-
-    const renderer = new Renderer({ gl })
-    renderer.setSize(gl.drawingBufferWidth, gl.drawingBufferHeight)
-    renderer.setClearColor(0x000000, 0)
-
-    const ambient = new AmbientLight(0xffffff, 0.6)
-    scene.add(ambient)
-
-    const dirLight = new DirectionalLight(0xffe4c4, 1.2)
-    dirLight.position.set(3, 8, 5)
-    scene.add(dirLight)
-
-    const accentLight = new PointLight(0xC8102E, 0.8, 15)
-    accentLight.position.set(-3, 3, 3)
-    scene.add(accentLight)
-
-    const blueLight = new PointLight(0x60A5FA, 0.5, 12)
-    blueLight.position.set(3, 2, -3)
-    scene.add(blueLight)
-
-    const rotGroup = new Group()
-    rotGroup.add(buildBahrainWTC())
-    rotGroup.add(buildAlFatehMosque())
-    rotGroup.add(buildBahrainFort())
-    rotGroup.add(buildPearlMonument())
-    rotGroup.add(buildTreeOfLife())
-    rotGroup.add(buildGroundDisc())
-    scene.add(rotGroup)
-
-    sceneRef.current = scene
-    cameraRef.current = camera
-    rendererRef.current = renderer
-    rotGroupRef.current = rotGroup
-    glRef.current = gl
-
-    const render = () => {
-      rafRef.current = requestAnimationFrame(render)
-      timeRef.current += 0.006
-
-      rotGroup.rotation.y = timeRef.current
-      rotGroup.children.forEach((child, i) => {
-        if (i < 5) {
-          child.position.y = child.position.y + Math.sin(timeRef.current * 2.5 + i * 1.3) * 0.001
-        }
-      })
-
-      camera.position.y = 4.5 + Math.sin(timeRef.current * 1.5) * 0.3
-      camera.lookAt(0, 0.8, 0)
-
-      renderer.render(scene, camera)
-      gl.endFrameEXP()
-    }
-    render()
-  }, [])
-
-  useEffect(() => {
-    return () => {
-      if (rafRef.current) cancelAnimationFrame(rafRef.current)
-    }
-  }, [])
-
-  return (
-    <Animated.View style={[styles.scene3dContainer, { opacity: fadeAnim }]}>
-      <GLView
-        style={styles.scene3dGl}
-        onContextCreate={handleContextCreate}
-        msaaSamples={4}
-      />
-      <LinearGradient
-        colors={['transparent', 'rgba(15,23,42,0.7)', 'rgba(15,23,42,0.95)']}
-        style={styles.scene3dFade}
-        pointerEvents="none"
-      />
-    </Animated.View>
-  )
-}
-
 
 function LoadingStepCard({ step, index, isDone, isActive, isPending }) {
   const barWidth = useRef(new Animated.Value(0)).current
   const barShimmer = useRef(new Animated.Value(0)).current
+  const trackPulse = useRef(new Animated.Value(0)).current
   const checkScale = useRef(new Animated.Value(0)).current
   const checkRotate = useRef(new Animated.Value(0)).current
   const ringScale = useRef(new Animated.Value(0)).current
@@ -1346,26 +1418,95 @@ function LoadingStepCard({ step, index, isDone, isActive, isPending }) {
     Animated.spring(entrance, { toValue: 1, tension: 80, friction: 10, delay: index * 150, useNativeDriver: true }).start()
   }, [entrance, index])
 
+  const stopBarMotion = useCallback(() => {
+    barWidth.stopAnimation()
+    barShimmer.stopAnimation()
+    cardGlow.stopAnimation()
+    trackPulse.stopAnimation()
+  }, [barWidth, barShimmer, cardGlow, trackPulse])
+
   useEffect(() => {
-    if (isActive) {
-      Animated.timing(barWidth, { toValue: 0.85, duration: 8000, easing: Easing.bezier(0.25, 0.1, 0.25, 1), useNativeDriver: false }).start()
-      Animated.loop(Animated.sequence([
-        Animated.timing(barShimmer, { toValue: 1, duration: 1400, easing: Easing.linear, useNativeDriver: true }),
-        Animated.timing(barShimmer, { toValue: 0, duration: 0, useNativeDriver: true }),
-      ])).start()
-      Animated.loop(Animated.sequence([
-        Animated.timing(cardGlow, { toValue: 1, duration: 1000, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
-        Animated.timing(cardGlow, { toValue: 0.3, duration: 1000, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
-      ])).start()
+    if (isDone) {
+      stopBarMotion()
+      return undefined
     }
-  }, [isActive, barWidth, barShimmer, cardGlow])
+    if (!isActive) {
+      stopBarMotion()
+      barShimmer.setValue(0)
+      cardGlow.setValue(0)
+      trackPulse.setValue(0)
+      Animated.timing(barWidth, {
+        toValue: 0,
+        duration: 320,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: false,
+      }).start()
+      return undefined
+    }
+
+    barWidth.setValue(0.12)
+    const sweep = Animated.loop(
+      Animated.sequence([
+        Animated.timing(barWidth, {
+          toValue: 0.8,
+          duration: 2400,
+          easing: Easing.inOut(Easing.cubic),
+          useNativeDriver: false,
+        }),
+        Animated.timing(barWidth, {
+          toValue: 0.16,
+          duration: 2600,
+          easing: Easing.inOut(Easing.cubic),
+          useNativeDriver: false,
+        }),
+      ])
+    )
+    sweep.start()
+
+    const shimmer = Animated.loop(
+      Animated.sequence([
+        Animated.timing(barShimmer, { toValue: 1, duration: 2200, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
+        Animated.timing(barShimmer, { toValue: 0, duration: 0, useNativeDriver: true }),
+      ])
+    )
+    shimmer.start()
+
+    const glow = Animated.loop(
+      Animated.sequence([
+        Animated.timing(cardGlow, { toValue: 1, duration: 1500, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
+        Animated.timing(cardGlow, { toValue: 0.32, duration: 1500, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
+      ])
+    )
+    glow.start()
+
+    const track = Animated.loop(
+      Animated.sequence([
+        Animated.timing(trackPulse, { toValue: 1, duration: 900, easing: Easing.inOut(Easing.sin), useNativeDriver: true }),
+        Animated.timing(trackPulse, { toValue: 0, duration: 900, easing: Easing.inOut(Easing.sin), useNativeDriver: true }),
+      ])
+    )
+    track.start()
+
+    return () => {
+      sweep.stop()
+      shimmer.stop()
+      glow.stop()
+      track.stop()
+      stopBarMotion()
+    }
+  }, [isActive, isDone, barWidth, barShimmer, cardGlow, trackPulse, stopBarMotion])
 
   useEffect(() => {
     if (isDone && !prevDone.current) {
       prevDone.current = true
-      barShimmer.stopAnimation()
-      cardGlow.stopAnimation()
-      Animated.timing(barWidth, { toValue: 1, duration: 400, easing: Easing.out(Easing.cubic), useNativeDriver: false }).start()
+      stopBarMotion()
+      trackPulse.setValue(0)
+      Animated.spring(barWidth, {
+        toValue: 1,
+        tension: 120,
+        friction: 14,
+        useNativeDriver: false,
+      }).start()
       Animated.sequence([
         Animated.parallel([
           Animated.spring(checkScale, { toValue: 1.2, tension: 300, friction: 6, useNativeDriver: true }),
@@ -1385,9 +1526,10 @@ function LoadingStepCard({ step, index, isDone, isActive, isPending }) {
         Animated.timing(doneFlash, { toValue: 0, duration: 400, useNativeDriver: true }),
       ]).start()
     }
-  }, [isDone, barWidth, checkScale, checkRotate, ringScale, ringOpacity, doneFlash])
+  }, [isDone, barWidth, checkScale, checkRotate, ringScale, ringOpacity, doneFlash, stopBarMotion, trackPulse])
 
-  const shimmerX = barShimmer.interpolate({ inputRange: [0, 1], outputRange: [-80, SCREEN_WIDTH] })
+  const shimmerX = barShimmer.interpolate({ inputRange: [0, 1], outputRange: [-100, SCREEN_WIDTH + 40] })
+  const trackBgOpacity = trackPulse.interpolate({ inputRange: [0, 1], outputRange: [0.2, 0.38] })
   const glowOp = cardGlow.interpolate({ inputRange: [0, 1], outputRange: [0.3, 0.8] })
   const entryY = entrance.interpolate({ inputRange: [0, 1], outputRange: [30, 0] })
   const entryOp = entrance.interpolate({ inputRange: [0, 0.5, 1], outputRange: [0, 0.7, 1] })
@@ -1437,6 +1579,15 @@ function LoadingStepCard({ step, index, isDone, isActive, isPending }) {
         )}
       </View>
       <View style={styles.lsBarTrack}>
+        {isActive && !isDone ? (
+          <Animated.View
+            pointerEvents="none"
+            style={[
+              StyleSheet.absoluteFill,
+              { borderRadius: 5, backgroundColor: 'rgba(255,255,255,0.12)', opacity: trackBgOpacity },
+            ]}
+          />
+        ) : null}
         <Animated.View style={[styles.lsBarFillWrap, { width: barWidth.interpolate({ inputRange: [0, 1], outputRange: ['0%', '100%'] }) }]}>
           <LinearGradient
             colors={isDone ? [colors.done, '#34D399'] : colors.bar}
@@ -1445,7 +1596,7 @@ function LoadingStepCard({ step, index, isDone, isActive, isPending }) {
             style={styles.lsBarFill}
           />
         </Animated.View>
-        {isActive && (
+        {isActive && !isDone && (
           <Animated.View style={[styles.lsBarShimmer, { transform: [{ translateX: shimmerX }] }]} pointerEvents="none" />
         )}
       </View>
@@ -1455,35 +1606,46 @@ function LoadingStepCard({ step, index, isDone, isActive, isPending }) {
 
 function PlanModalLoadingView({ loadingStatus, showSuccess, spotPreviews }) {
   const fadeIn = useRef(new Animated.Value(0)).current
+  const contentOpacity = useRef(new Animated.Value(1)).current
+  const titleOpacity = useRef(new Animated.Value(1)).current
+  const titleScale = useRef(new Animated.Value(1)).current
+  const readyTitleOpacity = useRef(new Animated.Value(0)).current
+  const readyTitleScale = useRef(new Animated.Value(0.8)).current
   const successScale = useRef(new Animated.Value(0)).current
   const successOpacity = useRef(new Animated.Value(0)).current
   const successConfetti = useRef([...Array(14)].map(() => new Animated.Value(0))).current
   const stepsOpacity = useRef(new Animated.Value(1)).current
   const stepsScale = useRef(new Animated.Value(1)).current
   const celebrationReady = useRef(false)
+  const morphComplete = useRef(false)
   const [showCelebration, setShowCelebration] = useState(false)
+  const [factIdx] = useState(() => Math.floor(Math.random() * BAHRAIN_FACTS.length))
+  const fact = BAHRAIN_FACTS[factIdx]
 
   const steps = [
-    { icon: 'compass-outline', text: 'Discovering places', key: 'places' },
-    { icon: 'restaurant-outline', text: 'Finding food spots', key: 'food' },
-    { icon: 'sparkles-outline', text: 'Crafting your plan', key: 'plan' },
+    { icon: 'compass-outline', text: 'Places', key: 'places' },
+    { icon: 'restaurant-outline', text: 'Dining', key: 'food' },
+    { icon: 'sparkles-outline', text: 'Plan', key: 'plan' },
   ]
-
-  const rawCompleted = (() => {
-    if (showSuccess) return [0, 1, 2]
-    const s = (loadingStatus || '').toLowerCase()
-    if (s.includes('crafting') || s.includes('building') || s.includes('stitch')) return [0, 1]
-    if (s.includes('restaurant') || s.includes('food') || s.includes('breakfast') || s.includes('event')) return [0]
-    return []
-  })()
 
   const stepDoneAt = useRef([0, 0, 0])
   const [completedSteps, setCompletedSteps] = useState([])
-  const MIN_STEP_MS = 1800
+  const MIN_STEP_MS = 2400
+
+  const rawCompleted = useMemo(() => {
+    if (showSuccess) return [0, 1, 2]
+    const s = (loadingStatus || '').toLowerCase()
+    if (s.includes('crafting') || s.includes('building') || s.includes('stitch')) return [0, 1]
+    if (s.includes('shortlisting') || s.includes('restaurant') || s.includes('food') || s.includes('breakfast') || s.includes('event') || s.includes('café')) return [0]
+    if (s.includes('scouting') || s.includes('venues') || s.includes('live posts')) return [0]
+    return []
+  }, [loadingStatus, showSuccess])
+
+  const allStepsDone = showSuccess && completedSteps.length >= 3
 
   useEffect(() => {
     const now = Date.now()
-    const pending = rawCompleted.filter((idx) => !completedSteps.includes(idx))
+    const pending = (rawCompleted || []).filter((idx) => !completedSteps.includes(idx))
     if (pending.length === 0) return
 
     pending.forEach((idx) => {
@@ -1503,36 +1665,104 @@ function PlanModalLoadingView({ loadingStatus, showSuccess, spotPreviews }) {
       setCompletedSteps((prev) => prev.includes(nextIdx) ? prev : [...prev, nextIdx].sort((a, b) => a - b))
     }, wait)
     return () => clearTimeout(timer)
-  }, [rawCompleted.join(','), completedSteps.join(',')])
+  }, [(rawCompleted || []).join(','), completedSteps.join(','), showSuccess])
 
-  const [factIdx] = useState(() => Math.floor(Math.random() * BAHRAIN_FACTS.length))
-  const [phraseIdx] = useState(() => Math.floor(Math.random() * LOADING_PHRASES.length))
-  const fact = BAHRAIN_FACTS[factIdx]
-  const funPhrase = LOADING_PHRASES[phraseIdx]
+  useEffect(() => {
+    if (!showSuccess || completedSteps.length < 3) return
+    const finalTimer = setTimeout(() => {
+      setCompletedSteps([0, 1, 2])
+    }, 800)
+    return () => clearTimeout(finalTimer)
+  }, [showSuccess, completedSteps.length])
 
   useEffect(() => {
     Animated.timing(fadeIn, { toValue: 1, duration: 500, easing: Easing.out(Easing.cubic), useNativeDriver: true }).start()
   }, [])
 
   useEffect(() => {
-    if (!showSuccess || celebrationReady.current) return
-    if (completedSteps.length < 3) return
+    if (!allStepsDone || celebrationReady.current) return
     celebrationReady.current = true
 
-    Animated.parallel([
-      Animated.timing(stepsOpacity, { toValue: 0, duration: 300, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
-      Animated.timing(stepsScale, { toValue: 0.94, duration: 300, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
+    Animated.sequence([
+      Animated.delay(600),
+      Animated.parallel([
+        Animated.timing(contentOpacity, {
+          toValue: 0,
+          duration: 600,
+          easing: Easing.out(Easing.cubic),
+          useNativeDriver: true,
+        }),
+        Animated.timing(stepsOpacity, {
+          toValue: 0,
+          duration: 600,
+          easing: Easing.out(Easing.cubic),
+          useNativeDriver: true,
+        }),
+        Animated.timing(titleOpacity, {
+          toValue: 0,
+          duration: 500,
+          easing: Easing.in(Easing.ease),
+          useNativeDriver: true,
+        }),
+        Animated.timing(titleScale, {
+          toValue: 0.88,
+          duration: 500,
+          easing: Easing.in(Easing.ease),
+          useNativeDriver: true,
+        }),
+      ]),
+      Animated.delay(400),
+      Animated.parallel([
+        Animated.spring(readyTitleScale, {
+          toValue: 1,
+          tension: 60,
+          friction: 12,
+          useNativeDriver: true,
+        }),
+        Animated.timing(readyTitleOpacity, {
+          toValue: 1,
+          duration: 700,
+          easing: Easing.out(Easing.cubic),
+          useNativeDriver: true,
+        }),
+      ]),
+      Animated.delay(1400),
+      Animated.parallel([
+        Animated.spring(successScale, {
+          toValue: 1,
+          tension: 90,
+          friction: 8,
+          useNativeDriver: true,
+        }),
+        Animated.timing(successOpacity, {
+          toValue: 1,
+          duration: 400,
+          easing: Easing.out(Easing.ease),
+          useNativeDriver: true,
+        }),
+      ]),
     ]).start(() => {
+      morphComplete.current = true
       setShowCelebration(true)
-      Animated.stagger(30, [
-        Animated.parallel([
-          Animated.spring(successScale, { toValue: 1, tension: 100, friction: 7, useNativeDriver: true }),
-          Animated.timing(successOpacity, { toValue: 1, duration: 250, useNativeDriver: true }),
-        ]),
-        ...successConfetti.map((a) => Animated.spring(a, { toValue: 1, tension: 160, friction: 5, useNativeDriver: true })),
-      ]).start()
+      Animated.stagger(
+        40,
+        successConfetti.map((a) =>
+          Animated.spring(a, { toValue: 1, tension: 140, friction: 6, useNativeDriver: true })
+        )
+      ).start()
     })
-  }, [showSuccess, completedSteps.length, stepsOpacity, stepsScale, successScale, successOpacity, successConfetti])
+  }, [
+    allStepsDone,
+    contentOpacity,
+    stepsOpacity,
+    titleOpacity,
+    titleScale,
+    readyTitleScale,
+    readyTitleOpacity,
+    successScale,
+    successOpacity,
+    successConfetti,
+  ])
 
   const confettiColors = ['#FF6B6B', '#FACC15', '#4ADE80', '#60A5FA', '#F472B6', '#A78BFA', '#FB923C', '#34D399', '#FF6B6B', '#FACC15', '#4ADE80', '#60A5FA', '#FACC15', '#4ADE80']
   const confettiPositions = useMemo(() => Array.from({ length: 14 }, (_, i) => {
@@ -1541,88 +1771,159 @@ function PlanModalLoadingView({ loadingStatus, showSuccess, spotPreviews }) {
   }), [])
 
   const isFinished = showSuccess || showCelebration
-  const displayTitle = isFinished ? 'Your route is ready' : funPhrase
-  const displaySub = isFinished
-    ? 'Swipe up the card below for stops, maps & share'
-    : (loadingStatus || 'Building your perfect day…')
-  const displayBadge = isFinished ? 'READY' : 'BUILDING YOUR DAY'
+  const showLoadingContent = !allStepsDone
 
   return (
     <Animated.View style={[styles.ldWrap, { opacity: fadeIn }]}>
-      {!showCelebration && <BahrainScene3D isVisible />}
-
-      <ScrollView contentContainerStyle={styles.ldScrollContent} showsVerticalScrollIndicator={false} bounces={false}>
-        {/* Title */}
-        <View style={styles.ldTitleSection}>
-          <View style={styles.ldBadge}>
-            <View style={[styles.ldBadgeDot, isFinished && { backgroundColor: '#4ADE80' }]} />
-            <Text style={styles.ldBadgeText}>{displayBadge}</Text>
+      <View style={styles.ldBodyNoScroll}>
+        <View style={[styles.ldTopLoadingBlock, { zIndex: 100, elevation: 100 }]}>
+          <View style={styles.ldPlanLoadTitleBlock}>
+            {showLoadingContent ? (
+              <Animated.View style={{ opacity: titleOpacity, transform: [{ scale: titleScale }] }}>
+                <Text style={styles.ldTitle} accessibilityRole="header">
+                  Your route
+                </Text>
+                <Text style={styles.ldLoadingSub} numberOfLines={3}>
+                  Khalid is scouting the perfect places for you
+                </Text>
+              </Animated.View>
+            ) : (
+              <Animated.View
+                style={{
+                  opacity: readyTitleOpacity,
+                  transform: [{ scale: readyTitleScale }],
+                  alignItems: 'center',
+                }}
+              >
+                <Text style={[styles.ldTitle, { marginBottom: 8 }]} accessibilityRole="header">
+                  Your route is ready
+                </Text>
+              </Animated.View>
+            )}
           </View>
-          <Text style={styles.ldTitle}>{displayTitle}</Text>
-          <Text style={styles.ldSub}>{displaySub}</Text>
-        </View>
 
-        {/* Success celebration — appears after steps morph out */}
-        {showCelebration && (
-          <>
-            <View style={styles.ldSuccessCenter}>
-              {confettiPositions.map((pos, i) => (
-                <Animated.View key={i} style={{
-                  position: 'absolute', width: i % 3 === 0 ? 10 : 6, height: i % 2 === 0 ? 10 : 4, borderRadius: i % 2 === 0 ? 5 : 2,
-                  backgroundColor: confettiColors[i],
-                  transform: [
-                    { translateX: successConfetti[i].interpolate({ inputRange: [0, 1], outputRange: [0, pos.x] }) },
-                    { translateY: successConfetti[i].interpolate({ inputRange: [0, 1], outputRange: [0, pos.y] }) },
-                    { rotate: successConfetti[i].interpolate({ inputRange: [0, 1], outputRange: ['0deg', `${i * 26}deg`] }) },
-                  ],
-                  opacity: successConfetti[i].interpolate({ inputRange: [0, 0.4, 1], outputRange: [0, 1, 0.3] }),
-                }} />
-              ))}
-              <Animated.View style={{ transform: [{ scale: successScale }], opacity: successOpacity }}>
-                <View style={styles.successIconCircle}>
-                  <Ionicons name="checkmark" size={44} color="#FFFFFF" />
+          {showLoadingContent ? (
+            <>
+              <Animated.View
+                style={{
+                  opacity: contentOpacity,
+                  zIndex: 50,
+                  elevation: 50,
+                  width: '100%',
+                  alignItems: 'center',
+                }}
+              >
+                <KhalidScoutPlanVisual spotPreviews={spotPreviews} variant="modal" />
+              </Animated.View>
+
+              <Animated.View
+                style={{ opacity: contentOpacity, width: '100%', zIndex: 80, elevation: 80 }}
+              >
+                <View style={styles.ldFactCard}>
+                  <View style={styles.ldFactIcon}>
+                    <Ionicons name="bulb" size={16} color="#FACC15" />
+                  </View>
+                  <View style={styles.ldFactContent}>
+                    <Text style={styles.ldFactLabel}>Did you know?</Text>
+                    <Text style={styles.ldFactText} numberOfLines={4}>
+                      {fact}
+                    </Text>
+                  </View>
                 </View>
               </Animated.View>
-            </View>
-            <Animated.View style={{ opacity: successOpacity, width: '100%', paddingHorizontal: 8 }}>
-              <View style={styles.ldSheetHintCard}>
-                <Ionicons name="chevron-up" size={26} color={themeColors.primary} />
-                <Text style={styles.ldSheetHintTitle}>Full itinerary is in the sheet</Text>
-                <Text style={styles.ldSheetHintSub}>
-                  Drag the handle up — you will see Today in Bahrain, your stops, and Maps
-                </Text>
+            </>
+          ) : null}
+        </View>
+
+        {showCelebration && morphComplete.current && (
+          <View style={[styles.ldSuccessCenter, { zIndex: 110, elevation: 110 }]}>
+            {confettiPositions.map((pos, i) => (
+              <Animated.View
+                key={i}
+                style={{
+                  position: 'absolute',
+                  width: i % 3 === 0 ? 10 : 6,
+                  height: i % 2 === 0 ? 10 : 4,
+                  borderRadius: i % 2 === 0 ? 5 : 2,
+                  backgroundColor: confettiColors[i],
+                  transform: [
+                    {
+                      translateX: successConfetti[i].interpolate({
+                        inputRange: [0, 1],
+                        outputRange: [0, pos.x],
+                      }),
+                    },
+                    {
+                      translateY: successConfetti[i].interpolate({
+                        inputRange: [0, 1],
+                        outputRange: [0, pos.y],
+                      }),
+                    },
+                    {
+                      rotate: successConfetti[i].interpolate({
+                        inputRange: [0, 1],
+                        outputRange: ['0deg', `${i * 26}deg`],
+                      }),
+                    },
+                  ],
+                  opacity: successConfetti[i].interpolate({
+                    inputRange: [0, 0.4, 1],
+                    outputRange: [0, 1, 0.3],
+                  }),
+                }}
+              />
+            ))}
+            <Animated.View style={{ transform: [{ scale: successScale }], opacity: successOpacity }}>
+              <View style={styles.successIconCircle}>
+                <Ionicons name="checkmark" size={44} color="#FFFFFF" />
               </View>
             </Animated.View>
-          </>
+          </View>
         )}
 
-        {/* Step cards — morph out when done */}
-        {!showCelebration && (
-          <Animated.View style={[styles.lsSteps, { opacity: stepsOpacity, transform: [{ scale: stepsScale }] }]}>
+        {showCelebration && morphComplete.current && (
+          <Animated.View
+            style={{
+              opacity: successOpacity,
+              width: '100%',
+              paddingHorizontal: 8,
+              zIndex: 105,
+              elevation: 105,
+            }}
+          >
+            <View style={styles.ldSheetHintCard}>
+              <Ionicons name="chevron-up" size={26} color={themeColors.primary} />
+              <Text style={styles.ldSheetHintTitle}>Swipe up the sheet</Text>
+            </View>
+          </Animated.View>
+        )}
+
+        {showLoadingContent && (
+          <Animated.View
+            style={[
+              styles.lsSteps,
+              styles.ldStepsFooter,
+              { opacity: stepsOpacity, transform: [{ scale: stepsScale }], zIndex: 90, elevation: 90 },
+            ]}
+          >
             {steps.map((s, i) => {
-              const isDone = completedSteps.includes(i)
+              const isDone = allStepsDone ? true : completedSteps.includes(i)
               const isActive = !isDone && completedSteps.length === i
               const isPending = !isDone && !isActive
-              return <LoadingStepCard key={s.key} step={s} index={i} isDone={isDone} isActive={isActive} isPending={isPending} />
+              return (
+                <LoadingStepCard
+                  key={s.key}
+                  step={s}
+                  index={i}
+                  isDone={isDone}
+                  isActive={isActive}
+                  isPending={isPending}
+                />
+              )
             })}
           </Animated.View>
         )}
-
-        {/* Fun fact */}
-        {!showCelebration && (
-          <Animated.View style={{ opacity: stepsOpacity }}>
-            <View style={styles.ldFactCard}>
-              <View style={styles.ldFactIcon}>
-                <Ionicons name="bulb" size={16} color="#FACC15" />
-              </View>
-              <View style={styles.ldFactContent}>
-                <Text style={styles.ldFactLabel}>Did you know?</Text>
-                <Text style={styles.ldFactText}>{fact}</Text>
-              </View>
-            </View>
-          </Animated.View>
-        )}
-      </ScrollView>
+      </View>
     </Animated.View>
   )
 }
@@ -1652,8 +1953,10 @@ function AnimatedPlaceMarker({ mk, accent, isCurrent, onPress, showBadge = true,
     ]).start();
   }, []);
 
+  const pulseActive = isCurrent
+
   useEffect(() => {
-    if (!isCurrent) {
+    if (!pulseActive) {
       breatheScale.setValue(1);
       pulseRing.setValue(0);
       return;
@@ -1673,7 +1976,7 @@ function AnimatedPlaceMarker({ mk, accent, isCurrent, onPress, showBadge = true,
     breathe.start();
     ring.start();
     return () => { breathe.stop(); ring.stop(); };
-  }, [isCurrent, breatheScale, pulseRing]);
+  }, [pulseActive, breatheScale, pulseRing]);
 
   const ringScale = pulseRing.interpolate({ inputRange: [0, 1], outputRange: [1, 1.6] });
   const ringOpacity = pulseRing.interpolate({ inputRange: [0, 0.6, 1], outputRange: [0.6, 0.2, 0] });
@@ -1681,11 +1984,13 @@ function AnimatedPlaceMarker({ mk, accent, isCurrent, onPress, showBadge = true,
   const showLabel = zoomScale >= 0.55;
 
   const pinIcon = mk.type === 'restaurant' ? 'restaurant' : mk.type === 'event' ? 'calendar' : 'location';
-  const imageUrl = mk.image ? ensureImageUrl(mk.image) || mk.image : null;
+  const imageUrl = resolvePublicImageUrl(mk.image);
+
+  const showRadius = showCircle
 
   return (
     <React.Fragment>
-      {showCircle && (
+      {showRadius && (
         <Circle
           center={{ latitude: mk.lat, longitude: mk.lng }}
           radius={220}
@@ -1696,7 +2001,7 @@ function AnimatedPlaceMarker({ mk, accent, isCurrent, onPress, showBadge = true,
       )}
       <Marker coordinate={{ latitude: mk.lat, longitude: mk.lng }} onPress={onPress} anchor={{ x: 0.5, y: 0.5 }}>
         <Animated.View style={[styles.animatedMarkerWrap, { opacity: opacityAnim, transform: [{ scale: Animated.multiply(combinedScale, zoomScale) }] }]}>
-          {isCurrent && (
+          {pulseActive && (
             <Animated.View
               style={[
                 styles.animatedMarkerPulseRing,
@@ -1738,87 +2043,197 @@ function AnimatedPlaceMarker({ mk, accent, isCurrent, onPress, showBadge = true,
   );
 }
 
-// Radial options menu surrounding a marker (Google Maps–style)
-const RADIAL_ORBIT = 72;
-const RADIAL_BTN = 44;
-const RADIAL_OPTIONS = [
-  { key: 'profile', icon: 'person-circle-outline', label: 'Profile' },
-  { key: 'directions', icon: 'navigate-outline', label: 'Directions' },
-  { key: 'ar', icon: 'camera-outline', label: 'AR' },
+const MAP_MARKER_QUICK_OPTIONS = [
+  { key: 'profile', icon: 'person', label: 'Profile' },
+  { key: 'directions', icon: 'navigate', label: 'Directions' },
+  { key: 'ar', icon: 'camera', label: 'AR' },
 ];
 
-function RadialMarkerMenu({ visible, position, marker, onAction, onClose }) {
-  const scaleAnim = useRef(new Animated.Value(0)).current;
-  const opacityAnim = useRef(new Animated.Value(0)).current;
+const filterMarkerQuickOptions = (marker) =>
+  MAP_MARKER_QUICK_OPTIONS.filter((opt) => {
+    if (opt.key === 'profile') return !!marker?.clientId;
+    if (opt.key === 'directions' || opt.key === 'ar') return marker?.lat != null && marker?.lng != null;
+    return true;
+  });
+
+const MARKER_BOTTOM_SHEET_SLIDE = Math.round(SCREEN_HEIGHT * 0.5);
+
+const markerKindLabel = (type) => {
+  if (type === 'restaurant') return 'Restaurant';
+  if (type === 'event') return 'Event';
+  return 'Place';
+};
+
+const markerHeroIconName = (type) => {
+  if (type === 'restaurant') return 'restaurant';
+  if (type === 'event') return 'calendar';
+  return 'location';
+};
+
+/** Place details + actions; slides up from bottom over the map. */
+function MarkerDetailsBottomSheet({ visible, marker, insets, accentColor, onAction, onClose }) {
+  const translateY = useRef(new Animated.Value(MARKER_BOTTOM_SHEET_SLIDE)).current;
+  const backdropOp = useRef(new Animated.Value(0)).current;
+
+  const runClose = useCallback(() => {
+    Animated.parallel([
+      Animated.timing(translateY, {
+        toValue: MARKER_BOTTOM_SHEET_SLIDE,
+        duration: 280,
+        easing: Easing.in(Easing.cubic),
+        useNativeDriver: true,
+      }),
+      Animated.timing(backdropOp, {
+        toValue: 0,
+        duration: 260,
+        easing: Easing.out(Easing.quad),
+        useNativeDriver: true,
+      }),
+    ]).start(({ finished }) => {
+      if (finished) onClose();
+    });
+  }, [translateY, backdropOp, onClose]);
 
   useEffect(() => {
-    if (!visible) {
-      scaleAnim.setValue(0);
-      opacityAnim.setValue(0);
-      return;
-    }
+    if (!visible || !marker) return undefined;
+    translateY.setValue(MARKER_BOTTOM_SHEET_SLIDE);
+    backdropOp.setValue(0);
     Animated.parallel([
-      Animated.spring(scaleAnim, { toValue: 1, tension: 200, friction: 14, useNativeDriver: true }),
-      Animated.timing(opacityAnim, { toValue: 1, duration: 200, useNativeDriver: true }),
+      Animated.spring(translateY, {
+        toValue: 0,
+        useNativeDriver: true,
+        tension: 68,
+        friction: 14,
+      }),
+      Animated.timing(backdropOp, {
+        toValue: 1,
+        duration: 280,
+        easing: Easing.out(Easing.quad),
+        useNativeDriver: true,
+      }),
     ]).start();
-  }, [visible, scaleAnim, opacityAnim]);
+    return undefined;
+  }, [visible, marker?.lat, marker?.lng, marker?.clientId, translateY, backdropOp]);
 
-  if (!visible || !position) return null;
+  const backdropOpacity = backdropOp.interpolate({ inputRange: [0, 1], outputRange: [0, 0.42] });
 
-  const { x, y } = position;
-  const containerSize = (RADIAL_ORBIT + RADIAL_BTN) * 2;
-  const left = x - (RADIAL_ORBIT + RADIAL_BTN);
-  const top = y - (RADIAL_ORBIT + RADIAL_BTN);
+  if (!visible || !marker) return null;
 
   const handleAction = (key) => {
     onAction(key);
     onClose();
   };
 
+  const actions = filterMarkerQuickOptions(marker);
+  const bottomPad = 20 + getPlanSheetBottomPadding(insets)
+
+  const heroUri = resolvePublicImageUrl(marker.image);
+  const heroIcon = markerHeroIconName(marker.type);
+  const gradEnd = `${accentColor}E6`;
+  const gradMid = `${accentColor}99`;
+
   return (
-    <TouchableWithoutFeedback onPress={onClose}>
-      <View style={[StyleSheet.absoluteFill, { zIndex: 1000 }]}>
-        <Animated.View
-          pointerEvents="box-none"
-          style={[
-            styles.radialMenuContainer,
-            {
-              left,
-              top,
-              width: containerSize,
-              height: containerSize,
-              opacity: opacityAnim,
-              transform: [{ scale: scaleAnim }],
-            },
-          ]}
-        >
-          {RADIAL_OPTIONS.filter((opt) => {
-            if (opt.key === 'profile') return !!marker?.clientId;
-            if (opt.key === 'directions' || opt.key === 'ar') return marker?.lat != null && marker?.lng != null;
-            return true;
-          }).map((opt, i) => {
-            const count = RADIAL_OPTIONS.filter((o) => {
-              if (o.key === 'profile') return !!marker?.clientId;
-              if (o.key === 'directions' || o.key === 'ar') return marker?.lat != null && marker?.lng != null;
-              return true;
-            }).length;
-            const angle = (i / count) * 2 * Math.PI - Math.PI / 2;
-            const bx = RADIAL_ORBIT + RADIAL_BTN + RADIAL_ORBIT * Math.cos(angle) - RADIAL_BTN / 2;
-            const by = RADIAL_ORBIT + RADIAL_BTN + RADIAL_ORBIT * Math.sin(angle) - RADIAL_BTN / 2;
-            return (
-              <TouchableOpacity
+    <View style={styles.markerBottomSheetRoot} pointerEvents="box-none">
+      <Animated.View style={[styles.markerBottomSheetBackdrop, { opacity: backdropOpacity }]} pointerEvents="box-none">
+        <Pressable style={StyleSheet.absoluteFill} onPress={runClose} accessibilityLabel="Dismiss" accessibilityRole="button" />
+      </Animated.View>
+      <Animated.View
+        style={[
+          styles.markerBottomSheetPanel,
+          {
+            paddingBottom: bottomPad,
+            transform: [{ translateY }],
+          },
+        ]}
+      >
+        <View style={styles.markerBottomSheetGrab} accessible={false} />
+        <View style={styles.markerBottomSheetHeroWrap}>
+          {heroUri ? (
+            <Image source={{ uri: heroUri }} style={styles.markerBottomSheetHeroImg} resizeMode="cover" />
+          ) : (
+            <LinearGradient
+              colors={[gradEnd, gradMid, `${accentColor}33`]}
+              start={{ x: 0.1, y: 0 }}
+              end={{ x: 0.9, y: 1 }}
+              style={styles.markerBottomSheetHeroPlaceholder}
+            >
+              <View style={styles.markerBottomSheetHeroPlaceholderIcon}>
+                <Ionicons name={heroIcon} size={52} color="rgba(255,255,255,0.42)" />
+              </View>
+            </LinearGradient>
+          )}
+          <LinearGradient
+            colors={['transparent', 'rgba(15,23,42,0.5)', 'rgba(15,23,42,0.88)']}
+            locations={[0, 0.45, 1]}
+            style={styles.markerBottomSheetHeroScrim}
+            pointerEvents="none"
+          />
+          <Pressable
+            onPress={runClose}
+            style={({ pressed }) => [styles.markerBottomSheetHeroClose, pressed && { opacity: 0.88 }]}
+            hitSlop={8}
+            accessibilityLabel="Close"
+            accessibilityRole="button"
+          >
+            <View style={styles.markerBottomSheetHeroCloseInner}>
+              <Ionicons name="close" size={22} color="#FFFFFF" />
+            </View>
+          </Pressable>
+          <View style={styles.markerBottomSheetHeroFoot} pointerEvents="none">
+            <View style={styles.markerBottomSheetHeroTypePill}>
+              <Ionicons name={heroIcon} size={13} color="#FFFFFF" style={styles.markerBottomSheetHeroTypeIcon} />
+              <Text style={styles.markerBottomSheetHeroTypeText}>{markerKindLabel(marker.type)}</Text>
+            </View>
+            <Text style={styles.markerBottomSheetHeroTitle} numberOfLines={2}>
+              {marker.spot || 'Place'}
+            </Text>
+            {marker.time ? (
+              <View style={styles.markerBottomSheetHeroTimeRow}>
+                <Ionicons name="time-outline" size={15} color="rgba(255,255,255,0.9)" />
+                <Text style={styles.markerBottomSheetHeroTimeText}>{marker.time}</Text>
+              </View>
+            ) : null}
+          </View>
+        </View>
+
+        {marker.reason ? (
+          <View style={styles.markerBottomSheetReasonCard}>
+            <View style={styles.markerBottomSheetReasonHeader}>
+              <Ionicons name="sparkles" size={18} color={accentColor} />
+              <Text style={styles.markerBottomSheetReasonTitle}>Why visit</Text>
+            </View>
+            <ScrollView style={styles.markerBottomSheetReasonScroll} showsVerticalScrollIndicator={false} nestedScrollEnabled>
+              <Text style={styles.markerBottomSheetReason}>{marker.reason}</Text>
+            </ScrollView>
+          </View>
+        ) : null}
+
+        <View style={styles.markerBottomSheetActions}>
+          <Text style={styles.markerBottomSheetActionsHeading}>Quick actions</Text>
+          <View style={styles.markerBottomSheetActionGrid}>
+            {actions.map((opt) => (
+              <Pressable
                 key={opt.key}
-                style={[styles.radialMenuBtn, { left: bx, top: by }]}
+                style={({ pressed }) => [styles.markerBottomSheetActionCell, pressed && { opacity: 0.92, transform: [{ scale: 0.97 }] }]}
                 onPress={() => handleAction(opt.key)}
-                activeOpacity={0.8}
+                accessibilityRole="button"
+                accessibilityLabel={opt.label}
               >
-                <Ionicons name={opt.icon} size={22} color="#FFF" />
-              </TouchableOpacity>
-            );
-          })}
-        </Animated.View>
-      </View>
-    </TouchableWithoutFeedback>
+                <LinearGradient
+                  colors={[accentColor, themeColors.primary]}
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 1, y: 1 }}
+                  style={styles.markerBottomSheetActionGradient}
+                >
+                  <Ionicons name={opt.icon} size={26} color="#FFFFFF" />
+                  <Text style={styles.markerBottomSheetActionGradientLabel}>{opt.label}</Text>
+                </LinearGradient>
+              </Pressable>
+            ))}
+          </View>
+        </View>
+      </Animated.View>
+    </View>
   );
 }
 
@@ -2000,14 +2415,13 @@ function MapScanningOverlay({ visible }) {
   );
 }
 
-function buildMapMarkers(plan) {
+function buildMapMarkers(plan, loadedClientMarkers = []) {
   if (!plan) return [];
   return plan.map((item, idx) => {
-    const fixed = parsePlanItemCoords(item);
+    const fixed = parsePlanItemCoords(item) || resolveCoordsFromLoadedCache(item, loadedClientMarkers);
     if (!fixed) return null;
     const { lat, lng } = fixed;
-    const rawImg = item.image || (item.client_image ? parseStorageImageUrl(item.client_image) : null);
-    const image = rawImg ? (ensureImageUrl(rawImg) || rawImg) : null;
+    const image = resolvePublicImageUrl(item.image || item.client_image);
     return {
       idx,
       spot: item.spot,
@@ -2027,7 +2441,24 @@ export default function AIPlanScreen() {
   const insets = useSafeAreaInsets();
   const route = useRoute();
   const navigation = useNavigation();
-  const { preferences } = useUserPreferences();
+  const activeTabRouteName = useNavigationState((state) => {
+    if (!state?.routes?.length || state.index == null) return 'AI Plan'
+    return state.routes[state.index]?.name ?? 'AI Plan'
+  })
+  const { preferences, generalLabels, activityLabels, foodLabels: savedProfileFoodLabels } = useUserPreferences();
+
+  const handlePlanMiniNavPress = useCallback(
+    (screen) => {
+      if (activeTabRouteName === screen) {
+        if (screen === 'Home') {
+          navigation.navigate('Home', { scrollToTop: true, timestamp: Date.now() })
+        }
+        return
+      }
+      navigation.navigate(screen)
+    },
+    [navigation, activeTabRouteName],
+  )
   const mapRef = useRef(null);
   const sheetAnim = useRef(new Animated.Value(SNAP_POINTS[INITIAL_SNAP_INDEX])).current;
   const lastSnap = useRef(SNAP_POINTS[INITIAL_SNAP_INDEX]);
@@ -2038,6 +2469,8 @@ export default function AIPlanScreen() {
     breakfastSpots: null,
     events: null,
   });
+  const lastPrefLabelsRef = useRef([]);
+  const lastFoodLabelsRef = useRef([]);
 
   // 0 = past plans, 1 = preferences, 2 = food, 3 = results
   const [drawerStep, setDrawerStep] = useState(0);
@@ -2064,7 +2497,17 @@ export default function AIPlanScreen() {
   const doorFade = useRef(new Animated.Value(1)).current
   const skipOpenAnim = useRef(false)
   const [planGenerationSuccess, setPlanGenerationSuccess] = useState(false);
-  const [spotPreviews, setSpotPreviews] = useState([]);
+  
+  // Initialize with placeholder images immediately, then load real ones
+  const [spotPreviews, setSpotPreviews] = useState(() => {
+    // Create immediate placeholder data from common Bahrain imagery
+    const placeholders = [
+      { id: 'ph-1', name: 'Bahrain', type: 'place', image: 'https://zonhaprelkjyjugpqfdn.supabase.co/storage/v1/object/public/gobahrain-post-images/default-place-1.jpg' },
+      { id: 'ph-2', name: 'Bahrain', type: 'restaurant', image: 'https://zonhaprelkjyjugpqfdn.supabase.co/storage/v1/object/public/gobahrain-post-images/default-food-1.jpg' },
+      { id: 'ph-3', name: 'Bahrain', type: 'place', image: 'https://zonhaprelkjyjugpqfdn.supabase.co/storage/v1/object/public/gobahrain-post-images/default-place-2.jpg' },
+    ];
+    return placeholders;
+  });
   const [profileClientId, setProfileClientId] = useState(null);
   const [stopDetailPayload, setStopDetailPayload] = useState(null);
   const [openingMaps, setOpeningMaps] = useState(false);
@@ -2072,11 +2515,49 @@ export default function AIPlanScreen() {
   const shareCopyHintTimerRef = useRef(null);
   const [allPlaceMarkers, setAllPlaceMarkers] = useState([]);
   const [mapRegion, setMapRegion] = useState(BAHRAIN_REGION);
-  const [radialMenuPosition, setRadialMenuPosition] = useState(null);
   const [showSearchModal, setShowSearchModal] = useState(false);
   const [searchModalClients, setSearchModalClients] = useState({ restaurants: [], places: [], events: [] });
   const [searchModalLoading, setSearchModalLoading] = useState(false);
   const [searchModalQuery, setSearchModalQuery] = useState('');
+  const [enhancingIndex, setEnhancingIndex] = useState(null);
+  const [visibleStopCount, setVisibleStopCount] = useState(0);
+  const stopRevealTimers = useRef([]);
+
+  const STOP_REVEAL_STAGGER_MS = 120
+
+  const clearStopRevealTimers = useCallback(() => {
+    stopRevealTimers.current.forEach(clearTimeout)
+    stopRevealTimers.current = []
+  }, [])
+
+  /** Run after the plan sheet slides up / fades in — not on dayPlan or reorder. */
+  const scheduleStaggeredStopReveal = useCallback((itemCount) => {
+    clearStopRevealTimers()
+    const n = Math.max(0, Math.floor(Number(itemCount)) || 0)
+    if (n <= 0) {
+      setVisibleStopCount(0)
+      return
+    }
+    setVisibleStopCount(0)
+    for (let idx = 0; idx < n; idx += 1) {
+      const timer = setTimeout(() => {
+        setVisibleStopCount((prev) => Math.max(prev, idx + 1))
+      }, idx * STOP_REVEAL_STAGGER_MS)
+      stopRevealTimers.current.push(timer)
+    }
+  }, [clearStopRevealTimers])
+
+  useEffect(() => {
+    if (!dayPlan?.length) {
+      clearStopRevealTimers()
+      setVisibleStopCount(0)
+    }
+  }, [dayPlan?.length, clearStopRevealTimers])
+
+  useEffect(() => () => {
+    stopRevealTimers.current.forEach(clearTimeout)
+    stopRevealTimers.current = []
+  }, [])
 
   const handleOpenInGoogleMaps = async () => {
     if (!dayPlan || openingMaps) return;
@@ -2095,8 +2576,6 @@ export default function AIPlanScreen() {
   useEffect(() => {
     if (!dayPlan?.length) setStopDetailPayload(null);
   }, [dayPlan]);
-
-  const spinAnim = useRef(new Animated.Value(0)).current;
 
   // Plan modal animations (match Home AI overlay)
   const planModalBackdrop = useRef(new Animated.Value(0)).current;
@@ -2156,8 +2635,7 @@ export default function AIPlanScreen() {
           const lat = parseFloat(c.lat ?? c.latitude ?? '');
           const lng = parseFloat(c.lng ?? c.long ?? c.longitude ?? '');
           if (isNaN(lat) || isNaN(lng) || lat === 0 || lng === 0) return null;
-          const rawImg = c.client_image ? parseStorageImageUrl(c.client_image) : null;
-          const image = rawImg ? (ensureImageUrl(rawImg) || rawImg) : null;
+          const image = resolvePublicImageUrl(c.client_image);
           const spot = (c.business_name || c.name || 'Place').trim();
           const ct = ((c.client_type || '').toLowerCase());
           const type = ct === 'restaurant' ? 'restaurant' : ct === 'event' ? 'event' : 'place';
@@ -2187,7 +2665,13 @@ export default function AIPlanScreen() {
     const key = (prefLabels || []).join('|');
     if (!key) return;
     const cached = prefetchRef.current;
-    if (cached.prefsKey === key && cached.places && cached.breakfastSpots && cached.events) {
+    const hasValidPrefetch =
+      cached.prefsKey === key &&
+      Array.isArray(cached.places) &&
+      cached.places.length > 0 &&
+      Array.isArray(cached.events) &&
+      cached.events.length > 0;
+    if (hasValidPrefetch) {
       return;
     }
     prefetchRef.current = {
@@ -2198,15 +2682,14 @@ export default function AIPlanScreen() {
     };
     (async () => {
       try {
-        const [places, breakfastSpots, events] = await Promise.all([
+        const [places, events] = await Promise.all([
           fetchPlaces(prefLabels),
-          fetchBreakfastSpots(),
           fetchEvents(prefLabels),
         ]);
         prefetchRef.current = {
           prefsKey: key,
           places,
-          breakfastSpots,
+          breakfastSpots: null,
           events,
         };
       } catch {
@@ -2244,10 +2727,24 @@ export default function AIPlanScreen() {
           setSelectedMarker(null);
           setError(null);
           setLoading(true);
-          setLoadingStatus(`Finding places and restaurants for your ${theme.label.toLowerCase()} day…`);
+          setLoadingStatus(`Scouting venues & live posts for your ${theme.label.toLowerCase()} day…`);
           setDrawerStep(3);
+          lastPrefLabelsRef.current = prefLabels;
+          lastFoodLabelsRef.current = foodLabels;
 
-          fetchSpotPreviewsFromSupabase().then((p) => setSpotPreviews(p));
+          getCachedFeedImages()
+            .then((cached) => {
+              const c = Array.isArray(cached) ? cached : [];
+              if (c.length > 0) setSpotPreviews(c);
+              return c;
+            })
+            .then((c) =>
+              fetchSpotPreviewsFromSupabase().then((fresh) => {
+                const f = Array.isArray(fresh) ? fresh : [];
+                if (f.length > c.length) setSpotPreviews(f);
+              }),
+            )
+            .catch(() => {});
 
           (async () => {
             let generatedPlan = null;
@@ -2269,14 +2766,20 @@ export default function AIPlanScreen() {
               const allMatches = [...places, ...restaurants, ...breakfastSpots, ...events];
               setPineconeMatches(allMatches);
 
-              setLoadingStatus(`Khalid is building your ${theme.label} day…`);
-              const plan = await generateDayPlan(places, restaurants, breakfastSpots, events, prefLabels, foodLabels);
+              setLoadingStatus('Shortlisting restaurants & cafés that fit your vibe…');
+              await new Promise((res) => setTimeout(res, 380));
+              setLoadingStatus(`Khalid is crafting your ${theme.label.toLowerCase()} day…`);
+              const plan = await generateDayPlan(places, restaurants, breakfastSpots, events, prefLabels, foodLabels, {
+                profileGeneral: generalLabels,
+                profileActivity: activityLabels,
+                profileFood: savedProfileFoodLabels,
+              });
               generatedPlan = plan;
-              const enriched = await enrichPlanWithClientData(plan, allMatches);
-              setDayPlan(enriched);
+              const enriched = await enrichPlanWithClientData(plan, allMatches, allPlaceMarkers);
+              setDayPlan(attachPlanRowKeys(enriched));
               setError(null);
 
-              const validMarkers = buildMapMarkers(plan).filter(m => m.lat && m.lng);
+              const validMarkers = buildMapMarkers(plan, allPlaceMarkers).filter(m => m.lat && m.lng);
               const coords = validMarkers.map(m => ({ latitude: m.lat, longitude: m.lng }));
               if (coords.length > 0 && mapRef.current) {
                 mapRef.current.fitToCoordinates(coords, {
@@ -2288,7 +2791,8 @@ export default function AIPlanScreen() {
       console.warn('[AI Plan] API error, using mock plan:', err?.message);
       generatedPlan = getMockDayPlan();
       const allM = [...(places || []), ...(restaurants || []), ...(breakfastSpots || []), ...(events || [])];
-      enrichPlanWithClientData(generatedPlan, allM).then((e) => setDayPlan(e));
+      setPineconeMatches(allM);
+      enrichPlanWithClientData(generatedPlan, allM, allPlaceMarkers).then((e) => setDayPlan(attachPlanRowKeys(e)));
       setError(null);
     } finally {
       setLoading(false);
@@ -2400,6 +2904,81 @@ export default function AIPlanScreen() {
     }
   }, [dayPlan]);
 
+  const handleEnhanceStop = useCallback(async (planIndex) => {
+    if (planIndex == null || planIndex < 0) return
+    if (enhancingIndex !== null || loading) return
+    if (!dayPlan?.length) {
+      Alert.alert('Unavailable', 'Build a plan first so we can swap this stop.')
+      return
+    }
+    setEnhancingIndex(planIndex)
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {})
+    const prevKeys = dayPlan.map((x) => x._planRowKey)
+    const draft = [...dayPlan]
+    try {
+      const { replacement: rawStop, enrichCatalog } = await enhancePlanStopAtIndex(
+        dayPlan,
+        planIndex,
+        pineconeMatches,
+        lastPrefLabelsRef.current || [],
+        lastFoodLabelsRef.current || [],
+        {
+          profileGeneral: generalLabels,
+          profileActivity: activityLabels,
+          profileFood: savedProfileFoodLabels,
+        },
+      )
+      const newKey = `rk-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`
+      draft[planIndex] = { ...rawStop, _planRowKey: newKey }
+      const mergedKeys = prevKeys.map((k, i) => (i === planIndex ? newKey : k))
+      const enrichPool = enrichCatalog?.length ? enrichCatalog : pineconeMatches
+      const enriched = await enrichPlanWithClientData(draft, enrichPool, allPlaceMarkers)
+      const keyed = attachPlanRowKeys(
+        enriched.map((item, i) => ({ ...item, _planRowKey: mergedKeys[i] || item._planRowKey })),
+      )
+      setDayPlan(keyed)
+      const row = keyed[planIndex]
+      const timeColors = { Morning: colors.morning, Afternoon: colors.afternoon, Evening: colors.evening }
+      setStopDetailPayload((prev) => {
+        if (!prev || prev.planIndex !== planIndex || !row) return prev
+        const isEat = row.type === 'restaurant'
+        const isEvent = row.type === 'event'
+        const accent = isEat ? themeColors.dining : isEvent ? themeColors.event : (timeColors[row.time] || colors.morning)
+        const rawGallery = (row.images && row.images.length > 0) ? row.images : (row.image ? [row.image] : [])
+        const galleryUris = [...new Set(rawGallery.map((u) => resolvePublicImageUrl(u)).filter(Boolean))]
+        const hasImages = galleryUris.length > 0
+        const hasProfile = !!(row.clientId)
+        return {
+          item: row,
+          planIndex,
+          thisStopNum: planIndex + 1,
+          accent,
+          isEat,
+          isEvent,
+          hasImages,
+          images: galleryUris,
+          hasProfile,
+        }
+      })
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {})
+    } catch (e) {
+      Alert.alert('Enhance failed', e?.message || 'Please try again.')
+    } finally {
+      setEnhancingIndex(null)
+    }
+  }, [
+    dayPlan,
+    pineconeMatches,
+    enhancingIndex,
+    loading,
+    generalLabels,
+    activityLabels,
+    savedProfileFoodLabels,
+    colors.morning,
+    colors.afternoon,
+    colors.evening,
+  ])
+
   useEffect(() => () => {
     if (shareCopyHintTimerRef.current) clearTimeout(shareCopyHintTimerRef.current);
   }, []);
@@ -2480,15 +3059,29 @@ export default function AIPlanScreen() {
 
     setLoading(true);
     setPlanGenerationSuccess(false);
-    setLoadingStatus('Finding places and restaurants based on your preferences…');
+    setLoadingStatus('Khalid is scouting live posts for standout venues…');
     setError(null);
     setDayPlan(null);
     setPineconeMatches([]);
     setSelectedMarker(null);
     setDrawerStep(3);
+    lastPrefLabelsRef.current = prefLabels;
+    lastFoodLabelsRef.current = foodLabels;
 
-    // Fetch "Places we're considering" directly from Supabase — no Pinecone wait, random order
-    fetchSpotPreviewsFromSupabase().then((p) => setSpotPreviews(p));
+    // Get cached feed images immediately, fetch more in background
+    getCachedFeedImages()
+      .then((cached) => {
+        const c = Array.isArray(cached) ? cached : [];
+        if (c.length > 0) setSpotPreviews(c);
+        return c;
+      })
+      .then((c) =>
+        fetchSpotPreviewsFromSupabase().then((fresh) => {
+          const f = Array.isArray(fresh) ? fresh : [];
+          if (f.length > c.length) setSpotPreviews(f);
+        }),
+      )
+      .catch(() => {});
 
     let generatedPlan = null;
     try {
@@ -2502,16 +3095,17 @@ export default function AIPlanScreen() {
 
       const hasCached =
         cached.prefsKey === prefsKey &&
-        cached.places &&
-        cached.breakfastSpots &&
-        cached.events;
+        Array.isArray(cached.places) &&
+        cached.places.length > 0 &&
+        Array.isArray(cached.events) &&
+        cached.events.length > 0;
 
       if (hasCached) {
         places = cached.places;
-        breakfastSpots = cached.breakfastSpots;
         events = cached.events;
-        [restaurants] = await Promise.all([
+        [restaurants, breakfastSpots] = await Promise.all([
           fetchRestaurants(foodLabels),
+          fetchBreakfastSpots(),
         ]);
       } else {
         const [
@@ -2537,19 +3131,25 @@ export default function AIPlanScreen() {
       console.log(`Pinecone: ${places.length} places, ${restaurants.length} restaurants, ${breakfastSpots.length} breakfast, ${events.length} events`);
 
       // Pipeline Step 5 — GPT builds a smart day plan from all results
+      setLoadingStatus('Shortlisting restaurants & experiences for you…');
+      await new Promise((res) => setTimeout(res, 380));
       setLoadingStatus('Khalid is crafting your perfect day…');
-      const plan = await generateDayPlan(places, restaurants, breakfastSpots, events, prefLabels, foodLabels);
+      const plan = await generateDayPlan(places, restaurants, breakfastSpots, events, prefLabels, foodLabels, {
+        profileGeneral: generalLabels,
+        profileActivity: activityLabels,
+        profileFood: savedProfileFoodLabels,
+      });
       generatedPlan = plan;
-      const enriched = await enrichPlanWithClientData(plan, allMatches);
-      setDayPlan(enriched);
+      const enriched = await enrichPlanWithClientData(plan, allMatches, allPlaceMarkers);
+      setDayPlan(attachPlanRowKeys(enriched));
       setError(null);
 
       // Debug markers
-      const markers = buildMapMarkers(plan || []);
+      const markers = buildMapMarkers(plan || [], allPlaceMarkers);
       console.log(`Map markers: ${markers.length}/${plan.length} spots have coordinates`);
 
       // Fit map to show all markers
-      const validMarkers = buildMapMarkers(plan).filter(m => m.lat && m.lng);
+      const validMarkers = buildMapMarkers(plan, allPlaceMarkers).filter(m => m.lat && m.lng);
       const coords = validMarkers.map(m => ({ latitude: m.lat, longitude: m.lng }));
       if (coords.length > 0 && mapRef.current) {
         mapRef.current.fitToCoordinates(coords, {
@@ -2562,7 +3162,8 @@ export default function AIPlanScreen() {
       console.warn('[AI Plan] API error, using mock plan:', err?.message);
       generatedPlan = getMockDayPlan();
       const allM = [...(places || []), ...(restaurants || []), ...(breakfastSpots || []), ...(events || [])];
-      enrichPlanWithClientData(generatedPlan, allM).then((e) => setDayPlan(e));
+      setPineconeMatches(allM);
+      enrichPlanWithClientData(generatedPlan, allM, allPlaceMarkers).then((e) => setDayPlan(attachPlanRowKeys(e)));
       setError(null);
     } finally {
       setLoading(false);
@@ -2607,11 +3208,12 @@ export default function AIPlanScreen() {
   // Pin reveal: show pins one by one, pan camera to each, then open sheet with fade
   useEffect(() => {
     if (!revealingPins || !dayPlan) return;
-    const markers = buildMapMarkers(dayPlan);
+    const markers = buildMapMarkers(dayPlan, allPlaceMarkers);
     if (markers.length === 0) {
       setRevealingPins(false);
       sheetOpacity.setValue(1);
       lastSnap.current = SNAP_POINTS[0];
+      scheduleStaggeredStopReveal(dayPlan.length);
       Animated.spring(sheetAnim, {
         toValue: SNAP_POINTS[0],
         useNativeDriver: true,
@@ -2640,6 +3242,7 @@ export default function AIPlanScreen() {
           setTimeout(() => {
             setRevealingPins(false);
             lastSnap.current = SNAP_POINTS[0];
+            scheduleStaggeredStopReveal(dayPlan.length);
             Animated.parallel([
               Animated.timing(sheetOpacity, {
                 toValue: 1,
@@ -2674,7 +3277,7 @@ export default function AIPlanScreen() {
       });
     }, 750);
     return () => clearInterval(interval);
-  }, [revealingPins, dayPlan]);
+  }, [revealingPins, dayPlan, scheduleStaggeredStopReveal]);
 
   const regionThrottleRef = useRef({ last: 0, lastDelta: null });
   const handleRegionChange = (region) => {
@@ -2698,20 +3301,8 @@ export default function AIPlanScreen() {
     if (region?.latitudeDelta != null) setMapRegion(region);
   };
 
-  // When marker selected, get screen position for radial menu (re-run when region changes)
-  useEffect(() => {
-    if (!selectedMarker || !mapRef.current) {
-      setRadialMenuPosition(null);
-      return;
-    }
-    mapRef.current.pointForCoordinate({ latitude: selectedMarker.lat, longitude: selectedMarker.lng })
-      .then((p) => setRadialMenuPosition(p))
-      .catch(() => setRadialMenuPosition(null));
-  }, [selectedMarker?.lat, selectedMarker?.lng, mapRegion?.latitudeDelta]);
-
   const closeRadialMenu = () => {
     setSelectedMarker(null);
-    setRadialMenuPosition(null);
   };
 
   const handleRadialAction = (key) => {
@@ -2732,7 +3323,7 @@ export default function AIPlanScreen() {
     PanResponder.create({
       onStartShouldSetPanResponder: () => true,
       onMoveShouldSetPanResponder: (_, g) =>
-        Math.abs(g.dy) > 6 && Math.abs(g.dy) > Math.abs(g.dx) * 0.85,
+        Math.abs(g.dy) > 4 && Math.abs(g.dy) > Math.abs(g.dx) * 0.72,
       onPanResponderGrant: () => { lastSnap.current = currentYRef.current; },
       onPanResponderMove: (_, g) => {
         const newY = lastSnap.current + g.dy;
@@ -2787,7 +3378,7 @@ export default function AIPlanScreen() {
         })}
         {/* Plan markers — reveal one by one with profile images and entrance animation */}
         {dayPlan && (() => {
-          const markers = buildMapMarkers(dayPlan);
+          const markers = buildMapMarkers(dayPlan, allPlaceMarkers);
           const maxVisible = revealingPins ? visiblePinCount : markers.length;
           return markers.filter((mk) => mk.idx < maxVisible).map((mk) => {
             const isEat = mk.type === 'restaurant';
@@ -2809,12 +3400,45 @@ export default function AIPlanScreen() {
         })()}
       </MapView>
 
-      {/* Search button — top right */}
-      <View style={[styles.topBarWrap, { paddingTop: insets.top + 8 }]} pointerEvents="box-none">
+      {/* Mini tab icons — centered; AI Plan hides bottom bar */}
+      <View style={[styles.topBarWrap, { paddingTop: insets.top + 2 }]} pointerEvents="box-none">
+        <View style={styles.topBarBalanceSpacer} pointerEvents="none" accessibilityElementsHidden />
+        <View style={styles.planMiniNavRow} accessibilityRole="tablist" accessibilityLabel="Main navigation">
+          {PLAN_MINI_NAV.map((item) => {
+            const selected = activeTabRouteName === item.screen
+            return (
+              <TouchableOpacity
+                key={item.key}
+                style={styles.planMiniNavBtn}
+                onPress={() => handlePlanMiniNavPress(item.screen)}
+                activeOpacity={0.75}
+                accessibilityRole="tab"
+                accessibilityState={{ selected }}
+                accessibilityLabel={item.label}
+              >
+                {item.isLogo ? (
+                  <Image
+                    source={require('../../assets/ai-button-logo.png')}
+                    style={styles.planMiniNavLogo}
+                    resizeMode="cover"
+                  />
+                ) : (
+                  <Ionicons
+                    name={selected ? item.iconActive : item.icon}
+                    size={18}
+                    color={selected ? themeColors.primary : '#64748B'}
+                  />
+                )}
+              </TouchableOpacity>
+            )
+          })}
+        </View>
         <TouchableOpacity
           style={styles.searchButton}
           activeOpacity={0.8}
           onPress={() => setShowSearchModal(true)}
+          accessibilityRole="button"
+          accessibilityLabel="Search places"
         >
           <Ionicons name="search" size={22} color={themeColors.primary} />
         </TouchableOpacity>
@@ -2826,20 +3450,24 @@ export default function AIPlanScreen() {
       <Animated.View
         style={[
           styles.sheet,
+          drawerStep === 3 && styles.sheetPlanResultsTint,
+          drawerStep === 3 && styles.sheetPlanOverflowVisible,
           {
-            paddingBottom: 80 + getAppTabBarHeight(insets),
+            paddingBottom: getPlanSheetBottomPadding(insets),
             opacity: sheetOpacity,
             transform: [{ translateY: sheetAnim }],
           },
         ]}
       >
         <View
-          style={styles.grabberWrap}
+          style={styles.sheetDragArea}
           {...panResponder.panHandlers}
+          hitSlop={{ top: 16, bottom: 6, left: 0, right: 0 }}
           accessibilityRole="button"
-          accessibilityLabel="Drag up to expand your plan"
+          accessibilityLabel="Swipe up to expand the plan, or drag down to see more map"
         >
           <View style={styles.grabber} />
+          <Text style={styles.sheetDragHint}>Swipe up</Text>
         </View>
 
         {/* Step 0 — Past Plans (modern hero layout) */}
@@ -2847,7 +3475,10 @@ export default function AIPlanScreen() {
           <View style={styles.pastPlansStepWrap}>
             <ScrollView style={styles.pastPlansScroll} contentContainerStyle={styles.d0ScrollContent} showsVerticalScrollIndicator={false}>
               {/* Build CTA */}
-              <AiStagger delay={0}>
+              <AiStagger
+                delay={0}
+                entering={FadeIn.duration(340).delay(0)}
+              >
                 <Pressable
                   style={({ pressed }) => [styles.d0CtaRow, pressed && { opacity: 0.93, transform: [{ scale: 0.98 }] }]}
                   onPress={startSetup}
@@ -2872,24 +3503,6 @@ export default function AIPlanScreen() {
                     <Ionicons name="chevron-forward" size={20} color="rgba(255,255,255,0.7)" />
                   </LinearGradient>
                 </Pressable>
-              </AiStagger>
-
-              {/* Quick feature pills */}
-              <AiStagger delay={80}>
-                <View style={styles.d0FeatureRow}>
-                  {[
-                    { icon: 'location', label: 'Top spots', color: '#EF4444' },
-                    { icon: 'restaurant', label: 'Food picks', color: '#F59E0B' },
-                    { icon: 'time', label: 'Timed plan', color: '#3B82F6' },
-                  ].map((f, i) => (
-                    <View key={f.label} style={styles.d0FeaturePill}>
-                      <View style={[styles.d0FeaturePillIcon, { backgroundColor: `${f.color}15` }]}>
-                        <Ionicons name={f.icon} size={16} color={f.color} />
-                      </View>
-                      <Text style={styles.d0FeaturePillText}>{f.label}</Text>
-                    </View>
-                  ))}
-                </View>
               </AiStagger>
 
               {/* Past plans section */}
@@ -2970,36 +3583,37 @@ export default function AIPlanScreen() {
                 <View style={styles.drawerPageHeaderSpacer} />
               </View>
             ) : (
-              <View style={styles.planMastheadRoot}>
+              <LinearGradient
+                colors={['#FFFFFF', '#FFFBFC', '#FFF0F3']}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 1 }}
+                style={styles.planMastheadRoot}
+              >
                 <View style={styles.planMastheadTopRow}>
                   <TouchableOpacity
-                    style={styles.backButton}
+                    style={styles.planMastheadBackBtn}
                     activeOpacity={0.8}
                     onPress={() => { setDrawerStep(0); setDayPlan(null); setError(null); }}
                     accessibilityRole="button"
                     accessibilityLabel="Back to plans"
                   >
-                    <Ionicons name="chevron-back" size={20} color="#374151" />
+                    <Ionicons name="chevron-back" size={20} color="#0F172A" />
                   </TouchableOpacity>
-                  <View style={styles.planMastheadTitleCol}>
-                    <Text style={styles.planMastheadKicker}>Khalid · AI</Text>
-                    <Text style={styles.planMastheadHeadline} accessibilityRole="header">
-                      <Text style={styles.planMastheadHeadlineLead}>Your day</Text>
-                      <Text style={styles.planMastheadHeadlineTrail}> in Bahrain</Text>
+                  <View style={styles.planMastheadTitleBlock}>
+                    <Text style={styles.planMastheadTitleLine} accessibilityRole="header">
+                      <Text style={styles.planMastheadTitleStrong}>Your day </Text>
+                      <Text style={styles.planMastheadTitleSoft}>in Bahrain</Text>
+                    </Text>
+                    <Text style={styles.planMastheadMetaLine} accessibilityLabel={`${dayPlan.length} stops, ${dayPlan.filter((i) => i.type === 'restaurant').length} meals, one day`}>
+                      <Text style={styles.planMastheadMetaEm}>{dayPlan.length}</Text>
+                      <Text style={styles.planMastheadMetaSep}> stops · </Text>
+                      <Text style={styles.planMastheadMetaEm}>{dayPlan.filter((i) => i.type === 'restaurant').length}</Text>
+                      <Text style={styles.planMastheadMetaSep}> meals · </Text>
+                      <Text style={styles.planMastheadMetaEm}>1</Text>
+                      <Text style={styles.planMastheadMetaSep}> day</Text>
                     </Text>
                   </View>
                 </View>
-                <View style={styles.planMastheadStatsRow}>
-                  <Text style={styles.iv2StatsEm}>{dayPlan.length}</Text>
-                  <Text style={styles.iv2StatsWord}>stops</Text>
-                  <Text style={styles.iv2StatsSep}>·</Text>
-                  <Text style={styles.iv2StatsEm}>{dayPlan.filter((i) => i.type === 'restaurant').length}</Text>
-                  <Text style={styles.iv2StatsWord}>meals</Text>
-                  <Text style={styles.iv2StatsSep}>·</Text>
-                  <Text style={styles.iv2StatsEm}>1</Text>
-                  <Text style={styles.iv2StatsWord}>day</Text>
-                </View>
-                <Text style={styles.planMastheadHint}>Tap a stop for details, photos & directions</Text>
                 <View style={styles.planMastheadActions}>
                   <TouchableOpacity
                     style={styles.iv2MapOutline}
@@ -3041,7 +3655,7 @@ export default function AIPlanScreen() {
                   </View>
                 </View>
                 {shareCopyHint ? <Text style={styles.iv2CopyToast}>Copied</Text> : null}
-              </View>
+              </LinearGradient>
             )}
 
             {loading ? (
@@ -3051,24 +3665,11 @@ export default function AIPlanScreen() {
               >
                 <View style={styles.loadingBumpCard}>
                   <LinearGradient colors={['#FFF0F2', '#FFF8F9', '#FFFFFF']} style={StyleSheet.absoluteFill} />
-                  <View style={styles.loadingBumpIllustration}>
-                    <LinearGradient
-                      colors={[`${themeColors.primary}20`, `${themeColors.primary}08`]}
-                      style={styles.loadingBumpIllustrationBg}
-                    >
-                      <Ionicons name="airplane" size={28} color={themeColors.primary} />
-                    </LinearGradient>
-                    <View style={styles.loadingBumpIllustrationTrail}>
-                      {[0, 1, 2].map((i) => (
-                        <View key={i} style={[styles.loadingBumpTrailDot, { opacity: 0.3 + i * 0.2, width: 4 + i * 2 }]} />
-                      ))}
-                    </View>
-                  </View>
-                  <Text style={styles.loadingBumpTitle}>{loadingStatus || "Khalid's building your day…"}</Text>
-                  <Text style={styles.loadingBumpSub}>Hang tight, habibi — almost there!</Text>
-                  {spotPreviews.length > 0 && (
-                    <SpotMarqueeBanner items={spotPreviews} itemWidth={64} itemGap={10} variant="sheet" />
-                  )}
+                  <Text style={styles.loadingScoutTitle} accessibilityRole="header">
+                    <Text style={styles.loadingScoutTitleAccent}>Khalid</Text>
+                    {' is scouting the perfect places for you'}
+                  </Text>
+                  <KhalidScoutPlanVisual spotPreviews={spotPreviews} variant="sheet" />
                   <View style={styles.loadingProgressBar}>
                     <LinearGradient
                       colors={[themeColors.primary, '#E63950']}
@@ -3077,28 +3678,10 @@ export default function AIPlanScreen() {
                       style={[styles.loadingProgressFill, (() => {
                         const s = (loadingStatus || '').toLowerCase()
                         if (s.includes('crafting') || s.includes('stitch')) return { width: '100%' }
-                        if (s.includes('food') || s.includes('restaurant')) return { width: '66%' }
+                        if (s.includes('shortlisting') || s.includes('restaurant')) return { width: '66%' }
                         return { width: '33%' }
                       })()]}
                     />
-                  </View>
-                  <View style={styles.loadingBumpSteps}>
-                    {[
-                      { text: 'Finding spots', icon: 'compass-outline' },
-                      { text: 'Picking food', icon: 'restaurant-outline' },
-                      { text: 'Stitching plan', icon: 'sparkles-outline' },
-                    ].map((step, i) => {
-                      const s = (loadingStatus || '').toLowerCase()
-                      const isDone = (i === 0 && (s.includes('food') || s.includes('restaurant') || s.includes('crafting') || s.includes('stitch'))) || (i === 1 && (s.includes('crafting') || s.includes('stitch')))
-                      return (
-                        <AiStagger key={step.text} delay={100 + i * 90} style={styles.loadingBumpStep}>
-                          <View style={[styles.loadingBumpDot, isDone && styles.loadingBumpDotDone]}>
-                            {isDone ? <Ionicons name="checkmark" size={14} color="#FFFFFF" /> : <Ionicons name={step.icon} size={14} color={themeColors.primary} />}
-                          </View>
-                          <Text style={[styles.loadingBumpStepText, isDone && styles.loadingBumpStepTextDone]}>{step.text}</Text>
-                        </AiStagger>
-                      )
-                    })}
                   </View>
                 </View>
               </Reanimated.View>
@@ -3127,172 +3710,124 @@ export default function AIPlanScreen() {
                 <Text style={styles.emptyResults}>No plan generated.</Text>
               </Reanimated.View>
             ) : (
-              <Reanimated.View
-                style={styles.planContentFill}
-                entering={FadeInDown.duration(380).springify().damping(18).stiffness(200)}
-              >
-              <ScrollView
+              <View style={styles.planContentFill}>
+              <DraggableFlatList
                 style={styles.resultsScroll}
+                data={dayPlan}
+                keyExtractor={(item) => item._planRowKey || `fallback-${item.spot}`}
+                onDragEnd={({ data }) => {
+                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {})
+                  setDayPlan(data)
+                }}
+                activationDistance={12}
+                containerStyle={styles.planDraggableListContainer}
                 contentContainerStyle={styles.resultsContent}
+                contentInsetAdjustmentBehavior="never"
                 showsVerticalScrollIndicator={false}
-                nestedScrollEnabled
                 keyboardShouldPersistTaps="handled"
-                bounces
-              >
-
-                {/* ═══ Itinerary — masthead lives in fixed sheet header above ═══ */}
-                {(() => {
-                  const sections = {
-                    Morning:   { color: colors.morning, icon: 'sunny-outline', label: 'Morning' },
-                    Afternoon: { color: colors.afternoon, icon: 'partly-sunny-outline', label: 'Afternoon' },
-                    Evening:   { color: colors.evening, icon: 'moon-outline', label: 'Evening' },
-                  };
-                  const order = ['Morning', 'Afternoon', 'Evening'];
-                  const grouped = {};
-                  dayPlan.forEach((item) => { if (!grouped[item.time]) grouped[item.time] = []; grouped[item.time].push(item); });
-                  let stopNum = 0;
-
-                  return order.filter(t => grouped[t]).map((time, secIdx) => {
-                    const sec = sections[time];
-                    const items = grouped[time];
-                    let base = stopNum
-                    const withStops = items.map((item) => {
-                      base += 1
-                      return { item, thisStopNum: base }
-                    })
-                    stopNum = base
-
-                    return (
-                      <AiStagger key={time} delay={100 + secIdx * 105} style={styles.bumpItinSection}>
-                        <View style={styles.iv2SectionHeadGrid}>
-                          <View style={[styles.iv2SectionIconSq, { backgroundColor: sec.color }]}>
-                            <Ionicons name={sec.icon} size={16} color="#FFFFFF" />
-                          </View>
-                          <View style={styles.iv2SectionHeadGridText}>
-                            <Text style={styles.iv2SectionGridTitle}>{sec.label}</Text>
-                            <Text style={styles.iv2SectionGridMeta}>
-                              {items.length} {items.length === 1 ? 'stop' : 'stops'}
-                            </Text>
-                          </View>
-                        </View>
-                        {(() => {
-                          const useSlider = items.length > 2;
-                          const tileW = useSlider ? ITIN_SLIDER_TILE : ITIN_GRID_TILE;
-                          const snapInterval = tileW + ITIN_GRID_GAP;
-                          const emptyIconSize = useSlider ? 26 : 28;
-                          const renderTile = ({ item, thisStopNum }) => {
-                            const isExpanded = stopDetailPayload?.thisStopNum === thisStopNum;
-                            const isEat = item.type === 'restaurant';
-                            const isEvent = item.type === 'event';
-                            const accent = isEat ? themeColors.dining : isEvent ? themeColors.event : sec.color;
-                            const hasImage = !!(item.image);
-                            const hasImages = (item.images && item.images.length > 0) || hasImage;
-                            const images = (item.images && item.images.length > 0) ? item.images : (item.image ? [item.image] : []);
-                            const hasProfile = !!(item.clientId);
-                            return (
-                              <TouchableOpacity
-                                key={`stop-${thisStopNum}`}
-                                style={[styles.iv2GridTile, { width: tileW }]}
-                                activeOpacity={0.88}
-                                onPress={() => {
-                                  if (stopDetailPayload?.thisStopNum === thisStopNum) {
-                                    setStopDetailPayload(null);
-                                    return;
-                                  }
-                                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
-                                  setStopDetailPayload({
-                                    item,
-                                    thisStopNum,
-                                    accent,
-                                    isEat,
-                                    isEvent,
-                                    hasImages,
-                                    images,
-                                    hasProfile,
-                                  });
-                                  const markers = buildMapMarkers(dayPlan);
-                                  const mk = markers[thisStopNum - 1];
-                                  if (mk) setSelectedMarker(mk);
-                                }}
-                                accessibilityRole="button"
-                                accessibilityState={{ expanded: isExpanded }}
-                                accessibilityLabel={`${item.spot}, stop ${thisStopNum}`}
-                              >
-                                <View style={styles.iv2GridTileInner}>
-                                  {hasImages ? (
-                                    <PreviewImage uri={images[0] || item.image} style={styles.iv2GridTileImg} />
-                                  ) : (
-                                    <View style={[styles.iv2GridTileImg, styles.iv2GridTileImgEmpty, { backgroundColor: `${accent}28` }]}>
-                                      <Ionicons name={isEat ? 'restaurant' : isEvent ? 'calendar' : 'location'} size={emptyIconSize} color={accent} />
-                                    </View>
-                                  )}
-                                  <LinearGradient
-                                    colors={['transparent', 'rgba(0,0,0,0.08)', 'rgba(0,0,0,0.82)']}
-                                    locations={[0, 0.45, 1]}
-                                    style={StyleSheet.absoluteFill}
-                                    pointerEvents="none"
-                                  />
-                                  <View style={styles.iv2GridTileTopRow}>
-                                    <View style={[styles.iv2GridTileNumBadge, { backgroundColor: accent }]}>
-                                      <Text style={styles.iv2GridTileNumBadgeText}>{thisStopNum}</Text>
-                                    </View>
-                                    {item.rating != null && (
-                                      <View style={styles.iv2GridTileRating}>
-                                        <Ionicons name="star" size={10} color="#F59E0B" />
-                                        <Text style={styles.iv2GridTileRatingText}>{Number(item.rating).toFixed(1)}</Text>
-                                      </View>
-                                    )}
-                                  </View>
-                                  <View style={styles.iv2GridTileBottom}>
-                                    <Text style={styles.iv2GridTileSpot} numberOfLines={2}>{item.spot}</Text>
-                                  </View>
-                                  <View style={styles.iv2GridTileExpandHint}>
-                                    <Ionicons name={isExpanded ? 'chevron-up' : 'expand-outline'} size={16} color="rgba(255,255,255,0.85)" />
-                                  </View>
-                                </View>
-                              </TouchableOpacity>
-                            );
-                          };
-                          if (useSlider) {
-                            return (
-                              <ScrollView
-                                horizontal
-                                showsHorizontalScrollIndicator={false}
-                                decelerationRate="fast"
-                                snapToInterval={snapInterval}
-                                snapToAlignment="start"
-                                disableIntervalMomentum
-                                nestedScrollEnabled
-                                directionalLockEnabled
-                                keyboardShouldPersistTaps="handled"
-                                contentContainerStyle={styles.iv2SliderContent}
-                              >
-                                {withStops.map((w) => renderTile(w))}
-                              </ScrollView>
-                            );
-                          }
-                          return (
-                            <View style={styles.iv2Grid}>
-                              {withStops.map((w) => renderTile(w))}
-                            </View>
-                          );
-                        })()}
-                      </AiStagger>
-                    );
-                  });
-                })()}
-
-                {/* ═══ Footer — friendly close ═══ */}
-                <AiStagger delay={320}>
-                  <View style={styles.iv2Footer}>
-                    <Ionicons name="information-circle-outline" size={16} color="#94a3b8" />
-                    <Text style={styles.iv2FooterText}>
-                      Tap a stop for details · Swipe time rows with 3+ places · Pinch the map to explore
+                ListFooterComponent={(
+                  <View style={styles.planListEndFooter}>
+                    <Text style={styles.planListEndFooterText}>
+                      Long-press the grip icon to reorder stops · Enhance with AI replaces one stop · Tap a row for details and maps
                     </Text>
                   </View>
-                </AiStagger>
-              </ScrollView>
-              </Reanimated.View>
+                )}
+                renderItem={({ item, drag, isActive, getIndex }) => {
+                  const planIndex = getIndex() ?? 0
+                  const thisStopNum = planIndex + 1
+                  const isEat = item.type === 'restaurant'
+                  const isEvent = item.type === 'event'
+                  const accent = isEat ? themeColors.dining : isEvent ? themeColors.event : colors.morning
+                  const rawGallery = (item.images && item.images.length > 0) ? item.images : (item.image ? [item.image] : [])
+                  const galleryUris = [...new Set(rawGallery.map((u) => resolvePublicImageUrl(u)).filter(Boolean))]
+                  const thumbUri = galleryUris[0] || resolvePublicImageUrl(item.image)
+                  const hasImages = galleryUris.length > 0
+                  const hasProfile = !!(item.clientId)
+                  const isExpanded = stopDetailPayload?.planIndex === planIndex
+                  const isVisible = planIndex < visibleStopCount
+                  
+                  return (
+                    <ScaleDecorator>
+                      <AnimatedStopRow isVisible={isVisible} style={styles.planRowEnterWrap}>
+                      <View style={[styles.planDraggableRow, isActive && styles.planDraggableRowActive]}>
+                        <TouchableOpacity
+                          onLongPress={drag}
+                          delayLongPress={180}
+                          style={styles.planRowDragHit}
+                          activeOpacity={0.75}
+                          accessibilityRole="button"
+                          accessibilityLabel="Drag to reorder stop"
+                        >
+                          <Ionicons name="reorder-three" size={28} color="#64748B" />
+                        </TouchableOpacity>
+                        <Pressable
+                          style={styles.planRowMain}
+                          onPress={() => {
+                            if (stopDetailPayload?.planIndex === planIndex) {
+                              setStopDetailPayload(null)
+                              return
+                            }
+                            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {})
+                            closeRadialMenu()
+                            setStopDetailPayload({
+                              item,
+                              planIndex,
+                              thisStopNum,
+                              accent,
+                              isEat,
+                              isEvent,
+                              hasImages,
+                              images: galleryUris,
+                              hasProfile,
+                            })
+                          }}
+                          accessibilityRole="button"
+                          accessibilityState={{ expanded: isExpanded }}
+                          accessibilityLabel={`${item.spot}, stop ${thisStopNum}`}
+                        >
+                          <View style={styles.planRowThumb}>
+                            {hasImages ? (
+                              <PreviewImage uri={thumbUri} style={styles.planRowThumbImg} />
+                            ) : (
+                              <View style={[styles.planRowThumbImg, styles.planRowThumbPlaceholder, { backgroundColor: `${accent}22` }]}>
+                                <Ionicons name={isEat ? 'restaurant' : isEvent ? 'calendar' : 'location'} size={22} color={accent} />
+                              </View>
+                            )}
+                          </View>
+                          <View style={styles.planRowTextCol}>
+                            <Text style={styles.planRowSpotTitle} numberOfLines={2}>{item.spot}</Text>
+                            {item.rating != null && (
+                              <View style={styles.planRowRatingInline}>
+                                <Ionicons name="star" size={12} color="#F59E0B" />
+                                <Text style={styles.planRowRatingInlineText}>{Number(item.rating).toFixed(1)}</Text>
+                              </View>
+                            )}
+                          </View>
+                        </Pressable>
+                        <TouchableOpacity
+                          style={styles.planRowEnhanceBtn}
+                          activeOpacity={0.85}
+                          onPress={() => handleEnhanceStop(planIndex)}
+                          disabled={enhancingIndex !== null}
+                          accessibilityRole="button"
+                          accessibilityLabel="Enhance with AI, replace this stop"
+                        >
+                          {enhancingIndex === planIndex ? (
+                            <ActivityIndicator size="small" color={themeColors.primary} />
+                          ) : (
+                            <>
+                              <Ionicons name="sparkles" size={14} color={themeColors.primary} />
+                              <Text style={styles.planRowEnhanceBtnText}>Enhance{'\n'}with AI</Text>
+                            </>
+                          )}
+                        </TouchableOpacity>
+                      </View>
+                      </AnimatedStopRow>
+                    </ScaleDecorator>
+                  )
+                }}
+              />
+              </View>
             )}
           </View>
         )}
@@ -3430,6 +3965,27 @@ export default function AIPlanScreen() {
                       </TouchableOpacity>
                     )}
                   </View>
+                  {stopDetailPayload.planIndex != null && (
+                    <View style={styles.stopDialogEnhanceWrap}>
+                      <TouchableOpacity
+                        style={styles.stopDialogEnhanceWide}
+                        activeOpacity={0.88}
+                        onPress={() => handleEnhanceStop(stopDetailPayload.planIndex)}
+                        disabled={enhancingIndex !== null}
+                        accessibilityRole="button"
+                        accessibilityLabel="Enhance with AI"
+                      >
+                        {enhancingIndex === stopDetailPayload.planIndex ? (
+                          <ActivityIndicator size="small" color={themeColors.primary} />
+                        ) : (
+                          <>
+                            <Ionicons name="sparkles" size={20} color={themeColors.primary} />
+                            <Text style={styles.stopDialogEnhanceWideText}>Enhance with AI</Text>
+                          </>
+                        )}
+                      </TouchableOpacity>
+                    </View>
+                  )}
                 </ScrollView>
               </View>
             </View>
@@ -3632,11 +4188,17 @@ export default function AIPlanScreen() {
         </KeyboardAvoidingView>
       </Modal>
 
-      {/* Radial options menu when marker tapped — above sheet so it's visible */}
-      <RadialMarkerMenu
+      <MarkerDetailsBottomSheet
         visible={!!selectedMarker}
-        position={radialMenuPosition}
         marker={selectedMarker}
+        insets={insets}
+        accentColor={
+          selectedMarker?.type === 'restaurant'
+            ? colors.dining
+            : selectedMarker?.type === 'event'
+              ? colors.event
+              : colors.textSecondary
+        }
         onAction={handleRadialAction}
         onClose={closeRadialMenu}
       />
@@ -3732,8 +4294,7 @@ export default function AIPlanScreen() {
                         contentContainerStyle={styles.searchModalHorizontalContent}
                       >
                         {items.map((client) => {
-                          const rawImg = client.client_image ? parseStorageImageUrl(client.client_image) : null;
-                          const imageUrl = rawImg ? (ensureImageUrl(rawImg) || rawImg) : null;
+                          const imageUrl = resolvePublicImageUrl(client.client_image);
                           return (
                             <TouchableOpacity
                               key={client.client_a_uuid || client.clientId}
@@ -3827,2374 +4388,3 @@ export default function AIPlanScreen() {
     </View>
   );
 }
-
-const TILE_WIDTH = (SCREEN_WIDTH - 48 - 24) / 3;
-
-const ITIN_GRID_GAP = 10
-const ITIN_CONTENT_GUTTER = 32
-const ITIN_GRID_TILE = Math.floor(((SCREEN_WIDTH - ITIN_CONTENT_GUTTER - ITIN_GRID_GAP) / 2) * 0.88)
-const ITIN_SLIDER_TILE = Math.floor((SCREEN_WIDTH - ITIN_CONTENT_GUTTER) * 0.38)
-
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#F8FAFC' },
-  topBarWrap: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    flexDirection: 'row',
-    justifyContent: 'flex-end',
-    paddingHorizontal: 16,
-    paddingBottom: 8,
-    zIndex: 100,
-  },
-  searchButton: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: '#FFFFFF',
-    alignItems: 'center',
-    justifyContent: 'center',
-    ...Platform.select({ ios: { shadowColor: '#0F172A', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.1, shadowRadius: 8 }, android: { elevation: 4 } }),
-  },
-  searchModalRoot: {
-    flex: 1,
-    backgroundColor: '#FFFFFF',
-  },
-  searchModalHeadingWrap: {
-    paddingHorizontal: 16,
-    paddingTop: 4,
-    paddingBottom: 4,
-    alignItems: 'center',
-  },
-  searchModalHeading: {
-    fontSize: 20,
-    fontWeight: '800',
-    color: '#0F172A',
-    letterSpacing: -0.3,
-    textAlign: 'center',
-  },
-  searchModalHeaderRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingTop: 8,
-    paddingBottom: 12,
-    gap: 10,
-  },
-  searchModalSearchWrap: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    backgroundColor: '#F8FAFC',
-    borderRadius: 14,
-    borderWidth: 1.5,
-    borderColor: '#E2E8F0',
-    ...Platform.select({
-      ios: { shadowColor: '#0F172A', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.04, shadowRadius: 4 },
-      android: { elevation: 2 },
-    }),
-  },
-  searchModalSearchIcon: {
-    marginRight: 10,
-  },
-  searchModalSearchInput: {
-    flex: 1,
-    fontSize: 16,
-    color: '#0F172A',
-    paddingVertical: 0,
-    minHeight: 22,
-  },
-  searchModalSearchClear: {
-    padding: 2,
-    marginLeft: 4,
-  },
-  searchModalCloseBtn: {
-    width: 44,
-    height: 44,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderRadius: 12,
-    backgroundColor: '#F1F5F9',
-    flexShrink: 0,
-  },
-  searchModalLoading: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 12,
-  },
-  searchModalLoadingText: {
-    fontSize: 15,
-    color: '#64748B',
-    fontWeight: '500',
-  },
-  searchModalScroll: { flex: 1 },
-  searchModalContent: {
-    paddingHorizontal: 16,
-    paddingBottom: 40,
-    paddingTop: 8,
-  },
-  searchModalSection: {
-    marginBottom: 24,
-  },
-  searchModalSectionHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    marginBottom: 12,
-  },
-  searchModalSectionIcon: {
-    width: 32,
-    height: 32,
-    borderRadius: 10,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  searchModalSectionTitle: {
-    fontSize: 15,
-    fontWeight: '800',
-    letterSpacing: 0.2,
-  },
-  searchModalEmpty: {
-    fontSize: 14,
-    color: '#94A3B8',
-    fontWeight: '500',
-    fontStyle: 'italic',
-  },
-  searchModalHorizontalContent: {
-    flexDirection: 'row',
-    gap: 14,
-    paddingRight: 16,
-  },
-  searchModalClientCard: {
-    alignItems: 'center',
-    width: 76,
-  },
-  searchModalClientCircle: {
-    width: 64,
-    height: 64,
-    borderRadius: 32,
-    borderWidth: 2,
-    overflow: 'hidden',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#FAFBFC',
-    ...Platform.select({
-      ios: { shadowColor: '#0F172A', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.08, shadowRadius: 8 },
-      android: { elevation: 3 },
-    }),
-  },
-  searchModalClientImage: {
-    width: '100%',
-    height: '100%',
-  },
-  searchModalClientName: {
-    fontSize: 11,
-    fontWeight: '600',
-    color: '#334155',
-    textAlign: 'center',
-    marginTop: 6,
-    maxWidth: 76,
-    lineHeight: 14,
-  },
-  sheet: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    bottom: 0,
-    height: SHEET_HEIGHT,
-    flexDirection: 'column',
-    backgroundColor: '#FFFFFF',
-    borderTopLeftRadius: 28,
-    borderTopRightRadius: 28,
-    shadowColor: '#0F172A',
-    shadowOffset: { width: 0, height: -8 },
-    shadowOpacity: 0.12,
-    shadowRadius: 24,
-    elevation: 16,
-    overflow: 'hidden',
-  },
-  grabberWrap: { alignItems: 'center', justifyContent: 'center', paddingVertical: 6, paddingHorizontal: 20 },
-  grabber: { width: 40, height: 5, borderRadius: 3, backgroundColor: '#CBD5E1' },
-
-  // Past plans (step 0) — compact, Bump-style
-  pastPlansStepWrap: { flex: 1, minHeight: 0 },
-  pastPlansScroll: { flex: 1, minHeight: 0 },
-  d0ScrollContent: { paddingHorizontal: 20, paddingBottom: 20, paddingTop: 8 },
-  d0CtaRow: {
-    borderRadius: 20,
-    overflow: 'hidden',
-    marginBottom: 14,
-    ...Platform.select({
-      ios: { shadowColor: themeColors.primary, shadowOffset: { width: 0, height: 5 }, shadowOpacity: 0.28, shadowRadius: 14 },
-      android: { elevation: 7 },
-    }),
-  },
-  d0CtaGradient: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 16,
-    paddingHorizontal: 18,
-    borderRadius: 20,
-  },
-  d0CtaLogoWrap: {
-    width: 44,
-    height: 44,
-    borderRadius: 12,
-    borderWidth: 2,
-    borderColor: 'rgba(255,255,255,0.4)',
-    overflow: 'hidden',
-    marginRight: 14,
-  },
-  d0CtaLogo: {
-    width: 40,
-    height: 40,
-  },
-  d0CtaLeft: { flex: 1 },
-  d0CtaTitle: {
-    fontSize: 18,
-    fontWeight: '900',
-    color: '#FFF',
-    letterSpacing: -0.4,
-    marginBottom: 2,
-  },
-  d0CtaSub: {
-    fontSize: 13,
-    fontWeight: '500',
-    color: 'rgba(255,255,255,0.8)',
-  },
-  d0CtaArrow: {
-    width: 40,
-    height: 40,
-    borderRadius: 12,
-    backgroundColor: 'rgba(255,255,255,0.2)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginLeft: 12,
-  },
-  d0FeatureRow: {
-    flexDirection: 'row',
-    gap: 8,
-    marginBottom: 24,
-  },
-  d0FeaturePill: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    paddingVertical: 10,
-    paddingHorizontal: 10,
-    borderRadius: 16,
-    backgroundColor: 'rgba(255,255,255,0.97)',
-    borderWidth: 1,
-    borderColor: 'rgba(206,17,38,0.12)',
-    ...Platform.select({
-      ios: { shadowColor: '#0F172A', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.05, shadowRadius: 6 },
-      android: { elevation: 2 },
-    }),
-  },
-  d0FeaturePillIcon: {
-    width: 28,
-    height: 28,
-    borderRadius: 8,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  d0FeaturePillText: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: '#475569',
-  },
-  d0SectionHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 10,
-  },
-  d0SectionTitle: {
-    fontSize: 16,
-    fontWeight: '800',
-    color: '#0F172A',
-    letterSpacing: -0.3,
-  },
-  d0SectionCount: {
-    width: 24,
-    height: 24,
-    borderRadius: 8,
-    backgroundColor: '#F1F5F9',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  d0SectionCountText: {
-    fontSize: 12,
-    fontWeight: '800',
-    color: '#64748B',
-  },
-  d0PlanCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    backgroundColor: '#FFFFFF',
-    paddingVertical: 14,
-    paddingHorizontal: 14,
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: '#F1F5F9',
-    marginBottom: 8,
-    ...Platform.select({
-      ios: { shadowColor: '#0F172A', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.03, shadowRadius: 6 },
-      android: { elevation: 1 },
-    }),
-  },
-  d0PlanIconWrap: {
-    width: 38,
-    height: 38,
-    borderRadius: 10,
-    backgroundColor: `${themeColors.primary}10`,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  d0PlanInfo: { flex: 1 },
-  d0PlanName: { fontSize: 15, fontWeight: '700', color: '#0F172A', marginBottom: 2 },
-  d0PlanMeta: { fontSize: 13, color: '#94A3B8', fontWeight: '500' },
-  d0ShareRow: {
-    flexDirection: 'row',
-    gap: 10,
-    marginTop: 20,
-  },
-  d0ShareBtn: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    paddingVertical: 12,
-    borderRadius: 12,
-    backgroundColor: '#F8FAFC',
-    borderWidth: 1,
-    borderColor: '#F1F5F9',
-  },
-  d0ShareBtnText: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: '#64748B',
-  },
-  d0CopyHint: {
-    textAlign: 'center',
-    fontSize: 13,
-    fontWeight: '800',
-    color: themeColors.primary,
-    marginTop: 8,
-  },
-
-  // Drawer page header — three-column row so center title is truly centered
-  drawerPageHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 12,
-    paddingTop: 4,
-    paddingBottom: 4,
-    marginBottom: 8,
-    minHeight: 48,
-  },
-  backButton: {
-    width: 40,
-    height: 40,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderRadius: 12,
-    backgroundColor: '#F1F5F9',
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: 'rgba(15,23,42,0.06)',
-  },
-  drawerPageHeaderCenter: {
-    flex: 1,
-    minWidth: 0,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 6,
-  },
-  drawerPageHeaderSpacer: { width: 40, height: 40 },
-  drawerPageHeaderTitle: {
-    fontSize: 16,
-    fontWeight: '800',
-    color: '#0F172A',
-    letterSpacing: -0.35,
-    textAlign: 'center',
-  },
-  drawerPageHeaderMeta: {
-    marginTop: 2,
-    fontSize: 11,
-    fontWeight: '600',
-    color: '#94A3B8',
-    textAlign: 'center',
-    letterSpacing: 0.15,
-  },
-
-  // Grid tiles for preferences + food
-  gridScroll: { flex: 1 },
-  gridContent: { paddingHorizontal: 24, paddingBottom: 48 },
-  gridRow: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', gap: 10 },
-  gridTile: {
-    width: TILE_WIDTH, aspectRatio: 1, borderRadius: 14, borderWidth: 2,
-    borderColor: '#E2E8F0', backgroundColor: '#FFFFFF',
-    justifyContent: 'center', alignItems: 'center',
-    shadowColor: '#0F172A', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.04, shadowRadius: 6, elevation: 2,
-  },
-  gridTileIcon: {
-    width: 36, height: 36, borderRadius: 10, alignItems: 'center', justifyContent: 'center', marginBottom: 6,
-  },
-  gridTileLabel: { fontSize: 12, fontWeight: '600', color: '#334155', textAlign: 'center' },
-
-  fixedButtonWrap: {
-    paddingHorizontal: 24,
-    paddingTop: 12,
-    paddingBottom: 12,
-  },
-
-  continueButton: {
-    backgroundColor: themeColors.primary, paddingVertical: 14, borderRadius: 14,
-    alignItems: 'center', justifyContent: 'center', marginTop: 16,
-    ...Platform.select({ ios: { shadowColor: themeColors.primary, shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.18, shadowRadius: 8 }, android: { elevation: 4 } }),
-  },
-  continueButtonDisabled: { backgroundColor: '#E2E8F0' },
-  continueButtonText: { fontSize: 16, fontWeight: '700', color: '#FFFFFF' },
-
-  // Generate button (food)
-  generateButton: {
-    flexDirection: 'row', backgroundColor: themeColors.primary, paddingVertical: 14, borderRadius: 14,
-    alignItems: 'center', justifyContent: 'center', marginTop: 16, gap: 8,
-    ...Platform.select({ ios: { shadowColor: themeColors.primary, shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.18, shadowRadius: 8 }, android: { elevation: 4 } }),
-  },
-  generateButtonDisabled: { opacity: 0.8 },
-  generateButtonText: { fontSize: 16, fontWeight: '700', color: '#FFFFFF' },
-
-  // ── Results (step 3) — tinted canvas so new layout is obvious vs plain white ──
-  resultsScroll: {
-    flex: 1,
-    backgroundColor: '#F3EBED',
-  },
-  resultsContent: {
-    flexGrow: 1,
-    paddingBottom: 36,
-    paddingHorizontal: 16,
-    paddingTop: 0,
-    backgroundColor: '#F3EBED',
-  },
-
-  // Loading (sheet fallback) — Bump-style fun
-  loadingWrap: {
-    flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 24, paddingBottom: 40,
-  },
-  loadingBumpCard: {
-    borderRadius: 20,
-    padding: 24,
-    alignItems: 'center',
-    width: '100%',
-    maxWidth: 320,
-    overflow: 'hidden',
-    borderWidth: 1,
-    borderColor: 'rgba(200,16,46,0.1)',
-    ...Platform.select({ ios: { shadowColor: '#0F172A', shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.1, shadowRadius: 24 }, android: { elevation: 8 } }),
-  },
-  loadingBumpIllustration: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 16,
-  },
-  loadingBumpIllustrationBg: {
-    width: 60,
-    height: 60,
-    borderRadius: 20,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  loadingBumpIllustrationTrail: {
-    flexDirection: 'row',
-    gap: 3,
-    marginLeft: 6,
-  },
-  loadingBumpTrailDot: {
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: themeColors.primary,
-  },
-  loadingSpotPreviews: { maxHeight: 76, marginBottom: 14, overflow: 'hidden', width: '100%' },
-  loadingSpotPreviewsContent: { paddingHorizontal: 4, gap: 10 },
-  loadingSpotPreviewItem: { width: 64, alignItems: 'center' },
-  loadingSpotPreviewImg: { width: 52, height: 52, borderRadius: 10 },
-  loadingSpotPreviewPlaceholder: {
-    width: 52,
-    height: 52,
-    borderRadius: 10,
-    backgroundColor: themeColors.primaryMuted,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  loadingSpotPreviewName: { fontSize: 10, fontWeight: '600', color: '#64748B', marginTop: 4, textAlign: 'center' },
-  loadingProgressBar: {
-    width: '100%',
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: 'rgba(200,16,46,0.12)',
-    marginBottom: 16,
-    overflow: 'hidden',
-  },
-  loadingProgressFill: {
-    height: '100%',
-    borderRadius: 2,
-    backgroundColor: themeColors.primary,
-  },
-  loadingBumpTitle: {
-    fontSize: 17,
-    fontWeight: '800',
-    color: '#0F172A',
-    textAlign: 'center',
-    marginBottom: 4,
-    letterSpacing: -0.2,
-  },
-  loadingBumpSub: {
-    fontSize: 13,
-    color: '#64748B',
-    fontWeight: '600',
-    marginBottom: 18,
-  },
-  loadingBumpSteps: { gap: 10, width: '100%', paddingHorizontal: 4 },
-  loadingBumpStep: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  loadingBumpDot: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    backgroundColor: 'rgba(200,16,46,0.15)',
-    borderWidth: 2,
-    borderColor: 'rgba(200,16,46,0.3)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  loadingBumpDotDone: {
-    backgroundColor: themeColors.primary,
-    borderColor: themeColors.primary,
-  },
-  loadingBumpStepText: { fontSize: 13, fontWeight: '600', color: '#64748B' },
-  loadingBumpStepTextDone: { color: '#0F172A', fontWeight: '700' },
-  loadingPulse: {
-    width: 96, height: 96, borderRadius: 48, backgroundColor: themeColors.primaryMuted,
-    alignItems: 'center', justifyContent: 'center', marginBottom: 28,
-    borderWidth: 2, borderColor: themeColors.primaryMuted,
-  },
-  loadingTitle: { fontSize: 24, fontWeight: '800', color: '#0F172A', marginBottom: 8, letterSpacing: -0.4 },
-  loadingSubtext: { fontSize: 16, color: '#475569', textAlign: 'center', marginBottom: 36, fontWeight: '600' },
-  loadingSteps: { gap: 18, width: '100%', paddingHorizontal: 12 },
-  loadingStepRow: { flexDirection: 'row', alignItems: 'center', gap: 16 },
-  loadingDot: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center' },
-  loadingStepText: { fontSize: 16, color: '#334155', fontWeight: '600' },
-
-  // Error
-  errorWrap: { paddingHorizontal: 24, flex: 1, justifyContent: 'center' },
-  errorCard: {
-    alignItems: 'center',
-    padding: 28,
-    backgroundColor: 'rgba(220,38,38,0.06)',
-    borderRadius: 24,
-    borderWidth: 1,
-    borderColor: 'rgba(220,38,38,0.15)',
-  },
-  errorIconWrap: {
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    backgroundColor: 'rgba(220,38,38,0.12)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 16,
-  },
-  errorTitle: { fontSize: 18, fontWeight: '800', color: '#991B1B', marginBottom: 8 },
-  errorText: { fontSize: 15, color: '#B91C1C', fontWeight: '600', lineHeight: 22, textAlign: 'center' },
-  retryButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 10,
-    marginTop: 24,
-    paddingVertical: 18,
-    borderRadius: 16,
-    borderWidth: 2,
-    borderColor: themeColors.primary,
-    backgroundColor: themeColors.primaryMuted,
-  },
-  retryButtonText: { fontSize: 16, fontWeight: '700', color: themeColors.primary },
-  emptyResults: { fontSize: 15, color: '#64748B', textAlign: 'center', paddingVertical: 32, fontWeight: '500' },
-
-  successIconCircle: {
-    width: 64,
-    height: 64,
-    borderRadius: 32,
-    backgroundColor: themeColors.success,
-    alignItems: 'center',
-    justifyContent: 'center',
-    ...Platform.select({
-      ios: { shadowColor: '#10B981', shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.5, shadowRadius: 20 },
-      android: { elevation: 12 },
-    }),
-  },
-  planStep3Body: {
-    flex: 1,
-    minHeight: 0,
-  },
-  planContentFill: {
-    flex: 1,
-    minHeight: 0,
-  },
-  planMastheadRoot: {
-    flexShrink: 0,
-    backgroundColor: '#FFFFFF',
-    paddingHorizontal: 14,
-    paddingTop: 6,
-    paddingBottom: 10,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#E2E8F0',
-  },
-  planMastheadTopRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 10,
-  },
-  planMastheadTitleCol: {
-    flex: 1,
-    minWidth: 0,
-    paddingTop: 2,
-    justifyContent: 'center',
-  },
-  planMastheadKicker: {
-    fontSize: 10,
-    fontWeight: '800',
-    color: '#94A3B8',
-    letterSpacing: 1.2,
-    textTransform: 'uppercase',
-  },
-  planMastheadHeadline: {
-    marginTop: 2,
-  },
-  planMastheadHeadlineLead: {
-    fontSize: 19,
-    fontWeight: '900',
-    color: '#0F172A',
-    letterSpacing: -0.5,
-  },
-  planMastheadHeadlineTrail: {
-    fontSize: 17,
-    fontWeight: '700',
-    color: '#64748B',
-    letterSpacing: -0.35,
-  },
-  planMastheadStatsRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    alignItems: 'baseline',
-    marginTop: 8,
-    gap: 5,
-  },
-  planMastheadHint: {
-    marginTop: 6,
-    fontSize: 11,
-    fontWeight: '600',
-    color: '#94A3B8',
-    lineHeight: 15,
-  },
-  planMastheadActions: {
-    flexDirection: 'row',
-    alignItems: 'stretch',
-    gap: 8,
-    marginTop: 8,
-  },
-  iv2Eyebrow: {
-    fontSize: 10,
-    fontWeight: '800',
-    color: '#94a3b8',
-    letterSpacing: 1.4,
-    textTransform: 'uppercase',
-  },
-  iv2Headline: {
-    marginTop: 4,
-    fontSize: 24,
-    fontWeight: '800',
-    letterSpacing: -0.65,
-    lineHeight: 28,
-  },
-  iv2HeadlineLead: {
-    color: '#0f172a',
-    fontWeight: '900',
-    letterSpacing: -0.65,
-    fontSize: 24,
-  },
-  iv2HeadlineTrail: {
-    color: '#64748b',
-    fontWeight: '700',
-    fontSize: 22,
-    letterSpacing: -0.45,
-  },
-  iv2StatsLine: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    alignItems: 'baseline',
-    marginTop: 10,
-    gap: 5,
-  },
-  iv2StatsEm: {
-    fontSize: 17,
-    fontWeight: '900',
-    color: themeColors.primary,
-    letterSpacing: -0.4,
-  },
-  iv2StatsWord: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#64748b',
-    marginRight: 2,
-  },
-  iv2StatsSep: {
-    fontSize: 14,
-    fontWeight: '500',
-    color: '#cbd5e1',
-    marginHorizontal: 2,
-  },
-  iv2Hint: {
-    marginTop: 10,
-    fontSize: 11,
-    fontWeight: '600',
-    color: '#94a3b8',
-    lineHeight: 15,
-  },
-  iv2ActionRow: {
-    flexDirection: 'row',
-    alignItems: 'stretch',
-    gap: 10,
-    marginTop: 12,
-  },
-  iv2MapOutline: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    paddingVertical: 10,
-    borderRadius: 12,
-    borderWidth: 2,
-    borderColor: themeColors.primary,
-    backgroundColor: '#FFFFFF',
-  },
-  iv2MapOutlineText: {
-    fontSize: 15,
-    fontWeight: '800',
-    color: themeColors.primary,
-    letterSpacing: 0.2,
-  },
-  iv2Seg: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: '#cbd5e1',
-    backgroundColor: 'rgba(255,255,255,0.85)',
-    overflow: 'hidden',
-  },
-  iv2SegBtn: {
-    paddingVertical: 10,
-    paddingHorizontal: 16,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  iv2SegDivider: {
-    width: 1,
-    alignSelf: 'stretch',
-    backgroundColor: '#e2e8f0',
-  },
-  iv2CopyToast: {
-    marginTop: 12,
-    fontSize: 12,
-    fontWeight: '800',
-    color: themeColors.primary,
-    letterSpacing: 0.3,
-  },
-
-  iv2SectionHeadGrid: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    marginBottom: 10,
-    marginTop: 0,
-    paddingBottom: 8,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: 'rgba(15,23,42,0.08)',
-  },
-  iv2SectionIconSq: {
-    width: 34,
-    height: 34,
-    borderRadius: 10,
-    alignItems: 'center',
-    justifyContent: 'center',
-    ...Platform.select({
-      ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.12, shadowRadius: 6 },
-      android: { elevation: 3 },
-    }),
-  },
-  iv2SectionHeadGridText: {
-    flex: 1,
-    minWidth: 0,
-  },
-  iv2SectionGridTitle: {
-    fontSize: 15,
-    fontWeight: '800',
-    color: '#0f172a',
-    letterSpacing: -0.25,
-  },
-  iv2SectionGridMeta: {
-    marginTop: 1,
-    fontSize: 11,
-    fontWeight: '600',
-    color: '#94a3b8',
-    letterSpacing: 0.1,
-  },
-
-  iv2Grid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: ITIN_GRID_GAP,
-  },
-  iv2SliderContent: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: ITIN_GRID_GAP,
-    paddingRight: 24,
-  },
-  iv2GridTile: {
-    aspectRatio: 1,
-    borderRadius: 14,
-    overflow: 'hidden',
-    backgroundColor: '#FFFFFF',
-    ...Platform.select({
-      ios: { shadowColor: '#0F172A', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.1, shadowRadius: 10 },
-      android: { elevation: 4 },
-    }),
-  },
-  iv2GridTileInner: {
-    flex: 1,
-    borderRadius: 14,
-    overflow: 'hidden',
-    position: 'relative',
-  },
-  iv2GridTileImg: {
-    ...StyleSheet.absoluteFillObject,
-  },
-  iv2GridTileImgEmpty: {
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  iv2GridTileTopRow: {
-    position: 'absolute',
-    top: 8,
-    left: 8,
-    right: 8,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    zIndex: 2,
-  },
-  iv2GridTileNumBadge: {
-    minWidth: 28,
-    height: 28,
-    paddingHorizontal: 8,
-    borderRadius: 10,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  iv2GridTileNumBadgeText: {
-    fontSize: 13,
-    fontWeight: '900',
-    color: '#FFFFFF',
-  },
-  iv2GridTileRating: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 3,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 10,
-    backgroundColor: 'rgba(255,255,255,0.95)',
-  },
-  iv2GridTileRatingText: {
-    fontSize: 10,
-    fontWeight: '800',
-    color: '#0f172a',
-  },
-  iv2GridTileBottom: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    bottom: 0,
-    paddingHorizontal: 10,
-    paddingBottom: 10,
-    paddingTop: 28,
-    zIndex: 2,
-  },
-  iv2GridTileSpot: {
-    fontSize: 13,
-    fontWeight: '800',
-    color: '#FFFFFF',
-    letterSpacing: -0.2,
-    lineHeight: 17,
-    textShadowColor: 'rgba(0,0,0,0.35)',
-    textShadowOffset: { width: 0, height: 1 },
-    textShadowRadius: 4,
-  },
-  iv2GridTileExpandHint: {
-    position: 'absolute',
-    bottom: 10,
-    right: 10,
-    zIndex: 3,
-  },
-
-  stopDialogKb: {
-    flex: 1,
-  },
-  stopDialogRoot: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    paddingVertical: 12,
-    paddingHorizontal: 6,
-  },
-  stopDialogDim: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(15,23,42,0.58)',
-  },
-  stopDialogCard: {
-    maxHeight: SCREEN_HEIGHT * 0.94,
-    zIndex: 2,
-    borderRadius: 22,
-    backgroundColor: '#FFFFFF',
-    overflow: 'hidden',
-    ...Platform.select({
-      ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 14 }, shadowOpacity: 0.28, shadowRadius: 32 },
-      android: { elevation: 18 },
-    }),
-  },
-  stopDialogHero: {
-    width: '100%',
-    alignSelf: 'stretch',
-    backgroundColor: '#0f172a',
-  },
-  stopDialogBodyScroll: {
-    maxHeight: SCREEN_HEIGHT * 0.52,
-  },
-  stopDialogScrollContent: {
-    paddingBottom: 22,
-    paddingHorizontal: 18,
-    paddingTop: 18,
-  },
-  stopDialogHeader: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    justifyContent: 'space-between',
-    gap: 12,
-    marginBottom: 14,
-  },
-  stopDialogHeaderMain: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 12,
-    minWidth: 0,
-  },
-  stopDialogNumBadge: {
-    width: 36,
-    height: 36,
-    borderRadius: 12,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  stopDialogNumText: {
-    fontSize: 15,
-    fontWeight: '900',
-    color: '#FFFFFF',
-  },
-  stopDialogTitleCol: {
-    flex: 1,
-    minWidth: 0,
-  },
-  stopDialogSpotTitle: {
-    fontSize: 22,
-    fontWeight: '900',
-    color: '#0f172a',
-    letterSpacing: -0.45,
-    lineHeight: 27,
-  },
-  stopDialogRatingRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-    marginTop: 6,
-  },
-  stopDialogRatingText: {
-    fontSize: 14,
-    fontWeight: '800',
-    color: '#475569',
-  },
-  stopDialogClose: {
-    marginTop: -4,
-    marginRight: -4,
-    padding: 4,
-  },
-  stopDialogSectionLabel: {
-    fontSize: 11,
-    fontWeight: '800',
-    color: '#94a3b8',
-    letterSpacing: 1.4,
-    textTransform: 'uppercase',
-    marginBottom: 8,
-  },
-  stopDialogDescBox: {
-    backgroundColor: '#F8FAFC',
-    borderRadius: 14,
-    paddingVertical: 14,
-    paddingHorizontal: 14,
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
-    marginBottom: 18,
-  },
-  stopDialogDescText: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#334155',
-    lineHeight: 24,
-  },
-  stopDialogActions: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 10,
-    marginBottom: 4,
-  },
-  stopDialogBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    paddingVertical: 12,
-    paddingHorizontal: 16,
-    borderRadius: 14,
-    minHeight: 48,
-  },
-  stopDialogBtnPrimary: {
-    flexGrow: 1,
-    flexShrink: 1,
-    minWidth: 120,
-    backgroundColor: themeColors.primary,
-    ...Platform.select({
-      ios: { shadowColor: themeColors.primary, shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.25, shadowRadius: 8 },
-      android: { elevation: 4 },
-    }),
-  },
-  stopDialogBtnPrimaryText: {
-    fontSize: 15,
-    fontWeight: '800',
-    color: '#FFFFFF',
-  },
-  stopDialogBtnGhost: {
-    borderWidth: 1.5,
-    borderColor: 'rgba(200,16,46,0.35)',
-    backgroundColor: 'rgba(200,16,46,0.06)',
-  },
-  stopDialogBtnGhostText: {
-    fontSize: 14,
-    fontWeight: '800',
-    color: themeColors.primary,
-  },
-
-  iv2Footer: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 10,
-    marginTop: 20,
-    marginBottom: 12,
-    paddingHorizontal: 4,
-    paddingVertical: 12,
-  },
-  iv2FooterText: {
-    flex: 1,
-    fontSize: 11,
-    fontWeight: '600',
-    color: '#94a3b8',
-    lineHeight: 16,
-    letterSpacing: 0.15,
-  },
-
-  // ── Boarding pass hero (legacy) ──
-  boardingPass: {
-    backgroundColor: '#FFFFFF', borderRadius: 24, marginBottom: 28, overflow: 'hidden',
-    borderWidth: 0,
-    shadowColor: '#0F172A', shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.12, shadowRadius: 24, elevation: 8,
-  },
-  bpTop: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    paddingHorizontal: 28, paddingTop: 26, paddingBottom: 22,
-  },
-  bpLabel: { fontSize: 12, fontWeight: '800', color: '#64748B', letterSpacing: 1.6 },
-  bpValue: { fontSize: 28, fontWeight: '800', color: '#0F172A', marginTop: 6, letterSpacing: -0.5 },
-  bpDivider: {
-    width: 52, height: 52, borderRadius: 26, borderWidth: 2, borderColor: 'rgba(200,16,46,0.15)',
-    backgroundColor: 'rgba(200,16,46,0.08)', alignItems: 'center', justifyContent: 'center',
-  },
-  bpDashedLine: {
-    height: 1, marginHorizontal: 24,
-    borderStyle: 'dashed', borderWidth: 1, borderColor: '#E2E8F0', borderRadius: 1,
-  },
-  bpBottom: {
-    paddingHorizontal: 28, paddingVertical: 22,
-  },
-  bpBudgetWrap: { alignItems: 'center' },
-  bpBudgetRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 8 },
-  bpBudgetTitle: { fontSize: 12, fontWeight: '800', color: '#475569', letterSpacing: 1.2, textTransform: 'uppercase' },
-  bpBudgetAmount: { fontSize: 30, fontWeight: '900', color: themeColors.primary, letterSpacing: 0.5 },
-  bpBudgetSub: { fontSize: 14, color: '#64748B', marginTop: 6, fontWeight: '600' },
-  bpAdviceWrap: {
-    flexDirection: 'row', alignItems: 'flex-start', gap: 12,
-    backgroundColor: '#FFFBEB', borderTopWidth: 1, borderTopColor: '#FDE68A',
-    paddingHorizontal: 26, paddingVertical: 20, borderBottomLeftRadius: 24, borderBottomRightRadius: 24,
-  },
-  bpAdviceText: { fontSize: 15, color: '#92400E', lineHeight: 22, flex: 1, fontStyle: 'italic', fontWeight: '600' },
-
-  // ── Itinerary list (flat rows + iv2 masthead / sections) ──
-  bumpItinSection: { marginBottom: 14 },
-  bumpItinRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 14,
-    paddingHorizontal: 4,
-  },
-  bumpItinNumCircle: {
-    width: 26,
-    height: 26,
-    borderRadius: 13,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 10,
-  },
-  bumpItinNumText: { fontSize: 12, fontWeight: '800', color: '#FFFFFF' },
-  bumpItinThumbWrap: {
-    position: 'relative',
-    width: 50,
-    height: 50,
-    borderRadius: 25,
-    overflow: 'hidden',
-    marginRight: 0,
-  },
-  bumpItinThumb: {
-    width: '100%',
-    height: '100%',
-  },
-  bumpItinThumbPlaceholder: {
-    width: '100%',
-    height: '100%',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  bumpItinRatingPill: {
-    position: 'absolute',
-    bottom: 4,
-    paddingHorizontal: 4,
-    paddingVertical: 2,
-    borderRadius: 6,
-    backgroundColor: 'rgba(255,255,255,0.95)',
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 2,
-  },
-  bumpItinRatingPillText: { fontSize: 9, fontWeight: '800', color: '#0F172A' },
-  bumpItinSummary: { flex: 1, minWidth: 0 },
-  bumpItinName: { fontSize: 15, fontWeight: '800', color: '#0F172A', marginBottom: 3, letterSpacing: -0.2 },
-  bumpItinReason: { fontSize: 12, color: '#64748B', lineHeight: 16 },
-  bumpItinActionRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 6 },
-  bumpItinActionIcon: { padding: 2 },
-  bumpItinChevron: { marginLeft: 4 },
-  bumpItinExpanded: {
-    borderTopWidth: 1,
-    borderTopColor: '#F1F5F9',
-    paddingHorizontal: 12,
-    paddingBottom: 12,
-    paddingTop: 10,
-  },
-  bumpItinExpandedImageWrap: {
-    width: '100%',
-    height: 100,
-    borderRadius: 10,
-    overflow: 'hidden',
-    backgroundColor: '#F8FAFC',
-    marginBottom: 10,
-  },
-  bumpItinExpandedScroll: { width: '100%', height: 100 },
-  bumpItinExpandedScrollContent: { flexGrow: 1 },
-  bumpItinExpandedSlide: {
-    width: SCREEN_WIDTH - 32,
-    height: 100,
-    position: 'relative',
-  },
-  bumpItinExpandedPlaceholder: {
-    width: '100%',
-    height: '100%',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  bumpItinExpandedReason: {
-    fontSize: 13,
-    color: '#64748B',
-    lineHeight: 20,
-    marginBottom: 10,
-  },
-  bumpItinExpandedActions: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 6,
-  },
-  bumpItinExpandedBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    borderRadius: 8,
-  },
-  bumpItinExpandedBtnPrimary: {
-    backgroundColor: themeColors.primary,
-  },
-  bumpItinExpandedBtnPrimaryText: { fontSize: 13, fontWeight: '700', color: '#FFFFFF' },
-  bumpItinExpandedBtnSecondary: {
-    backgroundColor: 'rgba(200,16,46,0.08)',
-    borderWidth: 1,
-    borderColor: 'rgba(200,16,46,0.2)',
-  },
-  bumpItinExpandedBtnSecondaryText: { fontSize: 13, fontWeight: '600', color: themeColors.primary },
-
-  // ── Itinerary section (legacy) ──
-  itinSection: { marginBottom: 16 },
-
-  secBanner: {
-    flexDirection: 'row', alignItems: 'center', borderRadius: 20, paddingVertical: 16,
-    paddingHorizontal: 20, marginBottom: 16,
-  },
-  secIconCircle: {
-    width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center',
-  },
-  secBannerText: { flex: 1, marginLeft: 16 },
-  secBannerTitle: { fontSize: 21, fontWeight: '800', letterSpacing: -0.3 },
-  secBannerSub: { fontSize: 14, fontWeight: '600', opacity: 0.85, marginTop: 2 },
-  secBannerCount: { fontSize: 14, fontWeight: '700' },
-
-  // ── Destination row (number + card) ──
-  destRow: { flexDirection: 'row', paddingLeft: 6 },
-
-  destLeft: { width: 40, alignItems: 'center', paddingTop: 18 },
-  destNumCircle: {
-    width: 32, height: 32, borderRadius: 16, alignItems: 'center', justifyContent: 'center', zIndex: 2,
-  },
-  destNum: { fontSize: 14, fontWeight: '800', color: '#FFFFFF' },
-  destConnector: { flex: 1, width: 2, borderRadius: 1, marginTop: 8 },
-
-  // Card
-  destCard: {
-    flex: 1, backgroundColor: '#FFFFFF', borderRadius: 22, marginLeft: 16, marginBottom: 16,
-    overflow: 'hidden', borderWidth: 0,
-    shadowColor: '#0F172A', shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.08, shadowRadius: 16, elevation: 6,
-  },
-  destStrip: {
-    flexDirection: 'row', alignItems: 'center', gap: 10,
-    paddingHorizontal: 16, paddingVertical: 10,
-  },
-  destStripText: { fontSize: 11, fontWeight: '800', letterSpacing: 1.2 },
-  destBody: {
-    flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingTop: 14, paddingBottom: 10,
-  },
-  destIconBox: {
-    width: 48, height: 48, borderRadius: 16, alignItems: 'center', justifyContent: 'center', marginRight: 16,
-  },
-  destName: { flex: 1, fontSize: 18, fontWeight: '700', color: '#0F172A', lineHeight: 24 },
-  destReasonWrap: {
-    flexDirection: 'row', marginHorizontal: 16, marginBottom: 18, marginTop: 8,
-    backgroundColor: '#FFFBEB', borderRadius: 16, padding: 16, gap: 12,
-  },
-  destReasonQuote: { marginTop: 2 },
-  destReasonText: { flex: 1, fontSize: 15, color: '#78350F', lineHeight: 22, fontStyle: 'italic', fontWeight: '600' },
-  destARBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    alignSelf: 'flex-start',
-    marginTop: 12,
-    paddingVertical: 8,
-    paddingHorizontal: 14,
-    backgroundColor: 'rgba(200,16,46,0.08)',
-    borderRadius: 12,
-  },
-  destARBtnText: { fontSize: 14, fontWeight: '700', color: themeColors.primary },
-
-  // ── Passport stamp footer (legacy) ──
-  stampFooter: { alignItems: 'center', marginTop: 28, paddingBottom: 12 },
-  stampCircle: {
-    width: 96, height: 96, borderRadius: 48, borderWidth: 2.5, borderColor: themeColors.primary,
-    alignItems: 'center', justifyContent: 'center', marginBottom: 16,
-    borderStyle: 'dashed',
-  },
-  stampTop: { fontSize: 10, fontWeight: '800', color: themeColors.primary, letterSpacing: 2 },
-  stampBottom: { fontSize: 9, fontWeight: '700', color: themeColors.primary, letterSpacing: 1.5, marginTop: 2 },
-  stampTagline: { fontSize: 16, fontWeight: '600', color: '#475569', fontStyle: 'italic' },
-
-  // ── Map pins (legacy, kept for reference) ──
-  mapPinWrap: { alignItems: 'center' },
-  mapPinRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  mapPin: {
-    flexDirection: 'row', alignItems: 'center', gap: 4,
-    paddingHorizontal: 9, paddingVertical: 6, borderRadius: 16,
-    shadowColor: '#0F172A', shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.2, shadowRadius: 6, elevation: 6,
-  },
-  mapPinNum: { fontSize: 12, fontWeight: '800', color: '#FFFFFF' },
-  mapPinLabel: {
-    maxWidth: 120, paddingHorizontal: 8, paddingVertical: 5, borderRadius: 10, borderWidth: 1.5,
-    backgroundColor: '#FFFFFF',
-    shadowColor: '#0F172A', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.15, shadowRadius: 4, elevation: 4,
-  },
-  mapPinLabelText: { fontSize: 12, fontWeight: '700' },
-  mapPinArrow: {
-    alignSelf: 'center', width: 0, height: 0,
-    borderLeftWidth: 6, borderRightWidth: 6, borderTopWidth: 8,
-    borderLeftColor: 'transparent', borderRightColor: 'transparent',
-  },
-
-  // ── Animated place markers (profile image + entrance animation) ──
-  animatedMarkerWrap: {
-    alignItems: 'center',
-  },
-  animatedMarkerPulseRing: {
-    position: 'absolute',
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    borderWidth: 3,
-    top: 2,
-  },
-  animatedMarkerAvatar: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    borderWidth: 3,
-    overflow: 'hidden',
-    backgroundColor: '#FFF',
-    shadowColor: '#0F172A',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.25,
-    shadowRadius: 8,
-    elevation: 8,
-  },
-  animatedMarkerImage: {
-    width: '100%',
-    height: '100%',
-    resizeMode: 'cover',
-  },
-  animatedMarkerIconBg: {
-    width: '100%',
-    height: '100%',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  animatedMarkerBadge: {
-    position: 'absolute',
-    bottom: -4,
-    right: -4,
-    width: 20,
-    height: 20,
-    borderRadius: 10,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 2,
-    borderColor: '#FFF',
-  },
-  animatedMarkerBadgeText: {
-    fontSize: 10,
-    fontWeight: '800',
-    color: '#FFF',
-  },
-  animatedMarkerLabel: {
-    marginTop: 6,
-    maxWidth: 110,
-    paddingHorizontal: 8,
-    paddingVertical: 5,
-    borderRadius: 10,
-    borderWidth: 1.5,
-    backgroundColor: '#FFFFFF',
-    shadowColor: '#0F172A',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.15,
-    shadowRadius: 4,
-    elevation: 4,
-  },
-  animatedMarkerLabelText: {
-    fontSize: 12,
-    fontWeight: '700',
-  },
-  animatedMarkerArrow: {
-    alignSelf: 'center',
-    width: 0,
-    height: 0,
-    marginTop: 2,
-    borderLeftWidth: 6,
-    borderRightWidth: 6,
-    borderTopWidth: 8,
-    borderLeftColor: 'transparent',
-    borderRightColor: 'transparent',
-  },
-
-  // ── Radial marker menu (options surrounding pin) ──
-  radialMenuContainer: {
-    position: 'absolute',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  radialMenuBtn: {
-    position: 'absolute',
-    width: RADIAL_BTN,
-    height: RADIAL_BTN,
-    borderRadius: RADIAL_BTN / 2,
-    backgroundColor: themeColors.primary,
-    alignItems: 'center',
-    justifyContent: 'center',
-    shadowColor: '#0F172A',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    elevation: 8,
-  },
-
-  // ── Map scanning overlay (Hang tight) — route tracing + radar ──
-  mapScanningOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    zIndex: 10,
-  },
-  mapScanningRadarCenter: {
-    position: 'absolute',
-    left: SCREEN_WIDTH / 2 - 100,
-    top: SCREEN_HEIGHT / 2 - 100,
-    width: 200,
-    height: 200,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  mapScanningRadarRing: {
-    width: 200,
-    height: 200,
-    borderRadius: 100,
-    borderWidth: 2,
-    borderColor: 'rgba(200,16,46,0.6)',
-    backgroundColor: 'rgba(200,16,46,0.06)',
-  },
-  mapScanningLine: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    height: 4,
-    backgroundColor: 'rgba(200,16,46,0.55)',
-    shadowColor: themeColors.primary,
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.3,
-    shadowRadius: 12,
-    elevation: 6,
-  },
-  mapRoutePath: {
-    ...StyleSheet.absoluteFillObject,
-  },
-  mapRouteSegWrap: {
-    position: 'absolute',
-    left: 30,
-    top: 70,
-    width: SCREEN_WIDTH - 90,
-    height: 4,
-    overflow: 'hidden',
-    backgroundColor: 'rgba(200,16,46,0.15)',
-    borderRadius: 2,
-  },
-  mapRouteSegWrap2: {
-    position: 'absolute',
-    right: 50,
-    top: 70,
-    width: 4,
-    height: 130,
-    overflow: 'hidden',
-    backgroundColor: 'rgba(200,16,46,0.15)',
-    borderRadius: 2,
-  },
-  mapRouteSegWrap3: {
-    position: 'absolute',
-    left: 40,
-    top: 195,
-    width: SCREEN_WIDTH - 90,
-    height: 4,
-    overflow: 'hidden',
-    backgroundColor: 'rgba(200,16,46,0.15)',
-    borderRadius: 2,
-  },
-  mapRouteSegWrap4: {
-    position: 'absolute',
-    left: 40,
-    top: 195,
-    width: 4,
-    height: 130,
-    overflow: 'hidden',
-    backgroundColor: 'rgba(200,16,46,0.15)',
-    borderRadius: 2,
-  },
-  mapRouteSegWrap5: {
-    position: 'absolute',
-    left: 30,
-    top: 320,
-    width: SCREEN_WIDTH - 80,
-    height: 4,
-    overflow: 'hidden',
-    backgroundColor: 'rgba(200,16,46,0.15)',
-    borderRadius: 2,
-  },
-  mapRouteSeg: {
-    position: 'absolute',
-    left: 0,
-    top: 0,
-    backgroundColor: 'rgba(200,16,46,0.7)',
-  },
-  mapRouteSeg1: { width: SCREEN_WIDTH - 90, height: 4, borderRadius: 2 },
-  mapRouteSeg2: { width: 4, height: 130, borderRadius: 2 },
-  mapRouteSeg3: { width: SCREEN_WIDTH - 90, height: 4, borderRadius: 2 },
-  mapRouteSeg4: { width: 4, height: 130, borderRadius: 2 },
-  mapRouteSeg5: { width: SCREEN_WIDTH - 80, height: 4, borderRadius: 2 },
-  mapRouteDotGlow: {
-    position: 'absolute',
-    left: 0,
-    top: 0,
-    width: 24,
-    height: 24,
-    borderRadius: 12,
-    backgroundColor: 'rgba(200,16,46,0.35)',
-  },
-  mapRouteDot: {
-    position: 'absolute',
-    left: 0,
-    top: 0,
-    width: 14,
-    height: 14,
-    borderRadius: 7,
-    backgroundColor: themeColors.primary,
-    borderWidth: 3,
-    borderColor: 'rgba(255,255,255,0.95)',
-    shadowColor: themeColors.primary,
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.4,
-    shadowRadius: 8,
-    elevation: 10,
-  },
-
-  // ── Bump-style UI ──
-  bumpHeaderWrap: {
-    position: 'absolute',
-    left: 16,
-    right: 16,
-    zIndex: 50,
-  },
-  bumpHeaderCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#FFFFFF',
-    borderRadius: 16,
-    paddingVertical: 10,
-    paddingHorizontal: 14,
-    gap: 10,
-    ...Platform.select({
-      ios: { shadowColor: '#0F172A', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.08, shadowRadius: 8 },
-      android: { elevation: 4 },
-    }),
-  },
-  bumpHeaderTextWrap: { flex: 1 },
-  bumpHeaderTitle: { fontSize: 15, fontWeight: '700', color: '#0F172A' },
-  bumpHeaderAddress: { fontSize: 13, color: '#64748B', marginTop: 2, fontWeight: '500' },
-  bumpBottomCardWrap: {
-    position: 'absolute',
-    left: 16,
-    right: 16,
-    zIndex: 50,
-  },
-  bumpBottomCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    backgroundColor: themeColors.primary,
-    borderRadius: 14,
-    paddingVertical: 12,
-    paddingHorizontal: 16,
-    ...Platform.select({
-      ios: { shadowColor: themeColors.primary, shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.2, shadowRadius: 8 },
-      android: { elevation: 6 },
-    }),
-  },
-  bumpBottomCardLeft: {
-    flex: 1,
-  },
-  bumpBottomCardEta: {
-    fontSize: 17,
-    fontWeight: '800',
-    color: '#FFFFFF',
-    letterSpacing: -0.3,
-  },
-  bumpBottomCardSub: {
-    fontSize: 12,
-    color: 'rgba(255,255,255,0.9)',
-    marginTop: 2,
-    fontWeight: '600',
-  },
-  bumpBottomCardStop: {
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderRadius: 10,
-  },
-  bumpBottomCardStopText: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: '#FFFFFF',
-  },
-  bumpBottomCardExpand: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    backgroundColor: '#FFFFFF',
-    borderRadius: 12,
-    paddingVertical: 10,
-    paddingHorizontal: 14,
-    marginTop: 8,
-    ...Platform.select({
-      ios: { shadowColor: '#0F172A', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.08, shadowRadius: 8 },
-      android: { elevation: 4 },
-    }),
-  },
-  bumpBottomCardExpandText: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: '#0F172A',
-    flex: 1,
-  },
-
-  // ── Spot detail card (legacy, kept for fallback) ──
-  spotDetailWrap: {
-    position: 'absolute', left: 20, right: 20, zIndex: 100,
-  },
-  spotDetailCard: {
-    backgroundColor: '#FFFFFF', borderRadius: 22, overflow: 'hidden',
-    shadowColor: '#0F172A', shadowOffset: { width: 0, height: 12 }, shadowOpacity: 0.18, shadowRadius: 28, elevation: 16,
-  },
-  spotDetailAccent: { height: 5 },
-  spotDetailBody: { padding: 20 },
-  spotDetailRow1: { flexDirection: 'row', alignItems: 'flex-start', marginBottom: 14 },
-  spotDetailStep: {
-    width: 34, height: 34, borderRadius: 12, alignItems: 'center', justifyContent: 'center', marginRight: 14, marginTop: 2,
-  },
-  spotDetailStepText: { fontSize: 15, fontWeight: '900', color: '#FFF' },
-  spotDetailNameWrap: { flex: 1, marginRight: 10 },
-  spotDetailName: { fontSize: 18, fontWeight: '800', color: '#0F172A', lineHeight: 24, marginBottom: 8 },
-  spotDetailTags: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  spotDetailTag: {
-    flexDirection: 'row', alignItems: 'center', gap: 5,
-    paddingHorizontal: 10, paddingVertical: 4, borderRadius: 10,
-  },
-  spotDetailTagText: { fontSize: 12, fontWeight: '700' },
-  spotDetailDot: { fontSize: 14, color: '#E2E8F0' },
-  spotDetailTime: { fontSize: 13, fontWeight: '600', color: '#94A3B8' },
-  spotDetailReason: { fontSize: 15, color: '#475569', lineHeight: 22, marginBottom: 16 },
-  spotDetailBtn: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
-    paddingVertical: 15, borderRadius: 16,
-  },
-  spotDetailBtnText: { fontSize: 16, fontWeight: '700', color: '#FFF' },
-
-  // ── Plan modal (Home AI design) ──
-  planModalRoot: { flex: 1, backgroundColor: 'transparent' },
-  planModalBackdropWrap: { ...StyleSheet.absoluteFillObject },
-  planModalBackdropDim: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.12)' },
-  planModalContentWrap: {
-    flex: 1,
-    paddingHorizontal: 16,
-    paddingTop: Platform.OS === 'ios' ? 56 : 44,
-    paddingBottom: 20,
-    alignItems: 'stretch',
-  },
-  planModalPresenceLayer: { flex: 1, width: '100%', alignSelf: 'stretch' },
-  // ── Plan modal hero & chips ──
-  pmHero: {
-    alignItems: 'center',
-    paddingTop: 12,
-    paddingBottom: 8,
-    paddingHorizontal: 16,
-  },
-  pmStepBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    paddingHorizontal: 14,
-    paddingVertical: 6,
-    borderRadius: 20,
-    backgroundColor: 'rgba(255,255,255,0.18)',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.3)',
-    marginBottom: 16,
-  },
-  pmStepBadgeText: {
-    fontSize: 11,
-    fontWeight: '800',
-    color: 'rgba(255,255,255,0.78)',
-    letterSpacing: 1.5,
-  },
-  pmStepDots: {
-    flexDirection: 'row',
-    gap: 4,
-  },
-  pmStepDotSmall: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: 'rgba(255,255,255,0.35)',
-  },
-  pmStepDotSmallActive: {
-    backgroundColor: '#FFFFFF',
-    ...Platform.select({
-      ios: { shadowColor: '#FFF', shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.5, shadowRadius: 4 },
-      android: {},
-    }),
-  },
-  pmTitle: {
-    fontSize: 28,
-    fontWeight: '900',
-    color: '#FFFFFF',
-    textAlign: 'center',
-    letterSpacing: -0.8,
-    lineHeight: 34,
-    marginBottom: 8,
-    ...Platform.select({
-      ios: {
-        textShadowColor: 'rgba(0,0,0,0.4)',
-        textShadowOffset: { width: 0, height: 2 },
-        textShadowRadius: 14,
-      },
-      android: { elevation: 2 },
-    }),
-  },
-  pmSub: {
-    fontSize: 15,
-    fontWeight: '500',
-    color: 'rgba(255,255,255,0.65)',
-    textAlign: 'center',
-    lineHeight: 21,
-    letterSpacing: 0.1,
-    marginBottom: 12,
-    maxWidth: 280,
-  },
-  pmSelectedPill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-    paddingHorizontal: 12,
-    paddingVertical: 5,
-    borderRadius: 14,
-    backgroundColor: 'rgba(255,255,255,0.22)',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.42)',
-  },
-  pmSelectedText: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: '#FFFFFF',
-  },
-  pmChipsWrap: {
-    flex: 1,
-    width: '100%',
-    maxWidth: 400,
-    alignSelf: 'center',
-  },
-  pmChipsScroll: { flex: 1 },
-  pmChipsScrollContent: { paddingBottom: 16, paddingHorizontal: 2 },
-  pmChipsPanel: {
-    width: '100%',
-    borderRadius: 22,
-    paddingVertical: 14,
-    paddingHorizontal: 10,
-    backgroundColor: 'rgba(0,0,0,0.14)',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.22)',
-    ...Platform.select({
-      ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.2, shadowRadius: 20 },
-      android: { elevation: 4 },
-    }),
-  },
-  pmChipsGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    justifyContent: 'center',
-    gap: 10,
-  },
-  pmChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 9,
-    paddingVertical: 11,
-    paddingHorizontal: 15,
-    borderRadius: 26,
-    backgroundColor: 'rgba(255,255,255,0.97)',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.65)',
-    ...Platform.select({
-      ios: { shadowColor: '#1e0a0c', shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.18, shadowRadius: 8 },
-      android: { elevation: 3 },
-    }),
-  },
-  pmChipSelected: {
-    borderWidth: 2,
-    ...Platform.select({
-      ios: { shadowOffset: { width: 0, height: 5 }, shadowOpacity: 0.35, shadowRadius: 14 },
-      android: { elevation: 8 },
-    }),
-  },
-  pmChipIcon: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: 'rgba(15,23,42,0.06)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  pmChipText: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: '#1e293b',
-    letterSpacing: 0.1,
-  },
-  pmChipTextSelected: {
-    color: '#FFFFFF',
-    fontWeight: '800',
-  },
-  pmChipCheck: {
-    width: 20,
-    height: 20,
-    borderRadius: 10,
-    backgroundColor: 'rgba(0,0,0,0.18)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginLeft: -2,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.35)',
-  },
-  ldWrap: {
-    flex: 1,
-    width: '100%',
-  },
-  ldScrollContent: {
-    paddingHorizontal: 24,
-    paddingTop: SCREEN_HEIGHT * 0.3,
-    paddingBottom: 40,
-    alignItems: 'center',
-  },
-  ldTitleSection: {
-    alignItems: 'center',
-    marginBottom: 24,
-  },
-  ldBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 20,
-    backgroundColor: 'rgba(255,255,255,0.18)',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.3)',
-    marginBottom: 16,
-  },
-  ldBadgeDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: '#4ADE80',
-  },
-  ldBadgeText: {
-    fontSize: 11,
-    fontWeight: '800',
-    color: 'rgba(255,255,255,0.8)',
-    letterSpacing: 1.5,
-  },
-  ldTitle: {
-    fontSize: 32,
-    fontWeight: '900',
-    color: '#FFFFFF',
-    textAlign: 'center',
-    letterSpacing: -0.8,
-    lineHeight: 38,
-    marginBottom: 8,
-    ...Platform.select({
-      ios: { textShadowColor: 'rgba(0,0,0,0.3)', textShadowOffset: { width: 0, height: 2 }, textShadowRadius: 12 },
-    }),
-  },
-  ldSub: {
-    fontSize: 15,
-    fontWeight: '600',
-    color: 'rgba(255,255,255,0.75)',
-    textAlign: 'center',
-    lineHeight: 21,
-  },
-  scene3dContainer: {
-    width: '100%',
-    height: SCREEN_HEIGHT * 0.38,
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    zIndex: 0,
-  },
-  scene3dGl: {
-    flex: 1,
-    backgroundColor: 'transparent',
-  },
-  scene3dFade: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
-    height: 100,
-  },
-  ldSuccessCenter: {
-    width: 160,
-    height: 160,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 16,
-  },
-  ldSheetHintCard: {
-    width: '100%',
-    maxWidth: 340,
-    alignSelf: 'center',
-    alignItems: 'center',
-    paddingVertical: 18,
-    paddingHorizontal: 20,
-    borderRadius: 20,
-    backgroundColor: 'rgba(255,255,255,0.96)',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.7)',
-    marginBottom: 20,
-    gap: 8,
-    ...Platform.select({
-      ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.12, shadowRadius: 20 },
-      android: { elevation: 8 },
-    }),
-  },
-  ldSheetHintTitle: {
-    fontSize: 17,
-    fontWeight: '900',
-    color: '#0f172a',
-    textAlign: 'center',
-    letterSpacing: -0.4,
-  },
-  ldSheetHintSub: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#64748b',
-    textAlign: 'center',
-    lineHeight: 19,
-  },
-  lsSteps: {
-    width: '100%',
-    gap: 12,
-    marginBottom: 24,
-  },
-  lsCard: {
-    borderRadius: 16,
-    backgroundColor: 'rgba(255,255,255,0.14)',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.22)',
-    padding: 14,
-    overflow: 'hidden',
-    position: 'relative',
-  },
-  lsCardGlow: {
-    position: 'absolute',
-    top: -20,
-    left: -20,
-    right: -20,
-    bottom: -20,
-    borderRadius: 30,
-    ...Platform.select({
-      ios: { shadowColor: '#C8102E', shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.4, shadowRadius: 20 },
-    }),
-  },
-  lsCardTop: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    marginBottom: 10,
-  },
-  lsIconWrap: {
-    width: 36,
-    height: 36,
-    borderRadius: 10,
-    backgroundColor: 'rgba(255,255,255,0.1)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    position: 'relative',
-  },
-  lsRing: {
-    position: 'absolute',
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    borderWidth: 2,
-  },
-  lsTextCol: { flex: 1 },
-  lsStepName: {
-    fontSize: 15,
-    fontWeight: '700',
-    color: 'rgba(255,255,255,0.45)',
-    marginBottom: 1,
-  },
-  lsStepNameDone: { color: '#FFFFFF' },
-  lsStepNameActive: { color: '#FFFFFF', fontWeight: '800' },
-  lsStepStatus: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: 'rgba(255,255,255,0.3)',
-  },
-  lsBarTrack: {
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: 'rgba(255,255,255,0.2)',
-    overflow: 'hidden',
-    position: 'relative',
-  },
-  lsBarFillWrap: {
-    height: '100%',
-    borderRadius: 3,
-    overflow: 'hidden',
-  },
-  lsBarFill: {
-    flex: 1,
-    borderRadius: 3,
-  },
-  lsBarShimmer: {
-    position: 'absolute',
-    top: 0,
-    bottom: 0,
-    width: 60,
-    backgroundColor: 'rgba(255,255,255,0.25)',
-    borderRadius: 3,
-  },
-  ldFactCard: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 12,
-    width: '100%',
-    paddingVertical: 14,
-    paddingHorizontal: 16,
-    backgroundColor: 'rgba(255,255,255,0.12)',
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.2)',
-  },
-  ldFactIcon: {
-    width: 28,
-    height: 28,
-    borderRadius: 8,
-    backgroundColor: 'rgba(255,255,255,0.18)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginTop: 2,
-  },
-  ldFactContent: { flex: 1 },
-  ldFactLabel: {
-    fontSize: 11,
-    fontWeight: '800',
-    color: '#FACC15',
-    letterSpacing: 0.5,
-    marginBottom: 4,
-  },
-  ldFactText: {
-    fontSize: 13,
-    color: 'rgba(255,255,255,0.75)',
-    lineHeight: 18,
-    fontWeight: '500',
-  },
-  planModalMarqueeMask: {
-    width: '100%',
-    overflow: 'hidden',
-  },
-  planModalBannerWrap: {
-    width: '100%',
-    overflow: 'hidden',
-  },
-  planModalBannerRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 4,
-  },
-  planModalPreviewScroll: {
-    paddingLeft: 4,
-    paddingRight: 24,
-    gap: 12,
-  },
-  planModalPreviewCard: {
-    width: 110,
-    borderRadius: 18,
-    marginRight: 12,
-    backgroundColor: 'rgba(255,255,255,0.15)',
-    borderWidth: 1.5,
-    borderColor: 'rgba(255,255,255,0.3)',
-    overflow: 'hidden',
-    alignItems: 'center',
-    ...Platform.select({
-      ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.2, shadowRadius: 12 },
-      android: { elevation: 6 },
-    }),
-  },
-  planModalPreviewImage: {
-    width: '100%',
-    height: 76,
-    backgroundColor: 'rgba(255,255,255,0.15)',
-    borderTopLeftRadius: 18,
-    borderTopRightRadius: 18,
-  },
-  planModalPreviewIcon: {
-    width: '100%',
-    height: 76,
-    backgroundColor: 'rgba(255,255,255,0.2)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderTopLeftRadius: 18,
-    borderTopRightRadius: 18,
-  },
-  planModalBannerName: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: '#FFFFFF',
-    textAlign: 'center',
-    paddingHorizontal: 8,
-    paddingTop: 8,
-  },
-  planModalBannerTag: {
-    fontSize: 11,
-    color: 'rgba(255,255,255,0.85)',
-    marginTop: 4,
-    fontWeight: '500',
-  },
-  planModalPreviewCardLegacy: {
-    width: 220,
-    borderRadius: 18,
-    marginRight: 12,
-    borderWidth: 1,
-    overflow: 'hidden',
-  },
-  planModalPreviewImage: {
-    width: '100%',
-    height: 96,
-  },
-  planModalPreviewBody: {
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-  },
-  planModalPreviewTagRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 6,
-    gap: 6,
-  },
-  planModalPreviewTag: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 999,
-  },
-  planModalPreviewTagText: {
-    fontSize: 11,
-    fontWeight: '700',
-  },
-  planModalPreviewArea: {
-    fontSize: 11,
-    color: 'rgba(15,23,42,0.9)',
-    fontWeight: '500',
-  },
-  planModalPreviewName: {
-    fontSize: 15,
-    fontWeight: '700',
-    color: '#0F172A',
-    marginBottom: 4,
-  },
-  planModalPreviewSnippet: {
-    fontSize: 13,
-    color: '#1F2937',
-    lineHeight: 18,
-  },
-  planModalPreviewPager: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginTop: 10,
-  },
-  planModalPreviewDotRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-  },
-  planModalPreviewDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: 'rgba(15,23,42,0.18)',
-  },
-  planModalPreviewDotActive: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: '#0F172A',
-  },
-  planModalPreviewCounter: {
-    fontSize: 11,
-    color: 'rgba(15,23,42,0.65)',
-    fontWeight: '600',
-  },
-  planModalOptionsWrap: { flex: 1, width: '100%', maxWidth: 400, alignSelf: 'center' },
-  planModalActionRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 12,
-    marginTop: 16,
-    paddingTop: 16,
-    borderTopWidth: 1,
-    borderTopColor: 'rgba(255,255,255,0.28)',
-  },
-  planModalBackBtn: {
-    width: 48,
-    height: 48,
-    borderRadius: 14,
-    backgroundColor: 'rgba(255,255,255,0.22)',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.38)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  planModalContinueBtn: {
-    flex: 1,
-    height: 52,
-    borderRadius: 16,
-    overflow: 'hidden',
-    ...Platform.select({
-      ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.15, shadowRadius: 12 },
-      android: { elevation: 6 },
-    }),
-  },
-  planModalBtnGradient: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-  },
-  planModalContinueBtnText: { fontSize: 16, fontWeight: '800', color: '#FFFFFF', letterSpacing: 0.3 },
-  planModalGenerateBtn: {
-    flex: 1,
-    height: 52,
-    borderRadius: 16,
-    overflow: 'hidden',
-    ...Platform.select({
-      ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.15, shadowRadius: 16 },
-      android: { elevation: 8 },
-    }),
-  },
-  planModalGenerateBtnText: { fontSize: 15, fontWeight: '800', color: '#FFFFFF', letterSpacing: 0.3 },
-  optionCheckBadge: {
-    position: 'absolute',
-    top: -4,
-    right: -4,
-    width: 20,
-    height: 20,
-    borderRadius: 10,
-    backgroundColor: 'rgba(255,255,255,0.3)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1.5,
-    borderColor: 'rgba(255,255,255,0.5)',
-  },
-  doorOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    zIndex: 9999,
-    elevation: 9999,
-  },
-  doorHalf: {
-    position: 'absolute',
-    top: 0,
-    bottom: 0,
-    width: SCREEN_WIDTH / 2,
-    overflow: 'hidden',
-  },
-  doorLeft: {
-    left: 0,
-  },
-  doorRight: {
-    right: 0,
-  },
-  doorZigzag: {
-    position: 'absolute',
-    top: 0,
-    left: SCREEN_WIDTH / 2,
-    bottom: 0,
-    zIndex: 2,
-  },
-  doorIconWrap: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    alignItems: 'center',
-    justifyContent: 'center',
-    zIndex: 10000,
-  },
-  doorLogoShadow: {
-    width: 124,
-    height: 124,
-    borderRadius: 62,
-    borderWidth: 4,
-    borderColor: '#FFFFFF',
-    overflow: 'hidden',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.4,
-    shadowRadius: 16,
-    elevation: 14,
-  },
-  doorLogoImage: {
-    width: 116,
-    height: 116,
-    borderRadius: 58,
-  },
-  doorFlagLabel: {
-    marginTop: 16,
-    fontSize: 20,
-    fontWeight: '900',
-    color: '#FFFFFF',
-    letterSpacing: 3,
-    textTransform: 'uppercase',
-    textShadowColor: 'rgba(0,0,0,0.4)',
-    textShadowOffset: { width: 0, height: 2 },
-    textShadowRadius: 6,
-  },
-});

@@ -7,9 +7,7 @@ import {
   ScrollView,
   FlatList,
   TouchableOpacity,
-  TouchableWithoutFeedback,
   Image,
-  useWindowDimensions,
   Platform,
   Animated,
   Easing,
@@ -38,26 +36,67 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import ScreenContainer from '../components/ScreenContainer';
 import ClientProfileModal from '../components/ClientProfileModal';
 import { useAuth } from '../context/AuthContext';
+import { useDoorTransition } from '../context/DoorTransitionContext';
 import { supabase } from '../config/supabase';
 import { ensureImageUrl } from '../utils/imageUrl';
+import { Gesture, GestureDetector } from 'react-native-gesture-handler';
+import Reanimated, { runOnJS, useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated';
+import { fetchFeedPage, trackInteraction, getVoterId, clearFeedCache } from '../services/feedService';
 
-const VOTER_ID_KEY = '@gobahrain_voter_id';
-
-async function getVoterId() {
-  try {
-    let id = await AsyncStorage.getItem(VOTER_ID_KEY);
-    if (!id) {
-      id = `${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
-      await AsyncStorage.setItem(VOTER_ID_KEY, id);
-    }
-    return id;
-  } catch {
-    return `anon-${Date.now()}`;
-  }
-}
-
-const DOUBLE_TAP_DELAY = 350;
 const { width: WINDOW_WIDTH, height: WINDOW_HEIGHT } = Dimensions.get('window');
+
+const FEED_IMAGE_ZOOM_MAX = 4;
+const ReanimatedImage = Reanimated.createAnimatedComponent(Image);
+
+/** Pinch-to-zoom on feed photos; double-tap still triggers upvote (handled via onImageDoubleTap). */
+function PinchZoomPostImage({ uri, style, onImageDoubleTap, onLoad, onError }) {
+  const scale = useSharedValue(1);
+  const savedScale = useSharedValue(1);
+
+  const pinchGesture = Gesture.Pinch()
+    .onUpdate((event) => {
+      const next = savedScale.value * event.scale;
+      const clamped = Math.min(FEED_IMAGE_ZOOM_MAX, Math.max(1, next));
+      scale.value = clamped;
+    })
+    .onEnd(() => {
+      if (scale.value < 1.02) {
+        scale.value = withSpring(1, { damping: 18, stiffness: 280 });
+        savedScale.value = 1;
+      } else {
+        savedScale.value = scale.value;
+      }
+    });
+
+  const doubleTapGesture = Gesture.Tap()
+    .numberOfTaps(2)
+    .maxDuration(280)
+    .onEnd((event) => {
+      runOnJS(onImageDoubleTap)(event.absoluteX, event.absoluteY);
+    });
+
+  const composed = Gesture.Simultaneous(pinchGesture, doubleTapGesture);
+
+  const imageAnimatedStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: scale.value }],
+  }));
+
+  return (
+    <View style={{ flex: 1, overflow: 'hidden', width: '100%' }} collapsable={false}>
+      <GestureDetector gesture={composed}>
+        <View style={{ flex: 1, overflow: 'hidden' }} collapsable={false}>
+          <ReanimatedImage
+            source={{ uri }}
+            style={[style, imageAnimatedStyle]}
+            resizeMode="cover"
+            onLoad={onLoad}
+            onError={onError}
+          />
+        </View>
+      </GestureDetector>
+    </View>
+  );
+}
 
 const PARTICLE_SIZE = 28;
 const PARTICLE_COUNT = 14;
@@ -98,10 +137,17 @@ function getHomeStyles(colors) {
     },
     headerBlur: {
       ...StyleSheet.absoluteFillObject,
+      zIndex: 0,
       backgroundColor: Platform.OS === 'android' ? C.screenBg : 'transparent',
     },
     headerContent: {
       paddingBottom: 0,
+      position: 'relative',
+      zIndex: 2,
+      ...Platform.select({
+        android: { elevation: 14 },
+        ios: {},
+      }),
     },
     instagramHeader: {
       flexDirection: 'row',
@@ -206,8 +252,7 @@ function getHomeStyles(colors) {
       minHeight: 0,
     },
     filtersScrollView: {
-      flexGrow: 0,
-      flex: 1,
+      width: '100%',
     },
     filtersScroll: {
       paddingVertical: 8,
@@ -273,18 +318,22 @@ function getHomeStyles(colors) {
       paddingVertical: 8,
       paddingBottom: 40,
     },
-    card: {
-      backgroundColor: C.cardBg,
+    /** Shadow/elevation on outer so inner can clip zoomed images (Android breaks clip when both are on one view). */
+    cardOuter: {
       marginHorizontal: 12,
       marginBottom: 18,
       borderRadius: 20,
-      overflow: 'hidden',
-      borderWidth: 1,
-      borderColor: C.borderLight,
       ...Platform.select({
         ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.1, shadowRadius: 12 },
         android: { elevation: 5 },
       }),
+    },
+    cardInner: {
+      backgroundColor: C.cardBg,
+      borderRadius: 20,
+      overflow: 'hidden',
+      borderWidth: 1,
+      borderColor: C.borderLight,
     },
     cardHeader: {
       flexDirection: 'row',
@@ -581,7 +630,7 @@ function filterPostsBySearch(posts, searchQuery) {
   });
 }
 
-/** Distance in km between two points (haversine). */
+/** Same formula as feedService (km) for consistent “Nearby” ordering on the client. */
 function haversineKm(lat1, lon1, lat2, lon2) {
   const R = 6371;
   const dLat = ((lat2 - lat1) * Math.PI) / 180;
@@ -593,23 +642,38 @@ function haversineKm(lat1, lon1, lat2, lon2) {
   return R * c;
 }
 
-/** Sort posts by distance from user (closest first). Posts without coords go last. */
-function sortPostsByDistance(posts, userLat, userLng) {
-  if (!posts.length || userLat == null || userLng == null) return posts;
-  return [...posts].sort((a, b) => {
-    const latA = a.lat != null ? parseFloat(a.lat) : NaN;
-    const lngA = a.lng != null ? parseFloat(a.lng) : (a.long != null ? parseFloat(a.long) : NaN);
-    const latB = b.lat != null ? parseFloat(b.lat) : NaN;
-    const lngB = b.lng != null ? parseFloat(b.lng) : (b.long != null ? parseFloat(b.long) : NaN);
-    const hasA = !Number.isNaN(latA) && !Number.isNaN(lngA);
-    const hasB = !Number.isNaN(latB) && !Number.isNaN(lngB);
-    if (!hasA && !hasB) return 0;
-    if (!hasA) return 1;
-    if (!hasB) return -1;
-    const distA = haversineKm(userLat, userLng, latA, lngA);
-    const distB = haversineKm(userLat, userLng, latB, lngB);
-    return distA - distB;
-  });
+/** Apply home feed chip ordering using fields we actually have on each post. */
+function applyFeedSort(posts, feedMode, userPosition) {
+  const list = [...posts];
+  const lat = userPosition?.latitude;
+  const lng = userPosition?.longitude;
+  const hasUserCoords = lat != null && lng != null && !Number.isNaN(lat) && !Number.isNaN(lng);
+
+  if (feedMode === 'popular') {
+    return list.sort((a, b) => {
+      const up = (b.upvotes ?? 0) - (a.upvotes ?? 0);
+      if (up !== 0) return up;
+      return new Date(b.created_at || 0) - new Date(a.created_at || 0);
+    });
+  }
+
+  if (feedMode === 'recent') {
+    return list.sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
+  }
+
+  if (feedMode === 'nearby' && hasUserCoords) {
+    return list.sort((a, b) => {
+      if (a.lat == null || a.lng == null) return 1;
+      if (b.lat == null || b.lng == null) return -1;
+      return haversineKm(lat, lng, a.lat, a.lng) - haversineKm(lat, lng, b.lat, b.lng);
+    });
+  }
+
+  if (feedMode === 'photos') {
+    return list.sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
+  }
+
+  return list;
 }
 
 function choiceToPostId(choice, posts) {
@@ -627,16 +691,6 @@ function choiceToPostId(choice, posts) {
   return match ? match.id : posts[0]?.id ?? null;
 }
 
-/** Fisher–Yates shuffle. Returns a new array in random order so the feed feels fresh each load. */
-function shufflePosts(posts) {
-  const arr = [...posts];
-  for (let i = arr.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [arr[i], arr[j]] = [arr[j], arr[i]];
-  }
-  return arr;
-}
-
 /** Instagram-style: Upvote (replaces Like), Share; no comment. Bookmark on right. Built in HomeScreen from theme. */
 
 const NOTIFICATION_COUNT = 3;
@@ -646,11 +700,6 @@ const CARD_PADDING = 14;
 const DESC_COLLAPSED_LENGTH = 100; // ~2 lines
 
 function PostCard({ item, isHighlighted = false, onHighlightDone, onUpvoteToggle, onClientPress, upvoteScaleAnim, styles, COLORS, ACTION_BUTTONS_LEFT, UPVOTE_COLOR }) {
-  const { width } = useWindowDimensions();
-  const imageWidth = width;
-  const imageHeight = imageWidth; // Instagram: square 1:1
-
-  const lastTapRef = useRef(0);
   const [descExpanded, setDescExpanded] = useState(false);
   const hasUpvoted = item.hasUpvoted ?? false;
   const displayUpvotes = item.upvotes ?? 0;
@@ -746,17 +795,11 @@ function PostCard({ item, isHighlighted = false, onHighlightDone, onUpvoteToggle
     onUpvoteToggle?.(item, e);
   };
 
-  const handleImagePress = (e) => {
-    const now = Date.now();
-    if (now - lastTapRef.current < DOUBLE_TAP_DELAY) {
-      if (!hasUpvoted) {
-        animateUpvote();
-      }
-      onUpvoteToggle?.(item, e);
-      lastTapRef.current = 0;
-    } else {
-      lastTapRef.current = now;
+  const handleImageDoubleTap = (pageX, pageY) => {
+    if (!hasUpvoted) {
+      animateUpvote();
     }
+    onUpvoteToggle?.(item, { nativeEvent: { pageX, pageY } });
   };
 
   const glowOpacity = highlightGlow.interpolate({
@@ -766,14 +809,15 @@ function PostCard({ item, isHighlighted = false, onHighlightDone, onUpvoteToggle
 
   return (
     <Animated.View
-      style={[styles.card, { transform: [{ scale: highlightScale }] }]}
+      style={[styles.cardOuter, { transform: [{ scale: highlightScale }] }]}
     >
+      <Animated.View style={styles.cardInner}>
       <Animated.View
         pointerEvents="none"
         style={[
           StyleSheet.absoluteFill,
           styles.cardHighlightGlow,
-          { opacity: glowOpacity, borderRadius: 24 },
+          { opacity: glowOpacity, borderRadius: 20 },
         ]}
       />
       <Animated.View
@@ -781,7 +825,7 @@ function PostCard({ item, isHighlighted = false, onHighlightDone, onUpvoteToggle
         style={[
           StyleSheet.absoluteFill,
           styles.cardHighlightBorder,
-          { opacity: glowOpacity, borderRadius: 24 },
+          { opacity: glowOpacity, borderRadius: 20 },
         ]}
       />
       <TouchableOpacity
@@ -814,47 +858,45 @@ function PostCard({ item, isHighlighted = false, onHighlightDone, onUpvoteToggle
           <Ionicons name="chevron-forward-circle-outline" size={22} color={COLORS.primary} />
         </TouchableOpacity>
       </TouchableOpacity>
-      <TouchableWithoutFeedback onPress={handleImagePress}>
-        <View style={styles.cardImageContainer}>
-          {item.imageUri ? (
-            <Image
-              source={{ uri: item.imageUri }}
-              style={[styles.cardImage, { width: '100%', height: '100%' }]}
-              resizeMode="cover"
-              onLoad={() => console.log(`[PostCard] LOADED: ${item.imageUri}`)}
-              onError={(e) => console.error(`[PostCard] ERROR: ${item.imageUri}`, e.nativeEvent.error)}
-            />
-          ) : (
-            <View style={[styles.cardImage, { width: WINDOW_WIDTH, height: WINDOW_WIDTH, alignItems: 'center', justifyContent: 'center' }]}>
-              <Ionicons name="image-outline" size={48} color={COLORS.textMuted} />
-            </View>
-          )}
-          
-          <Animated.View 
-            style={[
-              StyleSheet.absoluteFill, 
-              { 
-                alignItems: 'center', 
-                justifyContent: 'center', 
-                opacity: upvoteAnimOpacity, 
-                transform: [
-                  { scale: upvoteAnimScale },
-                  { translateY: upvoteAnimTranslateY }
-                ] 
-              }
-            ]}
-            pointerEvents="none"
-          >
-            <Ionicons name="arrow-up-circle" size={100} color="#FFFFFF" />
-          </Animated.View>
+      <View style={styles.cardImageContainer} collapsable={false}>
+        {item.imageUri ? (
+          <PinchZoomPostImage
+            uri={item.imageUri}
+            style={[styles.cardImage, { width: '100%', height: '100%' }]}
+            onImageDoubleTap={handleImageDoubleTap}
+            onLoad={() => console.log(`[PostCard] LOADED: ${item.imageUri}`)}
+            onError={(e) => console.error(`[PostCard] ERROR: ${item.imageUri}`, e.nativeEvent.error)}
+          />
+        ) : (
+          <View style={[styles.cardImage, { width: WINDOW_WIDTH, height: WINDOW_WIDTH, alignItems: 'center', justifyContent: 'center' }]}>
+            <Ionicons name="image-outline" size={48} color={COLORS.textMuted} />
+          </View>
+        )}
 
-          {item.priceRange ? (
-            <View style={styles.cardFloatingBadge}>
-              <Text style={styles.cardFloatingBadgeText}>{item.priceRange}</Text>
-            </View>
-          ) : null}
-        </View>
-      </TouchableWithoutFeedback>
+        <Animated.View
+          style={[
+            StyleSheet.absoluteFill,
+            {
+              alignItems: 'center',
+              justifyContent: 'center',
+              opacity: upvoteAnimOpacity,
+              transform: [
+                { scale: upvoteAnimScale },
+                { translateY: upvoteAnimTranslateY },
+              ],
+            },
+          ]}
+          pointerEvents="none"
+        >
+          <Ionicons name="arrow-up-circle" size={100} color="#FFFFFF" />
+        </Animated.View>
+
+        {item.priceRange ? (
+          <View style={styles.cardFloatingBadge}>
+            <Text style={styles.cardFloatingBadgeText}>{item.priceRange}</Text>
+          </View>
+        ) : null}
+      </View>
       <View style={styles.cardBody}>
         <View style={styles.actionRow}>
           <View style={styles.actionRowLeft}>
@@ -917,6 +959,7 @@ function PostCard({ item, isHighlighted = false, onHighlightDone, onUpvoteToggle
           );
         })() : null}
       </View>
+      </Animated.View>
     </Animated.View>
   );
 }
@@ -992,10 +1035,17 @@ function easeInOutCubic(t) {
 }
 
 /** Wraps a feed item and runs a staggered fade-in + slide-up on mount. */
-function StaggeredFeedItem({ index, children }) {
+function StaggeredFeedItem({ index, children, isRefreshing = false }) {
   const opacity = useRef(new Animated.Value(0)).current;
   const translateY = useRef(new Animated.Value(24)).current;
+  const scale = useRef(new Animated.Value(0.95)).current;
+  
   useEffect(() => {
+    // Reset animations
+    opacity.setValue(0);
+    translateY.setValue(24);
+    scale.setValue(0.95);
+    
     const delay = Math.min(index * 58, 420);
     Animated.sequence([
       Animated.delay(delay),
@@ -1006,92 +1056,207 @@ function StaggeredFeedItem({ index, children }) {
           easing: Easing.out(Easing.cubic),
           useNativeDriver: true,
         }),
-        Animated.timing(translateY, {
+        Animated.spring(translateY, {
           toValue: 0,
-          duration: 360,
-          easing: Easing.out(Easing.cubic),
+          tension: 120,
+          friction: 10,
+          useNativeDriver: true,
+        }),
+        Animated.spring(scale, {
+          toValue: 1,
+          tension: 140,
+          friction: 9,
           useNativeDriver: true,
         }),
       ]),
     ]).start();
-  }, [index]);
+  }, [index, isRefreshing]);
+  
   return (
-    <Animated.View style={{ opacity, transform: [{ translateY }] }}>
+    <Animated.View style={{ opacity, transform: [{ translateY }, { scale }] }}>
       {children}
     </Animated.View>
   );
 }
 
 function CoolRefreshControl({ scrollY, refreshing, topInset, colors }) {
-  const rotateAnim = useRef(new Animated.Value(0)).current;
-
+  const spinValue = useRef(new Animated.Value(0)).current;
+  const scaleValue = useRef(new Animated.Value(1)).current;
+  const dotsRotate = useRef(new Animated.Value(0)).current;
+  
   useEffect(() => {
     if (refreshing) {
+      // Smooth continuous spin
       Animated.loop(
-        Animated.timing(rotateAnim, {
+        Animated.timing(spinValue, {
           toValue: 1,
-          duration: 1000,
+          duration: 800,
+          easing: Easing.linear,
+          useNativeDriver: true,
+        })
+      ).start();
+      
+      // Pulse effect
+      Animated.loop(
+        Animated.sequence([
+          Animated.timing(scaleValue, {
+            toValue: 1.1,
+            duration: 800,
+            easing: Easing.inOut(Easing.ease),
+            useNativeDriver: true,
+          }),
+          Animated.timing(scaleValue, {
+            toValue: 1,
+            duration: 800,
+            easing: Easing.inOut(Easing.ease),
+            useNativeDriver: true,
+          }),
+        ])
+      ).start();
+      
+      // Orbiting dots
+      Animated.loop(
+        Animated.timing(dotsRotate, {
+          toValue: 1,
+          duration: 2000,
           easing: Easing.linear,
           useNativeDriver: true,
         })
       ).start();
     } else {
-      rotateAnim.setValue(0);
-      rotateAnim.stopAnimation();
+      spinValue.setValue(0);
+      scaleValue.setValue(1);
+      dotsRotate.setValue(0);
+      spinValue.stopAnimation();
+      scaleValue.stopAnimation();
+      dotsRotate.stopAnimation();
     }
-  }, [refreshing]);
+  }, [refreshing, spinValue, scaleValue, dotsRotate]);
 
   const scale = scrollY.interpolate({
     inputRange: [-120, -60, 0],
-    outputRange: [1.2, 1, 0],
+    outputRange: [1, 1, 0],
     extrapolate: 'clamp',
   });
 
-  const rotate = scrollY.interpolate({
+  const pullRotate = scrollY.interpolate({
     inputRange: [-150, 0],
     outputRange: ['360deg', '0deg'],
     extrapolate: 'clamp',
   });
   
-  const spin = rotateAnim.interpolate({
+  const spin = spinValue.interpolate({
+    inputRange: [0, 1],
+    outputRange: ['0deg', '360deg']
+  });
+  
+  const dotsRotation = dotsRotate.interpolate({
     inputRange: [0, 1],
     outputRange: ['0deg', '360deg']
   });
 
   const translateY = scrollY.interpolate({
     inputRange: [-150, 0],
-    outputRange: [0, -50], // Move down slightly as you pull
+    outputRange: [10, -50],
     extrapolate: 'clamp',
   });
 
   return (
     <View style={{
       position: 'absolute',
-      top: topInset + 10,
+      top: topInset + 20,
       left: 0,
       right: 0,
       alignItems: 'center',
       justifyContent: 'center',
-      zIndex: 1, // Visible above background but below list content if possible, or just rely on list moving down
+      zIndex: 1,
       pointerEvents: 'none'
     }}>
       <Animated.View style={{
-        transform: [
-          { translateY },
-          { scale },
-          { rotate: refreshing ? spin : rotate }
-        ],
+        transform: [{ translateY }, { scale }],
         opacity: scale
       }}>
-        <View style={{
-          width: 48, height: 48, borderRadius: 24,
-          backgroundColor: colors.surface,
-          alignItems: 'center', justifyContent: 'center',
-          shadowColor: colors.primary, shadowOffset: {width: 0, height: 4}, shadowOpacity: 0.2, shadowRadius: 8, elevation: 6,
-          borderWidth: 1, borderColor: colors.borderLight
+        <Animated.View style={{
+          transform: [
+            { scale: scaleValue },
+            { rotate: refreshing ? spin : pullRotate }
+          ]
         }}>
-           <Ionicons name="airplane" size={26} color={colors.primary} />
-        </View>
+          {/* Main gradient circle */}
+          <View style={{
+            width: 44,
+            height: 44,
+            borderRadius: 22,
+            overflow: 'hidden',
+            backgroundColor: colors.surface,
+            ...Platform.select({
+              ios: {
+                shadowColor: colors.primary,
+                shadowOffset: { width: 0, height: 4 },
+                shadowOpacity: 0.25,
+                shadowRadius: 12,
+              },
+              android: {
+                elevation: 6,
+              }
+            })
+          }}>
+            <LinearGradient
+              colors={[colors.primary, colors.primaryLight || colors.primary, colors.primary]}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={{
+                width: '100%',
+                height: '100%',
+                alignItems: 'center',
+                justifyContent: 'center',
+              }}
+            >
+              {refreshing ? (
+                <View style={{ width: 24, height: 24, alignItems: 'center', justifyContent: 'center' }}>
+                  {/* Three dots loader */}
+                  <View style={{ flexDirection: 'row', gap: 4 }}>
+                    <View style={{ width: 4, height: 4, borderRadius: 2, backgroundColor: '#FFFFFF' }} />
+                    <View style={{ width: 4, height: 4, borderRadius: 2, backgroundColor: '#FFFFFF', opacity: 0.7 }} />
+                    <View style={{ width: 4, height: 4, borderRadius: 2, backgroundColor: '#FFFFFF', opacity: 0.4 }} />
+                  </View>
+                </View>
+              ) : (
+                <Ionicons name="chevron-down" size={20} color="#FFFFFF" />
+              )}
+            </LinearGradient>
+          </View>
+          
+          {/* Orbiting dots when refreshing */}
+          {refreshing && (
+            <Animated.View style={{
+              position: 'absolute',
+              width: 70,
+              height: 70,
+              alignItems: 'center',
+              justifyContent: 'center',
+              transform: [{ rotate: dotsRotation }]
+            }}>
+              {[0, 120, 240].map((angle, i) => (
+                <View
+                  key={i}
+                  style={{
+                    position: 'absolute',
+                    width: 6,
+                    height: 6,
+                    borderRadius: 3,
+                    backgroundColor: colors.primary,
+                    opacity: 0.6,
+                    transform: [
+                      { translateX: Math.cos((angle * Math.PI) / 180) * 35 },
+                      { translateY: Math.sin((angle * Math.PI) / 180) * 35 },
+                    ]
+                  }}
+                />
+              ))}
+            </Animated.View>
+          )}
+        </Animated.View>
       </Animated.View>
     </View>
   );
@@ -1103,6 +1268,7 @@ export default function HomeScreen() {
   const route = useRoute();
   const navigation = useNavigation();
   const { profile } = useAuth();
+  const { isAwaitingHomeOpen, notifyHomeReady } = useDoorTransition();
 
   const COLORS = useMemo(() => ({
     primary: colors.primary,
@@ -1122,11 +1288,11 @@ export default function HomeScreen() {
   }), [colors]);
 
   const CATEGORIES = useMemo(() => [
-    { id: 'nearby', label: 'Nearby', icon: 'location', color: colors.primary },
-    { id: 'food', label: 'Food', icon: 'restaurant', color: colors.success },
-    { id: 'hangout', label: 'Hangout', icon: 'pin', color: colors.afternoon },
-    { id: 'trending', label: 'Trending', icon: 'trending-up', color: colors.morning },
-    { id: 'opennow', label: 'Open Now', icon: 'time', color: colors.primary },
+    { id: 'all', label: 'For you', icon: 'sparkles', color: colors.primary },
+    { id: 'nearby', label: 'Nearby', icon: 'navigate', color: colors.success },
+    { id: 'popular', label: 'Popular', icon: 'flame', color: colors.morning },
+    { id: 'recent', label: 'New', icon: 'time', color: colors.afternoon },
+    { id: 'photos', label: 'Photos', icon: 'images', color: colors.primary },
   ], [colors]);
 
   const ACTION_BUTTONS_LEFT = useMemo(() => [
@@ -1139,7 +1305,8 @@ export default function HomeScreen() {
 
   const [locationUpdating, setLocationUpdating] = useState(false);
   const [userPosition, setUserPosition] = useState(null);
-  const [selectedCategory, setSelectedCategory] = useState('nearby');
+  const [locationModeActive, setLocationModeActive] = useState(false);
+  const [selectedCategory, setSelectedCategory] = useState('all');
   const locationBtnScale = useRef(new Animated.Value(1)).current;
   const locationBtnRingScale = useRef(new Animated.Value(1)).current;
   const locationBtnRingOpacity = useRef(new Animated.Value(0)).current;
@@ -1156,6 +1323,9 @@ export default function HomeScreen() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [fetchError, setFetchError] = useState(null);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [nextCursor, setNextCursor] = useState(null);
+  const [hasMore, setHasMore] = useState(true);
   const [showScrollToTop, setShowScrollToTop] = useState(false);
   const [searchExpanded, setSearchExpanded] = useState(false);
   const [filtersExpanded, setFiltersExpanded] = useState(false);
@@ -1164,6 +1334,12 @@ export default function HomeScreen() {
   const [upvoteParticlesVisible, setUpvoteParticlesVisible] = useState(false);
   const [upvoteParticlePosition, setUpvoteParticlePosition] = useState({ x: 0, y: 0 });
   const [selectedClientId, setSelectedClientId] = useState(null);
+  const [showMapAnimation, setShowMapAnimation] = useState(false);
+  const [feedRefreshKey, setFeedRefreshKey] = useState(0);
+  const mapAnimOpacity = useRef(new Animated.Value(0)).current;
+  const mapAnimScale = useRef(new Animated.Value(0)).current;
+  const mapAnimRotate = useRef(new Animated.Value(0)).current;
+  const mapPulse = useRef(new Animated.Value(1)).current;
   const lastPulseRef = useRef(0);
   const flatListRef = useRef(null);
   const scrollOffsetRef = useRef(0);
@@ -1174,8 +1350,8 @@ export default function HomeScreen() {
   const lastScrollY = useRef(0);
   const headerTranslateY = useRef(new Animated.Value(0)).current;
   const headerVisibleRef = useRef(true);
-  // Reserve space so first post is not covered. Must match header: paddingTop (2) + title row (44) + search (52) + filters (84) + buffer
-  const FILTERS_SECTION_EXPANDED_HEIGHT = 84;
+  // Reserve space so first post is not covered. Must match header: paddingTop (2) + title row (44) + search (52) + filters row + buffer
+  const FILTERS_SECTION_EXPANDED_HEIGHT = 96;
   const HEADER_TITLE_ROW_HEIGHT = 44;
   const SEARCH_BAR_HEIGHT = 52; // searchHeight outputRange max
   const HEADER_TOP_PADDING = 2;
@@ -1207,12 +1383,19 @@ export default function HomeScreen() {
   }, [searchExpanded]);
 
   useEffect(() => {
-    Animated.spring(filtersSectionAnim, {
-      toValue: filtersExpanded ? 1 : 0,
+    const target = filtersExpanded ? 1 : 0;
+    const anim = Animated.timing(filtersSectionAnim, {
+      toValue: target,
+      duration: 220,
+      easing: Easing.out(Easing.cubic),
       useNativeDriver: false,
-      tension: 65,
-      friction: 11,
-    }).start();
+    });
+    anim.start(({ finished }) => {
+      if (finished) {
+        filtersSectionAnim.setValue(target);
+      }
+    });
+    return () => anim.stop();
   }, [filtersExpanded, filtersSectionAnim]);
 
   const toggleFilters = useCallback(() => {
@@ -1278,199 +1461,232 @@ export default function HomeScreen() {
   const filtersSectionHeight = filtersSectionAnim.interpolate({
     inputRange: [0, 1],
     outputRange: [0, FILTERS_SECTION_EXPANDED_HEIGHT],
-  });
-  const filtersSectionOpacity = filtersSectionAnim.interpolate({
-    inputRange: [0, 0.5, 1],
-    outputRange: [0, 0, 1],
+    extrapolate: 'clamp',
   });
 
   const filteredPosts = useMemo(() => {
-    const bySearch = filterPostsBySearch(posts, searchQuery);
-    if (userPosition?.latitude != null && userPosition?.longitude != null) {
-      return sortPostsByDistance(bySearch, userPosition.latitude, userPosition.longitude);
+    let result = posts;
+
+    if (searchQuery.trim()) {
+      result = filterPostsBySearch(result, searchQuery);
     }
-    return bySearch;
-  }, [posts, searchQuery, userPosition?.latitude, userPosition?.longitude]);
 
-  const fetchPosts = useCallback(async (opts = {}) => {
-    const { skipGlobalLoading = false, onDone } = opts;
-    try {
-      setFetchError(null);
-      if (!skipGlobalLoading) setLoading(true);
-      console.log('[Home] Fetching posts from Supabase...');
-      const { data: postRows, error } = await supabase
-        .from('posts')
-        .select('*')
-        .order('created_at', { ascending: false });
+    if (selectedCategory === 'photos') {
+      result = result.filter((p) => Boolean(p.imageUri));
+    }
 
-      console.log('[Home] Supabase response:', { rowCount: postRows?.length ?? 0, error: error?.message ?? null });
-
-      if (error) {
-        console.error('[Home] Error fetching posts:', error.message, error);
-        const errMsg = String(error?.message ?? error ?? '');
-        const isNetworkError = /network request failed|failed to fetch|network error/i.test(errMsg);
-        setFetchError(isNetworkError ? 'network' : errMsg || 'unknown');
-        setPosts([]);
-        if (!skipGlobalLoading) setLoading(false);
-        onDone?.();
-        return;
-      }
-
-      const rows = postRows || [];
-      const clientIds = [...new Set(rows.map((r) => r.client_a_uuid).filter(Boolean))];
-      let clientMap = {};
-
-      if (clientIds.length > 0) {
-        let clientRows = [];
-        let clientError = null;
-        const byId = await supabase.from('client').select('*').in('id', clientIds);
-        if (byId.error || !byId.data?.length) {
-          const byClientUuid = await supabase.from('client').select('*').in('client_a_uuid', clientIds);
-          clientRows = byClientUuid.data || [];
-          clientError = byClientUuid.error;
-        } else {
-          clientRows = byId.data;
-          clientError = byId.error;
-        }
-        if (!clientError && clientRows.length) {
-          clientRows.forEach((c) => {
-            const id = c.id ?? c.client_a_uuid;
-            if (id) clientMap[id] = c;
-            if (c.client_a_uuid && c.client_a_uuid !== id) clientMap[c.client_a_uuid] = c;
-          });
-          console.log('[Home] Loaded clients:', clientRows.length, clientRows.map((c) => c.business_name || c.name || c.client_a_uuid));
-        } else if (clientError) {
-          console.warn('[Home] Client fetch failed (check RLS or table name "client"):', clientError.message);
-        }
-      }
-
-      const mapped = rows.map((row) => {
-        const client = clientMap[row.client_a_uuid] || null;
-        const tags = client?.tags != null
-          ? (Array.isArray(client.tags) ? client.tags : String(client.tags).split(',').map((t) => t.trim()).filter(Boolean))
-          : [];
-        const rating = client?.rating != null && client?.rating !== '' ? client.rating : null;
-        const clientPrice = client?.price_range != null && client?.price_range !== '' ? client.price_range : null;
-        const postPrice = row.price_range != null && row.price_range !== '' ? row.price_range : null;
-        const priceRange = postPrice ?? clientPrice;
-        const businessName = client?.business_name ?? client?.name ?? client?.business_name_ar ?? null;
-        const rawClientImage = client?.client_image != null && String(client.client_image).trim() !== '' ? String(client.client_image).trim() : null;
-        const clientImage = rawClientImage ? (ensureImageUrl(rawClientImage) || rawClientImage) : null;
+    // Sort by distance if location mode is active
+    if (locationModeActive && userPosition?.latitude && userPosition?.longitude) {
+      // Sort by distance
+      const sorted = [...result].sort((a, b) => {
+        if (!a.lat || !a.lng) return 1;
+        if (!b.lat || !b.lng) return -1;
         
-        // Ensure post_image is a valid string/URI
-        let imageUri = row.post_image;
+        const distA = Math.sqrt(
+          Math.pow(a.lat - userPosition.latitude, 2) + 
+          Math.pow(a.lng - userPosition.longitude, 2)
+        );
+        const distB = Math.sqrt(
+          Math.pow(b.lat - userPosition.latitude, 2) + 
+          Math.pow(b.lng - userPosition.longitude, 2)
+        );
         
-        if (imageUri && typeof imageUri === 'string' && imageUri.startsWith('[{')) {
-          try {
-            const parsed = JSON.parse(imageUri);
-            if (Array.isArray(parsed) && parsed[0]?.url) {
-              imageUri = parsed[0].url;
-            } else if (Array.isArray(parsed) && typeof parsed[0] === 'string') {
-              imageUri = parsed[0];
-            }
-          } catch (e) {
-            console.warn('[Home] Failed to parse post_image JSON:', e);
+        return distA - distB;
+      });
+      
+      // Apply diversification (no consecutive same user)
+      const diversified = [];
+      const remaining = [...sorted];
+      const recentUsers = new Set();
+      
+      while (remaining.length > 0) {
+        let selectedIndex = -1;
+        
+        // Try to find a post from a user not in recent set
+        for (let i = 0; i < remaining.length; i++) {
+          const post = remaining[i];
+          if (!recentUsers.has(post.clientId)) {
+            selectedIndex = i;
+            break;
           }
         }
         
-        // If it's a relative path from Supabase storage, prepend the base URL
-        if (imageUri && typeof imageUri === 'string' && !imageUri.startsWith('http')) {
-          const cleanPath = imageUri.startsWith('gobahrain-post-images/') 
-            ? imageUri.replace('gobahrain-post-images/', '') 
-            : imageUri;
-          imageUri = `https://zonhaprelkjyjugpqfdn.supabase.co/storage/v1/object/public/gobahrain-post-images/${cleanPath}`;
+        // If all remaining posts are from recent users, clear the set and pick the closest
+        if (selectedIndex === -1) {
+          recentUsers.clear();
+          selectedIndex = 0;
         }
-
-        // Final check: if still no imageUri, use a placeholder or check if it's a direct Supabase path
-        if (!imageUri && row.post_image) {
-          imageUri = row.post_image;
+        
+        const selected = remaining[selectedIndex];
+        diversified.push(selected);
+        recentUsers.add(selected.clientId);
+        
+        // Keep last 2 users in memory to prevent consecutive duplicates
+        if (recentUsers.size > 2) {
+          const firstUser = [...recentUsers][0];
+          recentUsers.delete(firstUser);
         }
-
-        const lat = client?.lat != null && client?.lat !== '' ? parseFloat(client.lat) : null;
-        const lng = client?.long != null && client?.long !== '' ? parseFloat(client.long) : (client?.lng != null && client?.lng !== '' ? parseFloat(client.lng) : null);
-        const hasCoords = lat != null && !Number.isNaN(lat) && lng != null && !Number.isNaN(lng);
-
-        return {
-          id: row.post_uuid,
-          clientId: row.client_a_uuid,
-          username: row.client_a_uuid?.slice(0, 8) ?? 'client',
-          businessName: businessName ? String(businessName).trim() : null,
-          clientImage,
-          tags,
-          rating,
-          priceRange: priceRange != null ? `${priceRange} BHD` : '',
-          verified: false,
-          location: client?.location || client?.address || '',
-          distance: '',
-          lat: hasCoords ? lat : null,
-          lng: hasCoords ? lng : null,
-          imageUri: imageUri,
-          openNow: false,
-          upvotes: 0,
-          hasUpvoted: false,
-          description: row.description || '',
-        };
-      });
-
-      const postIds = mapped.map((p) => p.id);
-      const voterId = await getVoterId();
-      let upvoteCounts = {};
-      let myUpvotedIds = new Set();
-
-      if (postIds.length > 0) {
-        const { data: upvoteRows } = await supabase
-          .from('post_upvote')
-          .select('post_uuid, voter_id')
-          .in('post_uuid', postIds);
-        if (upvoteRows?.length) {
-          upvoteRows.forEach((r) => {
-            upvoteCounts[r.post_uuid] = (upvoteCounts[r.post_uuid] || 0) + 1;
-            if (r.voter_id === voterId) myUpvotedIds.add(r.post_uuid);
-          });
-        }
+        
+        remaining.splice(selectedIndex, 1);
       }
+      
+      return diversified;
+    }
 
-      mapped.forEach((p) => {
-        p.upvotes = upvoteCounts[p.id] ?? 0;
-        p.hasUpvoted = myUpvotedIds.has(p.id);
+    return applyFeedSort(result, selectedCategory, userPosition);
+  }, [
+    posts,
+    searchQuery,
+    selectedCategory,
+    userPosition?.latitude,
+    userPosition?.longitude,
+    locationModeActive,
+  ]);
+
+  const fetchPosts = useCallback(async (opts = {}) => {
+    const { skipGlobalLoading = false, onDone, append = false } = opts;
+    try {
+      setFetchError(null);
+      if (!skipGlobalLoading && !append) setLoading(true);
+      if (append) setLoadingMore(true);
+      
+      console.log('[Home] Fetching feed page...');
+      
+      const result = await fetchFeedPage({
+        cursor: append ? nextCursor : null,
+        limit: 15,
+        userLat: userPosition?.latitude,
+        userLng: userPosition?.longitude,
+        category: null,
+        searchQuery: searchQuery.trim() || null,
+        useCache: !append && !skipGlobalLoading,
       });
-
-      console.log('[Home] Mapped posts:', mapped.length, mapped.map((p) => p.id));
-      const fallbackPosts = [
-        { id: '28e92d6c-b228-47d0-ac58-7481af618f45', clientId: 'e2885f06-b664-4d00-81b9-650828c2ed6f', username: 'e2885f06', businessName: null, tags: [], rating: null, priceRange: '0.100 BHD', verified: false, location: '', distance: '', imageUri: 'https://zonhaprelkjyjugpqfdn.supabase.co/storage/v1/object/public/gobahrain-post-images/e2885f06-b664-4d00-81b9-650828c2ed6f/a2c53cb8-a5cd-4299-bf01-e2760faf47c2.jpeg', openNow: false, upvotes: 0, hasUpvoted: false, description: 'karak' },
-        { id: 'a11f9c80-a5dc-490d-807d-5ae4bb84ded6', clientId: '40e1cc11-034f-41c8-bc3b-267e705d72d9', username: '40e1cc11', businessName: null, tags: [], rating: null, priceRange: '3.5 BHD', verified: false, location: '', distance: '', imageUri: 'https://zonhaprelkjyjugpqfdn.supabase.co/storage/v1/object/public/gobahrain-post-images/40e1cc11-034f-41c8-bc3b-267e705d72d9/9550a0f4-aa62-43bd-b765-7c1cb1ca0489.webp', openNow: false, upvotes: 0, hasUpvoted: false, description: 'chessy cheesy burger' },
-        { id: 'c86ef509-9f55-4134-8e1e-e20b6821b97e', clientId: '40e1cc11-034f-41c8-bc3b-267e705d72d9', username: '40e1cc11', businessName: null, tags: [], rating: null, priceRange: '2 BHD', verified: false, location: '', distance: '', imageUri: 'https://zonhaprelkjyjugpqfdn.supabase.co/storage/v1/object/public/gobahrain-post-images/40e1cc11-034f-41c8-bc3b-267e705d72d9/a5f2d5dd-2260-4c7e-b3ea-bda3d7755501.jpeg', openNow: false, upvotes: 0, hasUpvoted: false, description: 'try new sizzling burger' },
-      ];
-      const list = mapped.length > 0 ? mapped : fallbackPosts;
-      setPosts(shufflePosts(list));
+      
+      console.log('[Home] Feed result:', { 
+        posts: result.posts.length, 
+        hasMore: result.hasMore,
+        nextCursor: result.nextCursor 
+      });
+      
+      if (append) {
+        setPosts(prev => [...prev, ...result.posts]);
+      } else {
+        setPosts(result.posts);
+      }
+      
+      setNextCursor(result.nextCursor);
+      setHasMore(result.hasMore);
+      
+      // Only trigger re-animation for full refresh, not append
+      if (!append && !skipGlobalLoading) {
+        setFeedRefreshKey(prev => prev + 1);
+      }
     } catch (err) {
       console.error('[Home] Failed to fetch posts:', err);
       const errMsg = String(err?.message ?? err ?? '');
       const isNetworkError = /network request failed|failed to fetch|network error/i.test(errMsg);
       setFetchError(isNetworkError ? 'network' : errMsg || 'unknown');
-      setPosts([]);
+      if (!append) setPosts([]);
     } finally {
-      if (!skipGlobalLoading) setLoading(false);
+      if (!skipGlobalLoading && !append) setLoading(false);
+      if (append) setLoadingMore(false);
       onDone?.();
     }
+  }, [nextCursor, userPosition?.latitude, userPosition?.longitude, searchQuery]);
+
+  useEffect(() => {
+    // Only fetch on mount, not when dependencies change
+    fetchPosts();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
-    fetchPosts();
-  }, [fetchPosts]);
-
-  const handleRefresh = useCallback(() => {
+    if (!loading && isAwaitingHomeOpen) {
+      let cancelled = false
+      const task = InteractionManager.runAfterInteractions(() => {
+        if (!cancelled) notifyHomeReady()
+      })
+      return () => {
+        cancelled = true
+        if (task && typeof task.cancel === 'function') task.cancel()
+      }
+    }
+  }, [loading, isAwaitingHomeOpen, notifyHomeReady])
+  
+  const handleRefresh = useCallback(async () => {
     if (refreshingRef.current) return;
     refreshingRef.current = true;
     setRefreshing(true);
-    fetchPosts({
-      skipGlobalLoading: true,
-      onDone: () => {
-        setRefreshing(false);
-        refreshingRef.current = false;
-      },
-    });
-  }, [fetchPosts]);
+    
+    console.log('[Home] 🔄 REFRESH STARTED - Clearing cache...');
+    await clearFeedCache();
+    setNextCursor(null);
+    setHasMore(true);
+    
+    // Call fetchPosts directly without relying on callback reference
+    try {
+      setFetchError(null);
+      setLoading(false);
+      
+      console.log('[Home] 🔄 Fetching fresh feed with randomization...');
+      
+      const result = await fetchFeedPage({
+        cursor: null,
+        limit: 15,
+        userLat: userPosition?.latitude,
+        userLng: userPosition?.longitude,
+        category: null,
+        searchQuery: searchQuery.trim() || null,
+        useCache: false, // Always fetch fresh on refresh
+        isRefresh: true, // Add randomization to scoring
+      });
+      
+      console.log('[Home] ✅ Refresh complete:', { 
+        posts: result.posts.length, 
+        hasMore: result.hasMore,
+        firstPostId: result.posts[0]?.id,
+        firstPostBusiness: result.posts[0]?.businessName 
+      });
+      
+      setPosts(result.posts);
+      setNextCursor(result.nextCursor);
+      setHasMore(result.hasMore);
+      setFeedRefreshKey(prev => prev + 1); // Trigger re-animation
+    } catch (err) {
+      console.error('[Home] Failed to refresh:', err);
+      const errMsg = String(err?.message ?? err ?? '');
+      const isNetworkError = /network request failed|failed to fetch|network error/i.test(errMsg);
+      setFetchError(isNetworkError ? 'network' : errMsg || 'unknown');
+    } finally {
+      setRefreshing(false);
+      refreshingRef.current = false;
+    }
+  }, [userPosition?.latitude, userPosition?.longitude, searchQuery]);
+  
+  const handleLoadMore = useCallback(() => {
+    if (loadingMore || !hasMore || loading || refreshing) return;
+    
+    console.log('[Home] Loading more posts...');
+    fetchPosts({ skipGlobalLoading: true, append: true });
+  }, [loadingMore, hasMore, loading, refreshing, fetchPosts]);
+
+  const handleViewableItemsChanged = useRef(({ viewableItems }) => {
+    if (viewableItems.length > 0) {
+      const viewable = viewableItems[0]?.item;
+      if (viewable?.id) {
+        trackInteraction('VIEW', { 
+          postId: viewable.id, 
+          clientId: viewable.clientId,
+          tags: viewable.tags 
+        });
+      }
+    }
+  }).current;
+  
+  const viewabilityConfig = useRef({
+    itemVisiblePercentThreshold: 50,
+    minimumViewTime: 1000,
+  }).current;
 
   const handleUpvoteToggle = useCallback(async (post, event) => {
     const adding = !post.hasUpvoted;
@@ -1480,7 +1696,6 @@ export default function HomeScreen() {
     if (!upvoteAnimations[post.id]) upvoteAnimations[post.id] = { scale: new Animated.Value(1) };
     const scaleAnim = upvoteAnimations[post.id].scale;
 
-    // Update count and state immediately so the UI feels instant
     const newCount = Math.max(0, post.upvotes + (adding ? 1 : -1));
     setPosts((prev) =>
       prev.map((p) =>
@@ -1509,6 +1724,12 @@ export default function HomeScreen() {
           useNativeDriver: true,
         }),
       ]).start();
+      
+      trackInteraction('LIKE', { 
+        postId: post.id, 
+        clientId: post.clientId,
+        tags: post.tags 
+      });
     } else {
       Animated.sequence([
         Animated.timing(scaleAnim, {
@@ -1579,6 +1800,14 @@ export default function HomeScreen() {
     setSelectedClientId(openClientId);
     navigation.setParams({ openClientId: undefined });
   }, [route.params?.openClientId, navigation]);
+
+  // Scroll to top when home button is pressed while on Home screen
+  useEffect(() => {
+    if (route.params?.scrollToTop) {
+      flatListRef.current?.scrollToOffset({ offset: 0, animated: true });
+      navigation.setParams({ scrollToTop: undefined });
+    }
+  }, [route.params?.scrollToTop, navigation]);
 
   useEffect(() => {
     if (!khalidCommandRef.current || posts.length === 0) return;
@@ -1831,6 +2060,49 @@ export default function HomeScreen() {
   const handleUpdateLocation = useCallback(async () => {
     const userRow = profile?.user;
     const userUuid = userRow?.user_a_uuid;
+    
+    // Toggle location mode
+    if (locationModeActive) {
+      // Turn OFF location mode - back to default algorithm
+      setLocationModeActive(false);
+      setUserPosition(null);
+      
+      // Animate button back to normal
+      Animated.spring(locationBtnScale, {
+        toValue: 1,
+        useNativeDriver: true,
+        friction: 8,
+        tension: 120,
+      }).start();
+      
+      // Refetch with default algorithm
+      await clearFeedCache();
+      setNextCursor(null);
+      setHasMore(true);
+      
+      try {
+        const result = await fetchFeedPage({
+          cursor: null,
+          limit: 15,
+          userLat: null,
+          userLng: null,
+          category: null,
+          searchQuery: searchQuery.trim() || null,
+          useCache: false,
+          isRefresh: true,
+        });
+        
+        setPosts(result.posts);
+        setNextCursor(result.nextCursor);
+        setHasMore(result.hasMore);
+        setFeedRefreshKey(prev => prev + 1); // Trigger re-animation
+      } catch (err) {
+        console.error('[Home] Failed to reset feed:', err);
+      }
+      
+      return;
+    }
+    
     if (!userUuid) {
       Alert.alert('Location', 'Sign in as a user to save your location.');
       return;
@@ -1840,12 +2112,72 @@ export default function HomeScreen() {
       const { status } = await Location.requestForegroundPermissionsAsync();
       if (status !== 'granted') {
         Alert.alert('Location', 'Permission denied. Enable location in Settings to save your position.');
+        setLocationUpdating(false);
         return;
       }
       const { coords } = await Location.getCurrentPositionAsync({
         accuracy: Location.Accuracy.Balanced,
       });
       const { latitude, longitude } = coords;
+      
+      // Show map loading animation
+      setShowMapAnimation(true);
+      mapAnimOpacity.setValue(0);
+      mapAnimScale.setValue(0);
+      mapAnimRotate.setValue(0);
+      mapPulse.setValue(1);
+      
+      // Entrance animation
+      Animated.parallel([
+        Animated.spring(mapAnimScale, {
+          toValue: 1,
+          tension: 150,
+          friction: 8,
+          useNativeDriver: true,
+        }),
+        Animated.timing(mapAnimOpacity, {
+          toValue: 1,
+          duration: 300,
+          useNativeDriver: true,
+        }),
+      ]).start();
+      
+      // Scanning/loading animation
+      Animated.loop(
+        Animated.sequence([
+          Animated.timing(mapAnimRotate, {
+            toValue: 1,
+            duration: 2000,
+            easing: Easing.inOut(Easing.ease),
+            useNativeDriver: true,
+          }),
+          Animated.timing(mapAnimRotate, {
+            toValue: 0,
+            duration: 2000,
+            easing: Easing.inOut(Easing.ease),
+            useNativeDriver: true,
+          }),
+        ])
+      ).start();
+      
+      // Pulse animation
+      Animated.loop(
+        Animated.sequence([
+          Animated.timing(mapPulse, {
+            toValue: 1.2,
+            duration: 800,
+            easing: Easing.inOut(Easing.ease),
+            useNativeDriver: true,
+          }),
+          Animated.timing(mapPulse, {
+            toValue: 1,
+            duration: 800,
+            easing: Easing.inOut(Easing.ease),
+            useNativeDriver: true,
+          }),
+        ])
+      ).start();
+      
       let areaLabel = '';
       try {
         const [rev] = await Location.reverseGeocodeAsync({ latitude, longitude });
@@ -1859,12 +2191,64 @@ export default function HomeScreen() {
         .eq('user_a_uuid', userUuid);
       if (error) throw error;
 
-      // Animate list reorder (closest first)
+      // Set user position and ENABLE location mode
+      setUserPosition({ latitude, longitude });
+      setLocationModeActive(true);
+      
+      // Fetch fresh posts from database with distance sorting
+      await clearFeedCache();
+      setNextCursor(null);
+      setHasMore(true);
+      
+      try {
+        console.log('[Home] Fetching posts with location:', latitude, longitude);
+        const result = await fetchFeedPage({
+          cursor: null,
+          limit: 30, // Fetch more posts for better distance variety
+          userLat: latitude,
+          userLng: longitude,
+          category: 'nearby',
+          searchQuery: searchQuery.trim() || null,
+          useCache: false,
+          isRefresh: false, // Don't randomize, pure distance
+        });
+        
+        console.log('[Home] Location-based posts loaded:', result.posts.length);
+        setPosts(result.posts);
+        setNextCursor(result.nextCursor);
+        setHasMore(result.hasMore);
+        setFeedRefreshKey(prev => prev + 1); // Trigger re-animation
+      } catch (err) {
+        console.error('[Home] Failed to fetch location-based posts:', err);
+      }
+      
+      // Hide map animation after fetch completes
+      setTimeout(() => {
+        Animated.parallel([
+          Animated.timing(mapAnimOpacity, {
+            toValue: 0,
+            duration: 300,
+            useNativeDriver: true,
+          }),
+          Animated.spring(mapAnimScale, {
+            toValue: 0.8,
+            tension: 150,
+            friction: 8,
+            useNativeDriver: true,
+          }),
+        ]).start(() => {
+          setShowMapAnimation(false);
+          mapAnimRotate.stopAnimation();
+          mapPulse.stopAnimation();
+        });
+      }, 1800);
+
+      // Animate list appearance
       LayoutAnimation.configureNext(
         LayoutAnimation.create(320, LayoutAnimation.Types.easeInEaseOut, LayoutAnimation.Properties.opacity)
       );
-      setUserPosition({ latitude, longitude });
-      // Scroll to top after reorder so the closest place is visible
+      
+      // Scroll to top to show closest place
       requestAnimationFrame(() => {
         setTimeout(() => {
           flatListRef.current?.scrollToOffset({ offset: 0, animated: true });
@@ -1917,17 +2301,13 @@ export default function HomeScreen() {
         ]),
       ]).start();
 
-      if (areaLabel) {
-        Alert.alert('Location saved', `You're in ${areaLabel}. Coordinates saved.`);
-      } else {
-        Alert.alert('Location saved', `Lat ${latitude.toFixed(4)}, Long ${longitude.toFixed(4)} saved.`);
-      }
+      // No alert dialog - animation is the feedback
     } catch (e) {
       Alert.alert('Location', e?.message ?? 'Could not get or save location.');
     } finally {
       setLocationUpdating(false);
     }
-  }, [profile?.user?.user_a_uuid, locationBtnScale, locationBtnRingScale, locationBtnRingOpacity, locationSuccessOpacity]);
+  }, [profile?.user?.user_a_uuid, locationModeActive, locationBtnScale, locationBtnRingScale, locationBtnRingOpacity, locationSuccessOpacity, mapAnimOpacity, mapAnimScale, mapAnimRotate, mapPulse]);
 
   return (
     <ScreenContainer style={styles.screen}>
@@ -1949,7 +2329,7 @@ export default function HomeScreen() {
         <View style={styles.headerContent}>
           <View style={styles.instagramHeader}>
             <TouchableOpacity
-              style={styles.headerIconBtn}
+              style={[styles.headerIconBtn, locationModeActive && styles.headerIconBtnActive]}
               onPress={handleUpdateLocation}
               disabled={locationUpdating}
               activeOpacity={0.7}
@@ -1968,6 +2348,16 @@ export default function HomeScreen() {
                 <Animated.View style={{ transform: [{ scale: locationBtnScale }] }}>
                   {locationUpdating ? (
                     <ActivityIndicator size="small" color={COLORS.textPrimary} />
+                  ) : locationModeActive ? (
+                    <>
+                      <Animated.View
+                        style={{
+                          opacity: locationBtnBlinkOpacity,
+                        }}
+                      >
+                        <Ionicons name="location" size={24} color={COLORS.primary} />
+                      </Animated.View>
+                    </>
                   ) : (
                     <>
                       <Animated.View
@@ -2067,11 +2457,11 @@ export default function HomeScreen() {
           </Animated.View>
 
           <Animated.View
+            collapsable={false}
             style={[
               styles.filtersSection,
               {
                 height: filtersSectionHeight,
-                opacity: filtersSectionOpacity,
                 overflow: 'hidden',
               },
             ]}
@@ -2079,8 +2469,10 @@ export default function HomeScreen() {
             <ScrollView
               horizontal
               showsHorizontalScrollIndicator={false}
+              nestedScrollEnabled
+              keyboardShouldPersistTaps="handled"
               contentContainerStyle={styles.filtersScroll}
-              style={styles.filtersScrollView}
+              style={[styles.filtersScrollView, { height: FILTERS_SECTION_EXPANDED_HEIGHT }]}
             >
               {CATEGORIES.map((cat) => {
                 const selected = selectedCategory === cat.id;
@@ -2157,6 +2549,25 @@ export default function HomeScreen() {
             <Text style={styles.retryBtnText}>Clear search</Text>
           </TouchableOpacity>
         </View>
+      ) : posts.length > 0 && filteredPosts.length === 0 ? (
+        <View style={styles.loadingWrap}>
+          <Ionicons name="images-outline" size={48} color={COLORS.textMuted} />
+          <Text style={styles.emptyText}>
+            {selectedCategory === 'photos'
+              ? 'No posts with a photo in your feed yet'
+              : 'Nothing matches this filter right now'}
+          </Text>
+          <TouchableOpacity
+            style={styles.retryBtn}
+            onPress={() => {
+              setSelectedCategory('all');
+              setHighlightedPostId(null);
+            }}
+            activeOpacity={0.8}
+          >
+            <Text style={styles.retryBtnText}>Show all posts</Text>
+          </TouchableOpacity>
+        </View>
       ) : (
         <Animated.FlatList
           ref={flatListRef}
@@ -2165,13 +2576,18 @@ export default function HomeScreen() {
           renderItem={({ item, index }) => {
             if (!upvoteAnimations[item.id]) upvoteAnimations[item.id] = { scale: new Animated.Value(1) };
             return (
-              <StaggeredFeedItem index={index}>
+              <StaggeredFeedItem key={`${item.id}-${feedRefreshKey}`} index={index} isRefreshing={refreshing}>
                 <PostCard
                   item={item}
                   isHighlighted={item.id === highlightedPostId}
                   onHighlightDone={() => setHighlightedPostId(null)}
                   onUpvoteToggle={handleUpvoteToggle}
-                  onClientPress={(post) => post?.clientId && setSelectedClientId(post.clientId)}
+                  onClientPress={(post) => {
+                    if (post?.clientId) {
+                      trackInteraction('PROFILE_VIEW', { clientId: post.clientId });
+                      setSelectedClientId(post.clientId);
+                    }
+                  }}
                   upvoteScaleAnim={upvoteAnimations[item.id].scale}
                   styles={styles}
                   COLORS={COLORS}
@@ -2203,14 +2619,35 @@ export default function HomeScreen() {
           onScrollToIndexFailed={() => {}}
           onScroll={handleScroll}
           scrollEventThrottle={16}
+          onEndReached={handleLoadMore}
+          onEndReachedThreshold={0.3}
+          onViewableItemsChanged={handleViewableItemsChanged}
+          viewabilityConfig={viewabilityConfig}
+          ListFooterComponent={
+            loadingMore && hasMore ? (
+              <View style={{ paddingVertical: 30, alignItems: 'center' }}>
+                <ActivityIndicator size="large" color={COLORS.primary} />
+                <Text style={{ marginTop: 12, fontSize: 14, color: COLORS.textMuted }}>
+                  Loading more posts...
+                </Text>
+              </View>
+            ) : !hasMore && posts.length > 0 ? (
+              <View style={{ paddingVertical: 30, alignItems: 'center' }}>
+                <Text style={{ fontSize: 14, color: COLORS.textMuted }}>
+                  You've reached the end!
+                </Text>
+              </View>
+            ) : null
+          }
           refreshControl={
             <RefreshControl
               refreshing={refreshing}
               onRefresh={handleRefresh}
-              colors={['transparent']} 
-              tintColor="transparent"
-              progressBackgroundColor="transparent"
-              style={{ backgroundColor: 'transparent' }}
+              colors={[COLORS.primary]} 
+              tintColor={COLORS.primary}
+              progressBackgroundColor={COLORS.cardBg}
+              title="Pull to refresh"
+              titleColor={COLORS.textMuted}
             />
           }
         />
@@ -2322,9 +2759,108 @@ export default function HomeScreen() {
         </KeyboardAvoidingView>
       </Modal>
       <UpvoteParticles visible={upvoteParticlesVisible} position={upvoteParticlePosition} UPVOTE_COLOR={UPVOTE_COLOR} colors={colors} />
+      
+      {/* Map Loading Animation */}
+      {showMapAnimation && (
+        <Animated.View
+          style={{
+            position: 'absolute',
+            top: '40%',
+            left: 0,
+            right: 0,
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 9999,
+            opacity: mapAnimOpacity,
+            transform: [{ scale: mapAnimScale }]
+          }}
+          pointerEvents="none"
+        >
+          <View style={{
+            width: 120,
+            height: 120,
+            borderRadius: 60,
+            backgroundColor: COLORS.cardBg,
+            alignItems: 'center',
+            justifyContent: 'center',
+            ...Platform.select({
+              ios: {
+                shadowColor: COLORS.primary,
+                shadowOffset: { width: 0, height: 10 },
+                shadowOpacity: 0.4,
+                shadowRadius: 30,
+              },
+              android: {
+                elevation: 15,
+              }
+            }),
+          }}>
+            <LinearGradient
+              colors={[COLORS.primary, COLORS.primaryLight || COLORS.primary]}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={{
+                width: '100%',
+                height: '100%',
+                borderRadius: 60,
+                alignItems: 'center',
+                justifyContent: 'center',
+              }}
+            >
+              <Animated.View style={{
+                transform: [
+                  { scale: mapPulse },
+                  { 
+                    rotate: mapAnimRotate.interpolate({
+                      inputRange: [0, 1],
+                      outputRange: ['0deg', '360deg']
+                    })
+                  }
+                ]
+              }}>
+                <Ionicons name="map" size={50} color="#FFFFFF" />
+              </Animated.View>
+            </LinearGradient>
+            
+            {/* Scanning rings */}
+            <Animated.View style={{
+              position: 'absolute',
+              width: 120,
+              height: 120,
+              borderRadius: 60,
+              borderWidth: 3,
+              borderColor: COLORS.primary,
+              opacity: mapPulse.interpolate({
+                inputRange: [1, 1.2],
+                outputRange: [0.5, 0]
+              }),
+              transform: [{ scale: mapPulse }]
+            }} />
+            <Animated.View style={{
+              position: 'absolute',
+              width: 140,
+              height: 140,
+              borderRadius: 70,
+              borderWidth: 2,
+              borderColor: COLORS.primary,
+              opacity: mapPulse.interpolate({
+                inputRange: [1, 1.2],
+                outputRange: [0.3, 0]
+              }),
+              transform: [{ 
+                scale: mapPulse.interpolate({
+                  inputRange: [1, 1.2],
+                  outputRange: [1, 1.3]
+                })
+              }]
+            }} />
+          </View>
+        </Animated.View>
+      )}
+      
       {!loading && posts.length > 0 && showScrollToTop ? (
         <TouchableOpacity
-          style={[styles.scrollToTopBtn, { bottom: 24 + insets.bottom }]}
+          style={[styles.scrollToTopBtn, { bottom: 90 + insets.bottom }]}
           onPress={scrollToTop}
           activeOpacity={0.9}
         >

@@ -323,6 +323,65 @@ function formatTimeAgo(iso) {
   return `${Math.floor(sec / 2592000)}mo`;
 }
 
+const COMMENT_SELECT = 'comment_uuid, body, created_at, user_a_uuid';
+
+function mapCommentRow(row) {
+  if (!row) return null;
+  const shortId = String(row.user_a_uuid || '').replace(/-/g, '').slice(0, 6);
+  const author = shortId ? `@${shortId}` : 'Member';
+  return {
+    id: row.comment_uuid,
+    body: row.body || '',
+    author,
+    time: formatTimeAgo(row.created_at),
+  };
+}
+
+/**
+ * Replies for a community post. Requires table public.community_comment (see database/migrations/002_community_comment.sql).
+ * Returns [] if the table is missing or on error.
+ */
+export async function fetchCommunityComments(communityUuid) {
+  if (!communityUuid) return [];
+  const { data, error } = await supabase
+    .from('community_comment')
+    .select(COMMENT_SELECT)
+    .eq('community_uuid', communityUuid)
+    .order('created_at', { ascending: true });
+
+  if (error) {
+    console.warn('[Community] fetchCommunityComments:', error.message);
+    return [];
+  }
+  return (data || []).map(mapCommentRow).filter(Boolean);
+}
+
+/**
+ * Insert a reply. Uses getCommunityUserId() for user_a_uuid (same as posts).
+ */
+export async function createCommunityComment(communityUuid, text) {
+  const body = (text || '').trim();
+  if (!communityUuid || !body) {
+    throw new Error('Comment cannot be empty');
+  }
+  const user_a_uuid = await getCommunityUserId();
+  const { data, error } = await supabase
+    .from('community_comment')
+    .insert({
+      community_uuid: communityUuid,
+      user_a_uuid,
+      body,
+    })
+    .select(COMMENT_SELECT)
+    .single();
+
+  if (error) {
+    console.error('[Community] createCommunityComment:', error);
+    throw error;
+  }
+  return mapCommentRow(data);
+}
+
 /**
  * Upload up to 2 images to bucket community_reviews. Accepts array of { base64, mimeType? } (React Native friendly).
  * Returns array of public URLs.

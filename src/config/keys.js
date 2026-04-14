@@ -21,3 +21,7 @@ const K3 = 'https://gobahrain-1pj8txc.svc.aped-4627-b74a.pinecone.io';
 export const OPENAI_KEY = (typeof process !== 'undefined' && process.env?.EXPO_PUBLIC_OPENAI_API_KEY) || _d(K1);
 export const PINECONE_KEY = (typeof process !== 'undefined' && process.env?.EXPO_PUBLIC_PINECONE_API_KEY) || _d(K2);
 export const PINECONE_HOST = (typeof process !== 'undefined' && process.env?.EXPO_PUBLIC_PINECONE_HOST) || K3;
+
+/** Day-plan chat model — override with EXPO_PUBLIC_OPENAI_PLAN_MODEL (e.g. gpt-4.1-mini) if needed */
+export const OPENAI_PLAN_MODEL =
+  (typeof process !== 'undefined' && process.env?.EXPO_PUBLIC_OPENAI_PLAN_MODEL) || 'gpt-4o'

@@ -1,4 +1,4 @@
-import { OPENAI_KEY, PINECONE_KEY, PINECONE_HOST } from '../config/keys';
+import { OPENAI_KEY, PINECONE_KEY, PINECONE_HOST, OPENAI_PLAN_MODEL } from '../config/keys';
 import { supabase } from '../config/supabase';
 
 const OPENAI_API_KEY = OPENAI_KEY;
@@ -7,6 +7,18 @@ const PINECONE_API_KEY = PINECONE_KEY;
 const OPENAI_EMBEDDINGS_URL = 'https://api.openai.com/v1/embeddings';
 const OPENAI_CHAT_URL = 'https://api.openai.com/v1/chat/completions';
 const PINECONE_QUERY_URL = `${PINECONE_HOST}/query`;
+const PINECONE_API_VERSION = '2024-07';
+const FETCH_TIMEOUT_MS = 45000;
+
+async function fetchWithTimeout(url, options = {}, timeoutMs = FETCH_TIMEOUT_MS) {
+  const ctrl = new AbortController();
+  const id = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: ctrl.signal });
+  } finally {
+    clearTimeout(id);
+  }
+}
 
 // ─── Mock plan (fallback when OpenAI/Pinecone unavailable) ──────────
 
@@ -41,7 +53,7 @@ async function parseJsonResponse(res, serviceName = 'API') {
 }
 
 async function getEmbedding(text) {
-  const res = await fetch(OPENAI_EMBEDDINGS_URL, {
+  const res = await fetchWithTimeout(OPENAI_EMBEDDINGS_URL, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -57,153 +69,184 @@ async function getEmbedding(text) {
 }
 
 async function queryPinecone(vector, topK, filter) {
-  const res = await fetch(PINECONE_QUERY_URL, {
+  if (!PINECONE_API_KEY || !PINECONE_HOST) {
+    console.warn('[Pinecone] Missing API key or host');
+    return [];
+  }
+  const payload = {
+    vector,
+    topK,
+    includeMetadata: true,
+    includeValues: false,
+  };
+  if (filter != null && typeof filter === 'object' && Object.keys(filter).length > 0) {
+    payload.filter = filter;
+  }
+  const res = await fetchWithTimeout(PINECONE_QUERY_URL, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       'Api-Key': PINECONE_API_KEY,
+      'X-Pinecone-Api-Version': PINECONE_API_VERSION,
     },
-    body: JSON.stringify({
-      vector,
-      topK,
-      filter,
-      includeMetadata: true,
-      namespace: '',
-    }),
+    body: JSON.stringify(payload),
   });
   const json = await parseJsonResponse(res, 'Pinecone');
   if (!res.ok) throw new Error(json?.message || `Pinecone error (${res.status})`);
   return (json && json.matches) || [];
 }
 
+async function queryPineconeSafe(vector, topK, filter) {
+  try {
+    return await queryPinecone(vector, topK, filter);
+  } catch (e) {
+    const msg = e?.name === 'AbortError' ? 'timeout' : e?.message;
+    console.warn('[Pinecone] query failed:', msg);
+    return [];
+  }
+}
+
 // ─── Step 1: Places (from preferences) ─────────────────────────────
 
 export async function fetchPlaces(preferenceLabels) {
-  const text =
-    preferenceLabels.length > 0
-      ? `Places in Bahrain for ${preferenceLabels.join(', ')}`
-      : 'Popular places and things to do in Bahrain';
+  try {
+    const text =
+      preferenceLabels.length > 0
+        ? `Places in Bahrain for ${preferenceLabels.join(', ')}`
+        : 'Popular places and things to do in Bahrain';
 
-  const embedding = await getEmbedding(text);
+    const embedding = await getEmbedding(text);
 
-  // First try with client_type = place
-  let places = await queryPinecone(embedding, 6, {
-    record_type: { $eq: 'client' },
-    client_type: { $eq: 'place' },
-  });
-
-  // If no results, fallback: fetch without client_type filter (rely on embedding similarity)
-  if (places.length === 0) {
-    const all = await queryPinecone(embedding, 12, {
+    // First try with client_type = place
+    let places = await queryPineconeSafe(embedding, 8, {
       record_type: { $eq: 'client' },
+      client_type: { $eq: 'place' },
     });
-    places = all.filter(
-      (m) => (m.metadata?.client_type || '').toLowerCase() !== 'restaurant'
-    ).slice(0, 6);
-  }
 
-  // If still nothing, just get any 6 non-restaurant clients
-  if (places.length === 0) {
-    const all = await queryPinecone(embedding, 12, {
-      record_type: { $eq: 'client' },
-    });
-    places = all.slice(0, 6);
-  }
+    // If no results, fallback: fetch without client_type filter (rely on embedding similarity)
+    if (places.length === 0) {
+      const all = await queryPineconeSafe(embedding, 16, {
+        record_type: { $eq: 'client' },
+      });
+      places = all
+        .filter((m) => (m.metadata?.client_type || '').toLowerCase() !== 'restaurant')
+        .slice(0, 8);
+    }
 
-  return places;
+    // If still nothing, just get any 8 clients from the broader pool
+    if (places.length === 0) {
+      const all = await queryPineconeSafe(embedding, 16, {
+        record_type: { $eq: 'client' },
+      });
+      places = all.slice(0, 8);
+    }
+
+    return places;
+  } catch (e) {
+    console.warn('[fetchPlaces] failed:', e?.message);
+    return [];
+  }
 }
 
 // ─── Step 2: Restaurants (from food preferences) ────────────────────
 
 export async function fetchRestaurants(foodLabels) {
-  const text =
-    foodLabels.length > 0
-      ? `Restaurants in Bahrain serving ${foodLabels.join(', ')}`
-      : 'Best restaurants and food spots in Bahrain';
+  try {
+    const text =
+      foodLabels.length > 0
+        ? `Restaurants in Bahrain serving ${foodLabels.join(', ')}`
+        : 'Best restaurants and food spots in Bahrain';
 
-  const embedding = await getEmbedding(text);
+    const embedding = await getEmbedding(text);
 
-  // Map UI labels to exact Pinecone cuisine_type values
-  const cuisineMap = {
-    'Cuisine': 'Cuisine',
-    'Seafood': 'Seafood',
-    'American': 'American',
-    'International': 'International',
-    'Cafe': 'Cafe',
-    'Asian': 'Asian',
-    'Italian': 'Italian',
-    'South Asian': 'SouthAsian',
-    'Fast Food': 'Fastfood',
-  };
+    // Map UI labels to exact Pinecone cuisine_type values
+    const cuisineMap = {
+      Cuisine: 'Cuisine',
+      Seafood: 'Seafood',
+      American: 'American',
+      International: 'International',
+      Cafe: 'Cafe',
+      Asian: 'Asian',
+      Italian: 'Italian',
+      'South Asian': 'SouthAsian',
+      'Fast Food': 'Fastfood',
+    };
 
-  if (foodLabels.length > 0) {
-    const seen = new Set();
-    let exactMatches = [];
-    let similarMatches = [];
-
-    // 1) Fetch ALL restaurants matching the exact cuisine_type
-    for (const label of foodLabels) {
-      const pineconeValue = cuisineMap[label] || label;
-      console.log(`[Restaurant] Querying cuisine_type = "${pineconeValue}"`);
-      const filtered = await queryPinecone(embedding, 10, {
+    const fetchByCuisineField = async (pineconeValue) => {
+      let filtered = await queryPineconeSafe(embedding, 12, {
         client_type: { $eq: 'restaurant' },
         cuisine: { $eq: pineconeValue },
       });
-      console.log(`[Restaurant] Exact matches for "${pineconeValue}": ${filtered.length}`);
-      filtered.forEach(m => console.log(`  → ${m.metadata?.business_name || m.metadata?.name} (cuisine: ${m.metadata?.cuisine || m.metadata?.cuisine_type})`));
-      for (const m of filtered) {
-        if (!seen.has(m.id)) {
-          seen.add(m.id);
-          exactMatches.push(m);
+      if (filtered.length === 0) {
+        filtered = await queryPineconeSafe(embedding, 12, {
+          client_type: { $eq: 'restaurant' },
+          cuisine_type: { $eq: pineconeValue },
+        });
+      }
+      return filtered;
+    };
+
+    if (foodLabels.length > 0) {
+      const seen = new Set();
+      const exactMatches = [];
+      const similarMatches = [];
+
+      for (const label of foodLabels) {
+        const pineconeValue = cuisineMap[label] || label;
+        const filtered = await fetchByCuisineField(pineconeValue);
+        for (const m of filtered) {
+          if (!seen.has(m.id)) {
+            seen.add(m.id);
+            exactMatches.push(m);
+          }
         }
       }
+
+      const nearest = await queryPineconeSafe(embedding, 12, {
+        client_type: { $eq: 'restaurant' },
+      });
+      for (const m of nearest) {
+        if (!seen.has(m.id)) {
+          seen.add(m.id);
+          similarMatches.push(m);
+        }
+      }
+
+      return [...exactMatches, ...similarMatches];
     }
 
-    // 2) Also fetch 6 nearest vector-similar restaurants (any cuisine)
-    const nearest = await queryPinecone(embedding, 6, {
+    return queryPineconeSafe(embedding, 12, {
       client_type: { $eq: 'restaurant' },
     });
-    console.log(`[Restaurant] Similar matches (no cuisine filter): ${nearest.length}`);
-    nearest.forEach(m => console.log(`  → ${m.metadata?.business_name || m.metadata?.name} (cuisine: ${m.metadata?.cuisine || m.metadata?.cuisine_type})`));
-    for (const m of nearest) {
-      if (!seen.has(m.id)) {
-        seen.add(m.id);
-        similarMatches.push(m);
-      }
-    }
-
-    console.log(`[Restaurant] TOTAL sending to GPT: ${exactMatches.length} exact + ${similarMatches.length} similar = ${exactMatches.length + similarMatches.length}`);
-    return [...exactMatches, ...similarMatches];
+  } catch (e) {
+    console.warn('[fetchRestaurants] failed:', e?.message);
+    return [];
   }
-
-  return queryPinecone(embedding, 6, {
-    client_type: { $eq: 'restaurant' },
-  });
 }
 
 // ─── Step 3: Breakfast spots ────────────────────────────────────────
 
 export async function fetchBreakfastSpots() {
-  const text = 'Breakfast cafes and bakeries in Bahrain';
-  const embedding = await getEmbedding(text);
+  try {
+    const text = 'Breakfast cafes and bakeries in Bahrain';
+    const embedding = await getEmbedding(text);
 
-  const spots = await queryPinecone(embedding, 2, {
-    client_type: { $eq: 'restaurant' },
-    meal_type: { $eq: 'Breakfast' },
-  });
-
-  // Fallback: if exact meal_type filter returns nothing, try vector similarity
-  if (spots.length === 0) {
-    const fallback = await queryPinecone(embedding, 2, {
+    const spots = await queryPineconeSafe(embedding, 3, {
       client_type: { $eq: 'restaurant' },
+      meal_type: { $eq: 'Breakfast' },
     });
-    console.log(`[Breakfast] Fallback: ${fallback.length} spots`);
-    return fallback;
-  }
 
-  console.log(`[Breakfast] Found ${spots.length} breakfast spots`);
-  spots.forEach(m => console.log(`  → ${m.metadata?.business_name} (meal_type: ${m.metadata?.meal_type})`));
-  return spots;
+    if (spots.length === 0) {
+      return queryPineconeSafe(embedding, 3, {
+        client_type: { $eq: 'restaurant' },
+      });
+    }
+
+    return spots;
+  } catch (e) {
+    console.warn('[fetchBreakfastSpots] failed:', e?.message);
+    return [];
+  }
 }
 
 // ─── Step 4: Events ─────────────────────────────────────────────────
@@ -217,7 +260,7 @@ export async function fetchEvents(preferenceLabels) {
 
     const embedding = await getEmbedding(text);
 
-    const events = await queryPinecone(embedding, 4, {
+    const events = await queryPineconeSafe(embedding, 6, {
       record_type: { $eq: 'event' },
     });
 
@@ -265,9 +308,9 @@ export async function fetchPineconePlacesForChat(userMessage, options = {}) {
   let events = [];
   try {
     [places, restaurants, events] = await Promise.all([
-      queryPinecone(embedding, 10, { record_type: { $eq: 'client' }, client_type: { $eq: 'place' } }),
-      queryPinecone(embedding, 10, { record_type: { $eq: 'client' }, client_type: { $eq: 'restaurant' } }),
-      queryPinecone(embedding, 6, { record_type: { $eq: 'event' } }),
+      queryPineconeSafe(embedding, 12, { record_type: { $eq: 'client' }, client_type: { $eq: 'place' } }),
+      queryPineconeSafe(embedding, 12, { record_type: { $eq: 'client' }, client_type: { $eq: 'restaurant' } }),
+      queryPineconeSafe(embedding, 8, { record_type: { $eq: 'event' } }),
     ]);
   } catch (e) {
     console.warn('[Khalid] Pinecone query failed:', e?.message);
@@ -307,21 +350,53 @@ const BAHRAIN_LANDMARKS = [
 ];
 
 export async function fetchLandmarks() {
-  const text = 'Famous landmarks, heritage sites, museums, iconic buildings, and tourist attractions in Bahrain';
-  const embedding = await getEmbedding(text);
-  const places = await queryPinecone(embedding, 10, {
-    record_type: { $eq: 'client' },
-    client_type: { $eq: 'place' },
-  });
-  return places;
+  try {
+    const text = 'Famous landmarks, heritage sites, museums, iconic buildings, and tourist attractions in Bahrain';
+    const embedding = await getEmbedding(text);
+    return queryPineconeSafe(embedding, 10, {
+      record_type: { $eq: 'client' },
+      client_type: { $eq: 'place' },
+    });
+  } catch (e) {
+    console.warn('[fetchLandmarks] failed:', e?.message);
+    return [];
+  }
 }
 
 // ─── Nearby POIs for AR (from clients table) ────────────────────
 
+const BAHRAIN_BOUNDS_PIPELINE = { minLat: 25.55, maxLat: 26.4, minLng: 50.3, maxLng: 50.95 }
+
+const isWithinBahrainPipeline = (lat, lng) =>
+  lat >= BAHRAIN_BOUNDS_PIPELINE.minLat &&
+  lat <= BAHRAIN_BOUNDS_PIPELINE.maxLat &&
+  lng >= BAHRAIN_BOUNDS_PIPELINE.minLng &&
+  lng <= BAHRAIN_BOUNDS_PIPELINE.maxLng
+
+/** Accept only pairs that fall inside Bahrain after optional lat/lng swap (matches AI plan screen). */
+function unswapLatLngPipeline(lat, lng) {
+  const la = parseFloat(lat)
+  const ln = parseFloat(lng)
+  if (Number.isNaN(la) || Number.isNaN(ln) || (la === 0 && ln === 0)) return null
+  if (isWithinBahrainPipeline(la, ln)) return { lat: la, lng: ln }
+  if (isWithinBahrainPipeline(ln, la)) return { lat: ln, lng: la }
+  return null
+}
+
 function getLatLng(m) {
-  const lat = parseFloat(m.lat ?? m.latitude ?? m.Lat ?? '');
-  const lng = parseFloat(m.long ?? m.longitude ?? m.lng ?? m.Long ?? '');
-  return isNaN(lat) || isNaN(lng) ? null : { lat, lng };
+  if (!m || typeof m !== 'object') return null
+  let lat = parseFloat(
+    m.lat ?? m.latitude ?? m.Lat ?? m.google_lat ?? m.place_lat ?? m.geo_lat ?? '',
+  )
+  let lng = parseFloat(
+    m.long ?? m.longitude ?? m.lng ?? m.Long ?? m.google_lng ?? m.place_lng ?? m.geo_lng ?? '',
+  )
+  if ((Number.isNaN(lat) || Number.isNaN(lng)) && m.LatLng && typeof m.LatLng === 'object') {
+    lat = parseFloat(m.LatLng.lat)
+    lng = parseFloat(m.LatLng.lng)
+  }
+  if (Number.isNaN(lat) || Number.isNaN(lng)) return null
+  return unswapLatLngPipeline(lat, lng)
 }
 
 /** Fetch all clients from Supabase that have valid lat/long for AR. DB columns: lat, long. */
@@ -470,7 +545,7 @@ export async function fetchNearbyPOIs(userLat, userLng, mode = 'all', options = 
 
 function formatMatchForPrompt(match, idx) {
   const m = match.metadata || {};
-  const name = m.event_name || m.business_name || m.name || `Place ${idx + 1}`;
+  const name = m.event_name || m.business_name || m.name || m.place_name || `Place ${idx + 1}`;
   const lat = m.lat || m.latitude || m.Lat || '';
   const lng = m.long || m.longitude || m.lng || m.Long || '';
   const isEvent = m.record_type === 'event';
@@ -491,99 +566,156 @@ function formatMatchForPrompt(match, idx) {
   if (m.end_date) parts.push(`EndDate: ${m.end_date}`);
   if (m.venue) parts.push(`Venue: ${m.venue}`);
   if (m.indoor_outdoor) parts.push(`IndoorOutdoor: ${m.indoor_outdoor}`);
+  const mealType = m.meal_type || m.mealType;
+  if (mealType) parts.push(`MealType: ${mealType}`);
   return parts.join(' | ');
 }
 
-export async function generateDayPlan(places, restaurants, breakfastSpots, events, prefLabels, foodLabels) {
-  const allMatches = [...places, ...restaurants, ...breakfastSpots, ...events];
-  const MAX_MATCHES_FOR_PLAN = 18;
-  const limitedMatches = allMatches.slice(0, MAX_MATCHES_FOR_PLAN);
+const MAX_MATCHES_FOR_PLAN = 28
+const CAP_EVENTS = 8
+const CAP_BREAKFAST = 4
+const CAP_PLACES = 10
+const CAP_RESTAURANTS = 14
 
-  const placesText = limitedMatches.map((m, i) => formatMatchForPrompt(m, i)).join('\n');
+const pineconeScore = (m) => {
+  const s = m?.score
+  if (typeof s === 'number' && !Number.isNaN(s)) return s
+  return -Number.MAX_VALUE
+}
 
-  const hasPref = prefLabels.length > 0;
-  const hasFood = foodLabels.length > 0;
-  const hasEvents = events.length > 0;
+const stableMatchKey = (m) => {
+  if (m?.id != null && String(m.id) !== '') return `id:${m.id}`
+  const meta = m?.metadata || {}
+  if (meta.client_a_uuid) return `cid:${meta.client_a_uuid}`
+  const name = String(meta.event_name || meta.business_name || meta.name || meta.place_name || '')
+    .trim()
+    .toLowerCase()
+  const lat = String(meta.lat ?? meta.latitude ?? '')
+  const lng = String(meta.long ?? meta.longitude ?? meta.lng ?? '')
+  return `n:${name}|${lat}|${lng}`
+}
 
-  const systemPrompt = `You are Khalid, a warm and friendly Bahraini local who absolutely loves showing visitors his beautiful island. You speak like a real friend — not a tour guide reading a brochure. Sprinkle in local Bahraini flavor ("habibi", "yalla", "inshallah", "wallah") naturally.
+const dedupeSortedByScore = (arr) => {
+  const sorted = [...(arr || [])].sort((a, b) => pineconeScore(b) - pineconeScore(a))
+  const seen = new Set()
+  const out = []
+  for (const m of sorted) {
+    const k = stableMatchKey(m)
+    if (seen.has(k)) continue
+    seen.add(k)
+    out.push(m)
+  }
+  return out
+}
 
-YOU ARE GIVEN ${limitedMatches.length} real places, restaurants, and events in Bahrain. Your job is to build a FULL-DAY plan.
+/**
+ * Prefer high-similarity Pinecone hits across buckets so events/breakfast are not drowned out by restaurants.
+ */
+function selectMatchesForPlan(places, restaurants, breakfastSpots, events) {
+  const eventsU = dedupeSortedByScore(events).slice(0, CAP_EVENTS)
+  const breakfastU = dedupeSortedByScore(breakfastSpots).slice(0, CAP_BREAKFAST)
+  const placesU = dedupeSortedByScore(places).slice(0, CAP_PLACES)
+  const restaurantsU = dedupeSortedByScore(restaurants).slice(0, CAP_RESTAURANTS)
+  const merged = [...eventsU, ...breakfastU, ...placesU, ...restaurantsU]
+  const seen = new Set()
+  const final = []
+  for (const m of merged) {
+    const k = stableMatchKey(m)
+    if (seen.has(k)) continue
+    seen.add(k)
+    final.push(m)
+  }
+  return final.slice(0, MAX_MATCHES_FOR_PLAN)
+}
 
-═══ MANDATORY MINIMUM (always include) ═══
-1. BREAKFAST spot (Morning) — a cafe, bakery, or breakfast restaurant
-2. LUNCH spot (Afternoon) — a restaurant for a proper meal
-3. DINNER spot (Evening) — a restaurant for dinner
-4. 3 PLACES to visit — sightseeing, cultural, nature, shopping, etc. spread across Morning, Afternoon, and Evening
+const primaryNameFromMatch = (m) => {
+  const meta = m?.metadata || {}
+  return String(
+    meta.event_name ||
+      meta.business_name ||
+      meta.name ||
+      meta.place_name ||
+      meta.title ||
+      meta.display_name ||
+      meta.venue ||
+      meta.venue_name ||
+      '',
+  ).trim()
+}
 
-That is 6 stops minimum (3 meals + 3 places). But you are NOT limited to 6 — if the list has great options, feel free to add 7, 8, or even 9 stops. Khalid loves showing off his island, so more is welcome if it fits naturally into the day!
+const catalogNameList = (matches) =>
+  matches.map(primaryNameFromMatch).filter((n) => n.length > 0)
 
-═══ WHAT THE USER CHOSE ═══
-${hasPref ? `🎯 Activity preferences: ${prefLabels.join(', ')}
-The user specifically selected these interests. You MUST pick places that match these preferences. If the user chose "Instagram" pick photogenic/trendy spots. If they chose "Sightseeing" pick iconic landmarks. If they chose "Cultural" pick heritage sites. Match their vibe!` : 'The user did not pick specific preferences — choose a fun diverse mix of places (culture, shopping, sightseeing, nature).'}
+const normalizeSpot = (s) => String(s || '').trim().toLowerCase().replace(/\s+/g, ' ')
 
-${hasFood ? `🍽️ Food preferences: ${foodLabels.join(', ')}
-The user specifically wants to eat ${foodLabels.join(' and ')} food.
-IMPORTANT: In the list below, some restaurants are EXACT cuisine matches (their cuisine_type matches what the user asked for). You MUST include AT LEAST 1 of these exact-match restaurants in the plan. You can also pick other restaurants from the list for variety, but the user's cuisine choice MUST be represented. Do NOT skip all the exact-match restaurants.` : 'The user has no specific food preference — surprise them with a nice variety across breakfast, lunch, and dinner.'}
+const spotMatchesCatalog = (spot, catalogLower) => {
+  const s = normalizeSpot(spot)
+  if (!s) return false
+  if (catalogLower.some((n) => n === s)) return true
+  if (catalogLower.some((n) => n.length >= 6 && s.includes(n))) return true
+  if (catalogLower.some((n) => s.length >= 6 && n.includes(s))) return true
+  return catalogLower.some((n) => n.length >= 4 && (s.includes(n) || n.includes(s)))
+}
 
-═══ BREAKFAST SELECTION RULE ═══
-Some restaurants in the list have a "meal_type" field that includes "Breakfast". Follow this logic:
-1. FIRST check: does any restaurant matching the user's preferred cuisine (exact cuisine match) have "Breakfast" in its meal_type? If YES → use that as the breakfast spot.
-2. If NO cuisine-match restaurant serves breakfast → pick one of the dedicated breakfast spots marked with meal_type "Breakfast" from the list.
-3. NEVER skip breakfast. There is always at least one breakfast option in the data.
+const parsePlanFromRaw = (raw) => {
+  if (!raw || typeof raw !== 'string') return null
+  const trimmed = raw.trim()
+  try {
+    const p = JSON.parse(trimmed)
+    return Array.isArray(p) ? p : null
+  } catch (_) {
+    const jsonMatch = trimmed.match(/\[[\s\S]*\]/)
+    if (!jsonMatch) return null
+    try {
+      const p = JSON.parse(jsonMatch[0])
+      return Array.isArray(p) ? p : null
+    } catch (_) {
+      return null
+    }
+  }
+}
 
-═══ EVENTS ═══
-${hasEvents ? `Some items marked [EVENT] are real events happening in Bahrain. Try to fit 1-2 events into the day plan if they match the user's vibe.
-CRITICAL EVENT TIMING RULES:
-- Each event has a StartTime and EndTime. You MUST respect these times.
-- If an event starts at 2:00 PM (14:00), it belongs in the Afternoon — NEVER put it in the Morning.
-- If an event starts at 7:00 PM (19:00), it belongs in the Evening — NEVER put it in the Afternoon.
-- If an event runs 5PM-12AM, schedule it in the Evening.
-- NEVER suggest an event at a time outside its StartTime–EndTime window.
-- Use the event's venue and coordinates for the location.` : 'No events available right now.'}
+const validatePlan = (plan, catalogLower) => {
+  if (!Array.isArray(plan) || plan.length < 4) return { ok: false, reason: 'Plan missing or too short' }
+  const issues = []
+  for (let i = 0; i < plan.length; i++) {
+    const row = plan[i]
+    if (!row || typeof row !== 'object') {
+      issues.push(`Row ${i} invalid`)
+      continue
+    }
+    const { spot, time, type, lat, lng } = row
+    if (!spot || !time || !type) issues.push(`Row ${i} missing spot/time/type`)
+    if (lat == null || lng == null || Number.isNaN(Number(lat)) || Number.isNaN(Number(lng))) {
+      issues.push(`Row ${i} missing lat/lng`)
+    }
+    if (!spotMatchesCatalog(spot, catalogLower)) issues.push(`Row ${i} spot not in catalog: "${spot}"`)
+  }
+  return issues.length ? { ok: false, reason: issues.join('; ') } : { ok: true }
+}
 
-═══ SCHEDULING RULES ═══
-Morning (roughly 8 AM – 12 PM):
-  → Breakfast cafe/restaurant FIRST, then a place to visit (outdoor, cultural — cooler weather)
-Afternoon (roughly 12 PM – 5 PM):
-  → Lunch restaurant, then 1-2 indoor or chill activities (malls, museums, galleries — escape the heat)
-Evening (roughly 5 PM – 10 PM):
-  → A place to visit (seaside walk, souq, rooftop), then dinner restaurant
+const buildProfileSection = (personalization) => {
+  const g = personalization?.profileGeneral
+  const a = personalization?.profileActivity
+  const f = personalization?.profileFood
+  const hasG = Array.isArray(g) && g.length > 0
+  const hasA = Array.isArray(a) && a.length > 0
+  const hasF = Array.isArray(f) && f.length > 0
+  if (!hasG && !hasA && !hasF) {
+    return 'No saved onboarding profile is available — rely only on the choices below and the catalog.'
+  }
+  const lines = []
+  lines.push('═══ USER PROFILE (saved — personalize tone and picks) ═══')
+  if (hasG) lines.push(`General vibe / lifestyle: ${g.join(', ')} — reflect this in reasons and pacing (relaxed vs packed, family-friendly vs nightlife, etc.).`)
+  if (hasA) lines.push(`They usually enjoy: ${a.join(', ')} — align extra stops and descriptions with these when compatible with today’s activity picks.`)
+  if (hasF) lines.push(`They often like to eat: ${f.join(', ')} — use as a soft bias for meal personality even when today’s food picker differs.`)
+  lines.push('If today’s explicit picks conflict, today’s picks win — but still keep the day feeling like it was built for this person.')
+  return lines.join('\n')
+}
 
-═══ SMART RULES ═══
-- NEVER recommend a place marked "closed".
-- Do NOT always pick the highest-rated. Mix hidden gems, budget spots, and premium ones.
-- If two places serve the same purpose (e.g. two malls), pick ONE.
-- The day should flow geographically — don't zigzag across the island.
-- Consider price range — mix affordable and upscale.
-- Restaurants: classify them as breakfast, lunch, or dinner based on their type/cuisine. A cafe = breakfast. A fine dining = dinner. Use common sense.
-
-═══ OUTPUT FORMAT ═══
-For each stop return:
-- "spot": exact place/event name from the list (do NOT invent names)
-- "time": "Morning" | "Afternoon" | "Evening"
-- "type": "place" | "restaurant" | "event"
-- "lat": the latitude number from the data (copy it exactly as given)
-- "lng": the longitude number from the data (copy it exactly as given)
-- "reason": a warm 1-2 sentence description of WHY you chose this spot for this time. For events, mention the event vibe and timing.
-
-IMPORTANT: You MUST include "lat" and "lng" for every spot. Copy the Lat/Lng values exactly from the place data provided.
-Bahrain latitude is always ~26 (never ~50). Bahrain longitude is always ~50 (never ~26). Never swap lat and lng.
-
-Reply ONLY with a valid JSON array, NO markdown, NO extra text:
-[
-  { "spot": "Name", "time": "Morning", "type": "restaurant", "lat": 26.xxx, "lng": 50.xxx, "reason": "..." },
-  { "spot": "Name", "time": "Afternoon", "type": "event", "lat": 26.xxx, "lng": 50.xxx, "reason": "..." },
-  ...
-]`;
-
-  const userMsg = `${hasPref ? `🎯 The user selected these activity preferences: ${prefLabels.join(', ')} — MUST include places matching these.` : 'No activity preferences selected — surprise me with a diverse mix!'}
-${hasFood ? `🍽️ The user selected these food types: ${foodLabels.join(', ')} — MUST include restaurants serving these cuisines.` : 'No food preference selected — open to anything.'}
-
-Here are ${limitedMatches.length} available places, restaurants & events in Bahrain:
-${placesText}
-
-Build Khalid's perfect day. Remember: the user's selected preferences and food types are NON-NEGOTIABLE — include them. Minimum 3 meals (breakfast, lunch, dinner) + 3 places. Also try to include 1-2 events if they fit the timing!`;
-
+async function openAiPlanCompletion(messages, opts = {}) {
+  const temperature = typeof opts.temperature === 'number' ? opts.temperature : 0.58
+  const max_tokens = typeof opts.max_tokens === 'number' ? opts.max_tokens : 1600
   const res = await fetch(OPENAI_CHAT_URL, {
     method: 'POST',
     headers: {
@@ -591,38 +723,554 @@ Build Khalid's perfect day. Remember: the user's selected preferences and food t
       Authorization: `Bearer ${OPENAI_API_KEY}`,
     },
     body: JSON.stringify({
-      model: 'gpt-4.1-mini',
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userMsg },
-      ],
-      temperature: 0.8,
-      max_tokens: 900,
+      model: OPENAI_PLAN_MODEL,
+      messages,
+      temperature,
+      max_tokens,
     }),
-  });
+  })
+  const json = await parseJsonResponse(res, 'OpenAI')
+  if (!res.ok) throw new Error(json?.error?.message || `GPT error (${res.status})`)
+  const raw = json?.choices?.[0]?.message?.content?.trim()
+  if (!raw) throw new Error('Empty GPT response')
+  return raw
+}
 
-  const json = await parseJsonResponse(res, 'OpenAI');
-  if (!res.ok) throw new Error(json?.error?.message || `GPT error (${res.status})`);
+/**
+ * @param {object} [personalization]
+ * @param {string[]} [personalization.profileGeneral] — onboarding general labels
+ * @param {string[]} [personalization.profileActivity] — onboarding activity labels
+ * @param {string[]} [personalization.profileFood] — onboarding food labels
+ */
+export async function generateDayPlan(
+  places,
+  restaurants,
+  breakfastSpots,
+  events,
+  prefLabels,
+  foodLabels,
+  personalization = {},
+) {
+  const limitedMatches = selectMatchesForPlan(places, restaurants, breakfastSpots, events)
+  const placesText = limitedMatches.map((m, i) => formatMatchForPrompt(m, i)).join('\n')
+  const catalogLower = catalogNameList(limitedMatches).map((n) => normalizeSpot(n))
 
-  const raw = json?.choices?.[0]?.message?.content?.trim();
-  if (!raw) throw new Error('Empty GPT response');
+  const hasPref = prefLabels.length > 0
+  const hasFood = foodLabels.length > 0
+  const hasEvents = events.length > 0
+  const profileSection = buildProfileSection(personalization)
 
-  let plan;
+  const systemPrompt = `You are Khalid, a warm and friendly Bahraini local who absolutely loves showing visitors his beautiful island. You speak like a real friend — not a tour guide reading a brochure. Sprinkle in local Bahraini flavor ("habibi", "yalla", "inshallah", "wallah") naturally.
+
+YOU ARE GIVEN ${limitedMatches.length} real places, restaurants, and events in Bahrain. Your job is to build a FULL-DAY plan tailored to this user.
+
+${profileSection}
+
+═══ MANDATORY MINIMUM (always include) ═══
+1. BREAKFAST spot (Morning) — a cafe, bakery, or breakfast restaurant
+2. LUNCH spot (Afternoon) — a restaurant for a proper meal
+3. DINNER spot (Evening) — a restaurant for dinner
+4. 3 PLACES to visit — sightseeing, cultural, nature, shopping, etc. spread across Morning, Afternoon, and Evening
+
+That is 6 stops minimum (3 meals + 3 places). You may add 7–9 stops if the catalog supports a richer day.
+
+═══ TODAY’S PICKS (this session — highest priority) ═══
+${hasPref ? `🎯 Activity preferences: ${prefLabels.join(', ')}
+The user selected these for THIS plan. You MUST pick places that match them. "Instagram" → photogenic/trendy; "Sightseeing" → landmarks; "Cultural" → heritage; match their vibe.` : 'No specific activity preferences for this plan — choose a fun diverse mix (culture, shopping, sightseeing, nature).'}
+
+${hasFood ? `🍽️ Food preferences: ${foodLabels.join(', ')}
+They want ${foodLabels.join(' and ')} food for this plan.
+IMPORTANT: Some restaurants are exact cuisine matches. Include AT LEAST ONE exact-match restaurant. Do not skip every exact-match option.` : 'No specific food preference for this plan — offer a nice variety across breakfast, lunch, and dinner.'}
+
+═══ BREAKFAST SELECTION RULE ═══
+Some rows include MealType with "Breakfast". Logic:
+1. If an exact cuisine-match restaurant has Breakfast in MealType → prefer it for breakfast.
+2. Else pick a row with MealType Breakfast from the catalog.
+3. NEVER skip breakfast.
+
+═══ EVENTS ═══
+${hasEvents ? `Items marked [EVENT] are real events.
+CRITICAL EVENT TIMING:
+- Respect StartTime / EndTime. Afternoon starts ~after noon; evening ~from 5 PM onward unless the event times say otherwise.
+- Never schedule an event outside its time window.
+- Use the event’s coordinates from the catalog.` : 'No events in the current catalog slice.'}
+
+═══ SCHEDULING (Bahrain is compact — no route optimization) ═══
+Morning: breakfast first, then a place.
+Afternoon: lunch, then place(s) — favour indoor/chill mid-day when it fits the user.
+Evening: a place then dinner (or dinner then a stroll-type place if it fits events).
+
+═══ SMART RULES ═══
+- NEVER recommend a place marked "closed".
+- Mix ratings — not only the top-rated; include variety in price (see Price field).
+- If two stops are redundant (e.g. two similar malls), pick ONE.
+- Every "spot" string MUST be copied verbatim from the numbered catalog lines (the text before the first " | " on each line). Do not invent or shorten names.
+- Copy lat and lng EXACTLY from the same catalog line as that spot.
+
+═══ OUTPUT FORMAT ═══
+Each stop: "spot", "time" (Morning|Afternoon|Evening), "type" (place|restaurant|event), "lat", "lng", "reason" (1–2 warm sentences, personalized where possible).
+
+Bahrain lat ~26, lng ~50 — never swap.
+
+Reply ONLY with a valid JSON array — no markdown, no prose outside the array:
+[
+  { "spot": "Name", "time": "Morning", "type": "restaurant", "lat": 26.xxx, "lng": 50.xxx, "reason": "..." }
+]`;
+
+  const userMsg = `${hasPref ? `🎯 Today’s activity preferences: ${prefLabels.join(', ')}` : '🎯 Today: no activity prefs — diverse mix'}
+${hasFood ? `🍽️ Today’s food types: ${foodLabels.join(', ')}` : '🍽️ Today: open on food'}
+
+Catalog (${limitedMatches.length} rows):
+${placesText}
+
+Build Khalid’s perfect personalized day. Minimum 3 meals + 3 places. Include 1–2 events when the catalog has [EVENT] rows and timing fits.`
+
+  const messages = [
+    { role: 'system', content: systemPrompt },
+    { role: 'user', content: userMsg },
+  ]
+
+  let raw = await openAiPlanCompletion(messages, {})
+  let plan = parsePlanFromRaw(raw)
+  let validation = plan ? validatePlan(plan, catalogLower) : { ok: false, reason: 'Parse failed' }
+
+  if (!validation.ok) {
+    const repairUser = `Your previous reply was invalid: ${validation.reason}
+
+Return ONLY a valid JSON array. Each "spot" must match a name from the catalog (exact string from the start of a catalog line before " | ").
+
+Catalog names for reference:
+${catalogNameList(limitedMatches).slice(0, 40).join('\n')}`
+    messages.push({ role: 'assistant', content: raw })
+    messages.push({ role: 'user', content: repairUser })
+    raw = await openAiPlanCompletion(messages, {})
+    plan = parsePlanFromRaw(raw)
+    validation = plan ? validatePlan(plan, catalogLower) : { ok: false, reason: 'Parse failed on retry' }
+    if (!validation.ok) throw new Error(validation.reason || 'Could not parse day plan')
+  }
+
+  return plan
+}
+
+function pineconeBucketFromMatch(m) {
+  const meta = m?.metadata || {}
+  const rt = String(meta.record_type || '').trim().toLowerCase()
+  if (rt === 'event') return 'event'
+  if (meta.event_name && (meta.start_time != null || meta.start_date != null)) return 'event'
+
+  const ct = String(meta.client_type || meta.clientType || '').trim().toLowerCase()
+  const placeTags = new Set([
+    'place',
+    'attraction',
+    'sightseeing',
+    'landmark',
+    'shopping',
+    'mall',
+    'beach',
+    'park',
+    'museum',
+    'culture',
+    'cultural',
+    'hotel',
+    'resort',
+  ])
+  const foodTags = new Set([
+    'restaurant',
+    'food',
+    'dining',
+    'cafe',
+    'café',
+    'coffee',
+    'bakery',
+    'eatery',
+    'bar',
+    'bistro',
+  ])
+  if (placeTags.has(ct)) return 'place'
+  if (foodTags.has(ct)) return 'restaurant'
+
+  const typeHint = String(meta.type || meta.venue_type || meta.kind || '').toLowerCase()
+  if (
+    typeHint.includes('museum') ||
+    typeHint.includes('heritage') ||
+    typeHint.includes('mosque') ||
+    typeHint.includes('fort') ||
+    typeHint.includes('gallery')
+  ) {
+    return 'place'
+  }
+
+  if (
+    typeHint.includes('restaurant') ||
+    typeHint.includes('dining') ||
+    typeHint.includes('cafe') ||
+    typeHint.includes('café') ||
+    typeHint.includes('food court') ||
+    typeHint.includes('bakery')
+  ) {
+    return 'restaurant'
+  }
+
+  if (meta.cuisine || meta.cuisine_type || meta.meal_type || meta.mealType) return 'restaurant'
+
+  return 'place'
+}
+
+/** Larger Pinecone slice for “Enhance” when the normal catalog is empty or fully overlaps the plan. */
+async function fetchWideCandidatesForEnhanceSlot(slotType) {
+  if (slotType !== 'place' && slotType !== 'restaurant' && slotType !== 'event') return []
+  const text =
+    slotType === 'restaurant'
+      ? 'Diverse restaurants, cafés, and dining across Bahrain'
+      : slotType === 'event'
+        ? 'Events, festivals, exhibitions, and activities in Bahrain'
+        : 'Museums, landmarks, beaches, malls, and things to do in Bahrain'
   try {
-    plan = JSON.parse(raw);
-  } catch (_) {
-    const jsonMatch = raw.match(/\[[\s\S]*\]/);
-    if (jsonMatch) {
-      try {
-        plan = JSON.parse(jsonMatch[0]);
-      } catch (e2) {
-        plan = null;
+    const embedding = await getEmbedding(text)
+    if (slotType === 'event') {
+      return await queryPineconeSafe(embedding, 80, { record_type: { $eq: 'event' } })
+    }
+    if (slotType === 'restaurant') {
+      let rows = await queryPineconeSafe(embedding, 80, {
+        record_type: { $eq: 'client' },
+        client_type: { $eq: 'restaurant' },
+      })
+      if (rows.length === 0) {
+        rows = await queryPineconeSafe(embedding, 80, { client_type: { $eq: 'restaurant' } })
       }
-    } else {
-      plan = null;
+      if (rows.length === 0) {
+        const broad = await queryPineconeSafe(embedding, 96, { record_type: { $eq: 'client' } })
+        rows = broad.filter((match) => pineconeBucketFromMatch(match) === 'restaurant')
+      }
+      return rows
+    }
+    let rows = await queryPineconeSafe(embedding, 80, {
+      record_type: { $eq: 'client' },
+      client_type: { $eq: 'place' },
+    })
+    if (rows.length === 0) {
+      const all = await queryPineconeSafe(embedding, 96, { record_type: { $eq: 'client' } })
+      rows = all.filter((match) => pineconeBucketFromMatch(match) === 'place')
+    }
+    return rows
+  } catch (e) {
+    console.warn('[enhancePlanStopAtIndex] wide Pinecone query failed:', e?.message)
+    return []
+  }
+}
+
+const parseSingleStopFromRaw = (raw) => {
+  if (!raw || typeof raw !== 'string') return null
+  const trimmed = raw.trim()
+  try {
+    const p = JSON.parse(trimmed)
+    if (Array.isArray(p) && p[0] && typeof p[0] === 'object') return p[0]
+    if (p && typeof p === 'object' && p.spot) return p
+  } catch (_) {
+    /* fall through */
+  }
+  const jsonMatch = trimmed.match(/\{[\s\S]*\}/)
+  if (!jsonMatch) return null
+  try {
+    const p = JSON.parse(jsonMatch[0])
+    if (p && p.spot) return p
+  } catch (_) {
+    return null
+  }
+  return null
+}
+
+const validateReplacementStop = (row, catalogLower, slot, excludedExactSet) => {
+  if (!row || typeof row !== 'object') return { ok: false, reason: 'Invalid object' }
+  const { spot, time, type, lat, lng } = row
+  if (!spot || !time || !type) return { ok: false, reason: 'Missing spot/time/type' }
+  if (time !== slot.time || type !== slot.type) return { ok: false, reason: 'time/type must match original slot' }
+  if (lat == null || lng == null || Number.isNaN(Number(lat)) || Number.isNaN(Number(lng))) {
+    return { ok: false, reason: 'Missing lat/lng' }
+  }
+  if (!spotMatchesCatalog(spot, catalogLower)) return { ok: false, reason: 'spot not in catalog' }
+  const s = normalizeSpot(spot)
+  if (excludedExactSet.has(s)) return { ok: false, reason: 'spot already used elsewhere in plan' }
+  const oldNorm = normalizeSpot(slot.spot)
+  if (s === oldNorm) return { ok: false, reason: 'must pick a different venue than the current stop' }
+  return { ok: true }
+}
+
+function coordsFromPineconeMatch(m) {
+  const meta = m?.metadata || {}
+  const fromMeta = getLatLng(meta)
+  if (fromMeta) return fromMeta
+  return getLatLng(m)
+}
+
+function mergeCatalogForEnrich(fetched, pineconeMatches) {
+  return dedupeSortedByScore([...(fetched || []), ...(pineconeMatches || [])])
+}
+
+function pickFallbackReplacementFromMatches(candidates, slot, excludedExactSet) {
+  const slotNorm = normalizeSpot(slot.spot)
+  const ordered = dedupeSortedByScore(candidates)
+  for (const m of ordered) {
+    const name = primaryNameFromMatch(m)
+    const nn = normalizeSpot(name)
+    if (!nn || nn === slotNorm) continue
+    if (excludedExactSet.has(nn)) continue
+    const ll = coordsFromPineconeMatch(m)
+    if (!ll) continue
+    return {
+      spot: name,
+      time: slot.time,
+      type: slot.type,
+      lat: ll.lat,
+      lng: ll.lng,
+      reason: `Swapped in from your picks — fits your ${slot.time.toLowerCase()} and keeps the day flowing, yalla!`,
     }
   }
-  if (!Array.isArray(plan)) throw new Error('Could not parse day plan');
+  return null
+}
 
-  return plan;
+/**
+ * Replace one plan stop (same time + type). Fetches a fresh type-specific catalog:
+ * - place → fetchPlaces(session activity prefs + saved profile activities)
+ * - restaurant → fetchRestaurants(session food + profile food)
+ * - event → fetchEvents(session + profile activities)
+ *
+ * Returns { replacement, enrichCatalog } so the client can enrich images/coords against merged Pinecone rows.
+ */
+export async function enhancePlanStopAtIndex(
+  plan,
+  stopIndex,
+  pineconeMatches,
+  prefLabels,
+  foodLabels,
+  personalization = {},
+) {
+  if (!Array.isArray(plan) || stopIndex < 0 || stopIndex >= plan.length) {
+    throw new Error('Invalid stop index')
+  }
+  const slot = plan[stopIndex]
+  if (!slot || !slot.type || !slot.time) throw new Error('Invalid stop data')
+
+  const excludedExact = new Set(
+    plan
+      .filter((_, i) => i !== stopIndex)
+      .map((p) => normalizeSpot(p.spot))
+      .filter(Boolean),
+  )
+
+  const sessionActivity = Array.isArray(prefLabels) ? prefLabels.filter(Boolean) : []
+  const sessionFood = Array.isArray(foodLabels) ? foodLabels.filter(Boolean) : []
+  const profileActivity = Array.isArray(personalization.profileActivity)
+    ? personalization.profileActivity.filter(Boolean)
+    : []
+  const profileFood = Array.isArray(personalization.profileFood) ? personalization.profileFood.filter(Boolean) : []
+
+  let fetched = []
+  try {
+    if (slot.type === 'place') {
+      const labels = [...new Set([...sessionActivity, ...profileActivity])]
+      fetched = await fetchPlaces(labels)
+    } else if (slot.type === 'restaurant') {
+      const labels = [...new Set([...sessionFood, ...profileFood])]
+      fetched = await fetchRestaurants(labels)
+    } else if (slot.type === 'event') {
+      const labels = [...new Set([...sessionActivity, ...profileActivity])]
+      fetched = await fetchEvents(labels)
+    }
+  } catch (e) {
+    console.warn('[enhancePlanStopAtIndex] catalog fetch failed:', e?.message)
+    fetched = []
+  }
+
+  const slotNorm = normalizeSpot(slot.spot)
+
+  const buildCandidatesFromPool = (pool) =>
+    (pool || []).filter((m) => {
+      if (pineconeBucketFromMatch(m) !== slot.type) return false
+      const name = normalizeSpot(primaryNameFromMatch(m))
+      if (!name || name === slotNorm) return false
+      if (excludedExact.has(name)) return false
+      if (!coordsFromPineconeMatch(m)) return false
+      return true
+    })
+
+  const typeFiltered = (fetched || []).filter((m) => pineconeBucketFromMatch(m) === slot.type)
+  const fallbackPool = (pineconeMatches || []).filter((m) => pineconeBucketFromMatch(m) === slot.type)
+  const catalogSource = dedupeSortedByScore([...typeFiltered, ...fallbackPool])
+
+  let candidates = buildCandidatesFromPool(catalogSource)
+
+  if (candidates.length === 0 && slot.type === 'place') {
+    try {
+      const broad = await fetchPlaces([])
+      fetched = mergeCatalogForEnrich(broad, fetched)
+      candidates = buildCandidatesFromPool(broad)
+    } catch (_) {
+      /* ignore */
+    }
+  }
+
+  if (candidates.length === 0 && slot.type === 'restaurant') {
+    try {
+      const broad = await fetchRestaurants([])
+      fetched = mergeCatalogForEnrich(broad, fetched)
+      candidates = buildCandidatesFromPool(broad)
+    } catch (_) {
+      /* ignore */
+    }
+  }
+
+  if (candidates.length === 0 && slot.type === 'event') {
+    try {
+      const broad = await fetchEvents([])
+      fetched = mergeCatalogForEnrich(broad, fetched)
+      candidates = buildCandidatesFromPool(broad)
+    } catch (_) {
+      /* ignore */
+    }
+  }
+
+  if (candidates.length === 0) {
+    const wide = await fetchWideCandidatesForEnhanceSlot(slot.type)
+    fetched = mergeCatalogForEnrich(wide, fetched)
+    candidates = buildCandidatesFromPool(wide)
+  }
+
+  if (candidates.length === 0) {
+    let slotLL = unswapLatLngPipeline(slot.lat, slot.lng)
+    if (!slotLL) slotLL = { lat: 26.22, lng: 50.58 }
+    const pool = dedupeSortedByScore([...(fetched || []), ...(pineconeMatches || [])])
+    const synth = []
+    for (const m of pool) {
+      if (pineconeBucketFromMatch(m) !== slot.type) continue
+      const name = normalizeSpot(primaryNameFromMatch(m))
+      if (!name || name === slotNorm || excludedExact.has(name)) continue
+      if (coordsFromPineconeMatch(m)) continue
+      synth.push({
+        ...m,
+        metadata: {
+          ...(m.metadata || {}),
+          lat: String(slotLL.lat),
+          long: String(slotLL.lng),
+        },
+      })
+      if (synth.length >= 32) break
+    }
+    if (synth.length > 0) {
+      candidates = synth
+      fetched = mergeCatalogForEnrich(synth, fetched)
+    }
+  }
+
+  if (candidates.length === 0) {
+    const mockRows = getMockDayPlan().filter((row) => {
+      if (!row || row.type !== slot.type) return false
+      const n = normalizeSpot(row.spot)
+      if (!n || n === slotNorm || excludedExact.has(n)) return false
+      return unswapLatLngPipeline(row.lat, row.lng) != null
+    })
+    if (mockRows.length > 0) {
+      candidates = mockRows.map((row, i) => ({
+        id: `mock-enhance-${slot.type}-${i}`,
+        score: 0,
+        metadata: {
+          record_type: slot.type === 'event' ? 'event' : 'client',
+          client_type: slot.type === 'restaurant' ? 'restaurant' : slot.type === 'place' ? 'place' : undefined,
+          business_name: row.spot,
+          name: row.spot,
+          lat: String(row.lat),
+          long: String(row.lng),
+        },
+      }))
+      fetched = mergeCatalogForEnrich(candidates, fetched)
+    }
+  }
+
+  if (candidates.length === 0) {
+    throw new Error('No alternative venues available for this stop. Try building a new day or pick different preferences.')
+  }
+
+  const enrichCatalog = mergeCatalogForEnrich(fetched, pineconeMatches)
+
+  const capped = dedupeSortedByScore(candidates).slice(0, 24)
+  const placesText = capped.map((m, i) => formatMatchForPrompt(m, i)).join('\n')
+  const catalogLower = catalogNameList(capped).map((n) => normalizeSpot(n))
+  const profileSection = buildProfileSection(personalization)
+
+  const prefLine =
+    slot.type === 'place'
+      ? `User activity preferences (places must fit this vibe): ${[...sessionActivity, ...profileActivity].join(', ') || 'diverse Bahrain places'}.`
+      : slot.type === 'restaurant'
+        ? `User food preferences: ${[...sessionFood, ...profileFood].join(', ') || 'varied dining'}.`
+        : `User interests for events: ${[...sessionActivity, ...profileActivity].join(', ') || 'things to do in Bahrain'}.`
+
+  const systemPrompt = `You are Khalid, a friendly Bahraini local. Pick ONE replacement stop for an existing day plan.
+
+${profileSection}
+
+${prefLine}
+
+RULES:
+- Reply ONLY with a single JSON object (not an array, no markdown): spot, time, type, lat, lng, reason
+- "spot" must be copied EXACTLY from the start of one catalog line (before the first " | ")
+- "time" MUST be exactly: "${slot.time}"
+- "type" MUST be exactly: "${slot.type}"
+- lat and lng MUST be copied EXACTLY from the same catalog line as the chosen spot
+- "reason": 1–2 warm sentences (habibi / yalla ok).
+- MUST be a different venue than "${slot.spot}" (exact catalog name different).
+- Do not duplicate any "Other stops" name exactly.`
+
+  const otherNames = plan.filter((_, i) => i !== stopIndex).map((p) => p.spot).join('; ')
+  const userMsg = `Current stop to REPLACE (same time/type, new venue only):
+- spot: "${slot.spot}"
+- time: ${slot.time}
+- type: ${slot.type}
+
+Other stops already in the day (do not duplicate): ${otherNames || '(none)'}
+
+Catalog:
+${placesText}
+
+Return ONE JSON object for the replacement.`
+
+  const messages = [
+    { role: 'system', content: systemPrompt },
+    { role: 'user', content: userMsg },
+  ]
+
+  let raw = await openAiPlanCompletion(messages, { temperature: 0.42, max_tokens: 700 })
+  let row = parseSingleStopFromRaw(raw)
+  let validation = row ? validateReplacementStop(row, catalogLower, slot, excludedExact) : { ok: false, reason: 'Parse failed' }
+
+  if (!validation.ok) {
+    const repairUser = `Invalid reply: ${validation.reason}
+
+Return ONLY one JSON object with keys spot, time, type, lat, lng, reason.
+time="${slot.time}", type="${slot.type}".
+spot must be an EXACT catalog name from the list below (before " | "):
+${catalogNameList(capped).join('\n')}`
+    messages.push({ role: 'assistant', content: raw })
+    messages.push({ role: 'user', content: repairUser })
+    raw = await openAiPlanCompletion(messages, { temperature: 0.35, max_tokens: 700 })
+    row = parseSingleStopFromRaw(raw)
+    validation = row ? validateReplacementStop(row, catalogLower, slot, excludedExact) : { ok: false, reason: 'Parse failed on retry' }
+  }
+
+  if (!validation.ok) {
+    const fb = pickFallbackReplacementFromMatches(candidates, slot, excludedExact)
+    if (!fb) throw new Error(validation.reason || 'Could not pick a replacement stop')
+    row = fb
+  }
+
+  return {
+    replacement: {
+      spot: row.spot,
+      time: row.time,
+      type: row.type,
+      lat: Number(row.lat),
+      lng: Number(row.lng),
+      reason: row.reason || 'A fresh pick for your day — yalla!',
+    },
+    enrichCatalog,
+  }
 }

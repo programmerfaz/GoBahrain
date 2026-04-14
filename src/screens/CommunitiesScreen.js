@@ -1,5 +1,5 @@
 // communities screen
-import React, { useState, useRef, useCallback, useEffect } from 'react';
+import React, { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import {
   StyleSheet,
   Text,
@@ -20,17 +20,15 @@ import {
   RefreshControl,
   Alert,
 } from 'react-native';
-import { ScrollView as GHScrollView, FlatList as GHFlatList, TouchableOpacity as GHTouchableOpacity } from 'react-native-gesture-handler';
-import { BlurView } from 'expo-blur';
+import { FlatList as GHFlatList } from 'react-native-gesture-handler';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useNavigation, useRoute } from '@react-navigation/native';
+import { useNavigation } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import ScreenContainer from '../components/ScreenContainer';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import {
   fetchCommunityPosts,
-  fetchMyCommunityPosts,
   createCommunityPost,
   uploadCommunityImages,
   upvoteCommunityPost,
@@ -41,49 +39,13 @@ import {
 } from '../services/community';
 import { colors as themeColors, colorsDark as themeColorsDark } from '../theme/designTokens'
 import { useTheme } from '../context/ThemeContext'
+import {
+  getCommunityPalette,
+  buildCommunityFeedStyles,
+  CommunityReviewCard,
+} from '../components/community/CommunityReviewViews'
 
-function getC(isDark) {
-  const tc = isDark ? themeColorsDark : themeColors
-  return {
-    bg: isDark ? '#0F172A' : '#FFFFFF',
-    card: isDark ? '#1E293B' : '#FFFFFF',
-    text: isDark ? '#F8FAFC' : '#111827',
-    sub: isDark ? '#CBD5E1' : '#6B7280',
-    muted: isDark ? '#94A3B8' : '#9CA3AF',
-    border: isDark ? 'rgba(51,65,85,0.7)' : 'rgba(209,213,219,0.7)',
-    red: tc.error,
-    redSoft: tc.errorMuted,
-    orange: tc.morning,
-    orangeSoft: tc.warningMuted,
-    blue: tc.afternoon,
-    blueSoft: tc.primaryMuted,
-    green: tc.success,
-    upvoteLight: tc.success,
-    upvoteDark: isDark ? '#10B981' : '#047857',
-    chip: isDark ? '#334155' : '#F1F5F9',
-    chipActive: tc.textPrimary,
-    accent: isDark ? '#CBD5E1' : tc.textSecondary,
-    warmGlow: tc.textMuted,
-  }
-}
-
-let C = getC(false)
-
-// Muted accent palette for review strips (modern, not rainbow)
-const REVIEW_ACCENT_COLORS = [
-  themeColors.primary,
-  themeColors.morning,
-  themeColors.afternoon,
-  themeColors.evening,
-  themeColors.success,
-  themeColors.textSecondary,
-];
-function getReviewAccentColor(item) {
-  const id = (item?.id ?? item?.body ?? '0').toString();
-  let n = 0;
-  for (let i = 0; i < id.length; i++) n = (n * 31 + id.charCodeAt(i)) >>> 0;
-  return REVIEW_ACCENT_COLORS[n % REVIEW_ACCENT_COLORS.length];
-}
+let C = getCommunityPalette(false)
 
 // Community page top filter: All, Trending + hashtags (no AI chip — AI results show temporarily until another filter is tapped)
 const TOPICS = [
@@ -98,11 +60,6 @@ const TOPICS = [
   { id: 'family', label: 'Family' },
   { id: 'tips', label: 'Tips' },
 ];
-
-const TOPIC_EMOJIS = {
-  all: '🌴', trending: '🔥', food: '🍽️', places: '📍', events: '🎉',
-  beaches: '🏖️', culture: '🕌', nightlife: '🌙', family: '👨‍👩‍👧‍👦', tips: '💡',
-};
 
 // Create post — Select topic: only these 8, multiple select
 const CREATE_POST_TOPICS = [
@@ -127,13 +84,18 @@ const CREATE_POST_TOPIC_ICONS = {
   tips: 'bulb-outline',
 };
 
-const TOTAL_STARS = 5;
+// Top feed filters: feed chips use icons only; labels kept for accessibility
+const TOPIC_FILTER_ICONS = {
+  all: 'apps-outline',
+  trending: 'flame-outline',
+  ...CREATE_POST_TOPIC_ICONS,
+};
 
 /** Smooth shimmer skeleton loader for community feed. */
 function CommunityLoadingShimmer() {
-  const { width } = useWindowDimensions();
-  const cardWidth = width - 40;
-  const imgH = Math.round(cardWidth * 0.6);
+  const { width = 375 } = useWindowDimensions();
+  const cardWidth = width - 32;
+  const imgH = Math.round(cardWidth * 0.75);
   const shimmer = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
@@ -166,372 +128,43 @@ function CommunityLoadingShimmer() {
     >
       {[1, 2, 3].map((i) => (
         <View key={i} style={s.skeletonCard}>
-          <View style={s.cardAuthorRow}>
-            <SkeletonBox style={s.skeletonAvatar} width={38} height={38} />
-            <View style={{ flex: 1, marginLeft: 10 }}>
-              <SkeletonBox width="60%" height={14} />
-              <SkeletonBox width="40%" height={11} style={{ marginTop: 8 }} />
+          <View style={{ paddingHorizontal: 16, paddingTop: 14, paddingBottom: 12 }}>
+            <View style={s.cardAuthorRow}>
+              <SkeletonBox style={s.skeletonAvatar} width={44} height={44} />
+              <View style={{ flex: 1, marginLeft: 12 }}>
+                <SkeletonBox width="50%" height={16} />
+                <SkeletonBox width="35%" height={12} style={{ marginTop: 6 }} />
+              </View>
             </View>
           </View>
-          <SkeletonBox width="100%" height={14} style={{ marginBottom: 6 }} />
-          <SkeletonBox width="90%" height={14} style={{ marginBottom: 6 }} />
-          <SkeletonBox width="70%" height={14} style={{ marginBottom: 12 }} />
-          <View style={[s.cardImgWrap, { height: imgH }]}>
+          <View style={{ height: imgH, width: '100%' }}>
             <Animated.View style={[StyleSheet.absoluteFill, s.skeletonImage, { opacity }]} />
           </View>
-          <View style={[s.actions, { marginTop: 12 }]}>
-            <SkeletonBox width={60} height={20} />
-            <SkeletonBox width={50} height={20} />
+          <View style={{ paddingHorizontal: 16 }}>
+            <SkeletonBox width="100%" height={14} style={{ marginTop: 14, marginBottom: 6 }} />
+            <SkeletonBox width="85%" height={14} style={{ marginBottom: 6 }} />
+            <SkeletonBox width="60%" height={14} style={{ marginBottom: 14 }} />
+            <View style={{ flexDirection: 'row', gap: 8, marginBottom: 12 }}>
+              <SkeletonBox width={70} height={24} style={{ borderRadius: 12 }} />
+              <SkeletonBox width={60} height={24} style={{ borderRadius: 12 }} />
+            </View>
+            <View style={{ 
+              flexDirection: 'row', 
+              gap: 24, 
+              paddingTop: 12, 
+              paddingBottom: 16, 
+              borderTopWidth: 1, 
+              borderTopColor: C.border + '40',
+              marginTop: 4,
+            }}>
+              <SkeletonBox width={60} height={22} />
+              <SkeletonBox width={50} height={22} />
+              <SkeletonBox width={30} height={22} />
+            </View>
           </View>
         </View>
       ))}
     </ScrollView>
-  );
-}
-
-function RatingStars({ rating, size = 12, color }) {
-  if (rating == null || rating <= 0) return null;
-  const r = Math.min(5, Math.max(0, Number(rating)));
-  const starColor = color ?? C.orange;
-  return (
-    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 1 }}>
-      {Array.from({ length: TOTAL_STARS }, (_, i) => {
-        const starValue = i + 1;
-        const filled = r >= starValue;
-        const half = !filled && r >= starValue - 0.5;
-        const name = filled ? 'star' : half ? 'star-half' : 'star-outline';
-        return (
-          <Ionicons key={i} name={name} size={size} color={filled || half ? starColor : C.muted} />
-        );
-      })}
-    </View>
-  );
-}
-
-function ReviewCard({ item, onPress, onCommentPress, onUpvote, onRemoveUpvote }) {
-  const { width } = useWindowDimensions();
-  const cardWidth = width - 40;
-  const imgH = Math.round(cardWidth * 0.6);
-  const [upvoted, setUpvoted] = useState(item.upvoted);
-  const [imageIndex, setImageIndex] = useState(0);
-  const scale = useRef(new Animated.Value(1)).current;
-  const count = item.upvotes ?? 0;
-
-  const images = item.images?.length > 0 ? item.images : item.image ? [item.image] : [];
-
-  useEffect(() => {
-    setImageIndex(0);
-  }, [item.id]);
-
-  const doUpvote = () => {
-    const next = !upvoted;
-    setUpvoted(next);
-    Animated.sequence([
-      Animated.timing(scale, { toValue: 1.35, duration: 100, useNativeDriver: true }),
-      Animated.timing(scale, { toValue: 1, duration: 100, useNativeDriver: true }),
-    ]).start();
-    if (next) onUpvote?.(item); else onRemoveUpvote?.(item);
-  };
-
-  const topicIds = (item.topic || '').split(',').map((t) => t.trim()).filter(Boolean);
-
-  const clientProfilePic = item.client_image || null;
-  const hasClientProfilePic = !!clientProfilePic;
-
-  const body = (
-    <GHTouchableOpacity activeOpacity={0.94} onPress={() => onPress?.(item)} style={s.card}>
-      <View style={s.cardInner}>
-        {/* Client row — place name + rating, with client profile pic */}
-        <View style={s.cardClientRow}>
-          {hasClientProfilePic ? (
-            <Image source={{ uri: clientProfilePic }} style={s.clientAv} resizeMode="cover" />
-          ) : (
-            <View style={[s.clientAv, s.clientAvPlaceholder]}>
-              <Ionicons name="storefront-outline" size={22} color={C.red} />
-            </View>
-          )}
-          <View style={s.cardClientMeta}>
-            <Text style={s.clientPlaceText} numberOfLines={1}>{item.place || 'A place in Bahrain'}</Text>
-            {item.rating != null && item.rating > 0 && (
-              <View style={s.cardRatingPill}>
-                <RatingStars rating={item.rating} size={11} color={C.sub} />
-                <Text style={s.cardRatingNum}>{Number(item.rating).toFixed(1)}</Text>
-              </View>
-            )}
-            <Text style={s.cardAuthorSub} numberOfLines={1}>by {item.author}</Text>
-          </View>
-        </View>
-
-        {/* Review photos — slider when 2+ (gesture-handler for nested scroll) */}
-        {images.length > 0 && (
-          <View style={[s.cardImgWrap, { height: imgH, width: cardWidth }]}>
-            {images.length === 1 ? (
-              <Image source={{ uri: images[0] }} style={s.cardImg} resizeMode="contain" />
-            ) : (
-              <>
-                <GHScrollView
-                  horizontal
-                  pagingEnabled
-                  showsHorizontalScrollIndicator={false}
-                  onMomentumScrollEnd={(e) => {
-                    const i = Math.round(e.nativeEvent.contentOffset.x / cardWidth);
-                    setImageIndex(i);
-                  }}
-                  onScrollEndDrag={(e) => {
-                    const i = Math.round(e.nativeEvent.contentOffset.x / cardWidth);
-                    setImageIndex(i);
-                  }}
-                  style={{ width: cardWidth, height: imgH }}
-                  contentContainerStyle={{ width: cardWidth * images.length }}
-                >
-                  {images.map((uri, i) => (
-                    <View key={i} style={{ width: cardWidth, height: imgH }}>
-                      <Image source={{ uri }} style={{ width: cardWidth, height: imgH }} resizeMode="contain" />
-                    </View>
-                  ))}
-                </GHScrollView>
-                <View style={s.cardImgPills}>
-                  {images.map((_, i) => (
-                    <View key={i} style={[s.cardImgPill, i === imageIndex && s.cardImgPillActive]} />
-                  ))}
-                </View>
-                {images.length > 2 && (
-                  <View style={s.imgCountBadge}>
-                    <Text style={s.imgCountText}>+{images.length - 1}</Text>
-                  </View>
-                )}
-              </>
-            )}
-          </View>
-        )}
-
-        {/* Review body — main emphasis */}
-        <Text style={s.bodyText} numberOfLines={4}>{item.body}</Text>
-
-        {/* Topic pills */}
-        {topicIds.length > 0 && (
-          <View style={s.cardTopicRow}>
-            {topicIds.slice(0, 3).map((tid) => (
-              <View key={tid} style={s.cardTopicPill}>
-                <Text style={s.cardTopicPillText}>#{tid}</Text>
-              </View>
-            ))}
-          </View>
-        )}
-
-        {/* Actions: Upvote · Comment only */}
-        <View style={s.actions}>
-          <TouchableOpacity style={s.actionBtn} onPress={doUpvote} activeOpacity={0.7}>
-            <Animated.View style={{ transform: [{ scale }] }}>
-              <Ionicons name={upvoted ? 'arrow-up-circle' : 'arrow-up-circle-outline'} size={20} color={upvoted ? C.upvoteDark : C.upvoteLight} />
-            </Animated.View>
-            <Text style={[s.actionNum, { color: upvoted ? C.upvoteDark : C.upvoteLight }]}>{count}</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={s.actionBtn} onPress={() => onCommentPress?.(item)} activeOpacity={0.7}>
-            <Ionicons name="chatbubble-outline" size={17} color={C.blue} />
-            <Text style={[s.actionNum, { color: C.blue }]}>{item.comments}</Text>
-          </TouchableOpacity>
-        </View>
-      </View>
-    </GHTouchableOpacity>
-  );
-
-  return body;
-}
-
-function DetailModal({ post, onClose, onUpvote, onRemoveUpvote, focusReplyWhenOpen = false, onClearFocusReply }) {
-  const insets = useSafeAreaInsets();
-  const { width, height } = useWindowDimensions();
-  const cardMargin = 24;
-  const cardW = width - cardMargin * 2;
-  const imgW = cardW;
-  const imgH = Math.round(imgW * 0.6);
-  const popupMaxHeight = height * 0.88;
-  const popupCardHeaderH = 54; // "Review" header row
-  const [upvoted, setUpvoted] = useState(post?.upvoted ?? false);
-  const [imageIndex, setImageIndex] = useState(0);
-  const [cardHeight, setCardHeight] = useState(popupMaxHeight);
-  const [replyText, setReplyText] = useState('');
-  const imageScrollRef = useRef(null);
-  const replyInputRef = useRef(null);
-  const scale = useRef(new Animated.Value(1)).current;
-  const count = post?.upvotes ?? 0;
-
-  useEffect(() => {
-    if (post?.upvoted) setUpvoted(true);
-  }, [post?.id, post?.upvoted]);
-  useEffect(() => { setImageIndex(0); setCardHeight(popupMaxHeight); setReplyText(''); }, [post?.id, popupMaxHeight]);
-  useEffect(() => {
-    if (post && focusReplyWhenOpen && replyInputRef.current) {
-      const t = setTimeout(() => {
-        replyInputRef.current?.focus();
-        onClearFocusReply?.();
-      }, 400);
-      return () => clearTimeout(t);
-    }
-  }, [post?.id, focusReplyWhenOpen]);
-
-  if (!post) return null;
-
-  const images = post.images?.length > 0 ? post.images : post.image ? [post.image] : [];
-  const hasMultipleImages = images.length > 1;
-
-  const goToImage = (index) => {
-    const i = Math.max(0, Math.min(index, images.length - 1));
-    setImageIndex(i);
-    imageScrollRef.current?.scrollTo({ x: i * imgW, animated: true });
-  };
-  const topicIds = (post.topic || '').split(',').map((s2) => s2.trim()).filter(Boolean);
-  const topicLabels = topicIds.map((id) => TOPICS.find((t) => t.id === id)?.label || CREATE_POST_TOPICS.find((t) => t.id === id)?.label || id);
-
-  const doUpvote = () => {
-    const next = !upvoted;
-    setUpvoted(next);
-    Animated.sequence([
-      Animated.timing(scale, { toValue: 1.3, duration: 100, useNativeDriver: true }),
-      Animated.timing(scale, { toValue: 1, duration: 100, useNativeDriver: true }),
-    ]).start();
-    if (next) onUpvote?.(post); else onRemoveUpvote?.(post);
-  };
-
-  return (
-    <Modal visible={!!post} transparent animationType="fade" onRequestClose={onClose}>
-      <KeyboardAvoidingView style={s.popOverlay} behavior={Platform.OS === 'ios' ? 'padding' : undefined} keyboardVerticalOffset={0}>
-      <View style={[s.popOverlay, { flex: 1 }]} collapsable={false}>
-        {/* Blurred / dim backdrop — tap to close */}
-        <TouchableWithoutFeedback onPress={onClose}>
-          <View style={[StyleSheet.absoluteFill, { zIndex: 0 }]}>
-            {Platform.OS === 'ios' ? (
-              <BlurView intensity={70} tint="dark" style={StyleSheet.absoluteFill} />
-            ) : (
-              <View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(0,0,0,0.65)' }]} />
-            )}
-          </View>
-        </TouchableWithoutFeedback>
-
-        {/* Card — height shrinks to content, max popupMaxHeight */}
-        <View style={[s.popCard, { width: cardW, height: cardHeight, maxHeight: popupMaxHeight, zIndex: 10 }]}>
-          <View style={s.popHeader}>
-            <View style={s.popHeaderLeft}>
-              {post.client_image ? (
-                <Image source={{ uri: post.client_image }} style={s.popHeaderAv} resizeMode="cover" />
-              ) : (
-                <View style={[s.popHeaderAv, s.popHeaderAvPlaceholder]}>
-                  <Ionicons name="storefront-outline" size={18} color={C.red} />
-                </View>
-              )}
-              <View style={{ flex: 1, minWidth: 0 }}>
-                <Text style={s.popHeaderName} numberOfLines={1}>{post.place || 'A place in Bahrain'}</Text>
-                <Text style={s.popHeaderSub} numberOfLines={1}>by {post.author}</Text>
-              </View>
-            </View>
-            <TouchableOpacity onPress={onClose} hitSlop={14} activeOpacity={0.7}>
-              <Ionicons name="close-circle" size={28} color={C.red} />
-            </TouchableOpacity>
-          </View>
-
-          <ScrollView
-            style={{ flex: 1 }}
-            contentContainerStyle={{ paddingTop: 8, paddingBottom: 12, flexGrow: 0 }}
-            showsVerticalScrollIndicator={false}
-            bounces={false}
-            onContentSizeChange={(_, contentH) => {
-              const total = popupCardHeaderH + contentH;
-              setCardHeight(Math.min(total, popupMaxHeight));
-            }}
-          >
-            {/* Images */}
-            {images.length > 0 ? (
-              <View style={[s.popImgWrap, { width: cardW, height: imgH }]}>
-                <ScrollView
-                  ref={imageScrollRef}
-                  horizontal
-                  pagingEnabled
-                  showsHorizontalScrollIndicator={false}
-                  onMomentumScrollEnd={(e) => {
-                    const i = Math.round(e.nativeEvent.contentOffset.x / imgW);
-                    setImageIndex(i);
-                  }}
-                  style={{ width: cardW, height: imgH }}
-                >
-                  {images.map((uri, i) => (
-                    <Image key={i} source={{ uri }} style={{ width: imgW, height: imgH }} resizeMode="contain" />
-                  ))}
-                </ScrollView>
-                {images.length > 1 && (
-                  <View style={s.popImgPills}>
-                    {images.map((_, i) => (
-                      <View key={i} style={[s.popImgPill, i === imageIndex && s.popImgPillActive]} />
-                    ))}
-                  </View>
-                )}
-                <View style={s.popImgBadge}>
-                  <Ionicons name="images-outline" size={13} color="#FFF" />
-                  <Text style={s.popImgBadgeText}>{imageIndex + 1}/{images.length}</Text>
-                </View>
-              </View>
-            ) : null}
-
-            {/* Body content */}
-            <View style={s.popBody}>
-              {/* Location + rating in same row */}
-              <View style={s.popPlaceRatingRow}>
-                {post.place ? (
-                  <View style={s.popPlaceWrap}>
-                    <Ionicons name="location-sharp" size={13} color={C.red} />
-                    <Text style={s.popPlaceText} numberOfLines={1}>{post.place}</Text>
-                  </View>
-                ) : null}
-                {post.rating != null && post.rating > 0 && (
-                  <View style={s.popRatingWrap}>
-                    <RatingStars rating={post.rating} size={13} color={C.sub} />
-                    <Text style={s.popRatingNum}>{Number(post.rating).toFixed(1)}</Text>
-                  </View>
-                )}
-              </View>
-
-              {/* Review text */}
-              <Text style={s.popReviewText}>{post.body}</Text>
-
-              {/* Upvote */}
-              <View style={s.popUpvoteRow}>
-                <TouchableOpacity style={s.popUpvoteBtn} onPress={doUpvote} activeOpacity={0.7}>
-                  <Animated.View style={{ transform: [{ scale }] }}>
-                    <Ionicons name={upvoted ? 'arrow-up-circle' : 'arrow-up-circle-outline'} size={20} color={upvoted ? C.upvoteDark : C.upvoteLight} />
-                  </Animated.View>
-                  <Text style={[s.popUpvoteNum, { color: upvoted ? C.upvoteDark : C.upvoteLight }]}>{count}</Text>
-                </TouchableOpacity>
-              </View>
-
-              {/* Replies — always show so user can add reply */}
-              <View style={s.popReplySection}>
-                <Text style={s.popReplyTitle}>Replies</Text>
-                <View style={s.popReplyBox}>
-                  <View style={s.popReplyAv}>
-                    <Ionicons name="person" size={14} color={C.muted} />
-                  </View>
-                  <TextInput
-                    ref={replyInputRef}
-                    style={s.popReplyInput}
-                    placeholder="Add your thoughts..."
-                    placeholderTextColor={C.muted}
-                    value={replyText}
-                    onChangeText={setReplyText}
-                    multiline={false}
-                    returnKeyType="send"
-                    blurOnSubmit
-                  />
-                  <TouchableOpacity onPress={() => replyInputRef.current?.focus()} hitSlop={8}>
-                    <Ionicons name="send" size={16} color={C.red} />
-                  </TouchableOpacity>
-                </View>
-              </View>
-            </View>
-          </ScrollView>
-        </View>
-      </View>
-      </KeyboardAvoidingView>
-    </Modal>
   );
 }
 
@@ -961,11 +594,6 @@ function CreatePostModal({ visible, onClose, onPosted, initialPlace, initialClie
   );
 }
 
-const MAIN_TABS = [
-  { id: 'public', label: 'Public Reviews', icon: 'globe-outline' },
-  { id: 'my', label: 'My Reviews', icon: 'person-outline' },
-];
-
 // FAB menu: Post on top, Scan on left — each with distinct look
 const FAB_MENU_OPTIONS = [
   { id: 'post', label: 'Post', icon: 'create-outline', position: 'top', variant: 'post' },
@@ -1114,19 +742,56 @@ function RevolverFabOptions({ expanded, onOptionPress, children }) {
   );
 }
 
+const COMMUNITY_CARD_STAGGER_MS = 36;
+const COMMUNITY_CARD_STAGGER_CAP = 12;
+
+/** Staggered fade + slide-up when a row mounts or shows a new post (FlatList recycle). */
+const CommunityFeedCardWrapper = ({ itemId, index, children }) => {
+  const opacity = useRef(new Animated.Value(0)).current;
+  const translateY = useRef(new Animated.Value(14)).current;
+
+  useEffect(() => {
+    opacity.setValue(0);
+    translateY.setValue(14);
+    const delay = Math.min(index, COMMUNITY_CARD_STAGGER_CAP) * COMMUNITY_CARD_STAGGER_MS;
+    const parallel = Animated.parallel([
+      Animated.timing(opacity, {
+        toValue: 1,
+        duration: 340,
+        delay,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: true,
+      }),
+      Animated.spring(translateY, {
+        toValue: 0,
+        delay,
+        useNativeDriver: true,
+        damping: 19,
+        stiffness: 210,
+      }),
+    ]);
+    parallel.start();
+    return () => parallel.stop();
+  }, [itemId, index, opacity, translateY]);
+
+  return (
+    <Animated.View style={{ opacity, transform: [{ translateY }] }}>
+      {children}
+    </Animated.View>
+  );
+};
+
 export default function CommunitiesScreen() {
-  const { colors, isDark } = useTheme()
-  C = getC(isDark)
+  const navigation = useNavigation()
+  const { isDark } = useTheme()
+  const palette = useMemo(() => getCommunityPalette(isDark), [isDark])
+  C = palette
+  const feedStyles = useMemo(() => buildCommunityFeedStyles(palette), [palette])
   const insets = useSafeAreaInsets()
-  const route = useRoute();
-  const navigation = useNavigation();
   const [posts, setPosts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [mainTab, setMainTab] = useState('public');
   const [activeTopic, setActiveTopic] = useState('all');
-  const [selectedPost, setSelectedPost] = useState(null);
-  const [focusReplyWhenOpen, setFocusReplyWhenOpen] = useState(false);
   const [showCreate, setShowCreate] = useState(false);
   const [showScanner, setShowScanner] = useState(false);
   const [scanInitialPlace, setScanInitialPlace] = useState(null);
@@ -1143,16 +808,8 @@ export default function CommunitiesScreen() {
       setLoading(true);
     }
     try {
-      if (mainTab === 'my') {
-        const userId = await getCommunityUserId();
-        const list = await fetchMyCommunityPosts(userId);
-        // Ensure only current user's posts (filter by user_a_uuid)
-        const myOnly = (list || []).filter((p) => p.user_a_uuid === userId);
-        setPosts(myOnly);
-      } else {
-        const list = await fetchCommunityPosts(activeTopic);
-        setPosts(list);
-      }
+      const list = await fetchCommunityPosts(activeTopic);
+      setPosts(list);
     } catch (e) {
       console.error('[Community] load posts failed:', e);
       setPosts([]);
@@ -1160,7 +817,7 @@ export default function CommunitiesScreen() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [mainTab, activeTopic]);
+  }, [activeTopic]);
 
   useEffect(() => { loadPosts(); }, [loadPosts]);
 
@@ -1169,76 +826,66 @@ export default function CommunitiesScreen() {
       const newCount = await upvoteCommunityPost(item.id);
       const updater = (p) => (p.id === item.id ? { ...p, upvotes: newCount, upvoted: true } : p);
       setPosts((prev) => prev.map(updater));
-      if (selectedPost?.id === item.id) setSelectedPost((p) => (p?.id === item.id ? { ...p, upvotes: newCount, upvoted: true } : p));
     } catch (e) {
       console.warn('[Community] upvote failed:', e);
     }
-  }, [selectedPost?.id]);
+  }, []);
 
   const handleRemoveUpvote = useCallback(async (item) => {
     try {
       const newCount = await removeUpvoteCommunityPost(item.id);
       const updater = (p) => (p.id === item.id ? { ...p, upvotes: newCount, upvoted: false } : p);
       setPosts((prev) => prev.map(updater));
-      if (selectedPost?.id === item.id) setSelectedPost((p) => (p?.id === item.id ? { ...p, upvotes: newCount, upvoted: false } : p));
     } catch (e) {
       console.warn('[Community] remove upvote failed:', e);
     }
-  }, [selectedPost?.id]);
+  }, []);
+
+  const handleOpenPost = useCallback((post) => {
+    navigation.navigate('CommunityPostDetail', { post });
+  }, [navigation]);
+
+  const handleOpenPostComments = useCallback((post) => {
+    navigation.navigate('CommunityPostDetail', { post, focusComposer: true });
+  }, [navigation]);
 
   return (
     <ScreenContainer style={s.screen}>
       <View style={[s.topBar, { paddingTop: insets.top + 4 }]}>
-        {/* Header row */}
         <View style={s.header}>
           <View style={s.headerSpacer} />
-          <Text style={s.headerTitle}>Community</Text>
+          <View style={s.headerCenter}>
+            <Text style={s.headerTitle}>Community</Text>
+            <Text style={s.headerSubtitle}>Discover Bahrain together</Text>
+          </View>
           <View style={s.headerSpacer} />
         </View>
 
-        {/* Main tabs: Public Reviews | My Reviews */}
-        <View style={s.mainTabsWrap}>
-          <View style={s.mainTabsRow}>
-            {MAIN_TABS.map((tab) => {
-              const on = mainTab === tab.id;
+        <View style={s.filterTabsWrap}>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.filterScroll}>
+            {TOPICS.map((t) => {
+              const on = activeTopic === t.id;
+              const iconName = TOPIC_FILTER_ICONS[t.id] || 'ellipse-outline';
               return (
                 <TouchableOpacity
-                  key={tab.id}
-                  style={[s.mainTab, on && s.mainTabOn]}
-                  onPress={() => setMainTab(tab.id)}
-                  activeOpacity={0.7}
+                  key={t.id}
+                  style={[s.filterChip, on && s.filterChipOn]}
+                  onPress={() => setActiveTopic(t.id)}
+                  activeOpacity={0.75}
+                  accessibilityRole="button"
+                  accessibilityLabel={t.label}
+                  accessibilityState={{ selected: on }}
                 >
-                  <Ionicons name={tab.icon} size={18} color={on ? C.red : C.sub} />
-                  <Text style={[s.mainTabText, on && s.mainTabTextOn]}>{tab.label}</Text>
+                  <Ionicons
+                    name={iconName}
+                    size={22}
+                    color={on ? '#FFF' : C.sub}
+                  />
                 </TouchableOpacity>
               );
             })}
-          </View>
-          <View style={s.mainTabsIndicatorWrap}>
-            <View style={[s.mainTabsIndicator, { left: mainTab === 'public' ? 0 : '50%' }]} />
-          </View>
+          </ScrollView>
         </View>
-
-        {/* Topic filter tabs — only when Public */}
-        {mainTab === 'public' && (
-          <View style={s.filterTabsWrap}>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.filterScroll}>
-              {TOPICS.map((t) => {
-                const on = activeTopic === t.id;
-                return (
-                  <TouchableOpacity
-                    key={t.id}
-                    style={[s.filterChip, on && s.filterChipOn]}
-                    onPress={() => setActiveTopic(t.id)}
-                    activeOpacity={0.75}
-                  >
-                    <Text style={[s.filterChipText, on && s.filterChipTextOn]}>{t.label}</Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </ScrollView>
-          </View>
-        )}
       </View>
 
       {/* Ask Khalid — full-screen blurred modal */}
@@ -1253,37 +900,31 @@ export default function CommunitiesScreen() {
           ListHeaderComponent={
             null
           }
-          renderItem={({ item }) => (
-            <ReviewCard
+          renderItem={({ item, index }) => (
+            <CommunityFeedCardWrapper itemId={item.id} index={index}>
+              <CommunityReviewCard
                 item={item}
-                onPress={setSelectedPost}
-                onCommentPress={(it) => { setSelectedPost(it); setFocusReplyWhenOpen(true); }}
+                C={palette}
+                styles={feedStyles}
+                onPress={handleOpenPost}
+                onCommentPress={handleOpenPostComments}
                 onUpvote={handleUpvote}
                 onRemoveUpvote={handleRemoveUpvote}
               />
+            </CommunityFeedCardWrapper>
           )}
-          contentContainerStyle={s.feed}
+          contentContainerStyle={feedStyles.feed}
           showsVerticalScrollIndicator={false}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => loadPosts({ isRefresh: true })} colors={[C.red]} />}
-          ListEmptyComponent={
-            <View style={s.empty}>
-              <View style={s.emptyIcon}>
-                <Ionicons
-                  name={mainTab === 'my' ? 'document-text-outline' : 'compass-outline'}
-                  size={44}
-                  color={C.muted}
-                />
+          ListEmptyComponent={(
+            <View style={feedStyles.empty}>
+              <View style={feedStyles.emptyIcon}>
+                <Ionicons name="people" size={48} color={C.red} />
               </View>
-              <Text style={s.emptyTitle}>
-                {mainTab === 'my' ? 'No reviews from you yet' : 'No reviews yet'}
-              </Text>
-              <Text style={s.emptySub}>
-                {mainTab === 'my'
-                  ? 'Tap + to post your first review and share your favorite spots'
-                  : 'Be the first to share a hidden gem in Bahrain'}
-              </Text>
+              <Text style={feedStyles.emptyTitle}>No reviews yet</Text>
+              <Text style={feedStyles.emptySub}>Be the first to share your experience and help build our community</Text>
             </View>
-          }
+          )}
         />
       )}
 
@@ -1310,14 +951,6 @@ export default function CommunitiesScreen() {
           setShowCreate(true);
         }}
       />
-      <DetailModal
-        post={selectedPost}
-        onClose={() => { setSelectedPost(null); setFocusReplyWhenOpen(false); }}
-        onUpvote={handleUpvote}
-        onRemoveUpvote={handleRemoveUpvote}
-        focusReplyWhenOpen={focusReplyWhenOpen}
-        onClearFocusReply={() => setFocusReplyWhenOpen(false)}
-      />
       <CreatePostModal
         visible={showCreate}
         onClose={() => { setShowCreate(false); setScanInitialPlace(null); setScanInitialClientUuid(null); }}
@@ -1332,97 +965,73 @@ export default function CommunitiesScreen() {
 const s = StyleSheet.create({
   screen: { backgroundColor: C.bg },
   topBar: {
-    backgroundColor: C.bg,
-    paddingBottom: 6,
+    backgroundColor: C.card,
+    paddingBottom: 8,
+    ...Platform.select({
+      ios: {
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.05,
+        shadowRadius: 8,
+      },
+      android: {
+        elevation: 2,
+      },
+    }),
   },
   header: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
-    paddingHorizontal: 20, paddingBottom: 6,
+    paddingHorizontal: 20, paddingBottom: 8,
   },
   headerSpacer: { flex: 1 },
-  headerTitle: { fontSize: 18, fontWeight: '800', color: C.text, letterSpacing: -0.3 },
-  mainTabsWrap: {
-    marginHorizontal: 20,
-    marginBottom: 6,
-    borderBottomWidth: 1,
-    borderBottomColor: C.border,
+  headerCenter: { alignItems: 'center' },
+  headerTitle: { fontSize: 20, fontWeight: '800', color: C.text, letterSpacing: -0.5 },
+  headerSubtitle: { fontSize: 13, fontWeight: '500', color: C.sub, marginTop: 2, letterSpacing: 0.1 },
+  filterTabsWrap: {
+    paddingBottom: 4,
   },
-  mainTabsRow: {
-    flexDirection: 'row',
-    alignItems: 'stretch',
-  },
-  mainTab: {
-    flex: 1,
+  filterScroll: { paddingHorizontal: 20, paddingVertical: 6, gap: 6, flexDirection: 'row', alignItems: 'center' },
+  filterChip: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 6,
-    paddingVertical: 8,
-    paddingHorizontal: 8,
-  },
-  mainTabOn: {},
-  mainTabText: { fontSize: 14, fontWeight: '600', color: C.sub },
-  mainTabTextOn: { color: C.text, fontWeight: '700' },
-  mainTabsIndicatorWrap: {
-    position: 'absolute',
-    bottom: -1,
-    left: 0,
-    right: 0,
-    height: 3,
-    alignItems: 'center',
-  },
-  mainTabsIndicator: {
-    position: 'absolute',
-    bottom: 0,
-    width: '50%',
-    height: 3,
-    backgroundColor: C.red,
-    borderRadius: 2,
-  },
-  filterTabsWrap: {
-    borderBottomWidth: 1,
-    borderBottomColor: C.border,
-    marginBottom: 6,
-  },
-  filterScroll: { paddingHorizontal: 20, paddingVertical: 4, gap: 4, flexDirection: 'row', alignItems: 'center' },
-  filterChip: {
-    flexDirection: 'row', alignItems: 'center',
-    paddingVertical: 6, paddingHorizontal: 14, borderRadius: 8,
-    backgroundColor: 'transparent',
+    minWidth: 44,
+    minHeight: 44,
+    paddingVertical: 10,
+    paddingHorizontal: 10,
+    borderRadius: 22,
+    backgroundColor: C.bg,
+    borderWidth: 1.5,
+    borderColor: C.border,
   },
   filterChipOn: {
-    backgroundColor: C.redSoft,
+    backgroundColor: C.red,
+    borderColor: C.red,
   },
-  filterChipText: { fontSize: 13, fontWeight: '600', color: C.sub },
-  filterChipTextOn: { color: C.red, fontWeight: '700' },
-  filterChipDisabled: { opacity: 0.5 },
-  filterChipTextDisabled: { color: C.muted },
   feed: { paddingHorizontal: 16, paddingBottom: 110 },
   feedHeader: { paddingTop: 18, paddingBottom: 14 },
   feedHeaderTitle: { fontSize: 18, fontWeight: '800', color: C.text, marginBottom: 4 },
   feedHeaderSub: { fontSize: 14, color: C.muted, fontWeight: '500' },
   loadingWrap: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingVertical: 60 },
   loaderScroll: { flex: 1 },
-  loaderContent: { paddingHorizontal: 16, paddingBottom: 40 },
+  loaderContent: { paddingHorizontal: 16, paddingTop: 12, paddingBottom: 40 },
   skeletonCard: {
     backgroundColor: C.card,
-    marginBottom: 16,
-    padding: 16,
-    borderRadius: 16,
+    marginBottom: 20,
+    borderRadius: 20,
     overflow: 'hidden',
     ...Platform.select({
-      ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.06, shadowRadius: 8 },
-      android: { elevation: 2 },
+      ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.08, shadowRadius: 12 },
+      android: { elevation: 4 },
     }),
   },
   skeletonBox: {
     backgroundColor: C.chip,
     borderRadius: 8,
   },
-  skeletonAvatar: { borderRadius: 19 },
+  skeletonAvatar: { borderRadius: 22 },
   skeletonImage: {
     backgroundColor: C.chip,
-    borderRadius: 12,
   },
   card: {
     backgroundColor: C.card,
@@ -1439,7 +1048,6 @@ const s = StyleSheet.create({
   authorText: { fontSize: 14, fontWeight: '700', color: C.text },
   cardPlaceRow: { flexDirection: 'row', alignItems: 'center', gap: 3, marginTop: 2 },
   cardPlaceText: { fontSize: 12, fontWeight: '600', color: C.red },
-  // Client-focused card layout
   cardClientRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 12 },
   clientAv: { width: 48, height: 48, borderRadius: 24, backgroundColor: C.chip, marginRight: 12, overflow: 'hidden' },
   clientAvPlaceholder: { alignItems: 'center', justifyContent: 'center', backgroundColor: C.red + '18' },
@@ -1598,13 +1206,24 @@ const s = StyleSheet.create({
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 8,
   },
   scannerHint: { fontSize: 14, color: 'rgba(255,255,255,0.95)', fontWeight: '600', flex: 1, textAlign: 'center' },
-  empty: { paddingVertical: 72, alignItems: 'center', paddingHorizontal: 32 },
+  empty: { paddingVertical: 80, alignItems: 'center', paddingHorizontal: 32 },
   emptyIcon: {
-    width: 80, height: 80, borderRadius: 40, backgroundColor: C.chip,
-    alignItems: 'center', justifyContent: 'center', marginBottom: 20,
+    width: 96, height: 96, borderRadius: 48, backgroundColor: C.redSoft,
+    alignItems: 'center', justifyContent: 'center', marginBottom: 24,
+    ...Platform.select({
+      ios: {
+        shadowColor: C.red,
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.15,
+        shadowRadius: 12,
+      },
+      android: {
+        elevation: 3,
+      },
+    }),
   },
-  emptyTitle: { fontSize: 18, fontWeight: '700', color: C.text, marginBottom: 6 },
-  emptySub: { fontSize: 15, color: C.sub, textAlign: 'center', lineHeight: 22 },
+  emptyTitle: { fontSize: 20, fontWeight: '800', color: C.text, marginBottom: 8, letterSpacing: -0.3 },
+  emptySub: { fontSize: 15, color: C.sub, textAlign: 'center', lineHeight: 22, fontWeight: '500' },
   // Popup
   popOverlay: {
     flex: 1,

@@ -5,7 +5,6 @@ import {
   StyleSheet,
   TouchableOpacity,
   TextInput,
-  ScrollView,
   KeyboardAvoidingView,
   Platform,
   SafeAreaView,
@@ -14,11 +13,14 @@ import {
   Animated,
   Easing,
   useWindowDimensions,
+  ScrollView,
 } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
 import { LinearGradient } from 'expo-linear-gradient'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import { useAuth } from '../context/AuthContext'
+import { useUserPreferences } from '../context/UserPreferencesContext'
+import { useDoorTransition, yieldTwoFrames } from '../context/DoorTransitionContext'
 import { useTheme } from '../context/ThemeContext'
 import { gradients } from '../theme/designTokens'
 import { FadeInView, GradientButton, AnimatedPressable } from '../components/AnimatedUI'
@@ -31,23 +33,54 @@ const CLIENT_TYPES = [
   { id: 'cafe', label: 'Cafe', icon: 'cafe-outline' },
 ]
 
-const FloatingOrb = ({ size, color, startX, startY, duration, delay }) => {
+const FloatingBubble = ({ size, color, startX, startY, duration, delay }) => {
   const anim = useRef(new Animated.Value(0)).current
+  const floatAnim = useRef(new Animated.Value(0)).current
 
   useEffect(() => {
     const timer = setTimeout(() => {
-      Animated.loop(
-        Animated.sequence([
-          Animated.timing(anim, { toValue: 1, duration, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
-          Animated.timing(anim, { toValue: 0, duration, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
-        ])
-      ).start()
+      Animated.parallel([
+        Animated.loop(
+          Animated.sequence([
+            Animated.timing(anim, { 
+              toValue: 1, 
+              duration, 
+              easing: Easing.bezier(0.4, 0, 0.6, 1), 
+              useNativeDriver: true 
+            }),
+            Animated.timing(anim, { 
+              toValue: 0, 
+              duration, 
+              easing: Easing.bezier(0.4, 0, 0.6, 1), 
+              useNativeDriver: true 
+            }),
+          ])
+        ),
+        Animated.loop(
+          Animated.sequence([
+            Animated.timing(floatAnim, { 
+              toValue: 1, 
+              duration: duration * 1.3, 
+              easing: Easing.inOut(Easing.sin), 
+              useNativeDriver: true 
+            }),
+            Animated.timing(floatAnim, { 
+              toValue: 0, 
+              duration: duration * 1.3, 
+              easing: Easing.inOut(Easing.sin), 
+              useNativeDriver: true 
+            }),
+          ])
+        ),
+      ]).start()
     }, delay)
     return () => clearTimeout(timer)
-  }, [anim, duration, delay])
+  }, [anim, floatAnim, duration, delay])
 
-  const translateY = anim.interpolate({ inputRange: [0, 1], outputRange: [0, -30] })
-  const scale = anim.interpolate({ inputRange: [0, 0.5, 1], outputRange: [1, 1.15, 1] })
+  const translateY = anim.interpolate({ inputRange: [0, 1], outputRange: [0, -40] })
+  const translateX = floatAnim.interpolate({ inputRange: [0, 1], outputRange: [0, 15] })
+  const scale = anim.interpolate({ inputRange: [0, 0.5, 1], outputRange: [1, 1.2, 1] })
+  const opacity = anim.interpolate({ inputRange: [0, 0.5, 1], outputRange: [0.3, 0.6, 0.3] })
 
   return (
     <Animated.View
@@ -59,26 +92,108 @@ const FloatingOrb = ({ size, color, startX, startY, duration, delay }) => {
         height: size,
         borderRadius: size / 2,
         backgroundColor: color,
-        transform: [{ translateY }, { scale }],
+        transform: [{ translateY }, { translateX }, { scale }],
+        opacity,
       }}
     />
+  )
+}
+
+const MorphingInput = ({ value, onChangeText, placeholder, secureTextEntry, keyboardType, autoCapitalize, autoCorrect, editable, autoFocus, style, C, onEyePress, showEye }) => {
+  const focusAnim = useRef(new Animated.Value(0)).current
+  const shakeAnim = useRef(new Animated.Value(0)).current
+
+  const handleFocus = () => {
+    Animated.spring(focusAnim, {
+      toValue: 1,
+      damping: 15,
+      stiffness: 150,
+      useNativeDriver: false,
+    }).start()
+  }
+
+  const handleBlur = () => {
+    Animated.spring(focusAnim, {
+      toValue: 0,
+      damping: 15,
+      stiffness: 150,
+      useNativeDriver: false,
+    }).start()
+  }
+
+  const borderColor = focusAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [C.border, C.primary],
+  })
+
+  const backgroundColor = focusAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [C.inputBg, `${C.primary}05`],
+  })
+
+  const scale = focusAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [1, 1.02],
+  })
+
+  return (
+    <Animated.View
+      style={[
+        s.inputContainer,
+        {
+          borderColor,
+          backgroundColor,
+          transform: [{ scale }],
+        },
+        style,
+      ]}
+    >
+      <TextInput
+        style={[s.input, { color: C.text }, showEye && s.passwordInput]}
+        value={value}
+        onChangeText={onChangeText}
+        placeholder={placeholder}
+        placeholderTextColor={C.label}
+        secureTextEntry={secureTextEntry}
+        keyboardType={keyboardType}
+        autoCapitalize={autoCapitalize}
+        autoCorrect={autoCorrect}
+        editable={editable}
+        autoFocus={autoFocus}
+        onFocus={handleFocus}
+        onBlur={handleBlur}
+      />
+      {showEye && (
+        <TouchableOpacity
+          onPress={onEyePress}
+          style={s.eyeBtn}
+          hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+        >
+          <Ionicons 
+            name={secureTextEntry ? 'eye-off-outline' : 'eye-outline'} 
+            size={22} 
+            color={C.label} 
+          />
+        </TouchableOpacity>
+      )}
+    </Animated.View>
   )
 }
 
 export default function AuthScreen() {
   const { colors, isDark } = useTheme()
   const { signIn, signUp, ensureProfileAfterSignUp } = useAuth()
-  const { width } = useWindowDimensions()
+  const { isOnboardingComplete } = useUserPreferences()
+  const {
+    cancelDoorTransition,
+    armDoorForNextAuthSuccess,
+    disarmDoorForNextAuthSuccess,
+  } = useDoorTransition()
+  const { width = 375 } = useWindowDimensions()
 
-  const logoScale = useRef(new Animated.Value(0.3)).current
-  const logoOpacity = useRef(new Animated.Value(0)).current
-
-  useEffect(() => {
-    Animated.parallel([
-      Animated.spring(logoScale, { toValue: 1, damping: 12, stiffness: 100, useNativeDriver: true }),
-      Animated.timing(logoOpacity, { toValue: 1, duration: 600, useNativeDriver: true }),
-    ]).start()
-  }, [logoScale, logoOpacity])
+  const contentOpacity = useRef(new Animated.Value(1)).current
+  const contentTranslateY = useRef(new Animated.Value(0)).current
+  const contentScale = useRef(new Animated.Value(1)).current
 
   const C = useMemo(() => (isDark ? {
     bg: '#0B1120',
@@ -103,6 +218,7 @@ export default function AuthScreen() {
   }), [colors, isDark])
 
   const [mode, setMode] = useState('login')
+  const [step, setStep] = useState(0)
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [userName, setUserName] = useState('')
@@ -125,30 +241,79 @@ export default function AuthScreen() {
     return () => { cancelled = true }
   }, [])
 
+  const animateStep = (newStep) => {
+    Animated.parallel([
+      Animated.timing(contentOpacity, { 
+        toValue: 0, 
+        duration: 200, 
+        easing: Easing.bezier(0.4, 0, 1, 1),
+        useNativeDriver: true 
+      }),
+      Animated.timing(contentScale, { 
+        toValue: 0.95, 
+        duration: 200, 
+        easing: Easing.bezier(0.4, 0, 1, 1),
+        useNativeDriver: true 
+      }),
+      Animated.timing(contentTranslateY, { 
+        toValue: 20, 
+        duration: 200,
+        easing: Easing.bezier(0.4, 0, 1, 1),
+        useNativeDriver: true 
+      }),
+    ]).start(() => {
+      setStep(newStep)
+      contentTranslateY.setValue(-20)
+      contentScale.setValue(0.95)
+      Animated.parallel([
+        Animated.spring(contentOpacity, { 
+          toValue: 1, 
+          damping: 20,
+          stiffness: 120,
+          useNativeDriver: true 
+        }),
+        Animated.spring(contentScale, { 
+          toValue: 1, 
+          damping: 18,
+          stiffness: 140,
+          useNativeDriver: true 
+        }),
+        Animated.spring(contentTranslateY, { 
+          toValue: 0, 
+          damping: 20,
+          stiffness: 120,
+          useNativeDriver: true 
+        }),
+      ]).start()
+    })
+  }
+
   const isSignUp = mode === 'signup'
-  const canSubmit =
-    email.trim().length > 0 &&
-    password.length >= 6 &&
-    (!isSignUp || (userName.trim().length > 0 && (accountType !== 'client' || businessName.trim().length > 0)))
 
   const handleLogin = async () => {
-    if (!canSubmit && !isSignUp) {
-      if (password.length > 0 && password.length < 6) {
-        Alert.alert('Error', 'Password must be at least 6 characters.')
-        return
-      }
+    if (!email.trim() || !password.trim()) {
       Alert.alert('Error', 'Please enter email and password.')
+      return
+    }
+    if (password.length < 6) {
+      Alert.alert('Error', 'Password must be at least 6 characters.')
       return
     }
     setLoading(true)
     try {
+      if (isOnboardingComplete) {
+        armDoorForNextAuthSuccess()
+      }
       await signIn(email.trim(), password)
+      await yieldTwoFrames()
       if (rememberMe) {
         await AsyncStorage.setItem(REMEMBER_ME_KEY, email.trim())
       } else {
         await AsyncStorage.removeItem(REMEMBER_ME_KEY)
       }
     } catch (e) {
+      disarmDoorForNextAuthSuccess()
+      cancelDoorTransition()
       Alert.alert('Login failed', e?.message ?? 'Invalid email or password.')
     } finally {
       setLoading(false)
@@ -156,25 +321,12 @@ export default function AuthScreen() {
   }
 
   const handleSignUp = async () => {
-    if (!canSubmit) {
-      if (password.length < 6) {
-        Alert.alert('Error', 'Password must be at least 6 characters.')
-        return
-      }
-      if (isSignUp && !userName.trim()) {
-        Alert.alert('Error', 'Please enter your name.')
-        return
-      }
-      if (accountType === 'client' && !businessName.trim()) {
-        Alert.alert('Error', 'Please enter business name.')
-        return
-      }
-      Alert.alert('Error', 'Please fill in all required fields.')
-      return
-    }
     setLoading(true)
     setSignUpSuccessMessage(null)
     try {
+      if (isOnboardingComplete) {
+        armDoorForNextAuthSuccess()
+      }
       const { session: newSession } = await signUp(email.trim(), password, {
         accountType,
         userName: userName.trim(),
@@ -194,10 +346,16 @@ export default function AuthScreen() {
           description: accountType === 'client' ? description.trim() || null : null,
           clientType: accountType === 'client' ? clientType : 'place',
         })
+        if (isOnboardingComplete) {
+          await yieldTwoFrames()
+        }
       } else {
+        disarmDoorForNextAuthSuccess()
         setSignUpSuccessMessage('Check your email to confirm your account, then sign in.')
       }
     } catch (e) {
+      disarmDoorForNextAuthSuccess()
+      cancelDoorTransition()
       const msg = e?.message ?? 'Could not create account.'
       if (/rate limit|rate_limit|too many requests/i.test(msg)) {
         Alert.alert(
@@ -222,278 +380,438 @@ export default function AuthScreen() {
     }
   }
 
-  const handleSubmit = () => {
-    if (isSignUp) handleSignUp()
-    else handleLogin()
+  const handleContinue = () => {
+    if (isSignUp) {
+      if (step === 0) {
+        if (!email.trim()) {
+          Alert.alert('Required', 'Please enter your email.')
+          return
+        }
+        if (!/\S+@\S+\.\S+/.test(email.trim())) {
+          Alert.alert('Invalid Email', 'Please enter a valid email address.')
+          return
+        }
+        animateStep(1)
+      } else if (step === 1) {
+        if (password.length < 6) {
+          Alert.alert('Error', 'Password must be at least 6 characters.')
+          return
+        }
+        animateStep(2)
+      } else if (step === 2) {
+        if (!userName.trim()) {
+          Alert.alert('Required', 'Please enter your name.')
+          return
+        }
+        animateStep(3)
+      } else if (step === 3) {
+        animateStep(4)
+      } else if (step === 4) {
+        if (accountType === 'user') {
+          handleSignUp()
+        } else {
+          animateStep(5)
+        }
+      } else if (step === 5) {
+        if (!businessName.trim()) {
+          Alert.alert('Required', 'Please enter business name.')
+          return
+        }
+        animateStep(6)
+      } else if (step === 6) {
+        animateStep(7)
+      } else if (step === 7) {
+        handleSignUp()
+      }
+    } else {
+      if (step === 0) {
+        if (!email.trim()) {
+          Alert.alert('Required', 'Please enter your email.')
+          return
+        }
+        animateStep(1)
+      } else if (step === 1) {
+        handleLogin()
+      }
+    }
+  }
+
+  const handleBack = () => {
+    if (step > 0) animateStep(step - 1)
+  }
+
+  const switchMode = () => {
+    Animated.sequence([
+      Animated.timing(contentOpacity, { toValue: 0, duration: 150, useNativeDriver: true }),
+    ]).start(() => {
+      setMode(mode === 'login' ? 'signup' : 'login')
+      setStep(0)
+      setSignUpSuccessMessage(null)
+      Animated.spring(contentOpacity, { toValue: 1, damping: 15, useNativeDriver: true }).start()
+    })
   }
 
   const bgColors = isDark ? gradients.heroDark : gradients.heroLight
+
+  const renderStepContent = () => {
+    if (isSignUp) {
+      if (step === 0) {
+        return (
+          <View style={s.stepContent}>
+            <Text style={[s.question, { color: C.text }]}>What's your email?</Text>
+            <MorphingInput
+              value={email}
+              onChangeText={setEmail}
+              placeholder="you@example.com"
+              keyboardType="email-address"
+              autoCapitalize="none"
+              autoCorrect={false}
+              editable={!loading}
+              autoFocus
+              C={C}
+            />
+          </View>
+        )
+      } else if (step === 1) {
+        return (
+          <View style={s.stepContent}>
+            <Text style={[s.question, { color: C.text }]}>Create a password</Text>
+            <MorphingInput
+              value={password}
+              onChangeText={setPassword}
+              placeholder="Enter at least 6 characters"
+              secureTextEntry={securePassword}
+              editable={!loading}
+              autoFocus
+              C={C}
+              showEye
+              onEyePress={() => setSecurePassword((v) => !v)}
+            />
+          </View>
+        )
+      } else if (step === 2) {
+        return (
+          <View style={s.stepContent}>
+            <Text style={[s.question, { color: C.text }]}>What's your name?</Text>
+            <MorphingInput
+              value={userName}
+              onChangeText={setUserName}
+              placeholder="First name"
+              editable={!loading}
+              autoFocus
+              C={C}
+            />
+          </View>
+        )
+      } else if (step === 3) {
+        return (
+          <View style={s.stepContent}>
+            <Text style={[s.question, { color: C.text }]}>Phone number</Text>
+            <Text style={[s.optionalLabel, { color: C.textMuted }]}>Optional</Text>
+            <MorphingInput
+              value={phone}
+              onChangeText={setPhone}
+              placeholder="+973 ..."
+              keyboardType="phone-pad"
+              editable={!loading}
+              autoFocus
+              C={C}
+            />
+          </View>
+        )
+      } else if (step === 4) {
+        return (
+          <View style={s.stepContent}>
+            <Text style={[s.question, { color: C.text }]}>What type of account?</Text>
+            <View style={s.optionsColumn}>
+              {[
+                { id: 'user', label: 'User', subtitle: 'Explore and discover Bahrain', icon: 'person-outline' },
+                { id: 'client', label: 'Business', subtitle: 'Promote your business', icon: 'business-outline' },
+              ].map((t) => {
+                const sel = accountType === t.id
+                return (
+                  <AnimatedPressable
+                    key={t.id}
+                    style={[s.optionCard, { 
+                      borderColor: sel ? C.primary : C.border, 
+                      backgroundColor: sel ? `${C.primary}10` : C.inputBg 
+                    }]}
+                    onPress={() => setAccountType(t.id)}
+                    scaleDown={0.97}
+                  >
+                    <View style={[s.optionIconWrap, { backgroundColor: sel ? `${C.primary}18` : 'rgba(148,163,184,0.1)' }]}>
+                      <Ionicons name={t.icon} size={28} color={sel ? C.primary : C.label} />
+                    </View>
+                    <View style={s.optionTextWrap}>
+                      <Text style={[s.optionLabel, { color: sel ? C.primary : C.text }]}>{t.label}</Text>
+                      <Text style={[s.optionSubtitle, { color: C.textMuted }]}>{t.subtitle}</Text>
+                    </View>
+                    {sel && (
+                      <View style={[s.checkCircle, { backgroundColor: C.primary }]}>
+                        <Ionicons name="checkmark" size={16} color="#FFF" />
+                      </View>
+                    )}
+                  </AnimatedPressable>
+                )
+              })}
+            </View>
+            {accountType === 'user' && (
+              <View style={s.subOptionsWrap}>
+                <Text style={[s.subLabel, { color: C.label }]}>I am</Text>
+                <View style={s.chipRow}>
+                  {[
+                    { id: 'local', label: 'Local', icon: 'home-outline' },
+                    { id: 'tourist', label: 'Tourist', icon: 'airplane-outline' },
+                  ].map((t) => {
+                    const sel = uType === t.id
+                    return (
+                      <AnimatedPressable
+                        key={t.id}
+                        style={[s.chip, { 
+                          borderColor: sel ? C.primary : C.border, 
+                          backgroundColor: sel ? `${C.primary}15` : C.inputBg 
+                        }]}
+                        onPress={() => setUType(t.id)}
+                        scaleDown={0.95}
+                      >
+                        <Ionicons name={t.icon} size={20} color={sel ? C.primary : C.label} />
+                        <Text style={[s.chipLabel, { color: sel ? C.primary : C.label }]}>{t.label}</Text>
+                      </AnimatedPressable>
+                    )
+                  })}
+                </View>
+              </View>
+            )}
+          </View>
+        )
+      } else if (step === 5) {
+        return (
+          <View style={s.stepContent}>
+            <Text style={[s.question, { color: C.text }]}>Business name</Text>
+            <MorphingInput
+              value={businessName}
+              onChangeText={setBusinessName}
+              placeholder="Your business name"
+              editable={!loading}
+              autoFocus
+              C={C}
+            />
+          </View>
+        )
+      } else if (step === 6) {
+        return (
+          <View style={s.stepContent}>
+            <Text style={[s.question, { color: C.text }]}>Short description</Text>
+            <Text style={[s.optionalLabel, { color: C.textMuted }]}>Optional</Text>
+            <MorphingInput
+              value={description}
+              onChangeText={setDescription}
+              placeholder="Describe your business"
+              editable={!loading}
+              autoFocus
+              C={C}
+              style={s.textAreaContainer}
+            />
+          </View>
+        )
+      } else if (step === 7) {
+        return (
+          <View style={s.stepContent}>
+            <Text style={[s.question, { color: C.text }]}>Business type</Text>
+            <View style={s.optionsColumn}>
+              {CLIENT_TYPES.map((t) => {
+                const sel = clientType === t.id
+                return (
+                  <AnimatedPressable
+                    key={t.id}
+                    style={[s.optionCard, { 
+                      borderColor: sel ? C.primary : C.border, 
+                      backgroundColor: sel ? `${C.primary}10` : C.inputBg 
+                    }]}
+                    onPress={() => setClientType(t.id)}
+                    scaleDown={0.97}
+                  >
+                    <View style={[s.optionIconWrap, { backgroundColor: sel ? `${C.primary}18` : 'rgba(148,163,184,0.1)' }]}>
+                      <Ionicons name={t.icon} size={28} color={sel ? C.primary : C.label} />
+                    </View>
+                    <Text style={[s.optionLabel, { color: sel ? C.primary : C.text }]}>{t.label}</Text>
+                    {sel && (
+                      <View style={[s.checkCircle, { backgroundColor: C.primary }]}>
+                        <Ionicons name="checkmark" size={16} color="#FFF" />
+                      </View>
+                    )}
+                  </AnimatedPressable>
+                )
+              })}
+            </View>
+          </View>
+        )
+      }
+    } else {
+      if (step === 0) {
+        return (
+          <View style={s.stepContent}>
+            <Text style={[s.question, { color: C.text }]}>What's your email?</Text>
+            <MorphingInput
+              value={email}
+              onChangeText={setEmail}
+              placeholder="you@example.com"
+              keyboardType="email-address"
+              autoCapitalize="none"
+              autoCorrect={false}
+              editable={!loading}
+              autoFocus
+              C={C}
+            />
+          </View>
+        )
+      } else if (step === 1) {
+        return (
+          <View style={s.stepContent}>
+            <Text style={[s.question, { color: C.text }]}>Enter your password</Text>
+            <MorphingInput
+              value={password}
+              onChangeText={setPassword}
+              placeholder="Your password"
+              secureTextEntry={securePassword}
+              editable={!loading}
+              autoFocus
+              C={C}
+              showEye
+              onEyePress={() => setSecurePassword((v) => !v)}
+            />
+            <TouchableOpacity
+              style={s.rememberRow}
+              onPress={() => setRememberMe((r) => !r)}
+              activeOpacity={0.8}
+            >
+              <View style={[s.checkbox, rememberMe && { backgroundColor: C.primary, borderColor: C.primary }]}>
+                {rememberMe && <Ionicons name="checkmark" size={14} color="#FFF" />}
+              </View>
+              <Text style={[s.rememberLabel, { color: C.textMuted }]}>Remember me</Text>
+            </TouchableOpacity>
+          </View>
+        )
+      }
+    }
+  }
+
+  const getButtonText = () => {
+    if (isSignUp) {
+      const lastStep = accountType === 'client' ? 7 : 4
+      return step === lastStep ? 'Create Account' : 'Continue'
+    }
+    return step === 1 ? 'Sign In' : 'Continue'
+  }
+
+  const getProgressPercent = () => {
+    if (isSignUp) {
+      const totalSteps = accountType === 'client' ? 8 : 5
+      return ((step + 1) / totalSteps) * 100
+    }
+    return ((step + 1) / 2) * 100
+  }
 
   return (
     <SafeAreaView style={[s.safe, { backgroundColor: C.bg }]}>
       <LinearGradient colors={bgColors} style={StyleSheet.absoluteFill} />
 
-      <FloatingOrb size={160} color={`${C.primary}08`} startX={-40} startY={80} duration={6000} delay={0} />
-      <FloatingOrb size={120} color={`${C.primary}06`} startX={width - 80} startY={200} duration={7000} delay={1000} />
-      <FloatingOrb size={90} color={isDark ? 'rgba(167,139,250,0.06)' : 'rgba(124,58,237,0.04)'} startX={40} startY={400} duration={5500} delay={500} />
+      <FloatingBubble size={180} color={`${C.primary}06`} startX={-50} startY={100} duration={7000} delay={0} />
+      <FloatingBubble size={140} color={`${C.primary}08`} startX={width - 70} startY={150} duration={6000} delay={800} />
+      <FloatingBubble size={100} color={isDark ? 'rgba(167,139,250,0.05)' : 'rgba(124,58,237,0.04)'} startX={width * 0.3} startY={500} duration={8000} delay={400} />
+      <FloatingBubble size={120} color={`${C.primary}04`} startX={width * 0.7} startY={400} duration={9000} delay={1200} />
 
       <KeyboardAvoidingView
         style={s.container}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        keyboardVerticalOffset={Platform.OS === 'ios' ? 16 : 0}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? 12 : 0}
       >
-        <View style={s.header}>
-          <Animated.View style={[s.logoBadge, { backgroundColor: `${C.primary}18`, borderColor: `${C.primary}30`, transform: [{ scale: logoScale }], opacity: logoOpacity }]}>
-            <Ionicons name="compass" size={30} color={C.primary} />
-          </Animated.View>
-          <FadeInView delay={200} from={12}>
-            <Text style={[s.title, { color: C.text }]}>
-              {isSignUp ? 'Create account' : 'Welcome back'}
-            </Text>
-          </FadeInView>
-          <FadeInView delay={350} from={10}>
-            <Text style={[s.subtitle, { color: C.textMuted }]}>
-              {isSignUp
-                ? 'Join as a local, tourist, or business — one account for all.'
-                : 'Sign in to continue exploring Bahrain.'}
-            </Text>
-          </FadeInView>
-        </View>
-
-        <ScrollView
-          style={s.scroll}
-          contentContainerStyle={s.scrollContent}
-          showsVerticalScrollIndicator={false}
-          keyboardShouldPersistTaps="handled"
-        >
-          <FadeInView delay={400} from={24}>
-            <View style={[s.formCard, { backgroundColor: C.card, borderColor: C.cardBorder }]}>
-              <TouchableOpacity
-                style={s.toggleRow}
-                onPress={() => { setMode(mode === 'login' ? 'signup' : 'login'); setSignUpSuccessMessage(null) }}
-                activeOpacity={0.8}
+        <View style={s.inner}>
+          <View style={s.topBar}>
+            {step > 0 ? (
+              <AnimatedPressable
+                style={s.backBtnTop}
+                onPress={handleBack}
+                scaleDown={0.95}
+                accessibilityRole="button"
+                accessibilityLabel="Go back"
               >
-                <Text style={[s.toggleText, { color: C.textMuted }]}>
-                  {isSignUp ? 'Already have an account? ' : "Don't have an account? "}
-                </Text>
-                <Text style={[s.toggleLink, { color: C.primary }]}>{isSignUp ? 'Sign in' : 'Sign up'}</Text>
-              </TouchableOpacity>
+                <Ionicons name="arrow-back" size={22} color={C.text} />
+                <Text style={[s.backBtnTopText, { color: C.textMuted }]}>Back</Text>
+              </AnimatedPressable>
+            ) : (
+              <View style={s.topBarSpacer} />
+            )}
+          </View>
 
-              <View style={s.inputWrap}>
-                <Text style={[s.label, { color: C.label }]}>Email</Text>
-                <View style={[s.inputContainer, { backgroundColor: C.inputBg, borderColor: C.border }]}>
-                  <Ionicons name="mail-outline" size={18} color={C.label} style={s.inputIcon} />
-                  <TextInput
-                    style={[s.input, { color: C.text }]}
-                    value={email}
-                    onChangeText={setEmail}
-                    placeholder="you@example.com"
-                    placeholderTextColor={C.label}
-                    keyboardType="email-address"
-                    autoCapitalize="none"
-                    autoCorrect={false}
-                    editable={!loading}
-                  />
-                </View>
-              </View>
-
-              <View style={s.inputWrap}>
-                <Text style={[s.label, { color: C.label }]}>Password (min 6)</Text>
-                <View style={[s.inputContainer, { backgroundColor: C.inputBg, borderColor: C.border }]}>
-                  <Ionicons name="lock-closed-outline" size={18} color={C.label} style={s.inputIcon} />
-                  <TextInput
-                    style={[s.input, s.passwordInput, { color: C.text }]}
-                    value={password}
-                    onChangeText={setPassword}
-                    placeholder="••••••••"
-                    placeholderTextColor={C.label}
-                    secureTextEntry={securePassword}
-                    editable={!loading}
-                  />
-                  <TouchableOpacity
-                    onPress={() => setSecurePassword((v) => !v)}
-                    style={s.eyeBtn}
-                    hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
-                  >
-                    <Ionicons name={securePassword ? 'eye-off-outline' : 'eye-outline'} size={20} color={C.label} />
-                  </TouchableOpacity>
-                </View>
-              </View>
-
-              {!isSignUp && (
-                <TouchableOpacity
-                  style={s.rememberRow}
-                  onPress={() => setRememberMe((r) => !r)}
-                  activeOpacity={0.8}
-                >
-                  <View style={[s.checkbox, rememberMe && { backgroundColor: C.primary, borderColor: C.primary }]}>
-                    {rememberMe && <Ionicons name="checkmark" size={14} color="#FFF" />}
-                  </View>
-                  <Text style={[s.rememberLabel, { color: C.textMuted }]}>Remember me</Text>
-                </TouchableOpacity>
-              )}
-
-              {isSignUp && (
-                <>
-                  <View style={s.inputWrap}>
-                    <Text style={[s.label, { color: C.label }]}>Name</Text>
-                    <View style={[s.inputContainer, { backgroundColor: C.inputBg, borderColor: C.border }]}>
-                      <Ionicons name="person-outline" size={18} color={C.label} style={s.inputIcon} />
-                      <TextInput
-                        style={[s.input, { color: C.text }]}
-                        value={userName}
-                        onChangeText={setUserName}
-                        placeholder="Your name"
-                        placeholderTextColor={C.label}
-                        editable={!loading}
-                      />
-                    </View>
-                  </View>
-                  <View style={s.inputWrap}>
-                    <Text style={[s.label, { color: C.label }]}>Phone (optional)</Text>
-                    <View style={[s.inputContainer, { backgroundColor: C.inputBg, borderColor: C.border }]}>
-                      <Ionicons name="call-outline" size={18} color={C.label} style={s.inputIcon} />
-                      <TextInput
-                        style={[s.input, { color: C.text }]}
-                        value={phone}
-                        onChangeText={setPhone}
-                        placeholder="+973 ..."
-                        placeholderTextColor={C.label}
-                        keyboardType="phone-pad"
-                        editable={!loading}
-                      />
-                    </View>
-                  </View>
-
-                  <Text style={[s.sectionLabel, { color: C.label }]}>Account type</Text>
-                  <View style={s.chipRow}>
-                    {[
-                      { id: 'user', label: 'User', icon: 'person-outline' },
-                      { id: 'client', label: 'Business', icon: 'business-outline' },
-                    ].map((t) => {
-                      const sel = accountType === t.id
-                      return (
-                        <AnimatedPressable
-                          key={t.id}
-                          style={[s.chip, { borderColor: sel ? C.primary : C.border, backgroundColor: sel ? `${C.primary}15` : C.inputBg }]}
-                          onPress={() => setAccountType(t.id)}
-                          scaleDown={0.95}
-                        >
-                          <Ionicons name={t.icon} size={20} color={sel ? C.primary : C.label} />
-                          <Text style={[s.chipLabel, { color: sel ? C.primary : C.label }, sel && s.chipLabelSel]}>{t.label}</Text>
-                        </AnimatedPressable>
-                      )
-                    })}
-                  </View>
-
-                  {accountType === 'user' && (
-                    <>
-                      <Text style={[s.sectionLabel, { color: C.label }]}>I am</Text>
-                      <View style={s.chipRow}>
-                        {[
-                          { id: 'local', label: 'Local', icon: 'home-outline' },
-                          { id: 'tourist', label: 'Tourist', icon: 'airplane-outline' },
-                        ].map((t) => {
-                          const sel = uType === t.id
-                          return (
-                            <AnimatedPressable
-                              key={t.id}
-                              style={[s.chip, { borderColor: sel ? C.primary : C.border, backgroundColor: sel ? `${C.primary}15` : C.inputBg }]}
-                              onPress={() => setUType(t.id)}
-                              scaleDown={0.95}
-                            >
-                              <Ionicons name={t.icon} size={18} color={sel ? C.primary : C.label} />
-                              <Text style={[s.chipLabel, { color: sel ? C.primary : C.label }, sel && s.chipLabelSel]}>{t.label}</Text>
-                            </AnimatedPressable>
-                          )
-                        })}
-                      </View>
-                    </>
-                  )}
-
-                  {accountType === 'client' && (
-                    <>
-                      <View style={s.inputWrap}>
-                        <Text style={[s.label, { color: C.label }]}>Business name</Text>
-                        <View style={[s.inputContainer, { backgroundColor: C.inputBg, borderColor: C.border }]}>
-                          <Ionicons name="storefront-outline" size={18} color={C.label} style={s.inputIcon} />
-                          <TextInput
-                            style={[s.input, { color: C.text }]}
-                            value={businessName}
-                            onChangeText={setBusinessName}
-                            placeholder="Your business name"
-                            placeholderTextColor={C.label}
-                            editable={!loading}
-                          />
-                        </View>
-                      </View>
-                      <View style={s.inputWrap}>
-                        <Text style={[s.label, { color: C.label }]}>Description (optional)</Text>
-                        <View style={[s.inputContainer, s.textAreaContainer, { backgroundColor: C.inputBg, borderColor: C.border }]}>
-                          <TextInput
-                            style={[s.input, s.textArea, { color: C.text }]}
-                            value={description}
-                            onChangeText={setDescription}
-                            placeholder="Short description"
-                            placeholderTextColor={C.label}
-                            multiline
-                            numberOfLines={2}
-                            editable={!loading}
-                          />
-                        </View>
-                      </View>
-                      <Text style={[s.sectionLabel, { color: C.label }]}>Business type</Text>
-                      <View style={s.chipRow}>
-                        {CLIENT_TYPES.map((t) => {
-                          const sel = clientType === t.id
-                          return (
-                            <AnimatedPressable
-                              key={t.id}
-                              style={[s.chip, { borderColor: sel ? C.primary : C.border, backgroundColor: sel ? `${C.primary}15` : C.inputBg }]}
-                              onPress={() => setClientType(t.id)}
-                              scaleDown={0.95}
-                            >
-                              <Ionicons name={t.icon} size={18} color={sel ? C.primary : C.label} />
-                              <Text style={[s.chipLabel, { color: sel ? C.primary : C.label }, sel && s.chipLabelSel]}>{t.label}</Text>
-                            </AnimatedPressable>
-                          )
-                        })}
-                      </View>
-                    </>
-                  )}
-                </>
-              )}
-
-              {signUpSuccessMessage ? (
-                <FadeInView from={10}>
-                  <View style={[s.successBanner, { backgroundColor: `${C.primary}15`, borderColor: C.primary }]}>
-                    <View style={[s.successIconWrap, { backgroundColor: `${C.primary}20` }]}>
-                      <Ionicons name="mail-outline" size={22} color={C.primary} />
-                    </View>
-                    <Text style={[s.successBannerText, { color: C.text }]}>{signUpSuccessMessage}</Text>
-                  </View>
-                </FadeInView>
-              ) : null}
-
-              <View style={s.submitWrap}>
-                <GradientButton
-                  onPress={handleSubmit}
-                  disabled={!canSubmit || loading}
-                  style={{ marginTop: 8 }}
-                >
-                  {loading ? (
-                    <ActivityIndicator size="small" color="#FFF" />
-                  ) : (
-                    <>
-                      <Text style={s.submitBtnText}>{isSignUp ? 'Create account' : 'Sign in'}</Text>
-                      <Ionicons name="arrow-forward" size={20} color="#FFF" />
-                    </>
-                  )}
-                </GradientButton>
-              </View>
+          <View style={s.progressBarWrap}>
+            <View style={[s.progressTrack, { backgroundColor: `${C.primary}12` }]}>
+              <Animated.View style={[s.progressFill, { backgroundColor: C.primary, width: `${getProgressPercent()}%` }]} />
             </View>
-          </FadeInView>
-        </ScrollView>
+          </View>
+
+          <ScrollView
+            style={s.scroll}
+            contentContainerStyle={s.scrollContent}
+            keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator={false}
+            bounces={false}
+          >
+            <Animated.View
+              style={[
+                s.contentWrap,
+                {
+                  opacity: contentOpacity,
+                  transform: [
+                    { translateY: contentTranslateY },
+                    { scale: contentScale },
+                  ],
+                },
+              ]}
+            >
+              {renderStepContent()}
+            </Animated.View>
+
+            {signUpSuccessMessage ? (
+              <FadeInView from={10}>
+                <View style={[s.successBanner, { backgroundColor: `${C.primary}15`, borderColor: C.primary }]}>
+                  <View style={[s.successIconWrap, { backgroundColor: `${C.primary}20` }]}>
+                    <Ionicons name="mail-outline" size={22} color={C.primary} />
+                  </View>
+                  <Text style={[s.successBannerText, { color: C.text }]}>{signUpSuccessMessage}</Text>
+                </View>
+              </FadeInView>
+            ) : null}
+          </ScrollView>
+
+          <View style={s.footer}>
+          <GradientButton
+            onPress={handleContinue}
+            disabled={loading}
+            style={s.continueBtn}
+          >
+            {loading ? (
+              <ActivityIndicator size="small" color="#FFF" />
+            ) : (
+              <>
+                <Text style={s.continueBtnText}>{getButtonText()}</Text>
+                <Ionicons name="arrow-forward" size={20} color="#FFF" />
+              </>
+            )}
+          </GradientButton>
+
+          <TouchableOpacity
+            style={s.switchModeBtn}
+            onPress={switchMode}
+            activeOpacity={0.7}
+          >
+            <Text style={[s.switchModeText, { color: C.textMuted }]}>
+              {isSignUp ? 'Already have an account? ' : "Don't have an account? "}
+            </Text>
+            <Text style={[s.switchModeLink, { color: C.primary }]}>{isSignUp ? 'Sign in' : 'Sign up'}</Text>
+          </TouchableOpacity>
+          </View>
+        </View>
       </KeyboardAvoidingView>
     </SafeAreaView>
   )
@@ -502,48 +820,145 @@ export default function AuthScreen() {
 const s = StyleSheet.create({
   safe: { flex: 1 },
   container: { flex: 1 },
-  header: { paddingHorizontal: 24, paddingTop: 24, paddingBottom: 20, alignItems: 'center' },
-  logoBadge: {
-    width: 64,
-    height: 64,
-    borderRadius: 20,
-    alignItems: 'center',
+  inner: { flex: 1 },
+  topBar: {
+    minHeight: 44,
+    paddingHorizontal: 12,
+    paddingTop: Platform.OS === 'ios' ? 4 : 8,
     justifyContent: 'center',
-    marginBottom: 20,
-    borderWidth: 1.5,
   },
-  title: { fontSize: 30, fontWeight: '800', marginBottom: 10, letterSpacing: -0.5, textAlign: 'center' },
-  subtitle: { fontSize: 15, lineHeight: 22, textAlign: 'center', paddingHorizontal: 8, maxWidth: 320 },
+  topBarSpacer: { minHeight: 44 },
+  backBtnTop: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    alignSelf: 'flex-start',
+    paddingVertical: 10,
+    paddingHorizontal: 8,
+  },
+  backBtnTopText: { fontSize: 16, fontWeight: '600' },
+  progressBarWrap: {
+    paddingHorizontal: 24,
+    marginBottom: 24,
+  },
   scroll: { flex: 1 },
-  scrollContent: { paddingHorizontal: 20, paddingBottom: 48 },
-  formCard: {
-    borderRadius: 28,
-    borderWidth: 1,
-    paddingHorizontal: 22,
-    paddingVertical: 28,
-    ...Platform.select({
-      ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 12 }, shadowOpacity: 0.15, shadowRadius: 24 },
-      android: { elevation: 8 },
-    }),
+  scrollContent: {
+    flexGrow: 1,
+    paddingBottom: 16,
   },
-  toggleRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', marginBottom: 24 },
-  toggleText: { fontSize: 15 },
-  toggleLink: { fontSize: 15, fontWeight: '700' },
-  inputWrap: { marginBottom: 18 },
-  label: { fontSize: 12, fontWeight: '700', marginBottom: 8, textTransform: 'uppercase', letterSpacing: 1 },
+  progressTrack: {
+    height: 4,
+    borderRadius: 2,
+    overflow: 'hidden',
+  },
+  progressFill: {
+    height: '100%',
+    borderRadius: 2,
+  },
+  contentWrap: {
+    paddingHorizontal: 24,
+    paddingTop: 8,
+    justifyContent: 'flex-start',
+  },
+  stepContent: { 
+    width: '100%',
+  },
+  question: { 
+    fontSize: 28, 
+    fontWeight: '700', 
+    marginBottom: 8,
+    letterSpacing: -0.5,
+  },
+  optionalLabel: {
+    fontSize: 15,
+    marginBottom: 16,
+    fontWeight: '500',
+  },
   inputContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    borderWidth: 1,
-    borderRadius: 14,
-    paddingHorizontal: 14,
-    minHeight: 52,
+    borderWidth: 2,
+    borderRadius: 16,
+    paddingHorizontal: 18,
+    minHeight: 58,
+    marginTop: 16,
   },
-  inputIcon: { marginRight: 10 },
-  input: { flex: 1, fontSize: 16, paddingVertical: Platform.OS === 'ios' ? 14 : 10 },
+  input: { 
+    flex: 1, 
+    fontSize: 17, 
+    paddingVertical: Platform.OS === 'ios' ? 16 : 14,
+    fontWeight: '500',
+  },
   passwordInput: { paddingRight: 40 },
   eyeBtn: { padding: 6 },
-  rememberRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 20, marginTop: 4 },
+  textAreaContainer: { 
+    alignItems: 'flex-start', 
+    minHeight: 120,
+  },
+  optionsColumn: { 
+    gap: 12,
+    marginTop: 20,
+  },
+  optionCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 18,
+    borderRadius: 18,
+    borderWidth: 2,
+    gap: 14,
+  },
+  optionIconWrap: {
+    width: 56,
+    height: 56,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  optionTextWrap: { flex: 1 },
+  optionLabel: { 
+    fontSize: 18, 
+    fontWeight: '700',
+    marginBottom: 3,
+  },
+  optionSubtitle: { 
+    fontSize: 14, 
+    lineHeight: 19,
+  },
+  checkCircle: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  subOptionsWrap: { marginTop: 28 },
+  subLabel: { 
+    fontSize: 13, 
+    fontWeight: '700', 
+    marginBottom: 12,
+    textTransform: 'uppercase',
+    letterSpacing: 0.8,
+  },
+  chipRow: { 
+    flexDirection: 'row', 
+    flexWrap: 'wrap', 
+    gap: 10,
+  },
+  chip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingVertical: 12,
+    paddingHorizontal: 18,
+    borderRadius: 14,
+    borderWidth: 2,
+  },
+  chipLabel: { fontSize: 15, fontWeight: '600' },
+  rememberRow: { 
+    flexDirection: 'row', 
+    alignItems: 'center', 
+    marginTop: 20,
+  },
   checkbox: {
     width: 22,
     height: 22,
@@ -556,23 +971,28 @@ const s = StyleSheet.create({
     marginRight: 12,
   },
   rememberLabel: { fontSize: 15, fontWeight: '500' },
-  textAreaContainer: { alignItems: 'flex-start', paddingVertical: 8 },
-  textArea: { minHeight: 68, textAlignVertical: 'top' },
-  sectionLabel: { fontSize: 12, fontWeight: '700', marginBottom: 10, marginTop: 10, textTransform: 'uppercase', letterSpacing: 1 },
-  chipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginBottom: 10 },
-  chip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    paddingVertical: 12,
-    paddingHorizontal: 16,
-    borderRadius: 14,
-    borderWidth: 1.5,
+  footer: {
+    paddingHorizontal: 24,
+    paddingBottom: Platform.OS === 'ios' ? 28 : 20,
+    paddingTop: 8,
+    gap: 12,
   },
-  chipLabel: { fontSize: 15, fontWeight: '500' },
-  chipLabelSel: { fontWeight: '700' },
-  submitWrap: { marginTop: 12 },
-  submitBtnText: { fontSize: 17, fontWeight: '700', color: '#FFF' },
+  continueBtn: { 
+    width: '100%',
+  },
+  continueBtnText: { 
+    fontSize: 17, 
+    fontWeight: '700', 
+    color: '#FFF',
+  },
+  switchModeBtn: { 
+    flexDirection: 'row', 
+    alignItems: 'center', 
+    justifyContent: 'center',
+    paddingVertical: 12,
+  },
+  switchModeText: { fontSize: 15 },
+  switchModeLink: { fontSize: 15, fontWeight: '700' },
   successBanner: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -580,7 +1000,8 @@ const s = StyleSheet.create({
     padding: 16,
     borderRadius: 16,
     borderWidth: 1,
-    marginTop: 20,
+    marginHorizontal: 24,
+    marginBottom: 16,
   },
   successIconWrap: {
     width: 40,

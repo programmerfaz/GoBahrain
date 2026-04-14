@@ -12,14 +12,197 @@ import {
   ActivityIndicator,
   Platform,
   useWindowDimensions,
+  Easing,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { BlurView } from 'expo-blur';
 import { Ionicons } from '@expo/vector-icons';
 import { supabase } from '../config/supabase';
-import { colors as themeColors } from '../theme/designTokens';
+import { colors as themeColors, gradients } from '../theme/designTokens';
 import { useTheme } from '../context/ThemeContext';
-import { ensureImageUrl } from '../utils/imageUrl';
+import { resolvePublicImageUrl } from '../utils/imageUrl';
+
+const PROFILE_STAT_GAP = 10;
+
+function GalleryGridCell({
+  post,
+  idx,
+  gridCellSize,
+  gridGap,
+  GRID_COLS,
+  styles,
+  COLORS,
+}) {
+  const opacity = useRef(new Animated.Value(0)).current;
+  const translateY = useRef(new Animated.Value(10)).current;
+
+  useEffect(() => {
+    const delay = Math.min(idx, 21) * 28;
+    const timer = setTimeout(() => {
+      Animated.parallel([
+        Animated.timing(opacity, {
+          toValue: 1,
+          duration: 340,
+          easing: Easing.out(Easing.cubic),
+          useNativeDriver: true,
+        }),
+        Animated.timing(translateY, {
+          toValue: 0,
+          duration: 340,
+          easing: Easing.out(Easing.cubic),
+          useNativeDriver: true,
+        }),
+      ]).start();
+    }, delay);
+    return () => clearTimeout(timer);
+  }, [idx, opacity, translateY]);
+
+  return (
+    <Animated.View
+      style={{
+        opacity,
+        transform: [{ translateY }],
+        width: gridCellSize,
+        height: gridCellSize,
+        marginRight: (idx % GRID_COLS) < GRID_COLS - 1 ? gridGap : 0,
+        marginBottom: gridGap,
+      }}
+    >
+      <Pressable
+        style={({ pressed }) => [
+          styles.gridItem,
+          { width: gridCellSize, height: gridCellSize },
+          pressed && { opacity: 0.9 },
+        ]}
+      >
+        {post.imageUri ? (
+          <Image source={{ uri: post.imageUri }} style={styles.gridImage} resizeMode="cover" />
+        ) : (
+          <View style={styles.gridPlaceholder}>
+            <Ionicons name="image-outline" size={22} color={COLORS.textMuted} />
+          </View>
+        )}
+      </Pressable>
+    </Animated.View>
+  );
+}
+
+function ReviewStars({ rating, size = 14, filledColor = '#FBBF24', emptyColor = 'rgba(255,255,255,0.45)' }) {
+  if (rating == null || rating <= 0) return null;
+  return (
+    <>
+      {[1, 2, 3, 4, 5].map((i) => (
+        <Ionicons
+          key={i}
+          name={rating >= i ? 'star' : rating >= i - 0.5 ? 'star-half' : 'star-outline'}
+          size={size}
+          color={rating >= i - 0.5 ? filledColor : emptyColor}
+        />
+      ))}
+    </>
+  );
+}
+
+function ReviewCardAnimated({ rev, idx, styles, COLORS }) {
+  const opacity = useRef(new Animated.Value(0)).current;
+  const translateY = useRef(new Animated.Value(16)).current;
+
+  useEffect(() => {
+    const delay = Math.min(idx, 12) * 48;
+    const timer = setTimeout(() => {
+      Animated.parallel([
+        Animated.timing(opacity, {
+          toValue: 1,
+          duration: 400,
+          easing: Easing.out(Easing.cubic),
+          useNativeDriver: true,
+        }),
+        Animated.spring(translateY, {
+          toValue: 0,
+          useNativeDriver: true,
+          friction: 11,
+          tension: 76,
+        }),
+      ]).start();
+    }, delay);
+    return () => clearTimeout(timer);
+  }, [idx, opacity, translateY]);
+
+  const hasImage = Boolean(rev.imageUri);
+  const hasBody = Boolean(rev.body && rev.body.trim());
+  const ratingVal = rev.rating != null && rev.rating > 0 ? Number(rev.rating) : null;
+
+  return (
+    <Animated.View style={{ opacity, transform: [{ translateY }] }}>
+      <View style={styles.reviewCard}>
+        {hasImage ? (
+          <>
+            <View style={styles.reviewHero}>
+              <Image source={{ uri: rev.imageUri }} style={styles.reviewHeroImage} resizeMode="cover" />
+              <LinearGradient
+                colors={['transparent', 'rgba(0,0,0,0.08)', 'rgba(0,0,0,0.72)']}
+                locations={[0, 0.45, 1]}
+                style={styles.reviewHeroScrim}
+              />
+              {ratingVal != null && (
+                <View style={styles.reviewRatingPill}>
+                  <ReviewStars rating={ratingVal} size={13} filledColor="#FBBF24" emptyColor="rgba(255,255,255,0.4)" />
+                  <Text style={styles.reviewRatingPillNum}>{ratingVal.toFixed(1)}</Text>
+                </View>
+              )}
+            </View>
+            {(hasBody || rev.place) ? (
+              <View style={styles.reviewTextBlock}>
+                {hasBody ? (
+                  <Text style={styles.reviewBodyPrimary} numberOfLines={10}>
+                    {rev.body.trim()}
+                  </Text>
+                ) : null}
+                {rev.place ? (
+                  <View style={styles.reviewPlaceRow}>
+                    <Ionicons name="location-outline" size={14} color={COLORS.primary} />
+                    <Text style={styles.reviewPlaceText} numberOfLines={1}>{rev.place}</Text>
+                  </View>
+                ) : null}
+              </View>
+            ) : null}
+          </>
+        ) : (
+          <View style={styles.reviewNoImage}>
+            <LinearGradient
+              colors={[`${COLORS.primary}12`, `${COLORS.primary}03`]}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={styles.reviewNoImageAccent}
+            />
+            {ratingVal != null && (
+              <View style={styles.reviewRatingInline}>
+                <ReviewStars rating={ratingVal} size={16} filledColor="#F59E0B" emptyColor={COLORS.textMuted} />
+                <Text style={styles.reviewRatingInlineNum}>{ratingVal.toFixed(1)}</Text>
+              </View>
+            )}
+            {hasBody ? (
+              <View style={styles.reviewQuoteRow}>
+                <Ionicons name="chatbox-ellipses-outline" size={22} color={`${COLORS.primary}99`} style={styles.reviewQuoteIcon} />
+                <Text style={styles.reviewBodyFeatured} numberOfLines={12}>
+                  {rev.body.trim()}
+                </Text>
+              </View>
+            ) : (
+              <Text style={styles.reviewNoTextHint}>No written review</Text>
+            )}
+            {rev.place ? (
+              <View style={[styles.reviewPlaceRow, styles.reviewPlaceRowMuted]}>
+                <Ionicons name="location-outline" size={14} color={COLORS.textSecondary} />
+                <Text style={styles.reviewPlaceTextMuted} numberOfLines={2}>{rev.place}</Text>
+              </View>
+            ) : null}
+          </View>
+        )}
+      </View>
+    </Animated.View>
+  );
+}
 
 function getModalColors(c) {
   return {
@@ -107,14 +290,25 @@ function getModalStyles(C) {
       marginHorizontal: 14,
       marginTop: 12,
       marginBottom: 10,
-      borderRadius: 20,
+      borderRadius: 22,
       overflow: 'hidden',
       borderWidth: 1,
       borderColor: border + '80',
+      position: 'relative',
       ...Platform.select({
-        ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.08, shadowRadius: 12 },
-        android: { elevation: 4 },
+        ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.1, shadowRadius: 16 },
+        android: { elevation: 5 },
       }),
+    },
+    profileCardHeaderGlow: {
+      position: 'absolute',
+      left: 0,
+      right: 0,
+      top: 0,
+      height: 140,
+      borderTopLeftRadius: 22,
+      borderTopRightRadius: 22,
+      pointerEvents: 'none',
     },
     profileCardGradient: {
       borderRadius: 18,
@@ -122,45 +316,56 @@ function getModalStyles(C) {
     },
     profileCardInner: {
       padding: 16,
+      paddingTop: 18,
       backgroundColor: surface,
       borderRadius: 18,
+      position: 'relative',
+      zIndex: 2,
     },
     profileRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 14 },
     profileAvatarWrap: {
-      width: 60,
-      height: 60,
-      borderRadius: 30,
-      padding: 2,
+      width: 72,
+      height: 72,
+      borderRadius: 36,
+      padding: 3,
       overflow: 'hidden',
       alignItems: 'center',
       justifyContent: 'center',
     },
     profileAvatar: {
-      width: 56,
-      height: 56,
-      borderRadius: 28,
+      width: 66,
+      height: 66,
+      borderRadius: 33,
       backgroundColor: C.pillBg,
       alignItems: 'center',
       justifyContent: 'center',
       overflow: 'hidden',
     },
-    profileAvatarImg: { width: 56, height: 56, borderRadius: 28 },
+    profileAvatarImg: { width: 66, height: 66, borderRadius: 33 },
     profileMain: { flex: 1, minWidth: 0 },
-    profileName: { fontSize: 17, fontWeight: '800', color: C.textPrimary, marginBottom: 2, letterSpacing: -0.3 },
-    profileSub: { fontSize: 12, color: C.textSecondary, marginBottom: 8 },
+    profileName: { fontSize: 19, fontWeight: '800', color: C.textPrimary, marginBottom: 3, letterSpacing: -0.4 },
+    profileSub: { fontSize: 12, color: C.textSecondary, marginBottom: 10, fontWeight: '600' },
     profileStats: {
       flexDirection: 'row',
-      gap: 20,
-      paddingVertical: 8,
-      paddingHorizontal: 0,
+      alignItems: 'stretch',
+      gap: PROFILE_STAT_GAP,
+      paddingVertical: 12,
+      paddingHorizontal: 2,
       borderTopWidth: StyleSheet.hairlineWidth,
       borderTopColor: border + '60',
-      marginTop: 4,
+      marginTop: 6,
     },
-    profileStat: { alignItems: 'center', flex: 1 },
-    profileStatNum: { fontSize: 15, fontWeight: '800', color: C.textPrimary },
-    profileStatLabel: { fontSize: 10, color: C.textMuted, marginTop: 1 },
-    chipsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 12, marginBottom: 10 },
+    profileStat: {
+      alignItems: 'center',
+      justifyContent: 'center',
+      flex: 1,
+      paddingVertical: 8,
+      borderRadius: 14,
+      backgroundColor: C.pillBg + 'AA',
+    },
+    profileStatNum: { fontSize: 17, fontWeight: '800', color: C.textPrimary },
+    profileStatLabel: { fontSize: 9, fontWeight: '700', color: C.textMuted, marginTop: 3, textTransform: 'uppercase', letterSpacing: 0.35 },
+    chipsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 14, marginBottom: 8 },
     chip: {
       flexDirection: 'row',
       alignItems: 'center',
@@ -175,7 +380,7 @@ function getModalStyles(C) {
     chipRatingText: { color: C.rating || '#B45309' },
     chipMuted: { backgroundColor: C.pillBg },
     chipMutedText: { color: C.textSecondary },
-    bio: { fontSize: 13, color: C.textSecondary, lineHeight: 18, marginTop: 6 },
+    bio: { fontSize: 13, color: C.textSecondary, lineHeight: 20, marginTop: 8, fontWeight: '500' },
     arBtn: {
       flexDirection: 'row',
       alignItems: 'center',
@@ -199,6 +404,19 @@ function getModalStyles(C) {
       backgroundColor: C.pillBg,
       borderRadius: 14,
       padding: 4,
+      position: 'relative',
+    },
+    tabIndicator: {
+      position: 'absolute',
+      top: 4,
+      bottom: 4,
+      left: 4,
+      borderRadius: 10,
+      backgroundColor: surface,
+      ...Platform.select({
+        ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.08, shadowRadius: 6 },
+        android: { elevation: 2 },
+      }),
     },
     tab: {
       flex: 1,
@@ -218,43 +436,156 @@ function getModalStyles(C) {
     tabBadgeText: { fontSize: 10, fontWeight: '800', color: C.textSecondary },
     tabBadgeTextActive: { color: '#FFF' },
     tabContent: { flex: 1, backgroundColor: C.screenBg },
-    sectionLabel: { fontSize: 11, fontWeight: '700', color: C.textMuted, marginBottom: 8, marginHorizontal: 14, letterSpacing: 0.5 },
     empty: {
       alignItems: 'center',
       justifyContent: 'center',
-      paddingVertical: 48,
-      gap: 12,
-      backgroundColor: C.pillBg + '50',
+      paddingVertical: 52,
+      gap: 14,
+      backgroundColor: C.pillBg + '55',
       marginHorizontal: 14,
       marginTop: 8,
-      borderRadius: 16,
+      borderRadius: 18,
+      borderWidth: 1,
+      borderColor: border + '50',
     },
     emptyText: { fontSize: 14, color: C.textMuted, fontWeight: '600' },
-    grid: { flexDirection: 'row', flexWrap: 'wrap', paddingHorizontal: 2 },
+    gridWrap: { alignSelf: 'stretch' },
+    grid: { flexDirection: 'row', flexWrap: 'wrap' },
     gridItem: {
       overflow: 'hidden',
       backgroundColor: C.pillBg,
-      borderRadius: 8,
+      borderRadius: 14,
+      borderWidth: 1,
+      borderColor: border + '45',
     },
-    gridImage: { width: '100%', height: '100%', borderRadius: 8 },
-    gridPlaceholder: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: C.pillBg, borderRadius: 8 },
-    reviewsContent: { padding: 14, paddingBottom: 20 },
-    reviewsList: { gap: 10 },
+    gridImage: { width: '100%', height: '100%', borderRadius: 13 },
+    gridPlaceholder: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: C.pillBg, borderRadius: 13 },
+    reviewsContent: { paddingHorizontal: 14, paddingTop: 8, paddingBottom: 20 },
+    reviewsList: { gap: 16 },
     reviewCard: {
       backgroundColor: surface,
-      borderRadius: 14,
+      borderRadius: 20,
       overflow: 'hidden',
+      borderWidth: 1,
+      borderColor: border + '50',
       ...Platform.select({
-        ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.06, shadowRadius: 8 },
-        android: { elevation: 3 },
+        ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 5 }, shadowOpacity: 0.09, shadowRadius: 16 },
+        android: { elevation: 4 },
       }),
     },
-    reviewCardGradient: { position: 'absolute', left: 0, top: 0, bottom: 0, width: 4, borderTopLeftRadius: 14, borderBottomLeftRadius: 14 },
-    reviewInner: { padding: 14 },
-    reviewRating: { flexDirection: 'row', alignItems: 'center', gap: 4, marginBottom: 6 },
-    reviewRatingNum: { fontSize: 13, fontWeight: '800', color: '#F59E0B', marginLeft: 2 },
-    reviewBody: { fontSize: 13, color: C.textPrimary, lineHeight: 19, fontStyle: 'italic' },
-    reviewImage: { width: '100%', height: 90, borderRadius: 10, marginTop: 8, backgroundColor: C.pillBg },
+    reviewHero: {
+      width: '100%',
+      aspectRatio: 1.22,
+      backgroundColor: C.pillBg,
+      position: 'relative',
+    },
+    reviewHeroImage: {
+      ...StyleSheet.absoluteFillObject,
+      width: '100%',
+      height: '100%',
+    },
+    reviewHeroScrim: {
+      ...StyleSheet.absoluteFillObject,
+    },
+    reviewRatingPill: {
+      position: 'absolute',
+      left: 10,
+      bottom: 10,
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 5,
+      paddingVertical: 7,
+      paddingHorizontal: 11,
+      borderRadius: 22,
+      backgroundColor: 'rgba(15, 23, 42, 0.58)',
+    },
+    reviewRatingPillNum: {
+      fontSize: 14,
+      fontWeight: '800',
+      color: '#FFFFFF',
+      marginLeft: 2,
+    },
+    reviewTextBlock: {
+      paddingHorizontal: 16,
+      paddingTop: 14,
+      paddingBottom: 16,
+      gap: 10,
+    },
+    reviewBodyPrimary: {
+      fontSize: 16,
+      fontWeight: '500',
+      color: C.textPrimary,
+      lineHeight: 25,
+      letterSpacing: -0.25,
+    },
+    reviewPlaceRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 6,
+    },
+    reviewPlaceRowMuted: {
+      marginTop: 4,
+    },
+    reviewPlaceText: {
+      flex: 1,
+      fontSize: 13,
+      fontWeight: '600',
+      color: C.textSecondary,
+    },
+    reviewPlaceTextMuted: {
+      flex: 1,
+      fontSize: 13,
+      color: C.textSecondary,
+      lineHeight: 19,
+    },
+    reviewNoImage: {
+      paddingHorizontal: 18,
+      paddingTop: 16,
+      paddingBottom: 18,
+      position: 'relative',
+      overflow: 'hidden',
+    },
+    reviewNoImageAccent: {
+      position: 'absolute',
+      left: 0,
+      right: 0,
+      top: 0,
+      height: 4,
+      borderTopLeftRadius: 19,
+      borderTopRightRadius: 19,
+    },
+    reviewRatingInline: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 6,
+      marginBottom: 10,
+    },
+    reviewRatingInlineNum: {
+      fontSize: 17,
+      fontWeight: '800',
+      color: '#F59E0B',
+      marginLeft: 4,
+    },
+    reviewQuoteRow: {
+      flexDirection: 'row',
+      alignItems: 'flex-start',
+      gap: 12,
+    },
+    reviewQuoteIcon: { marginTop: 3 },
+    reviewBodyFeatured: {
+      flex: 1,
+      fontSize: 17,
+      fontWeight: '600',
+      color: C.textPrimary,
+      lineHeight: 26,
+      letterSpacing: -0.35,
+    },
+    reviewNoTextHint: {
+      fontSize: 14,
+      color: C.textMuted,
+      fontStyle: 'italic',
+      lineHeight: 20,
+    },
   };
 }
 
@@ -262,7 +593,7 @@ export default function ClientProfileModal({ visible, clientId, onClose, insets,
   const { colors, isDark } = useTheme();
   const COLORS = React.useMemo(() => getModalColors(colors), [colors]);
   const styles = React.useMemo(() => StyleSheet.create(getModalStyles(COLORS)), [COLORS]);
-  const { width: screenWidth } = useWindowDimensions();
+  const { width: screenWidth = 375 } = useWindowDimensions();
   const [client, setClient] = useState(null);
   const [restaurant, setRestaurant] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -272,6 +603,11 @@ export default function ClientProfileModal({ visible, clientId, onClose, insets,
   const [activeTab, setActiveTab] = useState(PROFILE_TAB_POSTS);
   const slideAnim = useRef(new Animated.Value(1)).current;
   const fadeAnim = useRef(new Animated.Value(0)).current;
+  const tabIndicatorX = useRef(new Animated.Value(0)).current;
+  const [tabSegment, setTabSegment] = useState(0);
+  const prevTabSegment = useRef(0);
+  const avatarEntrance = useRef(new Animated.Value(0)).current;
+  const skeletonPulse = useRef(new Animated.Value(0.55)).current;
 
   useEffect(() => {
     if (visible) {
@@ -344,6 +680,45 @@ export default function ClientProfileModal({ visible, clientId, onClose, insets,
   }, [visible, clientId]);
 
   useEffect(() => {
+    if (!client) {
+      avatarEntrance.setValue(0);
+      return;
+    }
+    avatarEntrance.setValue(0);
+    Animated.spring(avatarEntrance, {
+      toValue: 1,
+      friction: 9,
+      tension: 72,
+      useNativeDriver: true,
+    }).start();
+  }, [client?.client_a_uuid, avatarEntrance]);
+
+  useEffect(() => {
+    if (!loading || !visible) {
+      skeletonPulse.setValue(0.55);
+      return;
+    }
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(skeletonPulse, {
+          toValue: 1,
+          duration: 700,
+          easing: Easing.inOut(Easing.quad),
+          useNativeDriver: true,
+        }),
+        Animated.timing(skeletonPulse, {
+          toValue: 0.55,
+          duration: 700,
+          easing: Easing.inOut(Easing.quad),
+          useNativeDriver: true,
+        }),
+      ])
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [loading, visible, skeletonPulse]);
+
+  useEffect(() => {
     if (!visible || !client || !client.client_a_uuid) return;
     let cancelled = false;
     const uuid = client.client_a_uuid;
@@ -355,35 +730,15 @@ export default function ClientProfileModal({ visible, clientId, onClose, insets,
       if (cancelled) return;
       const name = client.business_name || client.name || client.business_name_ar || '';
       if (postsRes.data) {
-        setClientPosts(postsRes.data.map((r) => {
-          let imageUri = r.post_image;
-          if (imageUri && typeof imageUri === 'string' && imageUri.startsWith('[{')) {
-            try {
-              const parsed = JSON.parse(imageUri);
-              if (Array.isArray(parsed) && parsed[0]?.url) {
-                imageUri = parsed[0].url;
-              } else if (Array.isArray(parsed) && typeof parsed[0] === 'string') {
-                imageUri = parsed[0];
-              }
-            } catch (e) {
-              console.warn('[ClientProfile] Failed to parse post_image JSON:', e);
-            }
-          }
-          if (imageUri && typeof imageUri === 'string' && !imageUri.startsWith('http')) {
-            const cleanPath = imageUri.startsWith('gobahrain-post-images/')
-              ? imageUri.replace('gobahrain-post-images/', '')
-              : imageUri;
-            imageUri = `https://zonhaprelkjyjugpqfdn.supabase.co/storage/v1/object/public/gobahrain-post-images/${cleanPath}`;
-          }
-          if (!imageUri && r.post_image) {
-            imageUri = r.post_image;
-          }
-          return { id: r.post_uuid, imageUri: imageUri || null, description: r.description || '' };
-        }));
+        setClientPosts(postsRes.data.map((r) => ({
+          id: r.post_uuid,
+          imageUri: resolvePublicImageUrl(r.post_image),
+          description: r.description || '',
+        })));
       }
       const toReviewUri = (img) => {
         const raw = parseReviewImage(img);
-        return raw ? (ensureImageUrl(raw) || raw) : null;
+        return resolvePublicImageUrl(raw);
       };
       let reviews = (reviewsRes.data || []).map((r) => ({
         id: r.community_uuid,
@@ -401,6 +756,28 @@ export default function ClientProfileModal({ visible, clientId, onClose, insets,
     return () => { cancelled = true; };
   }, [visible, client]);
 
+  useEffect(() => {
+    if (tabSegment <= 0) return;
+    const hadSegment = prevTabSegment.current > 0;
+    const segmentResized = hadSegment && Math.abs(prevTabSegment.current - tabSegment) > 0.5;
+    prevTabSegment.current = tabSegment;
+    if (segmentResized) {
+      const x = activeTab === PROFILE_TAB_POSTS ? 0 : tabSegment;
+      tabIndicatorX.setValue(x);
+    }
+  }, [tabSegment, activeTab, tabIndicatorX]);
+
+  useEffect(() => {
+    if (tabSegment <= 0) return;
+    const to = activeTab === PROFILE_TAB_POSTS ? 0 : tabSegment;
+    Animated.spring(tabIndicatorX, {
+      toValue: to,
+      useNativeDriver: true,
+      friction: 9,
+      tension: 80,
+    }).start();
+  }, [activeTab, tabIndicatorX, tabSegment]);
+
   if (!visible) return null;
 
   const name = client?.business_name || client?.name || client?.business_name_ar || 'Business';
@@ -413,6 +790,7 @@ export default function ClientProfileModal({ visible, clientId, onClose, insets,
     : [];
   const category = client?.category || client?.client_type || '';
   const cuisine = client?.cuisine || client?.cuisine_type || restaurant?.cuisine || '';
+  const profileAvatarUri = client?.client_image ? resolvePublicImageUrl(String(client.client_image).trim()) : null;
 
   const mealTypes = parseJsonField(restaurant?.meal_type);
   const foodTypes = parseJsonField(restaurant?.food_type);
@@ -431,12 +809,26 @@ export default function ClientProfileModal({ visible, clientId, onClose, insets,
   tags.slice(0, 3).forEach((t) => chips.push({ icon: null, label: t, primary: false }));
 
   const GRID_COLS = 3;
-  const gridGap = 1;
-  const gridCellSize = (screenWidth - gridGap * (GRID_COLS - 1)) / GRID_COLS;
+  const GALLERY_H_PAD = 14;
+  const gridGap = 8;
+  const galleryWidth = Math.max(0, screenWidth - GALLERY_H_PAD * 2);
+  const gridCellSize = Math.max(
+    1,
+    Math.floor((galleryWidth - gridGap * (GRID_COLS - 1)) / GRID_COLS),
+  );
 
   const slideTranslateX = slideAnim.interpolate({
     inputRange: [0, 1],
     outputRange: [0, screenWidth],
+  });
+
+  const avatarScale = avatarEntrance.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0.86, 1],
+  });
+  const avatarOpacityAnim = avatarEntrance.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0.7, 1],
   });
 
   return (
@@ -458,21 +850,24 @@ export default function ClientProfileModal({ visible, clientId, onClose, insets,
 
         {loading ? (
           <ScrollView style={{ flex: 1 }} showsVerticalScrollIndicator={false}>
-            <View style={styles.skeletonCard}>
-              <View style={{ flexDirection: 'row', gap: 14 }}>
-                <View style={styles.skeletonAvatar} />
-                <View style={{ flex: 1 }}>
-                  <View style={[styles.skeletonLine, { width: '80%' }]} />
-                  <View style={[styles.skeletonLine, styles.skeletonLineShort, { marginTop: 12 }]} />
-                  <View style={{ flexDirection: 'row', gap: 20, marginTop: 16 }}>
-                    <View style={[styles.skeletonLine, { width: 40, height: 32 }]} />
-                    <View style={[styles.skeletonLine, { width: 40, height: 32 }]} />
+            <Animated.View style={{ opacity: skeletonPulse }}>
+              <View style={styles.skeletonCard}>
+                <View style={{ flexDirection: 'row', gap: 14 }}>
+                  <View style={styles.skeletonAvatar} />
+                  <View style={{ flex: 1 }}>
+                    <View style={[styles.skeletonLine, { width: '80%' }]} />
+                    <View style={[styles.skeletonLine, styles.skeletonLineShort, { marginTop: 12 }]} />
+                    <View style={{ flexDirection: 'row', gap: 20, marginTop: 16 }}>
+                      <View style={[styles.skeletonLine, { width: 40, height: 32 }]} />
+                      <View style={[styles.skeletonLine, { width: 40, height: 32 }]} />
+                      <View style={[styles.skeletonLine, { width: 40, height: 32 }]} />
+                    </View>
                   </View>
                 </View>
+                <View style={[styles.skeletonLine, { marginTop: 16, width: '100%' }]} />
+                <View style={[styles.skeletonLine, { marginTop: 8, width: '70%' }]} />
               </View>
-              <View style={[styles.skeletonLine, { marginTop: 16, width: '100%' }]} />
-              <View style={[styles.skeletonLine, { marginTop: 8, width: '70%' }]} />
-            </View>
+            </Animated.View>
             <View style={[styles.tabs, { opacity: 0.5 }]}>
               <View style={[styles.tab]} />
               <View style={[styles.tab]} />
@@ -501,22 +896,36 @@ export default function ClientProfileModal({ visible, clientId, onClose, insets,
             <ScrollView style={{ flex: 1 }} showsVerticalScrollIndicator={false}>
               <Animated.View style={{ opacity: fadeAnim }}>
               <View style={styles.profileCard}>
+                <LinearGradient
+                  colors={gradients.hero(isDark)}
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 1, y: 1 }}
+                  style={styles.profileCardHeaderGlow}
+                />
+                <LinearGradient
+                  colors={gradients.cardGlow(isDark)}
+                  start={{ x: 0.5, y: 0 }}
+                  end={{ x: 0.5, y: 1 }}
+                  style={[styles.profileCardHeaderGlow, { opacity: 0.9 }]}
+                />
                 <View style={[styles.profileCardGradient, styles.profileCardInner]}>
                   <View style={styles.profileRow}>
-                    <LinearGradient
-                      colors={[COLORS.primary, COLORS.primaryLight]}
-                      start={{ x: 0, y: 0 }}
-                      end={{ x: 1, y: 1 }}
-                      style={styles.profileAvatarWrap}
-                    >
-                      <View style={styles.profileAvatar}>
-                        {client.client_image ? (
-                          <Image source={{ uri: ensureImageUrl(client.client_image) || client.client_image }} style={styles.profileAvatarImg} resizeMode="cover" />
-                        ) : (
-                          <Ionicons name="storefront" size={26} color={COLORS.primary} />
-                        )}
-                      </View>
-                    </LinearGradient>
+                    <Animated.View style={{ transform: [{ scale: avatarScale }], opacity: avatarOpacityAnim }}>
+                      <LinearGradient
+                        colors={[COLORS.primary, COLORS.primaryLight]}
+                        start={{ x: 0, y: 0 }}
+                        end={{ x: 1, y: 1 }}
+                        style={styles.profileAvatarWrap}
+                      >
+                        <View style={styles.profileAvatar}>
+                          {profileAvatarUri ? (
+                            <Image source={{ uri: profileAvatarUri }} style={styles.profileAvatarImg} resizeMode="cover" />
+                          ) : (
+                            <Ionicons name="storefront" size={30} color={COLORS.primary} />
+                          )}
+                        </View>
+                      </LinearGradient>
+                    </Animated.View>
                     <View style={styles.profileMain}>
                       <Text style={styles.profileName} numberOfLines={1}>{name}</Text>
                       {(category || cuisine) ? (
@@ -532,6 +941,10 @@ export default function ClientProfileModal({ visible, clientId, onClose, insets,
                         <View style={styles.profileStat}>
                           <Text style={styles.profileStatNum}>{clientReviews.length}</Text>
                           <Text style={styles.profileStatLabel}>Reviews</Text>
+                        </View>
+                        <View style={styles.profileStat}>
+                          <Text style={styles.profileStatNum}>{rating != null ? Number(rating).toFixed(1) : '—'}</Text>
+                          <Text style={styles.profileStatLabel}>Rating</Text>
                         </View>
                       </View>
                     </View>
@@ -596,9 +1009,29 @@ export default function ClientProfileModal({ visible, clientId, onClose, insets,
                 </View>
               </View>
 
-              <View style={styles.tabs}>
+              <View
+                style={styles.tabs}
+                onLayout={(e) => {
+                  const w = e.nativeEvent.layout.width;
+                  const inner = Math.max(0, w - 8);
+                  const seg = inner / 2;
+                  setTabSegment(seg);
+                  tabIndicatorX.setValue(activeTab === PROFILE_TAB_POSTS ? 0 : seg);
+                }}
+              >
+                {tabSegment > 0 && (
+                  <Animated.View
+                    style={[
+                      styles.tabIndicator,
+                      {
+                        width: tabSegment,
+                        transform: [{ translateX: tabIndicatorX }],
+                      },
+                    ]}
+                  />
+                )}
                 <Pressable
-                  style={({ pressed }) => [styles.tab, activeTab === PROFILE_TAB_POSTS && styles.tabActive, pressed && { opacity: 0.8 }]}
+                  style={({ pressed }) => [styles.tab, { zIndex: 1 }, pressed && { opacity: 0.85 }]}
                   onPress={() => setActiveTab(PROFILE_TAB_POSTS)}
                 >
                   <Ionicons name="grid-outline" size={18} color={activeTab === PROFILE_TAB_POSTS ? COLORS.primary : COLORS.textSecondary} />
@@ -608,7 +1041,7 @@ export default function ClientProfileModal({ visible, clientId, onClose, insets,
                   </View>
                 </Pressable>
                 <Pressable
-                  style={({ pressed }) => [styles.tab, activeTab === PROFILE_TAB_REVIEWS && styles.tabActive, pressed && { opacity: 0.8 }]}
+                  style={({ pressed }) => [styles.tab, { zIndex: 1 }, pressed && { opacity: 0.85 }]}
                   onPress={() => setActiveTab(PROFILE_TAB_REVIEWS)}
                 >
                   <Ionicons name="chatbubbles-outline" size={18} color={activeTab === PROFILE_TAB_REVIEWS ? COLORS.primary : COLORS.textSecondary} />
@@ -621,68 +1054,47 @@ export default function ClientProfileModal({ visible, clientId, onClose, insets,
 
               {activeTab === PROFILE_TAB_POSTS ? (
                 <View style={[styles.tabContent, { paddingBottom: (insets?.bottom ?? 0) + 12 }]}>
-                  <Text style={styles.sectionLabel}>GALLERY</Text>
                   {clientPosts.length === 0 ? (
                     <View style={styles.empty}>
-                      <Ionicons name="images-outline" size={36} color={COLORS.textMuted} />
+                      <Ionicons name="images-outline" size={38} color={COLORS.textMuted} />
                       <Text style={styles.emptyText}>No posts yet</Text>
                     </View>
                   ) : (
-                    <View style={[styles.grid, { width: screenWidth }]}>
-                      {clientPosts.map((post, idx) => (
-                        <Pressable
-                          key={post.id || idx}
-                          style={({ pressed }) => [
-                            styles.gridItem,
-                            { width: gridCellSize, height: gridCellSize, marginRight: (idx % GRID_COLS) < GRID_COLS - 1 ? gridGap : 0, marginBottom: gridGap },
-                            pressed && { opacity: 0.9 },
-                          ]}
-                        >
-                          {post.imageUri ? (
-                            <Image source={{ uri: post.imageUri }} style={styles.gridImage} resizeMode="cover" />
-                          ) : (
-                            <View style={styles.gridPlaceholder}>
-                              <Ionicons name="image-outline" size={22} color={COLORS.textMuted} />
-                            </View>
-                          )}
-                        </Pressable>
-                      ))}
+                    <View style={[styles.gridWrap, { paddingHorizontal: GALLERY_H_PAD }]}>
+                      <View style={[styles.grid, { width: galleryWidth }]}>
+                        {clientPosts.map((post, idx) => (
+                          <GalleryGridCell
+                            key={post.id || `p-${idx}`}
+                            post={post}
+                            idx={idx}
+                            gridCellSize={gridCellSize}
+                            gridGap={gridGap}
+                            GRID_COLS={GRID_COLS}
+                            styles={styles}
+                            COLORS={COLORS}
+                          />
+                        ))}
+                      </View>
                     </View>
                   )}
                 </View>
               ) : (
                 <View style={[styles.reviewsContent, { paddingBottom: (insets?.bottom ?? 0) + 20 }]}>
-                  <Text style={[styles.sectionLabel, { marginHorizontal: 0 }]}>REVIEWS</Text>
                   {clientReviews.length === 0 ? (
                     <View style={styles.empty}>
-                      <Ionicons name="chatbubbles-outline" size={36} color={COLORS.textMuted} />
+                      <Ionicons name="chatbubbles-outline" size={38} color={COLORS.textMuted} />
                       <Text style={styles.emptyText}>No reviews yet</Text>
                     </View>
                   ) : (
                     <View style={styles.reviewsList}>
                       {clientReviews.map((rev, idx) => (
-                        <View key={rev.id || idx} style={styles.reviewCard}>
-                          <LinearGradient
-                            colors={[COLORS.primary, COLORS.primaryLight]}
-                            start={{ x: 0, y: 0 }}
-                            end={{ x: 0, y: 1 }}
-                            style={styles.reviewCardGradient}
-                          />
-                          <View style={styles.reviewInner}>
-                            {rev.rating != null && rev.rating > 0 && (
-                              <View style={styles.reviewRating}>
-                                {[1, 2, 3, 4, 5].map((i) => (
-                                  <Ionicons key={i} name={rev.rating >= i ? 'star' : rev.rating >= i - 0.5 ? 'star-half' : 'star-outline'} size={12} color="#F59E0B" />
-                                ))}
-                                <Text style={styles.reviewRatingNum}>{Number(rev.rating).toFixed(1)}</Text>
-                              </View>
-                            )}
-                            {rev.body ? <Text style={styles.reviewBody} numberOfLines={3}>"{rev.body}"</Text> : null}
-                            {rev.imageUri ? (
-                              <Image source={{ uri: rev.imageUri }} style={styles.reviewImage} resizeMode="cover" />
-                            ) : null}
-                          </View>
-                        </View>
+                        <ReviewCardAnimated
+                          key={rev.id || `r-${idx}`}
+                          rev={rev}
+                          idx={idx}
+                          styles={styles}
+                          COLORS={COLORS}
+                        />
                       ))}
                     </View>
                   )}
