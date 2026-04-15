@@ -28,6 +28,7 @@ import { fetchNearbyPOIs, fetchEvents } from '../services/aiPipeline'
 import ClientProfileModal from '../components/ClientProfileModal'
 import { useSavedPlaces } from '../context/SavedPlacesContext'
 import { colors as themeColors } from '../theme/designTokens'
+import { LUXURY, luxuryElevated } from '../theme/luxuryPremium'
 import { useTheme } from '../context/ThemeContext'
 
 const C = {
@@ -194,15 +195,15 @@ function POIMarker({ poi, x, y, onPress, isNearest, index, isBusy }) {
 const mk = StyleSheet.create({
   wrap: { position: 'absolute', alignItems: 'center' },
   card: {
-    flexDirection: 'row', alignItems: 'center', gap: 5,
-    paddingVertical: 6, paddingHorizontal: 8,
-    backgroundColor: C.card, borderRadius: 10, borderWidth: 1, borderColor: C.glassBorder,
-    ...Platform.select({
-      ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.35, shadowRadius: 6 },
-      android: { elevation: 6 },
-    }),
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    paddingVertical: 8, paddingHorizontal: 10,
+    backgroundColor: C.card,
+    borderRadius: LUXURY.radiusMarkerPill,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: C.glassBorder,
+    ...luxuryElevated,
   },
-  iconBg: { width: 18, height: 18, borderRadius: 6, alignItems: 'center', justifyContent: 'center' },
+  iconBg: { width: 20, height: 20, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
   name: { color: '#FFF', fontSize: 10, fontWeight: '700', maxWidth: 80 },
   dist: { color: C.dimText, fontSize: 9, fontWeight: '600' },
   stem: { width: 1, height: 8, opacity: 0.5 },

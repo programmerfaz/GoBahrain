@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react'
+import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import {
   View,
   Text,
@@ -10,15 +10,17 @@ import {
   Easing,
   useWindowDimensions,
   ScrollView,
+  TextInput,
 } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
 import { LinearGradient } from 'expo-linear-gradient'
 import { useUserPreferences } from '../context/UserPreferencesContext'
-import { useDoorTransition, yieldTwoFrames } from '../context/DoorTransitionContext'
 import { useTheme } from '../context/ThemeContext'
 import { gradients } from '../theme/designTokens'
 import { GENERAL_GROUPS } from '../constants/preferences'
 import { FadeInView, AnimatedPressable, GradientButton } from '../components/AnimatedUI'
+import { LUXURY, luxurySoftShadow } from '../theme/luxuryPremium'
+import { buildAndPersistUserPersona } from '../services/personalization'
 
 const FloatingBubble = ({ size, color, startX, startY, duration, delay }) => {
   const anim = useRef(new Animated.Value(0)).current
@@ -86,28 +88,25 @@ const FloatingBubble = ({ size, color, startX, startY, duration, delay }) => {
   )
 }
 
-const STEPS = [
-  { 
-    title: 'Tell us about you', 
-    subtitle: 'Pick what fits — we tailor suggestions just for you.', 
-    icon: 'person-outline',
-    type: 'general'
-  },
-  { 
-    title: 'What do you like to do?', 
-    subtitle: 'Activities we\'ll prioritize in your day plans.', 
-    icon: 'compass-outline',
-    type: 'activities'
-  },
-  { 
-    title: 'What do you like to eat?', 
-    subtitle: 'Food types we\'ll prioritize. Nothing hidden — just tailored.', 
-    icon: 'restaurant-outline',
-    type: 'food'
-  },
-]
+const GENERAL_GROUP_ICONS = {
+  companion: 'people-outline',
+  pace: 'speedometer-outline',
+  budget: 'wallet-outline',
+  interests: 'sparkles-outline',
+  planning: 'list-outline',
+  timing: 'time-outline',
+}
 
-const ChipItem = ({ item, selected, onPress }) => {
+const GENERAL_GROUP_HINTS = {
+  companion: 'Pick all that apply. This helps us adapt vibe, pace, and stop types.',
+  pace: 'We use this to set how full or relaxed each itinerary should feel.',
+  budget: 'This guides venue selection so recommendations match your spending comfort.',
+  interests: 'Select the experiences you genuinely enjoy most.',
+  planning: 'This tells us how much structure vs flexibility to include.',
+  timing: 'This helps us suggest places at the times you naturally prefer.',
+}
+
+const ChipItem = ({ item, selected, onPress, isDark, chipWidth }) => {
   const scaleAnim = useRef(new Animated.Value(1)).current
   const opacityAnim = useRef(new Animated.Value(1)).current
 
@@ -143,14 +142,17 @@ const ChipItem = ({ item, selected, onPress }) => {
     onPress()
   }
 
+  const borderUnselected = isDark ? 'rgba(148,163,184,0.35)' : 'rgba(100,116,139,0.28)'
+
   return (
     <AnimatedPressable
       style={[
         cs.chip,
-        { 
-          borderColor: selected ? item.color : 'rgba(148,163,184,0.25)',
-          backgroundColor: selected ? `${item.color}18` : 'rgba(30,41,59,0.5)',
-          borderWidth: selected ? 2 : 1,
+        {
+          width: chipWidth,
+          borderWidth: 2,
+          borderColor: selected ? item.color : borderUnselected,
+          backgroundColor: selected ? `${item.color}1E` : (isDark ? 'rgba(30,41,59,0.72)' : '#FFFFFF'),
           transform: [{ scale: scaleAnim }],
           opacity: opacityAnim,
         },
@@ -158,12 +160,12 @@ const ChipItem = ({ item, selected, onPress }) => {
       onPress={handlePress}
       scaleDown={0.94}
     >
-      <Ionicons name={item.icon} size={20} color={selected ? item.color : '#64748B'} />
-      <Text style={[cs.chipLabel, selected && { color: item.color, fontWeight: '700' }]}>
+      <Ionicons name={item.icon} size={20} color={selected ? item.color : (isDark ? '#CBD5E1' : '#334155')} />
+      <Text style={[cs.chipLabel, { color: isDark ? '#E2E8F0' : '#1E293B' }, selected && { color: item.color, fontWeight: '700' }]}>
         {item.label}
       </Text>
       {selected && (
-        <Animated.View 
+        <Animated.View
           style={[cs.chipCheck, { backgroundColor: item.color }]}
           entering={{
             animation: 'spring',
@@ -180,11 +182,14 @@ const ChipItem = ({ item, selected, onPress }) => {
 export default function OnboardingScreen() {
   const { colors, isDark } = useTheme()
   const { GENERAL_PREFERENCES, PREFERENCES, FOOD_CATEGORIES, completeOnboarding } = useUserPreferences()
-  const { startDoorToHome, cancelDoorTransition } = useDoorTransition()
   const { width = 375 } = useWindowDimensions()
   const [generalIds, setGeneralIds] = useState([])
   const [activityIds, setActivityIds] = useState([])
   const [foodIds, setFoodIds] = useState([])
+  const [profileAnswers, setProfileAnswers] = useState({
+    idealDay: '',
+    avoidList: '',
+  })
   const [step, setStep] = useState(0)
 
   const C = isDark ? {
@@ -193,26 +198,48 @@ export default function OnboardingScreen() {
     textMuted: 'rgba(203,213,225,0.85)',
     label: '#94A3B8',
     primary: colors.primary,
+    panel: 'rgba(15,23,42,0.62)',
+    panelBorder: 'rgba(148,163,184,0.22)',
   } : {
     bg: colors.background,
     text: colors.textPrimary,
     textMuted: colors.textSecondary,
     label: colors.textMuted,
     primary: colors.primary,
+    panel: 'rgba(255,255,255,0.82)',
+    panelBorder: 'rgba(148,163,184,0.24)',
   }
 
   const contentOpacity = useRef(new Animated.Value(1)).current
   const contentTranslateY = useRef(new Animated.Value(0)).current
   const contentScale = useRef(new Animated.Value(1)).current
-  const logoScale = useRef(new Animated.Value(0.3)).current
-  const logoOpacity = useRef(new Animated.Value(0)).current
+  const questionPop = useRef(new Animated.Value(0.92)).current
+  const questionFade = useRef(new Animated.Value(0)).current
+  const ctaLift = useRef(new Animated.Value(8)).current
 
   useEffect(() => {
     Animated.parallel([
-      Animated.spring(logoScale, { toValue: 1, damping: 12, stiffness: 100, useNativeDriver: true }),
-      Animated.timing(logoOpacity, { toValue: 1, duration: 600, useNativeDriver: true }),
+      Animated.spring(questionPop, {
+        toValue: 1,
+        damping: 13,
+        stiffness: 165,
+        mass: 0.8,
+        useNativeDriver: true,
+      }),
+      Animated.timing(questionFade, {
+        toValue: 1,
+        duration: 460,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: true,
+      }),
+      Animated.timing(ctaLift, {
+        toValue: 0,
+        duration: 420,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: true,
+      }),
     ]).start()
-  }, [logoScale, logoOpacity])
+  }, [questionPop, questionFade, ctaLift])
 
   const animateStep = useCallback((newStep) => {
     Animated.parallel([
@@ -257,26 +284,90 @@ export default function OnboardingScreen() {
           stiffness: 120,
           useNativeDriver: true 
         }),
+        Animated.spring(questionPop, {
+          toValue: 1,
+          damping: 14,
+          stiffness: 170,
+          mass: 0.76,
+          useNativeDriver: true,
+        }),
+        Animated.timing(questionFade, {
+          toValue: 1,
+          duration: 340,
+          easing: Easing.out(Easing.cubic),
+          useNativeDriver: true,
+        }),
       ]).start()
     })
-  }, [contentOpacity, contentScale, contentTranslateY])
+  }, [contentOpacity, contentScale, contentTranslateY, questionPop, questionFade])
+
+  const questionFlow = [
+    ...GENERAL_GROUPS.map((group) => ({
+      key: `general-${group.key}`,
+      type: 'general-group',
+      groupKey: group.key,
+      title: group.label,
+      subtitle: GENERAL_GROUP_HINTS[group.key] || 'Pick all that apply.',
+      icon: GENERAL_GROUP_ICONS[group.key] || 'person-outline',
+    })),
+    {
+      key: 'activities',
+      type: 'activities',
+      title: 'Which activities should your plans prioritize?',
+      subtitle: 'Think about what makes a day memorable for you in Bahrain.',
+      icon: 'compass-outline',
+    },
+    {
+      key: 'food',
+      type: 'food',
+      title: 'What kind of food experiences fit you best?',
+      subtitle: 'Choose the cuisines and dining style you naturally gravitate toward.',
+      icon: 'restaurant-outline',
+    },
+    {
+      key: 'ideal-day',
+      type: 'text',
+      title: 'What are the top 3 things your perfect Bahrain day must include?',
+      subtitle: 'Write specific preferences (pace, vibe, places, and timing). The more concrete you are, the better we personalize.',
+      placeholder: 'Example: 1) Specialty coffee in a quiet place, 2) One cultural or heritage stop, 3) Sunset by the sea with a casual local dinner',
+      answerKey: 'idealDay',
+    },
+    {
+      key: 'avoid-list',
+      type: 'text',
+      title: 'What are your non-negotiables and hard no\'s?',
+      subtitle: 'List anything we should avoid: food restrictions, crowd/noise tolerance, mobility limits, budget limits, or anything else.',
+      placeholder: 'Example: No shellfish, avoid very crowded/loud venues, max 20-minute drives between stops, no outdoor activity at noon',
+      answerKey: 'avoidList',
+    },
+  ]
 
   const toggleGeneral = (id) => setGeneralIds((prev) => prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id])
   const toggleActivity = (id) => setActivityIds((prev) => prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id])
   const toggleFood = (id) => setFoodIds((prev) => prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id])
 
   const handleContinue = async () => {
-    if (step === 0) {
-      animateStep(1)
-    } else if (step === 1) {
-      animateStep(2)
+    if (currentStep?.type === 'text') {
+      const raw = profileAnswers[currentStep.answerKey] || ''
+      const trimmed = raw.trim()
+      if (!trimmed) return
+      if (raw !== trimmed) {
+        setProfileAnswers((prev) => ({ ...prev, [currentStep.answerKey]: trimmed }))
+      }
+    }
+
+    if (step < questionFlow.length - 1) {
+      animateStep(step + 1)
     } else {
       try {
-        startDoorToHome()
-        await yieldTwoFrames()
-        await completeOnboarding({ generalIds, activityIds, foodIds })
+        const profileSummary = await buildAndPersistUserPersona({
+          generalIds,
+          activityIds,
+          foodIds,
+          profileAnswers,
+        })
+        await completeOnboarding({ generalIds, activityIds, foodIds, profileAnswers, profileSummary })
       } catch (e) {
-        cancelDoorTransition()
         console.warn('[Onboarding] complete failed', e?.message)
       }
     }
@@ -286,16 +377,33 @@ export default function OnboardingScreen() {
     if (step > 0) animateStep(step - 1)
   }
 
-  const currentStep = STEPS[step]
-  const isLastStep = step === 2
+  const currentStep = questionFlow[step]
+  const isLastStep = step === questionFlow.length - 1
 
-  const selectedCount = step === 0 ? generalIds.length : step === 1 ? activityIds.length : foodIds.length
+  const selectedCount = currentStep?.type === 'general-group'
+    ? generalIds.filter((id) => GENERAL_PREFERENCES.some((p) => p.group === currentStep.groupKey && p.id === id)).length
+    : currentStep?.type === 'activities'
+      ? activityIds.length
+      : currentStep?.type === 'food'
+        ? foodIds.length
+        : (profileAnswers[currentStep?.answerKey] || '').trim().length
 
   const getProgressPercent = () => {
-    return ((step + 1) / STEPS.length) * 100
+    return ((step + 1) / questionFlow.length) * 100
   }
 
   const bgColors = isDark ? gradients.heroDark : gradients.heroLight
+  const chipGap = 10
+  const chipCols = 3
+  const chipWidth = Math.floor((width - (24 * 2) - (chipGap * (chipCols - 1))) / chipCols)
+  const optionsForCurrentStep = useMemo(() => {
+    if (currentStep?.type === 'general-group') {
+      return GENERAL_PREFERENCES.filter((p) => p.group === currentStep.groupKey)
+    }
+    if (currentStep?.type === 'activities') return PREFERENCES
+    if (currentStep?.type === 'food') return FOOD_CATEGORIES
+    return []
+  }, [currentStep, GENERAL_PREFERENCES, PREFERENCES, FOOD_CATEGORIES])
 
   return (
     <SafeAreaView style={[s.safe, { backgroundColor: C.bg }]}>
@@ -307,15 +415,6 @@ export default function OnboardingScreen() {
       <FloatingBubble size={120} color={`${C.primary}04`} startX={width * 0.7} startY={420} duration={9000} delay={1200} />
 
       <View style={s.container}>
-        <View style={s.header}>
-          <Animated.View style={[s.logoBadge, { backgroundColor: `${C.primary}18`, borderColor: `${C.primary}30`, transform: [{ scale: logoScale }], opacity: logoOpacity }]}>
-            <Ionicons name="compass" size={30} color={C.primary} />
-          </Animated.View>
-          <FadeInView delay={200} from={12}>
-            <Text style={[s.title, { color: C.text }]}>Let's personalize</Text>
-          </FadeInView>
-        </View>
-
         <View style={s.progressBarWrap}>
           <View style={[s.progressTrack, { backgroundColor: `${C.primary}12` }]}>
             <Animated.View style={[s.progressFill, { backgroundColor: C.primary, width: `${getProgressPercent()}%` }]} />
@@ -334,69 +433,84 @@ export default function OnboardingScreen() {
             }
           ]}
         >
-          <View style={s.stepHeader}>
-            <View style={[s.stepIconWrap, { backgroundColor: `${C.primary}15` }]}>
-              <Ionicons name={currentStep.icon} size={26} color={C.primary} />
-            </View>
+          <Animated.View
+            style={[
+              s.stepHeader,
+              {
+                opacity: questionFade,
+                transform: [{ scale: questionPop }],
+              },
+            ]}
+          >
+            <Text style={[s.stepMeta, { color: C.label }]}>
+              Question {step + 1} of {questionFlow.length}
+            </Text>
             <Text style={[s.question, { color: C.text }]}>{currentStep.title}</Text>
             <Text style={[s.subtitle, { color: C.textMuted }]}>{currentStep.subtitle}</Text>
-          </View>
+          </Animated.View>
 
-          <ScrollView
-            style={s.scroll}
-            contentContainerStyle={s.scrollContent}
-            showsVerticalScrollIndicator={false}
-            keyboardShouldPersistTaps="handled"
-          >
-            {step === 0 ? (
-              <View style={s.chipColumn}>
-                {GENERAL_GROUPS.map((grp) => {
-                  const options = GENERAL_PREFERENCES.filter((p) => p.group === grp.key)
-                  if (options.length === 0) return null
-                  return (
-                    <View key={grp.key} style={s.groupBlock}>
-                      <Text style={[s.groupLabel, { color: C.label }]}>{grp.label}</Text>
-                      <View style={s.chipRow}>
-                        {options.map((p) => (
-                          <ChipItem
-                            key={p.id}
-                            item={p}
-                            selected={generalIds.includes(p.id)}
-                            onPress={() => toggleGeneral(p.id)}
-                          />
-                        ))}
-                      </View>
-                    </View>
-                  )
-                })}
-              </View>
-            ) : step === 1 ? (
-              <View style={s.chipRow}>
-                {PREFERENCES.map((p) => (
-                  <ChipItem
-                    key={p.id}
-                    item={p}
-                    selected={activityIds.includes(p.id)}
-                    onPress={() => toggleActivity(p.id)}
+          <View style={[s.questionPanel, { backgroundColor: C.panel, borderColor: C.panelBorder }]}>
+            <ScrollView
+              style={s.scroll}
+              contentContainerStyle={s.scrollContent}
+              showsVerticalScrollIndicator={false}
+              keyboardShouldPersistTaps="handled"
+            >
+              {currentStep?.type === 'text' ? (
+                <View style={s.textQuestionWrap}>
+                  <TextInput
+                    value={profileAnswers[currentStep.answerKey] || ''}
+                    onChangeText={(value) => setProfileAnswers((prev) => ({ ...prev, [currentStep.answerKey]: value }))}
+                    placeholder={currentStep.placeholder}
+                    placeholderTextColor={isDark ? '#94A3B8' : '#64748B'}
+                    multiline
+                    textAlignVertical="top"
+                    style={[
+                      s.textInput,
+                      {
+                        color: C.text,
+                        backgroundColor: isDark ? 'rgba(15,23,42,0.72)' : 'rgba(255,255,255,0.95)',
+                        borderColor: C.panelBorder,
+                      },
+                    ]}
+                    accessibilityLabel={currentStep.title}
                   />
-                ))}
-              </View>
-            ) : (
-              <View style={s.chipRow}>
-                {FOOD_CATEGORIES.map((p) => (
-                  <ChipItem
-                    key={p.id}
-                    item={p}
-                    selected={foodIds.includes(p.id)}
-                    onPress={() => toggleFood(p.id)}
-                  />
-                ))}
-              </View>
-            )}
-          </ScrollView>
+                  <Text style={[s.textHint, { color: C.label }]}>
+                    More detail gives better personalization.
+                  </Text>
+                </View>
+              ) : (
+                <View style={s.chipRow}>
+                  {optionsForCurrentStep.map((p, idx) => (
+                    <FadeInView key={`${currentStep.key}-${p.id}`} delay={60 + idx * 35} from={16} duration={280}>
+                      <ChipItem
+                        item={p}
+                        selected={
+                          currentStep?.type === 'general-group'
+                            ? generalIds.includes(p.id)
+                            : currentStep?.type === 'activities'
+                              ? activityIds.includes(p.id)
+                              : foodIds.includes(p.id)
+                        }
+                        onPress={() =>
+                          currentStep?.type === 'general-group'
+                            ? toggleGeneral(p.id)
+                            : currentStep?.type === 'activities'
+                              ? toggleActivity(p.id)
+                              : toggleFood(p.id)
+                        }
+                        isDark={isDark}
+                        chipWidth={chipWidth}
+                      />
+                    </FadeInView>
+                  ))}
+                </View>
+              )}
+            </ScrollView>
+          </View>
         </Animated.View>
 
-        <View style={s.footer}>
+        <Animated.View style={[s.footer, { transform: [{ translateY: ctaLift }] }]}>
           <View style={s.footerTop}>
             {step > 0 && (
               <AnimatedPressable style={s.backBtn} onPress={handleBack} scaleDown={0.95}>
@@ -413,13 +527,18 @@ export default function OnboardingScreen() {
             )}
           </View>
 
-          <GradientButton onPress={handleContinue} style={s.continueBtn}>
+          <GradientButton
+            onPress={handleContinue}
+            style={s.continueBtn}
+            gradientColors={['#0F172A', '#1E293B']}
+            disabled={currentStep?.type === 'text' && !(profileAnswers[currentStep.answerKey] || '').trim()}
+          >
             <Text style={s.continueBtnText}>
               {isLastStep ? "Let's go" : 'Continue'}
             </Text>
             <Ionicons name={isLastStep ? 'checkmark-circle' : 'arrow-forward'} size={20} color="#FFF" />
           </GradientButton>
-        </View>
+        </Animated.View>
       </View>
     </SafeAreaView>
   )
@@ -427,25 +546,35 @@ export default function OnboardingScreen() {
 
 const cs = StyleSheet.create({
   chip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    paddingVertical: 12,
-    paddingHorizontal: 16,
-    borderRadius: 14,
-  },
-  chipLabel: { 
-    fontSize: 15, 
-    color: '#94A3B8', 
-    fontWeight: '500',
-  },
-  chipCheck: {
-    width: 18,
-    height: 18,
-    borderRadius: 9,
+    minHeight: 82,
+    aspectRatio: 1,
+    flexDirection: 'column',
     alignItems: 'center',
     justifyContent: 'center',
-    marginLeft: 2,
+    gap: 6,
+    paddingVertical: 8,
+    paddingHorizontal: 6,
+    borderRadius: 16,
+    borderCurve: 'continuous',
+    position: 'relative',
+    ...luxurySoftShadow,
+  },
+  chipLabel: { 
+    fontSize: 12, 
+    color: '#94A3B8', 
+    fontWeight: '700',
+    textAlign: 'center',
+    lineHeight: 15,
+  },
+  chipCheck: {
+    position: 'absolute',
+    top: 8,
+    right: 8,
+    width: 16,
+    height: 16,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
 })
 
@@ -461,11 +590,12 @@ const s = StyleSheet.create({
   logoBadge: {
     width: 64,
     height: 64,
-    borderRadius: 20,
+    borderRadius: LUXURY.radiusPill,
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: 20,
     borderWidth: 1.5,
+    ...luxurySoftShadow,
   },
   title: { 
     fontSize: 32, 
@@ -475,46 +605,74 @@ const s = StyleSheet.create({
   },
   progressBarWrap: { 
     paddingHorizontal: 24, 
-    marginBottom: 32,
+    marginTop: 18,
+    marginBottom: 24,
   },
   progressTrack: {
-    height: 4,
-    borderRadius: 2,
+    height: 6,
+    borderRadius: 3,
     overflow: 'hidden',
   },
   progressFill: {
     height: '100%',
-    borderRadius: 2,
+    borderRadius: 3,
   },
   contentWrap: { 
     flex: 1, 
     paddingHorizontal: 24,
+    paddingTop: 10,
+    paddingBottom: 8,
+    alignItems: 'center',
   },
   stepHeader: {
-    marginBottom: 24,
+    marginBottom: 14,
+    alignItems: 'center',
+    width: '100%',
+  },
+  stepMeta: {
+    fontSize: 11,
+    fontWeight: '800',
+    textTransform: 'uppercase',
+    letterSpacing: 1.1,
+    marginBottom: 10,
   },
   stepIconWrap: {
     width: 52,
     height: 52,
-    borderRadius: 16,
+    borderRadius: LUXURY.radiusChip + 2,
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: 16,
   },
   question: { 
     fontSize: 26, 
-    fontWeight: '700', 
+    fontWeight: '900', 
+    lineHeight: 31,
     marginBottom: 8,
-    letterSpacing: -0.4,
+    letterSpacing: -0.55,
+    textAlign: 'center',
   },
   subtitle: { 
     fontSize: 15, 
     lineHeight: 22,
-    fontWeight: '500',
+    fontWeight: '600',
+    letterSpacing: -0.1,
+    textAlign: 'center',
+    maxWidth: 320,
   },
-  scroll: { flex: 1 },
+  questionPanel: {
+    flex: 1,
+    width: '100%',
+    borderRadius: 22,
+    borderWidth: StyleSheet.hairlineWidth,
+    overflow: 'hidden',
+    ...luxurySoftShadow,
+  },
+  scroll: { flex: 1, width: '100%' },
   scrollContent: { 
-    paddingBottom: 24,
+    paddingBottom: 20,
+    paddingTop: 14,
+    alignItems: 'center',
   },
   chipColumn: { gap: 8 },
   groupBlock: { marginBottom: 24 },
@@ -529,11 +687,35 @@ const s = StyleSheet.create({
     flexDirection: 'row', 
     flexWrap: 'wrap', 
     gap: 10,
+    justifyContent: 'center',
+    width: '100%',
+  },
+  textQuestionWrap: {
+    width: '100%',
+    paddingHorizontal: 12,
+    paddingBottom: 10,
+  },
+  textInput: {
+    minHeight: 152,
+    borderRadius: 16,
+    borderWidth: 1,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    fontSize: 15,
+    lineHeight: 22,
+    fontWeight: '600',
+  },
+  textHint: {
+    marginTop: 10,
+    fontSize: 12,
+    fontWeight: '600',
+    letterSpacing: 0.1,
+    textAlign: 'center',
   },
   footer: {
     paddingHorizontal: 24,
     paddingBottom: Platform.OS === 'ios' ? 32 : 24,
-    paddingTop: 20,
+    paddingTop: 14,
     gap: 16,
   },
   footerTop: {
@@ -556,7 +738,8 @@ const s = StyleSheet.create({
   countBadge: {
     paddingHorizontal: 14,
     paddingVertical: 7,
-    borderRadius: 10,
+    borderRadius: LUXURY.radiusPill,
+    ...luxurySoftShadow,
   },
   countBadgeText: { 
     fontSize: 13, 
@@ -564,10 +747,13 @@ const s = StyleSheet.create({
   },
   continueBtn: { 
     width: '100%',
+    borderRadius: 18,
+    overflow: 'hidden',
   },
   continueBtnText: { 
-    fontSize: 17, 
-    fontWeight: '700', 
+    fontSize: 16, 
+    fontWeight: '800', 
+    letterSpacing: 0.2,
     color: '#FFF',
   },
 })

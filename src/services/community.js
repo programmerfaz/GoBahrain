@@ -131,6 +131,23 @@ async function fetchClientImagesForPosts(rows) {
  * - other topicId: filter by hashtags, newest first
  * Uses direct join to user→account for author names. Run supabase/community-author-rls.sql for RLS.
  */
+/** Count comments per post from community_comment (empty map if table missing or error). */
+export async function fetchCommentCountsByCommunityIds(communityUuids) {
+  const ids = [...new Set((communityUuids || []).filter(Boolean))];
+  if (ids.length === 0) return {};
+  const map = Object.fromEntries(ids.map((id) => [id, 0]));
+  const { data, error } = await supabase.from('community_comment').select('community_uuid').in('community_uuid', ids);
+  if (error || !data) {
+    if (error) console.warn('[Community] fetchCommentCountsByCommunityIds:', error.message);
+    return map;
+  }
+  data.forEach((row) => {
+    const id = row.community_uuid;
+    if (id) map[id] = (map[id] || 0) + 1;
+  });
+  return map;
+}
+
 export async function fetchCommunityPosts(topicId = 'all') {
   let query = supabase.from('community').select(COMMUNITY_SELECT_WITH_AUTHOR);
 
@@ -151,7 +168,9 @@ export async function fetchCommunityPosts(topicId = 'all') {
   }
 
   const clientMap = await fetchClientImagesForPosts(rows || []);
-  return (rows || []).map((row) => mapRowToPost(row, clientMap));
+  const posts = (rows || []).map((row) => mapRowToPost(row, clientMap));
+  const commentMap = await fetchCommentCountsByCommunityIds(posts.map((p) => p.id));
+  return posts.map((p) => ({ ...p, comments: commentMap[p.id] ?? p.comments ?? 0 }));
 }
 
 /**
@@ -171,7 +190,9 @@ export async function fetchMyCommunityPosts(userId) {
   }
 
   const clientMap = await fetchClientImagesForPosts(rows || []);
-  return (rows || []).map((row) => mapRowToPost(row, clientMap));
+  const posts = (rows || []).map((row) => mapRowToPost(row, clientMap));
+  const commentMap = await fetchCommentCountsByCommunityIds(posts.map((p) => p.id));
+  return posts.map((p) => ({ ...p, comments: commentMap[p.id] ?? p.comments ?? 0 }));
 }
 
 function mapRowToPost(row, clientMap = {}) {

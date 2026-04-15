@@ -20,12 +20,14 @@ import { LinearGradient } from 'expo-linear-gradient'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import { useAuth } from '../context/AuthContext'
 import { useUserPreferences } from '../context/UserPreferencesContext'
-import { useDoorTransition, yieldTwoFrames } from '../context/DoorTransitionContext'
+import { yieldTwoFrames } from '../context/DoorTransitionContext'
 import { useTheme } from '../context/ThemeContext'
 import { gradients } from '../theme/designTokens'
 import { FadeInView, GradientButton, AnimatedPressable } from '../components/AnimatedUI'
+import { LUXURY, luxuryElevated, luxurySoftShadow } from '../theme/luxuryPremium'
 
-const REMEMBER_ME_KEY = '@gobahrain_remember_email'
+const REMEMBER_ME_EMAIL_KEY = '@gobahrain_remember_email'
+const REMEMBER_ME_PASSWORD_KEY = '@gobahrain_remember_password'
 
 const CLIENT_TYPES = [
   { id: 'place', label: 'Place', icon: 'location-outline' },
@@ -184,11 +186,6 @@ export default function AuthScreen() {
   const { colors, isDark } = useTheme()
   const { signIn, signUp, ensureProfileAfterSignUp } = useAuth()
   const { isOnboardingComplete } = useUserPreferences()
-  const {
-    cancelDoorTransition,
-    armDoorForNextAuthSuccess,
-    disarmDoorForNextAuthSuccess,
-  } = useDoorTransition()
   const { width = 375 } = useWindowDimensions()
 
   const contentOpacity = useRef(new Animated.Value(1)).current
@@ -229,17 +226,66 @@ export default function AuthScreen() {
   const [description, setDescription] = useState('')
   const [clientType, setClientType] = useState('place')
   const [loading, setLoading] = useState(false)
+  const [rememberBootstrapLoading, setRememberBootstrapLoading] = useState(true)
   const [securePassword, setSecurePassword] = useState(true)
   const [signUpSuccessMessage, setSignUpSuccessMessage] = useState(null)
   const [rememberMe, setRememberMe] = useState(true)
 
   useEffect(() => {
     let cancelled = false
-    AsyncStorage.getItem(REMEMBER_ME_KEY).then((saved) => {
-      if (!cancelled && saved) setEmail(saved.trim())
-    })
+
+    const bootstrapRememberedLogin = async () => {
+      try {
+        const [savedEmail, savedPassword] = await Promise.all([
+          AsyncStorage.getItem(REMEMBER_ME_EMAIL_KEY),
+          AsyncStorage.getItem(REMEMBER_ME_PASSWORD_KEY),
+        ])
+        if (cancelled) return
+
+        const nextEmail = savedEmail?.trim() ?? ''
+        const nextPassword = savedPassword ?? ''
+        const hasRememberedCredentials = Boolean(nextEmail && nextPassword)
+
+        if (!hasRememberedCredentials) {
+          setRememberMe(false)
+          setRememberBootstrapLoading(false)
+          return
+        }
+
+        setEmail(nextEmail)
+        setPassword(nextPassword)
+        setRememberMe(true)
+        setLoading(true)
+
+        try {
+          await signIn(nextEmail, nextPassword)
+          await yieldTwoFrames()
+        } catch (_e) {
+          await Promise.all([
+            AsyncStorage.removeItem(REMEMBER_ME_EMAIL_KEY),
+            AsyncStorage.removeItem(REMEMBER_ME_PASSWORD_KEY),
+          ])
+          if (!cancelled) {
+            setRememberMe(false)
+          }
+        } finally {
+          if (!cancelled) {
+            setLoading(false)
+            setRememberBootstrapLoading(false)
+          }
+        }
+      } catch (_e) {
+        if (!cancelled) {
+          setRememberMe(false)
+          setRememberBootstrapLoading(false)
+        }
+      }
+    }
+
+    bootstrapRememberedLogin()
+
     return () => { cancelled = true }
-  }, [])
+  }, [signIn, yieldTwoFrames])
 
   const animateStep = (newStep) => {
     Animated.parallel([
@@ -301,19 +347,20 @@ export default function AuthScreen() {
     }
     setLoading(true)
     try {
-      if (isOnboardingComplete) {
-        armDoorForNextAuthSuccess()
-      }
       await signIn(email.trim(), password)
       await yieldTwoFrames()
       if (rememberMe) {
-        await AsyncStorage.setItem(REMEMBER_ME_KEY, email.trim())
+        await Promise.all([
+          AsyncStorage.setItem(REMEMBER_ME_EMAIL_KEY, email.trim()),
+          AsyncStorage.setItem(REMEMBER_ME_PASSWORD_KEY, password),
+        ])
       } else {
-        await AsyncStorage.removeItem(REMEMBER_ME_KEY)
+        await Promise.all([
+          AsyncStorage.removeItem(REMEMBER_ME_EMAIL_KEY),
+          AsyncStorage.removeItem(REMEMBER_ME_PASSWORD_KEY),
+        ])
       }
     } catch (e) {
-      disarmDoorForNextAuthSuccess()
-      cancelDoorTransition()
       Alert.alert('Login failed', e?.message ?? 'Invalid email or password.')
     } finally {
       setLoading(false)
@@ -324,9 +371,6 @@ export default function AuthScreen() {
     setLoading(true)
     setSignUpSuccessMessage(null)
     try {
-      if (isOnboardingComplete) {
-        armDoorForNextAuthSuccess()
-      }
       const { session: newSession } = await signUp(email.trim(), password, {
         accountType,
         userName: userName.trim(),
@@ -350,12 +394,9 @@ export default function AuthScreen() {
           await yieldTwoFrames()
         }
       } else {
-        disarmDoorForNextAuthSuccess()
         setSignUpSuccessMessage('Check your email to confirm your account, then sign in.')
       }
     } catch (e) {
-      disarmDoorForNextAuthSuccess()
-      cancelDoorTransition()
       const msg = e?.message ?? 'Could not create account.'
       if (/rate limit|rate_limit|too many requests/i.test(msg)) {
         Alert.alert(
@@ -452,6 +493,17 @@ export default function AuthScreen() {
   }
 
   const bgColors = isDark ? gradients.heroDark : gradients.heroLight
+
+  if (rememberBootstrapLoading) {
+    return (
+      <SafeAreaView style={[s.safe, { backgroundColor: C.bg }]}>
+        <LinearGradient colors={bgColors} style={StyleSheet.absoluteFill} />
+        <View style={s.bootstrapLoaderWrap}>
+          <ActivityIndicator size="large" color={C.primary} />
+        </View>
+      </SafeAreaView>
+    )
+  }
 
   const renderStepContent = () => {
     if (isSignUp) {
@@ -846,6 +898,11 @@ const s = StyleSheet.create({
     flexGrow: 1,
     paddingBottom: 16,
   },
+  bootstrapLoaderWrap: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   progressTrack: {
     height: 4,
     borderRadius: 2,
@@ -878,10 +935,11 @@ const s = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     borderWidth: 2,
-    borderRadius: 16,
+    borderRadius: LUXURY.radiusInput,
     paddingHorizontal: 18,
     minHeight: 58,
     marginTop: 16,
+    ...luxurySoftShadow,
   },
   input: { 
     flex: 1, 
@@ -903,14 +961,15 @@ const s = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     padding: 18,
-    borderRadius: 18,
+    borderRadius: LUXURY.radiusInput,
     borderWidth: 2,
     gap: 14,
+    ...luxuryElevated,
   },
   optionIconWrap: {
     width: 56,
     height: 56,
-    borderRadius: 16,
+    borderRadius: LUXURY.radiusChip + 2,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -950,8 +1009,9 @@ const s = StyleSheet.create({
     gap: 8,
     paddingVertical: 12,
     paddingHorizontal: 18,
-    borderRadius: 14,
+    borderRadius: LUXURY.radiusChip + 2,
     borderWidth: 2,
+    ...luxurySoftShadow,
   },
   chipLabel: { fontSize: 15, fontWeight: '600' },
   rememberRow: { 
@@ -962,7 +1022,7 @@ const s = StyleSheet.create({
   checkbox: {
     width: 22,
     height: 22,
-    borderRadius: 7,
+    borderRadius: 8,
     borderWidth: 2,
     borderColor: 'rgba(148,163,184,0.4)',
     backgroundColor: 'transparent',
@@ -998,15 +1058,16 @@ const s = StyleSheet.create({
     alignItems: 'center',
     gap: 12,
     padding: 16,
-    borderRadius: 16,
+    borderRadius: LUXURY.radiusInput,
     borderWidth: 1,
     marginHorizontal: 24,
     marginBottom: 16,
+    ...luxuryElevated,
   },
   successIconWrap: {
     width: 40,
     height: 40,
-    borderRadius: 12,
+    borderRadius: LUXURY.radiusChip,
     alignItems: 'center',
     justifyContent: 'center',
   },

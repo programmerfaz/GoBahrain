@@ -1,5 +1,6 @@
 import { OPENAI_KEY, PINECONE_KEY, PINECONE_HOST, OPENAI_PLAN_MODEL } from '../config/keys';
 import { supabase } from '../config/supabase';
+import { coerceImageValueToString, resolvePublicImageUrl } from '../utils/imageUrl';
 
 const OPENAI_API_KEY = OPENAI_KEY;
 const PINECONE_API_KEY = PINECONE_KEY;
@@ -159,17 +160,26 @@ export async function fetchRestaurants(foodLabels) {
 
     const embedding = await getEmbedding(text);
 
-    // Map UI labels to exact Pinecone cuisine_type values
+    // Map UI labels to exact Pinecone cuisine_type values (include legacy onboarding labels)
     const cuisineMap = {
       Cuisine: 'Cuisine',
+      Local: 'Cuisine',
       Seafood: 'Seafood',
       American: 'American',
       International: 'International',
+      Global: 'International',
       Cafe: 'Cafe',
+      Café: 'Cafe',
       Asian: 'Asian',
       Italian: 'Italian',
+      Japanese: 'Japanese',
+      Chinese: 'Chinese',
+      Thai: 'Thai',
+      Turkish: 'Turkish',
       'South Asian': 'SouthAsian',
+      Subcontinent: 'SouthAsian',
       'Fast Food': 'Fastfood',
+      Quick: 'Fastfood',
     };
 
     const fetchByCuisineField = async (pineconeValue) => {
@@ -251,6 +261,77 @@ export async function fetchBreakfastSpots() {
 
 // ─── Step 4: Events ─────────────────────────────────────────────────
 
+/** Candidate keys to join Pinecone vectors to `public.events` (PK: `event_uuid`). */
+const eventIdentifiersFromMatch = (match) => {
+  const meta = match?.metadata || {};
+  const out = [];
+  const push = (v) => {
+    if (v == null) return;
+    const s = String(v).trim();
+    if (s) out.push(s);
+  };
+  push(meta.event_uuid);
+  push(match?.id);
+  push(meta.uuid);
+  push(meta.event_id);
+  push(meta.id);
+  return [...new Set(out)];
+};
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** Load `image` from `public.events` by `event_uuid`. */
+const fetchEventsImageLookup = async (identifiers) => {
+  const ids = [...new Set((identifiers || []).filter(Boolean).map((x) => String(x).trim()))].filter(Boolean);
+  const eventUuids = ids.filter((id) => UUID_RE.test(id));
+  if (eventUuids.length === 0) return {};
+
+  const { data, error } = await supabase.from('events').select('event_uuid, image').in('event_uuid', eventUuids);
+
+  if (error) {
+    console.warn('[Events] image lookup (events.event_uuid):', error.message);
+    return {};
+  }
+
+  const map = {};
+  for (const row of data || []) {
+    const key = row.event_uuid;
+    const raw = row.image;
+    if (key == null || raw == null) continue;
+    const url = resolvePublicImageUrl(String(raw).trim()) || String(raw).trim();
+    map[String(key)] = url;
+  }
+  return map;
+};
+
+const enrichEventMatchesWithEventsTableImages = async (events) => {
+  const list = events || [];
+  if (list.length === 0) return list;
+
+  const idList = [];
+  for (const m of list) idList.push(...eventIdentifiersFromMatch(m));
+  const imageMap = await fetchEventsImageLookup(idList);
+
+  return list.map((m) => {
+    const candidates = eventIdentifiersFromMatch(m);
+    let img = null;
+    for (const c of candidates) {
+      if (imageMap[c]) {
+        img = imageMap[c];
+        break;
+      }
+    }
+    if (!img) return m;
+    return {
+      ...m,
+      metadata: {
+        ...(m.metadata || {}),
+        image: img,
+      },
+    };
+  });
+};
+
 export async function fetchEvents(preferenceLabels) {
   try {
     const text =
@@ -264,13 +345,119 @@ export async function fetchEvents(preferenceLabels) {
       record_type: { $eq: 'event' },
     });
 
-    console.log(`[Events] Found ${events.length} events`);
-    events.forEach(m => console.log(`  → ${m.metadata?.event_name || m.metadata?.business_name} (${m.metadata?.start_time} - ${m.metadata?.end_time})`));
+    const withImages = await enrichEventMatchesWithEventsTableImages(events);
 
-    return events;
+    console.log(`[Events] Found ${withImages.length} events`);
+    withImages.forEach((m) =>
+      console.log(`  → ${m.metadata?.event_name || m.metadata?.business_name} (${m.metadata?.start_time} - ${m.metadata?.end_time})`),
+    );
+
+    return withImages;
   } catch (e) {
     console.warn('[Events] fetchEvents failed:', e?.message);
     return [];
+  }
+}
+
+/**
+ * Explore: `public.events` only (Supabase schema).
+ * Returns `{ events, error }` so the UI can distinguish query failures from an empty table.
+ */
+export async function fetchExploreEventsFromSupabase() {
+  try {
+    const url = process.env.EXPO_PUBLIC_SUPABASE_URL?.trim?.() ?? '';
+    const anon = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY?.trim?.() ?? '';
+    if (!url || !anon) {
+      const msg = !url ? 'Missing EXPO_PUBLIC_SUPABASE_URL' : 'Missing EXPO_PUBLIC_SUPABASE_ANON_KEY';
+      console.warn('[Explore]', msg);
+      return { events: [], error: msg };
+    }
+
+    const { data, error } = await supabase.from('events').select('*').order('created_at', { ascending: false }).limit(48);
+
+    if (error) {
+      console.warn('[Explore] events query:', error.message, error.code, error.details, error.hint);
+      return { events: [], error: error.message || 'Could not load events' };
+    }
+
+    const out = [];
+    for (let idx = 0; idx < (data || []).length; idx++) {
+      const row = data[idx];
+      if (row?.event_uuid == null) continue;
+
+      let resolved = null;
+      if (row.image != null && String(row.image).trim() !== '') {
+        resolved = resolvePublicImageUrl(row.image);
+        if (!resolved) {
+          const s = coerceImageValueToString(row.image);
+          if (s && (s.startsWith('http://') || s.startsWith('https://'))) resolved = s;
+        }
+      }
+
+      out.push({
+        id: String(row.event_uuid),
+        metadata: {
+          event_uuid: row.event_uuid,
+          event_name: (row.event_name && String(row.event_name).trim()) || 'Event',
+          venue: row.venue,
+          lat: row.lat,
+          long: row.long,
+          start_time: row.start_time,
+          end_time: row.end_time,
+          start_date: row.start_date,
+          end_date: row.end_date,
+          event_type: row.event_type,
+          status: row.status,
+          indoor_outdoor: row.indoor_outdoor,
+          client_a_uuid: row.client_a_uuid,
+          created_at: row.created_at,
+          image: resolved,
+        },
+      });
+    }
+
+    if (out.length === 0 && (data || []).length === 0) {
+      console.warn(
+        '[Explore] events returned 0 rows. If your table has data, enable RLS SELECT for anon — run database/migrations/004_events_public_read.sql in Supabase SQL editor.',
+      );
+    }
+
+    return { events: out, error: null };
+  } catch (e) {
+    console.warn('[Explore] fetchExploreEventsFromSupabase:', e?.message);
+    return { events: [], error: e?.message || 'Could not load events' };
+  }
+}
+
+/**
+ * Explore + Plan search: all rows from `client`, grouped by `client_type`
+ * (restaurant → restaurants, event → events, else → places).
+ */
+export async function fetchBrowseClientsGrouped() {
+  try {
+    const { data: rows, error } = await supabase.from('client').select('*');
+    if (error) {
+      console.warn('[Explore] client query:', error.message);
+      return { restaurants: [], places: [], events: [], error: error.message };
+    }
+    const restaurants = [];
+    const places = [];
+    const events = [];
+    (rows || []).forEach((c) => {
+      const ct = String(c.client_type || '').toLowerCase();
+      const item = {
+        ...c,
+        clientId: c.client_a_uuid,
+        name: (c.business_name || c.name || c.business_name_ar || 'Spot').trim(),
+      };
+      if (ct === 'restaurant') restaurants.push(item);
+      else if (ct === 'event') events.push(item);
+      else places.push(item);
+    });
+    return { restaurants, places, events, error: null };
+  } catch (e) {
+    console.warn('[Explore] fetchBrowseClientsGrouped:', e?.message);
+    return { restaurants: [], places: [], events: [], error: e?.message || null };
   }
 }
 
@@ -698,17 +885,30 @@ const buildProfileSection = (personalization) => {
   const g = personalization?.profileGeneral
   const a = personalization?.profileActivity
   const f = personalization?.profileFood
+  const narrative = typeof personalization?.profileNarrative === 'string' ? personalization.profileNarrative.trim() : ''
+  const answers = personalization?.profileAnswers && typeof personalization.profileAnswers === 'object'
+    ? personalization.profileAnswers
+    : null
   const hasG = Array.isArray(g) && g.length > 0
   const hasA = Array.isArray(a) && a.length > 0
   const hasF = Array.isArray(f) && f.length > 0
-  if (!hasG && !hasA && !hasF) {
+  const hasNarrative = narrative.length > 0
+  const hasAnswers =
+    answers &&
+    (typeof answers.idealDay === 'string' || typeof answers.avoidList === 'string') &&
+    ((answers.idealDay && String(answers.idealDay).trim()) || (answers.avoidList && String(answers.avoidList).trim()))
+
+  if (!hasG && !hasA && !hasF && !hasNarrative && !hasAnswers) {
     return 'No saved onboarding profile is available — rely only on the choices below and the catalog.'
   }
   const lines = []
   lines.push('═══ USER PROFILE (saved — personalize tone and picks) ═══')
+  if (hasNarrative) lines.push(`Persona summary: ${narrative}`)
   if (hasG) lines.push(`General vibe / lifestyle: ${g.join(', ')} — reflect this in reasons and pacing (relaxed vs packed, family-friendly vs nightlife, etc.).`)
   if (hasA) lines.push(`They usually enjoy: ${a.join(', ')} — align extra stops and descriptions with these when compatible with today’s activity picks.`)
   if (hasF) lines.push(`They often like to eat: ${f.join(', ')} — use as a soft bias for meal personality even when today’s food picker differs.`)
+  if (answers?.idealDay) lines.push(`Ideal day notes: ${String(answers.idealDay).trim()}`)
+  if (answers?.avoidList) lines.push(`Avoid these constraints: ${String(answers.avoidList).trim()}`)
   lines.push('If today’s explicit picks conflict, today’s picks win — but still keep the day feeling like it was built for this person.')
   return lines.join('\n')
 }
@@ -741,6 +941,8 @@ async function openAiPlanCompletion(messages, opts = {}) {
  * @param {string[]} [personalization.profileGeneral] — onboarding general labels
  * @param {string[]} [personalization.profileActivity] — onboarding activity labels
  * @param {string[]} [personalization.profileFood] — onboarding food labels
+ * @param {string} [personalization.profileNarrative] — AI-generated deep user summary
+ * @param {{idealDay?: string, avoidList?: string}} [personalization.profileAnswers] — typed profile answers
  */
 export async function generateDayPlan(
   places,
@@ -776,7 +978,7 @@ That is 6 stops minimum (3 meals + 3 places). You may add 7–9 stops if the cat
 
 ═══ TODAY’S PICKS (this session — highest priority) ═══
 ${hasPref ? `🎯 Activity preferences: ${prefLabels.join(', ')}
-The user selected these for THIS plan. You MUST pick places that match them. "Instagram" → photogenic/trendy; "Sightseeing" → landmarks; "Cultural" → heritage; match their vibe.` : 'No specific activity preferences for this plan — choose a fun diverse mix (culture, shopping, sightseeing, nature).'}
+The user selected these for THIS plan. You MUST pick places that match them. "Photos" → photogenic/trendy; "Landmarks" → iconic sights; "Culture" / "History" → heritage; match their vibe.` : 'No specific activity preferences for this plan — choose a fun diverse mix (culture, shopping, sightseeing, nature).'}
 
 ${hasFood ? `🍽️ Food preferences: ${foodLabels.join(', ')}
 They want ${foodLabels.join(' and ')} food for this plan.

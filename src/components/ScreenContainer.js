@@ -2,6 +2,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { Platform, View, Text, StyleSheet } from 'react-native'
 import { LinearGradient } from 'expo-linear-gradient'
 import { useTheme } from '../context/ThemeContext'
+import { luxurySoftShadow } from '../theme/luxuryPremium'
 
 const TAB_BAR_HEIGHT = Platform.OS === 'ios' ? 70 : 60
 
@@ -43,6 +44,7 @@ const styles = StyleSheet.create({
   headerOuter: {
     position: 'relative',
     overflow: 'hidden',
+    ...luxurySoftShadow,
   },
   headerInner: {
     flexDirection: 'row',

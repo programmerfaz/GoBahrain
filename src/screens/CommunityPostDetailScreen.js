@@ -11,6 +11,7 @@ import {
   Alert,
   StyleSheet,
 } from 'react-native'
+import { BlurView } from 'expo-blur'
 import { useNavigation, useRoute, useFocusEffect } from '@react-navigation/native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { Ionicons } from '@expo/vector-icons'
@@ -19,13 +20,11 @@ import {
   buildCommunityFeedStyles,
   CommunityReviewCard,
 } from '../components/community/CommunityReviewViews'
-import {
-  fetchCommunityComments,
-  createCommunityComment,
-  upvoteCommunityPost,
-  removeUpvoteCommunityPost,
-} from '../services/community'
+import { fetchCommunityComments, createCommunityComment } from '../services/community'
+import { UpvoteParticles } from '../components/FeedUpvoteInteractions'
+import { useCommunityUpvoteToggle } from '../hooks/useCommunityUpvoteToggle'
 import { useTheme } from '../context/ThemeContext'
+import { LUXURY, luxurySoftShadow } from '../theme/luxuryPremium'
 
 export default function CommunityPostDetailScreen() {
   const navigation = useNavigation()
@@ -36,7 +35,7 @@ export default function CommunityPostDetailScreen() {
   const focusComposer = !!route.params?.focusComposer
 
   const C = useMemo(() => getCommunityPalette(isDark), [isDark])
-  const feedStyles = useMemo(() => buildCommunityFeedStyles(C), [C])
+  const feedStyles = useMemo(() => buildCommunityFeedStyles(C, isDark), [C, isDark])
 
   const [post, setPost] = useState(initialPost)
   const [comments, setComments] = useState([])
@@ -88,23 +87,23 @@ export default function CommunityPostDetailScreen() {
     return () => clearTimeout(t)
   }, [focusComposer, post])
 
-  const handleUpvote = useCallback(async (item) => {
-    try {
-      const newCount = await upvoteCommunityPost(item.id)
-      setPost((p) => (p && p.id === item.id ? { ...p, upvotes: newCount, upvoted: true } : p))
-    } catch (e) {
-      console.warn('[Community] upvote failed:', e)
-    }
+  const {
+    handleUpvoteToggle,
+    getUpvoteScaleAnim,
+    particlesVisible,
+    particlePosition,
+  } = useCommunityUpvoteToggle()
+
+  const syncDetailPost = useCallback((updated) => {
+    setPost((p) => (p && p.id === updated.id ? { ...p, ...updated } : p))
   }, [])
 
-  const handleRemoveUpvote = useCallback(async (item) => {
-    try {
-      const newCount = await removeUpvoteCommunityPost(item.id)
-      setPost((p) => (p && p.id === item.id ? { ...p, upvotes: newCount, upvoted: false } : p))
-    } catch (e) {
-      console.warn('[Community] remove upvote failed:', e)
-    }
-  }, [])
+  const onDetailUpvoteToggle = useCallback(
+    (item, e) => {
+      handleUpvoteToggle(item, e, syncDetailPost)
+    },
+    [handleUpvoteToggle, syncDetailPost],
+  )
 
   const handleSendComment = useCallback(async () => {
     const text = draft.trim()
@@ -155,11 +154,11 @@ export default function CommunityPostDetailScreen() {
           hideCardBottomBorder
           onPress={null}
           onCommentPress={null}
-          onUpvote={handleUpvote}
-          onRemoveUpvote={handleRemoveUpvote}
+          onUpvoteToggle={onDetailUpvoteToggle}
+          upvoteScaleAnim={getUpvoteScaleAnim(post.id)}
         />
 
-        <View style={[styles.repliesHeader, { borderBottomColor: C.border }]}>
+        <View style={[styles.repliesHeader, { backgroundColor: C.card, borderColor: C.border }]}>
           <Text style={[styles.repliesTitle, { color: C.text }]}>Replies</Text>
           {loadingComments ? (
             <ActivityIndicator size="small" color={C.red} />
@@ -169,7 +168,7 @@ export default function CommunityPostDetailScreen() {
         </View>
 
         {loadingComments ? null : comments.length === 0 ? (
-          <View style={styles.emptyReplies}>
+          <View style={[styles.emptyReplies, { backgroundColor: C.card, borderColor: C.border }]}>
             <Ionicons name="chatbubbles-outline" size={40} color={C.muted} />
             <Text style={[styles.emptyTitle, { color: C.text }]}>No replies yet</Text>
             <Text style={[styles.emptySub, { color: C.sub }]}>
@@ -180,7 +179,7 @@ export default function CommunityPostDetailScreen() {
           comments.map((c) => (
             <View
               key={c.id}
-              style={[styles.commentRow, { borderBottomColor: C.border }]}
+              style={[styles.commentRow, { backgroundColor: C.card, borderColor: C.border }]}
             >
               <View style={[styles.commentAv, { backgroundColor: C.chip }]}>
                 <Ionicons name="person" size={16} color={C.muted} />
@@ -203,47 +202,56 @@ export default function CommunityPostDetailScreen() {
         style={[
           styles.composerWrap,
           {
-            backgroundColor: C.bg,
-            borderTopColor: C.border,
             paddingBottom: Math.max(insets.bottom, 10),
           },
         ]}
       >
-        <View style={[styles.composerInner, { backgroundColor: C.chip, borderColor: C.border }]}>
-          <View style={[styles.composerAv, { backgroundColor: C.card }]}>
-            <Ionicons name="person" size={18} color={C.muted} />
+        <View style={styles.composerGlassOuter}>
+          <BlurView intensity={Platform.OS === 'ios' ? 52 : 32} tint={isDark ? 'dark' : 'light'} style={StyleSheet.absoluteFillObject} />
+          <View style={[styles.composerGlassFrost, isDark && styles.composerGlassFrostDark]} pointerEvents="none" />
+          <View style={styles.composerGlassInner}>
+            <View style={[styles.composerInner, { backgroundColor: isDark ? 'rgba(255,255,255,0.08)' : 'rgba(255,255,255,0.5)', borderColor: C.border }]}>
+              <View style={[styles.composerAv, { backgroundColor: C.card }]}>
+                <Ionicons name="person" size={18} color={C.muted} />
+              </View>
+              <TextInput
+                ref={inputRef}
+                style={[styles.composerInput, { color: C.text }]}
+                placeholder="Post your reply"
+                placeholderTextColor={C.muted}
+                value={draft}
+                onChangeText={setDraft}
+                multiline
+                maxLength={2000}
+                editable={!sending}
+                accessibilityLabel="Write a reply"
+              />
+              <TouchableOpacity
+                onPress={handleSendComment}
+                disabled={sending || !draft.trim()}
+                style={[
+                  styles.sendBtn,
+                  { backgroundColor: draft.trim() ? C.red : C.chip },
+                ]}
+                accessibilityRole="button"
+                accessibilityLabel="Send reply"
+                accessibilityState={{ disabled: sending || !draft.trim() }}
+              >
+                {sending ? (
+                  <ActivityIndicator color="#FFF" size="small" />
+                ) : (
+                  <Ionicons name="arrow-up" size={20} color={draft.trim() ? '#FFF' : C.muted} />
+                )}
+              </TouchableOpacity>
+            </View>
           </View>
-          <TextInput
-            ref={inputRef}
-            style={[styles.composerInput, { color: C.text }]}
-            placeholder="Post your reply"
-            placeholderTextColor={C.muted}
-            value={draft}
-            onChangeText={setDraft}
-            multiline
-            maxLength={2000}
-            editable={!sending}
-            accessibilityLabel="Write a reply"
-          />
-          <TouchableOpacity
-            onPress={handleSendComment}
-            disabled={sending || !draft.trim()}
-            style={[
-              styles.sendBtn,
-              { backgroundColor: draft.trim() ? C.red : C.chip },
-            ]}
-            accessibilityRole="button"
-            accessibilityLabel="Send reply"
-            accessibilityState={{ disabled: sending || !draft.trim() }}
-          >
-            {sending ? (
-              <ActivityIndicator color="#FFF" size="small" />
-            ) : (
-              <Ionicons name="arrow-up" size={20} color={draft.trim() ? '#FFF' : C.muted} />
-            )}
-          </TouchableOpacity>
         </View>
       </View>
+      <UpvoteParticles
+        visible={particlesVisible}
+        position={particlePosition}
+        accentColor={C.green}
+      />
     </KeyboardAvoidingView>
   )
 }
@@ -257,30 +265,44 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+    marginHorizontal: 14,
+    marginTop: 10,
+    marginBottom: 8,
     paddingHorizontal: 16,
     paddingVertical: 12,
-    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderRadius: LUXURY.radiusInput,
+    borderWidth: StyleSheet.hairlineWidth,
+    ...luxurySoftShadow,
   },
   repliesTitle: { fontSize: 16, fontWeight: '800' },
   repliesCount: { fontSize: 14, fontWeight: '600' },
   emptyReplies: {
     alignItems: 'center',
-    paddingVertical: 36,
-    paddingHorizontal: 28,
+    paddingVertical: 28,
+    paddingHorizontal: 24,
+    marginHorizontal: 14,
+    marginBottom: 8,
     gap: 8,
+    borderRadius: LUXURY.radiusInput,
+    borderWidth: StyleSheet.hairlineWidth,
+    ...luxurySoftShadow,
   },
   emptyTitle: { fontSize: 16, fontWeight: '700', marginTop: 8 },
   emptySub: { fontSize: 14, textAlign: 'center', lineHeight: 20 },
   commentRow: {
     flexDirection: 'row',
-    paddingHorizontal: 16,
+    marginHorizontal: 14,
+    marginBottom: 10,
+    paddingHorizontal: 14,
     paddingVertical: 14,
-    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderRadius: LUXURY.radiusMarkerPill,
+    borderWidth: StyleSheet.hairlineWidth,
+    ...luxurySoftShadow,
   },
   commentAv: {
     width: 36,
     height: 36,
-    borderRadius: 18,
+    borderRadius: LUXURY.radiusPill - 2,
     alignItems: 'center',
     justifyContent: 'center',
     marginRight: 12,
@@ -291,9 +313,36 @@ const styles = StyleSheet.create({
   commentTime: { fontSize: 13 },
   commentText: { fontSize: 15, lineHeight: 21 },
   composerWrap: {
-    borderTopWidth: StyleSheet.hairlineWidth,
-    paddingHorizontal: 12,
-    paddingTop: 10,
+    paddingHorizontal: 10,
+    paddingTop: 8,
+  },
+  composerGlassOuter: {
+    borderRadius: 26,
+    overflow: 'hidden',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(142,142,147,0.22)',
+    ...Platform.select({
+      ios: {
+        shadowColor: '#000000',
+        shadowOffset: { width: 0, height: -6 },
+        shadowOpacity: 0.08,
+        shadowRadius: 20,
+      },
+      android: { elevation: 8 },
+    }),
+  },
+  composerGlassFrost: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(255,255,255,0.78)',
+  },
+  composerGlassFrostDark: {
+    backgroundColor: 'rgba(28,28,30,0.88)',
+  },
+  composerGlassInner: {
+    position: 'relative',
+    zIndex: 2,
+    paddingHorizontal: 8,
+    paddingVertical: 8,
   },
   composerInner: {
     flexDirection: 'row',

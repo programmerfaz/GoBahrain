@@ -12,6 +12,7 @@ import {
   KeyboardAvoidingView,
   Platform,
   Animated,
+  Easing,
   useWindowDimensions,
   Pressable,
 } from 'react-native'
@@ -20,6 +21,8 @@ import { BlurView } from 'expo-blur'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { Ionicons } from '@expo/vector-icons'
 import { colors as themeColors, colorsDark as themeColorsDark } from '../../theme/designTokens'
+import { useTheme } from '../../context/ThemeContext'
+import { PinchZoomPostImage } from '../FeedUpvoteInteractions'
 
 export function getCommunityPalette(isDark) {
   const tc = isDark ? themeColorsDark : themeColors
@@ -68,12 +71,42 @@ export function CommunityReviewRatingStars({ rating, size = 12, color, mutedColo
   )
 }
 
-export function buildCommunityFeedStyles(C) {
+export function buildCommunityFeedStyles(C, isDark = false) {
   return StyleSheet.create({
     card: {
       backgroundColor: C.card,
       borderBottomWidth: 1,
       borderBottomColor: C.border,
+      paddingVertical: 12,
+      paddingHorizontal: 16,
+    },
+    cardGlassOuter: {
+      marginHorizontal: 16,
+      marginBottom: 14,
+      borderRadius: 22,
+      overflow: 'hidden',
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: isDark ? 'rgba(148,148,158,0.28)' : 'rgba(142,142,147,0.22)',
+      ...Platform.select({
+        ios: {
+          shadowColor: '#000000',
+          shadowOffset: { width: 0, height: 12 },
+          shadowOpacity: 0.08,
+          shadowRadius: 22,
+        },
+        android: { elevation: 4 },
+      }),
+    },
+    cardGlassFrost: {
+      ...StyleSheet.absoluteFillObject,
+      backgroundColor: 'rgba(255,255,255,0.78)',
+    },
+    cardGlassFrostDark: {
+      backgroundColor: 'rgba(28,28,30,0.88)',
+    },
+    cardGlassContent: {
+      position: 'relative',
+      zIndex: 2,
       paddingVertical: 12,
       paddingHorizontal: 16,
     },
@@ -217,42 +250,56 @@ export function buildCommunityFeedStyles(C) {
       fontWeight: '600',
       marginLeft: 4,
     },
-    actions: { 
-      flexDirection: 'row', 
-      alignItems: 'center', 
+    actions: {
+      flexDirection: 'row',
+      alignItems: 'stretch',
       gap: 8,
       marginTop: 12,
     },
-    actionBtn: { 
-      width: 38,
-      height: 38,
-      borderRadius: 19,
+    actionPill: {
+      flex: 1,
+      minHeight: 48,
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: 6,
+      paddingHorizontal: 8,
+      borderRadius: 16,
       backgroundColor: C.chip,
-      alignItems: 'center',
-      justifyContent: 'center',
-      borderWidth: 1,
-      borderColor: C.border + '30',
-    },
-    upvoteCircle: {
-      width: 38,
-      height: 38,
-      borderRadius: 19,
-      alignItems: 'center',
-      justifyContent: 'center',
       borderWidth: 1.5,
+      borderColor: C.border + '55',
+      ...Platform.select({
+        ios: {
+          shadowColor: '#000',
+          shadowOffset: { width: 0, height: 1 },
+          shadowOpacity: 0.06,
+          shadowRadius: 3,
+        },
+        android: { elevation: 1 },
+      }),
+    },
+    actionPillUpvote: {
       borderColor: C.green,
       backgroundColor: 'transparent',
     },
-    upvoteCircleActive: {
+    actionPillUpvoteOn: {
       backgroundColor: C.green,
       borderColor: C.green,
     },
-    actionNum: { 
-      fontSize: 13, 
-      fontWeight: '700', 
+    actionPillNum: {
+      fontSize: 14,
+      fontWeight: '800',
       color: C.text,
-      marginLeft: 4,
-      marginTop: 8,
+      letterSpacing: -0.2,
+      minWidth: 18,
+      textAlign: 'center',
+    },
+    actionPillNumOn: {
+      color: '#FFFFFF',
+    },
+    actionPillNumMuted: {
+      color: C.sub,
+      fontWeight: '700',
     },
     feed: { 
       paddingHorizontal: 0, 
@@ -343,13 +390,21 @@ export function buildCommunityFeedStyles(C) {
       color: C.text,
       marginTop: 16,
     },
-    popUpvoteRow: { marginTop: 16, flexDirection: 'row', gap: 20 },
-    popUpvoteBtn: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-    popUpvoteNum: { fontSize: 15, fontWeight: '700', color: C.muted },
+    popUpvoteRow: { marginTop: 16, flexDirection: 'row', alignItems: 'stretch', gap: 8 },
+    popUpvoteBtn: {
+      flex: 1,
+      flexDirection: 'column',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: 6,
+      minHeight: 52,
+      paddingVertical: 4,
+    },
+    popUpvoteNum: { fontSize: 15, fontWeight: '800', color: C.muted },
     likeCircle: {
-      width: 36,
-      height: 36,
-      borderRadius: 18,
+      width: 40,
+      height: 40,
+      borderRadius: 20,
       alignItems: 'center',
       justifyContent: 'center',
       borderWidth: 1.5,
@@ -403,48 +458,78 @@ export function CommunityReviewCard({
   styles: st,
   onPress,
   onCommentPress,
-  onUpvote,
-  onRemoveUpvote,
+  onUpvoteToggle,
+  upvoteScaleAnim,
   expandBody = false,
   hideCardBottomBorder = false,
+  useGlass = true,
 }) {
+  const { isDark } = useTheme()
   const { width = 375 } = useWindowDimensions()
-  const cardWidth = width - 32
+  const cardWidth = useGlass ? width - 64 : width - 32
   const imgH = Math.round(cardWidth * 0.75)
-  const [upvoted, setUpvoted] = useState(item.upvoted)
   const [imageIndex, setImageIndex] = useState(0)
-  const scale = useRef(new Animated.Value(1)).current
+  const hasUpvoted = item.upvoted ?? false
   const count = item.upvotes ?? 0
+  const commentCount = item.comments ?? 0
 
   const images = item.images?.length > 0 ? item.images : item.image ? [item.image] : []
+
+  const upvoteAnimScale = useRef(new Animated.Value(0)).current
+  const upvoteAnimOpacity = useRef(new Animated.Value(0)).current
+  const upvoteAnimTranslateY = useRef(new Animated.Value(0)).current
+
+  const animateUpvoteBurst = () => {
+    upvoteAnimScale.setValue(0)
+    upvoteAnimOpacity.setValue(0)
+    upvoteAnimTranslateY.setValue(0)
+    Animated.parallel([
+      Animated.spring(upvoteAnimScale, {
+        toValue: 1.5,
+        friction: 4,
+        tension: 40,
+        useNativeDriver: true,
+      }),
+      Animated.sequence([
+        Animated.timing(upvoteAnimOpacity, {
+          toValue: 0.9,
+          duration: 150,
+          useNativeDriver: true,
+        }),
+        Animated.delay(400),
+        Animated.timing(upvoteAnimOpacity, {
+          toValue: 0,
+          duration: 300,
+          useNativeDriver: true,
+        }),
+      ]),
+      Animated.timing(upvoteAnimTranslateY, {
+        toValue: -50,
+        duration: 850,
+        easing: Easing.out(Easing.quad),
+        useNativeDriver: true,
+      }),
+    ]).start()
+  }
 
   useEffect(() => {
     setImageIndex(0)
   }, [item.id])
 
-  useEffect(() => {
-    setUpvoted(item.upvoted)
-  }, [item.id, item.upvoted])
+  const handleUpvotePress = (e) => {
+    if (!onUpvoteToggle) return
+    if (!hasUpvoted) {
+      animateUpvoteBurst()
+    }
+    onUpvoteToggle(item, e)
+  }
 
-  const handleUpvotePress = () => {
-    const next = !upvoted
-    setUpvoted(next)
-    Animated.sequence([
-      Animated.spring(scale, { 
-        toValue: 1.2, 
-        friction: 3,
-        tension: 100,
-        useNativeDriver: true 
-      }),
-      Animated.spring(scale, { 
-        toValue: 1, 
-        friction: 4,
-        tension: 100,
-        useNativeDriver: true 
-      }),
-    ]).start()
-    if (next) onUpvote?.(item)
-    else onRemoveUpvote?.(item)
+  const handleImageDoubleTap = (pageX, pageY) => {
+    if (!onUpvoteToggle) return
+    if (!hasUpvoted) {
+      animateUpvoteBurst()
+    }
+    onUpvoteToggle(item, { nativeEvent: { pageX, pageY } })
   }
 
   const topicIds = (item.topic || '').split(',').map((t) => t.trim()).filter(Boolean)
@@ -455,6 +540,21 @@ export function CommunityReviewCard({
     st.card,
     hideCardBottomBorder ? { borderBottomWidth: 0 } : null,
   ]
+
+  const glassLayers = (
+    <>
+      <BlurView
+        intensity={Platform.OS === 'ios' ? 52 : 32}
+        tint={isDark ? 'dark' : 'light'}
+        style={StyleSheet.absoluteFillObject}
+        pointerEvents="none"
+      />
+      <View
+        style={[st.cardGlassFrost, isDark && st.cardGlassFrostDark]}
+        pointerEvents="none"
+      />
+    </>
+  )
 
   const inner = (
     <>
@@ -497,7 +597,32 @@ export function CommunityReviewCard({
         {images.length > 0 && (
           <View style={[st.cardImgWrap, { height: imgH }]}>
             {images.length === 1 ? (
-              <Image source={{ uri: images[0] }} style={st.cardImg} resizeMode="contain" />
+              <View style={{ flex: 1, width: '100%', height: imgH }} collapsable={false}>
+                <PinchZoomPostImage
+                  uri={images[0]}
+                  style={[st.cardImg, { width: '100%', height: imgH }]}
+                  resizeMode="contain"
+                  pinchEnabled
+                  onImageDoubleTap={handleImageDoubleTap}
+                />
+                <Animated.View
+                  style={[
+                    StyleSheet.absoluteFillObject,
+                    {
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      opacity: upvoteAnimOpacity,
+                      transform: [
+                        { scale: upvoteAnimScale },
+                        { translateY: upvoteAnimTranslateY },
+                      ],
+                    },
+                  ]}
+                  pointerEvents="none"
+                >
+                  <Ionicons name="arrow-up-circle" size={100} color="#FFFFFF" />
+                </Animated.View>
+              </View>
             ) : (
               <>
                 <GHScrollView
@@ -517,10 +642,33 @@ export function CommunityReviewCard({
                 >
                   {images.map((uri, i) => (
                     <View key={i} style={{ width: cardWidth, height: imgH }}>
-                      <Image source={{ uri }} style={{ width: cardWidth, height: imgH }} resizeMode="contain" />
+                      <PinchZoomPostImage
+                        uri={uri}
+                        style={{ width: cardWidth, height: imgH }}
+                        resizeMode="contain"
+                        pinchEnabled={false}
+                        onImageDoubleTap={handleImageDoubleTap}
+                      />
                     </View>
                   ))}
                 </GHScrollView>
+                <Animated.View
+                  style={[
+                    StyleSheet.absoluteFillObject,
+                    {
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      opacity: upvoteAnimOpacity,
+                      transform: [
+                        { scale: upvoteAnimScale },
+                        { translateY: upvoteAnimTranslateY },
+                      ],
+                    },
+                  ]}
+                  pointerEvents="none"
+                >
+                  <Ionicons name="arrow-up-circle" size={100} color="#FFFFFF" />
+                </Animated.View>
                 {images.length > 1 && (
                   <View style={st.cardImgPills}>
                     {images.map((_, i) => (
@@ -539,45 +687,85 @@ export function CommunityReviewCard({
           </View>
         )}
 
-        {/* Action bar */}
+        {/* Action bar — equal-width tappable pills */}
         <View style={st.actions}>
-          <Animated.View style={{ transform: [{ scale }] }}>
-            <TouchableOpacity
-              style={[
-                st.upvoteCircle,
-                upvoted && st.upvoteCircleActive,
-              ]}
-              activeOpacity={0.7}
-              onPress={handleUpvotePress}
-            >
-              <Ionicons 
-                name={upvoted ? 'arrow-up-circle' : 'arrow-up'} 
-                size={22} 
-                color={upvoted ? '#FFFFFF' : C.green} 
-              />
-            </TouchableOpacity>
-          </Animated.View>
+          {(() => {
+            const upvotePillBtn = (
+              <TouchableOpacity
+                style={[st.actionPill, st.actionPillUpvote, hasUpvoted && st.actionPillUpvoteOn]}
+                activeOpacity={0.88}
+                onPress={handleUpvotePress}
+                accessibilityRole="button"
+                accessibilityLabel={`Upvote, ${count}`}
+                accessibilityState={{ selected: hasUpvoted }}
+              >
+                <Ionicons
+                  name={hasUpvoted ? 'arrow-up-circle' : 'arrow-up'}
+                  size={20}
+                  color={hasUpvoted ? '#FFFFFF' : C.green}
+                />
+                <Text style={[st.actionPillNum, hasUpvoted && st.actionPillNumOn]}>{count}</Text>
+              </TouchableOpacity>
+            )
+            if (upvoteScaleAnim != null) {
+              return (
+                <Animated.View style={{ flex: 1, transform: [{ scale: upvoteScaleAnim }] }}>
+                  {upvotePillBtn}
+                </Animated.View>
+              )
+            }
+            return <View style={{ flex: 1 }}>{upvotePillBtn}</View>
+          })()}
           <TouchableOpacity
-            style={st.actionBtn}
-            activeOpacity={0.7}
+            style={st.actionPill}
+            activeOpacity={0.88}
             onPress={() => onCommentPress?.(item)}
+            accessibilityRole="button"
+            accessibilityLabel={`Comments, ${commentCount}`}
           >
             <Ionicons name="chatbubble-outline" size={20} color={C.text} />
+            <Text style={[st.actionPillNum, commentCount === 0 && st.actionPillNumMuted]}>{commentCount}</Text>
           </TouchableOpacity>
           <TouchableOpacity
-            style={st.actionBtn}
-            activeOpacity={0.7}
+            style={st.actionPill}
+            activeOpacity={0.88}
+            accessibilityRole="button"
+            accessibilityLabel="Share"
           >
             <Ionicons name="paper-plane-outline" size={20} color={C.text} />
           </TouchableOpacity>
         </View>
-        {count > 0 && (
-          <Text style={st.actionNum}>
-            {count} {count === 1 ? 'upvote' : 'upvotes'}
-          </Text>
-        )}
     </>
   )
+
+  if (useGlass) {
+    if (onPress) {
+      return (
+        <Pressable
+          style={({ pressed }) => [
+            st.cardGlassOuter,
+            pressed && { opacity: 0.94 },
+          ]}
+          onPress={() => onPress(item)}
+          accessibilityRole="button"
+          accessibilityLabel={`Open post: ${item.place || 'Community review'}`}
+        >
+          {glassLayers}
+          <View style={st.cardGlassContent}>
+            <View style={st.cardInner}>{inner}</View>
+          </View>
+        </Pressable>
+      )
+    }
+    return (
+      <View style={st.cardGlassOuter}>
+        {glassLayers}
+        <View style={st.cardGlassContent}>
+          <View style={st.cardInner}>{inner}</View>
+        </View>
+      </View>
+    )
+  }
 
   if (onPress) {
     return (
@@ -604,8 +792,8 @@ export function CommunityReviewDetailModal({
   C,
   styles: st,
   onClose,
-  onUpvote,
-  onRemoveUpvote,
+  onUpvoteToggle,
+  upvoteScaleAnim,
   focusReplyWhenOpen = false,
   onClearFocusReply,
 }) {
@@ -617,18 +805,51 @@ export function CommunityReviewDetailModal({
   const imgH = Math.round(imgW * 0.6)
   const popupMaxHeight = height * 0.88
   const popupCardHeaderH = 54
-  const [upvoted, setUpvoted] = useState(post?.upvoted ?? false)
   const [imageIndex, setImageIndex] = useState(0)
   const [cardHeight, setCardHeight] = useState(popupMaxHeight)
   const [replyText, setReplyText] = useState('')
   const imageScrollRef = useRef(null)
   const replyInputRef = useRef(null)
-  const scale = useRef(new Animated.Value(1)).current
+  const hasUpvoted = post?.upvoted ?? false
   const count = post?.upvotes ?? 0
+  const commentCount = post?.comments ?? 0
 
-  useEffect(() => {
-    if (post?.upvoted) setUpvoted(true)
-  }, [post?.id, post?.upvoted])
+  const upvoteAnimScale = useRef(new Animated.Value(0)).current
+  const upvoteAnimOpacity = useRef(new Animated.Value(0)).current
+  const upvoteAnimTranslateY = useRef(new Animated.Value(0)).current
+
+  const animateUpvoteBurst = () => {
+    upvoteAnimScale.setValue(0)
+    upvoteAnimOpacity.setValue(0)
+    upvoteAnimTranslateY.setValue(0)
+    Animated.parallel([
+      Animated.spring(upvoteAnimScale, {
+        toValue: 1.5,
+        friction: 4,
+        tension: 40,
+        useNativeDriver: true,
+      }),
+      Animated.sequence([
+        Animated.timing(upvoteAnimOpacity, {
+          toValue: 0.9,
+          duration: 150,
+          useNativeDriver: true,
+        }),
+        Animated.delay(400),
+        Animated.timing(upvoteAnimOpacity, {
+          toValue: 0,
+          duration: 300,
+          useNativeDriver: true,
+        }),
+      ]),
+      Animated.timing(upvoteAnimTranslateY, {
+        toValue: -50,
+        duration: 850,
+        easing: Easing.out(Easing.quad),
+        useNativeDriver: true,
+      }),
+    ]).start()
+  }
 
   useEffect(() => {
     setImageIndex(0)
@@ -650,25 +871,20 @@ export function CommunityReviewDetailModal({
 
   const images = post.images?.length > 0 ? post.images : post.image ? [post.image] : []
 
-  const handleUpvotePress = () => {
-    const next = !upvoted
-    setUpvoted(next)
-    Animated.sequence([
-      Animated.spring(scale, { 
-        toValue: 1.2, 
-        friction: 3,
-        tension: 100,
-        useNativeDriver: true 
-      }),
-      Animated.spring(scale, { 
-        toValue: 1, 
-        friction: 4,
-        tension: 100,
-        useNativeDriver: true 
-      }),
-    ]).start()
-    if (next) onUpvote?.(post)
-    else onRemoveUpvote?.(post)
+  const handleUpvotePress = (e) => {
+    if (!onUpvoteToggle) return
+    if (!hasUpvoted) {
+      animateUpvoteBurst()
+    }
+    onUpvoteToggle(post, e)
+  }
+
+  const handleImageDoubleTap = (pageX, pageY) => {
+    if (!onUpvoteToggle) return
+    if (!hasUpvoted) {
+      animateUpvoteBurst()
+    }
+    onUpvoteToggle(post, { nativeEvent: { pageX, pageY } })
   }
 
   return (
@@ -717,21 +933,77 @@ export function CommunityReviewDetailModal({
             >
               {images.length > 0 ? (
                 <View style={[st.popImgWrap, { width: cardW, height: imgH }]}>
-                  <ScrollView
-                    ref={imageScrollRef}
-                    horizontal
-                    pagingEnabled
-                    showsHorizontalScrollIndicator={false}
-                    onMomentumScrollEnd={(e) => {
-                      const i = Math.round(e.nativeEvent.contentOffset.x / imgW)
-                      setImageIndex(i)
-                    }}
-                    style={{ width: cardW, height: imgH }}
-                  >
-                    {images.map((uri, i) => (
-                      <Image key={i} source={{ uri }} style={{ width: imgW, height: imgH }} resizeMode="contain" />
-                    ))}
-                  </ScrollView>
+                  {images.length === 1 ? (
+                    <View style={{ flex: 1, width: cardW, height: imgH }} collapsable={false}>
+                      <PinchZoomPostImage
+                        uri={images[0]}
+                        style={{ width: imgW, height: imgH }}
+                        resizeMode="contain"
+                        pinchEnabled
+                        onImageDoubleTap={handleImageDoubleTap}
+                      />
+                      <Animated.View
+                        style={[
+                          StyleSheet.absoluteFillObject,
+                          {
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            opacity: upvoteAnimOpacity,
+                            transform: [
+                              { scale: upvoteAnimScale },
+                              { translateY: upvoteAnimTranslateY },
+                            ],
+                          },
+                        ]}
+                        pointerEvents="none"
+                      >
+                        <Ionicons name="arrow-up-circle" size={100} color="#FFFFFF" />
+                      </Animated.View>
+                    </View>
+                  ) : (
+                    <>
+                      <ScrollView
+                        ref={imageScrollRef}
+                        horizontal
+                        pagingEnabled
+                        showsHorizontalScrollIndicator={false}
+                        onMomentumScrollEnd={(e) => {
+                          const i = Math.round(e.nativeEvent.contentOffset.x / imgW)
+                          setImageIndex(i)
+                        }}
+                        style={{ width: cardW, height: imgH }}
+                      >
+                        {images.map((uri, i) => (
+                          <View key={i} style={{ width: imgW, height: imgH }}>
+                            <PinchZoomPostImage
+                              uri={uri}
+                              style={{ width: imgW, height: imgH }}
+                              resizeMode="contain"
+                              pinchEnabled={false}
+                              onImageDoubleTap={handleImageDoubleTap}
+                            />
+                          </View>
+                        ))}
+                      </ScrollView>
+                      <Animated.View
+                        style={[
+                          StyleSheet.absoluteFillObject,
+                          {
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            opacity: upvoteAnimOpacity,
+                            transform: [
+                              { scale: upvoteAnimScale },
+                              { translateY: upvoteAnimTranslateY },
+                            ],
+                          },
+                        ]}
+                        pointerEvents="none"
+                      >
+                        <Ionicons name="arrow-up-circle" size={100} color="#FFFFFF" />
+                      </Animated.View>
+                    </>
+                  )}
                   {images.length > 1 && (
                     <View style={st.popImgPills}>
                       {images.map((_, i) => (
@@ -765,34 +1037,47 @@ export function CommunityReviewDetailModal({
                 <Text style={st.popReviewText}>{post.body}</Text>
 
                 <View style={st.popUpvoteRow}>
-                  <TouchableOpacity onPress={handleUpvotePress} activeOpacity={0.7}>
-                    <View style={st.popUpvoteBtn}>
+                  <TouchableOpacity onPress={handleUpvotePress} activeOpacity={0.88} style={st.popUpvoteBtn}>
+                    {upvoteScaleAnim != null ? (
                       <Animated.View style={[
                         st.likeCircle,
-                        upvoted && st.likeCircleActive,
-                        { transform: [{ scale }] }
+                        hasUpvoted && st.likeCircleActive,
+                        { transform: [{ scale: upvoteScaleAnim }] },
                       ]}>
-                        <Ionicons 
-                          name={upvoted ? 'arrow-up-circle' : 'arrow-up-circle-outline'} 
-                          size={20} 
-                          color={upvoted ? '#FFF' : C.green} 
+                        <Ionicons
+                          name={hasUpvoted ? 'arrow-up-circle' : 'arrow-up-circle-outline'}
+                          size={20}
+                          color={hasUpvoted ? '#FFF' : C.green}
                         />
                       </Animated.View>
-                      <Text style={[st.popUpvoteNum, { color: upvoted ? C.green : C.muted }]}>{count}</Text>
-                    </View>
-                  </TouchableOpacity>
-                  <TouchableOpacity activeOpacity={0.7}>
-                    <View style={st.popUpvoteBtn}>
-                      <View style={[st.likeCircle, { borderColor: C.muted, borderWidth: 1.5 }]}>
-                        <Ionicons name="chatbubble-outline" size={18} color={C.muted} />
+                    ) : (
+                      <View style={[st.likeCircle, hasUpvoted && st.likeCircleActive]}>
+                        <Ionicons
+                          name={hasUpvoted ? 'arrow-up-circle' : 'arrow-up-circle-outline'}
+                          size={20}
+                          color={hasUpvoted ? '#FFF' : C.green}
+                        />
                       </View>
-                      <Text style={st.popUpvoteNum}>0</Text>
-                    </View>
+                    )}
+                    <Text style={[st.popUpvoteNum, { color: hasUpvoted ? C.green : C.muted }]}>{count}</Text>
                   </TouchableOpacity>
-                  <TouchableOpacity activeOpacity={0.7}>
-                    <View style={[st.likeCircle, { borderColor: C.muted, borderWidth: 1.5 }]}>
-                      <Ionicons name="paper-plane-outline" size={18} color={C.muted} />
+                  <TouchableOpacity
+                    activeOpacity={0.88}
+                    style={st.popUpvoteBtn}
+                    onPress={() => replyInputRef.current?.focus()}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Comments, ${commentCount}`}
+                  >
+                    <View style={[st.likeCircle, { borderColor: C.border + 'AA', backgroundColor: C.chip }]}>
+                      <Ionicons name="chatbubble-outline" size={20} color={C.text} />
                     </View>
+                    <Text style={[st.popUpvoteNum, { color: commentCount > 0 ? C.text : C.muted }]}>{commentCount}</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity activeOpacity={0.88} style={st.popUpvoteBtn} accessibilityRole="button" accessibilityLabel="Share">
+                    <View style={[st.likeCircle, { borderColor: C.border + 'AA', backgroundColor: C.chip }]}>
+                      <Ionicons name="paper-plane-outline" size={20} color={C.text} />
+                    </View>
+                    <View style={{ height: 18 }} />
                   </TouchableOpacity>
                 </View>
 

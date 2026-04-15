@@ -19,6 +19,7 @@ import { BlurView } from 'expo-blur';
 import { Ionicons } from '@expo/vector-icons';
 import { supabase } from '../config/supabase';
 import { colors as themeColors, gradients } from '../theme/designTokens';
+import { LUXURY, luxuryCardShadow, luxurySoftShadow } from '../theme/luxuryPremium';
 import { useTheme } from '../context/ThemeContext';
 import { resolvePublicImageUrl } from '../utils/imageUrl';
 
@@ -276,7 +277,7 @@ function getModalStyles(C) {
     clientProfileHeaderPlaceholder: { width: 64 },
     clientProfileLoading: { flex: 1, justifyContent: 'center', alignItems: 'center', gap: 14 },
     clientProfileLoadingText: { fontSize: 14, color: C.textSecondary },
-    skeletonCard: { marginHorizontal: 14, marginTop: 12, padding: 16, borderRadius: 18, backgroundColor: surface },
+    skeletonCard: { marginHorizontal: 14, marginTop: 12, padding: 16, borderRadius: LUXURY.radiusInput, backgroundColor: surface, ...luxurySoftShadow },
     skeletonAvatar: { width: 56, height: 56, borderRadius: 28, backgroundColor: C.pillBg },
     skeletonLine: { height: 12, borderRadius: 6, backgroundColor: C.pillBg, marginTop: 8 },
     skeletonLineShort: { width: '60%' },
@@ -290,15 +291,12 @@ function getModalStyles(C) {
       marginHorizontal: 14,
       marginTop: 12,
       marginBottom: 10,
-      borderRadius: 22,
+      borderRadius: LUXURY.radiusCardSheet,
       overflow: 'hidden',
       borderWidth: 1,
       borderColor: border + '80',
       position: 'relative',
-      ...Platform.select({
-        ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.1, shadowRadius: 16 },
-        android: { elevation: 5 },
-      }),
+      ...luxuryCardShadow,
     },
     profileCardHeaderGlow: {
       position: 'absolute',
@@ -306,19 +304,19 @@ function getModalStyles(C) {
       right: 0,
       top: 0,
       height: 140,
-      borderTopLeftRadius: 22,
-      borderTopRightRadius: 22,
+      borderTopLeftRadius: LUXURY.radiusCardSheet,
+      borderTopRightRadius: LUXURY.radiusCardSheet,
       pointerEvents: 'none',
     },
     profileCardGradient: {
-      borderRadius: 18,
+      borderRadius: LUXURY.radiusInput,
       overflow: 'hidden',
     },
     profileCardInner: {
       padding: 16,
       paddingTop: 18,
       backgroundColor: surface,
-      borderRadius: 18,
+      borderRadius: LUXURY.radiusInput,
       position: 'relative',
       zIndex: 2,
     },

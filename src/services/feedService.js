@@ -16,7 +16,7 @@ const INTERACTION_WEIGHTS = {
 
 const RECENCY_DECAY_HOURS = 168 // 1 week
 
-const scorePost = (post, userInteractions = [], userLat = null, userLng = null) => {
+const scorePost = (post, userInteractions = [], userLat = null, userLng = null, userPersonaSummary = '') => {
   let score = 0
   
   // 1. Popularity Score (Likes)
@@ -52,6 +52,28 @@ const scorePost = (post, userInteractions = [], userLat = null, userLng = null) 
   const daysOld = Math.max(1, postAge / 24)
   const engagementRate = post.upvotes / daysOld
   score += engagementRate * 5
+
+  // 6. Persona summary affinity (soft boost)
+  if (userPersonaSummary && typeof userPersonaSummary === 'string') {
+    const summary = userPersonaSummary.toLowerCase()
+    const postText = [
+      post.description || '',
+      post.businessName || '',
+      post.location || '',
+      ...(post.tags || []),
+    ].join(' ').toLowerCase()
+
+    let affinityBoost = 0
+    const tokens = summary
+      .split(/[^a-z0-9]+/i)
+      .map((t) => t.trim())
+      .filter((t) => t.length >= 4)
+
+    for (const token of tokens.slice(0, 40)) {
+      if (postText.includes(token)) affinityBoost += 1.25
+    }
+    score += Math.min(16, affinityBoost)
+  }
   
   return score
 }
@@ -183,7 +205,8 @@ export const fetchFeedPage = async ({
   category = null,
   searchQuery = null,
   useCache = true,
-  isRefresh = false
+  isRefresh = false,
+  userPersonaSummary = '',
 }) => {
   try {
     const voterId = await getVoterId()
@@ -331,7 +354,7 @@ export const fetchFeedPage = async ({
     })
     
     const scoredPosts = mapped.map((post, idx) => {
-      const baseScore = scorePost(post, userInteractions, userLat, userLng)
+      const baseScore = scorePost(post, userInteractions, userLat, userLng, userPersonaSummary)
       const randomBoost = isRefresh ? Math.random() * 15 : 0  // Increased from 5 to 15 for more variation
       const finalScore = baseScore + randomBoost
       

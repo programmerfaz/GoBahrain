@@ -32,14 +32,29 @@ const CommunityStack = createNativeStackNavigator()
 
 function CommunityStackNavigator() {
   return (
-    <CommunityStack.Navigator screenOptions={{ headerShown: false }}>
-      <CommunityStack.Screen name="CommunityMain" component={CommunitiesScreen} />
+    <CommunityStack.Navigator
+      screenOptions={{
+        headerShown: false,
+        headerBackTitleVisible: false,
+        headerBackTitle: '',
+        headerBackButtonDisplayMode: 'minimal',
+      }}
+    >
+      <CommunityStack.Screen
+        name="CommunityMain"
+        component={CommunitiesScreen}
+        options={{
+          title: '',
+        }}
+      />
       <CommunityStack.Screen
         name="CommunityPostDetail"
         component={CommunityPostDetailScreen}
         options={{
           headerShown: true,
+          title: '',
           headerBackTitleVisible: false,
+          headerBackTitle: '',
         }}
       />
     </CommunityStack.Navigator>

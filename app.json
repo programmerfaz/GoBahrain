@@ -1,6 +1,7 @@
 {
   "expo": {
     "name": "GoBahrain",
+    "scheme": "gobahrain",
     "slug": "go-bahrain",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -19,6 +20,9 @@
         "backgroundColor": "#ffffff"
       },
       "edgeToEdgeEnabled": true
-    }
+    },
+    "plugins": [
+      "expo-asset"
+    ]
   }
 }

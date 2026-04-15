@@ -11,12 +11,9 @@ import {
   CommunityReviewCard,
   CommunityReviewDetailModal,
 } from '../components/community/CommunityReviewViews'
-import {
-  fetchMyCommunityPosts,
-  getCommunityUserId,
-  upvoteCommunityPost,
-  removeUpvoteCommunityPost,
-} from '../services/community'
+import { fetchMyCommunityPosts, getCommunityUserId } from '../services/community'
+import { UpvoteParticles } from '../components/FeedUpvoteInteractions'
+import { useCommunityUpvoteToggle } from '../hooks/useCommunityUpvoteToggle'
 import { useTheme } from '../context/ThemeContext'
 
 const TAB_BAR_HEIGHT = Platform.OS === 'ios' ? 70 : 60
@@ -26,7 +23,7 @@ export default function MyReviewsScreen() {
   const navigation = useNavigation()
   const insets = useSafeAreaInsets()
   const C = getCommunityPalette(isDark)
-  const feedStyles = useMemo(() => buildCommunityFeedStyles(C), [C])
+  const feedStyles = useMemo(() => buildCommunityFeedStyles(C, isDark), [C, isDark])
 
   const [posts, setPosts] = useState([])
   const [loading, setLoading] = useState(true)
@@ -70,27 +67,24 @@ export default function MyReviewsScreen() {
     })
   }, [navigation, C.bg, C.red, C.text])
 
-  const handleUpvote = useCallback(async (item) => {
-    try {
-      const newCount = await upvoteCommunityPost(item.id)
-      const updater = (p) => (p.id === item.id ? { ...p, upvotes: newCount, upvoted: true } : p)
-      setPosts((prev) => prev.map(updater))
-      if (selectedPost?.id === item.id) setSelectedPost((p) => (p?.id === item.id ? { ...p, upvotes: newCount, upvoted: true } : p))
-    } catch (e) {
-      console.warn('[MyReviews] upvote failed:', e)
-    }
-  }, [selectedPost?.id])
+  const {
+    handleUpvoteToggle,
+    getUpvoteScaleAnim,
+    particlesVisible,
+    particlePosition,
+  } = useCommunityUpvoteToggle()
 
-  const handleRemoveUpvote = useCallback(async (item) => {
-    try {
-      const newCount = await removeUpvoteCommunityPost(item.id)
-      const updater = (p) => (p.id === item.id ? { ...p, upvotes: newCount, upvoted: false } : p)
-      setPosts((prev) => prev.map(updater))
-      if (selectedPost?.id === item.id) setSelectedPost((p) => (p?.id === item.id ? { ...p, upvotes: newCount, upvoted: false } : p))
-    } catch (e) {
-      console.warn('[MyReviews] remove upvote failed:', e)
-    }
-  }, [selectedPost?.id])
+  const syncMyReviewsPost = useCallback((updated) => {
+    setPosts((prev) => prev.map((p) => (p.id === updated.id ? { ...p, ...updated } : p)))
+    setSelectedPost((p) => (p?.id === updated.id ? { ...p, ...updated } : p))
+  }, [])
+
+  const onMyReviewsUpvoteToggle = useCallback(
+    (item, e) => {
+      handleUpvoteToggle(item, e, syncMyReviewsPost)
+    },
+    [handleUpvoteToggle, syncMyReviewsPost],
+  )
 
   if (loading && posts.length === 0) {
     return (
@@ -115,8 +109,8 @@ export default function MyReviewsScreen() {
               setSelectedPost(it)
               setFocusReplyWhenOpen(true)
             }}
-            onUpvote={handleUpvote}
-            onRemoveUpvote={handleRemoveUpvote}
+            onUpvoteToggle={onMyReviewsUpvoteToggle}
+            upvoteScaleAnim={getUpvoteScaleAnim(item.id)}
           />
         )}
         contentContainerStyle={[feedStyles.feed, { paddingBottom: fabBottom }]}
@@ -142,10 +136,15 @@ export default function MyReviewsScreen() {
           setSelectedPost(null)
           setFocusReplyWhenOpen(false)
         }}
-        onUpvote={handleUpvote}
-        onRemoveUpvote={handleRemoveUpvote}
+        onUpvoteToggle={onMyReviewsUpvoteToggle}
+        upvoteScaleAnim={selectedPost ? getUpvoteScaleAnim(selectedPost.id) : null}
         focusReplyWhenOpen={focusReplyWhenOpen}
         onClearFocusReply={() => setFocusReplyWhenOpen(false)}
+      />
+      <UpvoteParticles
+        visible={particlesVisible}
+        position={particlePosition}
+        accentColor={C.green}
       />
     </View>
   )

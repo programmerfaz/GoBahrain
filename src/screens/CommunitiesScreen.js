@@ -24,6 +24,7 @@ import { FlatList as GHFlatList } from 'react-native-gesture-handler';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
+import { BlurView } from 'expo-blur';
 import * as ImagePicker from 'expo-image-picker';
 import ScreenContainer from '../components/ScreenContainer';
 import { CameraView, useCameraPermissions } from 'expo-camera';
@@ -31,12 +32,12 @@ import {
   fetchCommunityPosts,
   createCommunityPost,
   uploadCommunityImages,
-  upvoteCommunityPost,
-  removeUpvoteCommunityPost,
   getCommunityUserId,
   fetchClients,
   fetchClientByQrPayload,
 } from '../services/community';
+import { UpvoteParticles } from '../components/FeedUpvoteInteractions';
+import { useCommunityUpvoteToggle } from '../hooks/useCommunityUpvoteToggle';
 import { colors as themeColors, colorsDark as themeColorsDark } from '../theme/designTokens'
 import { useTheme } from '../context/ThemeContext'
 import {
@@ -93,8 +94,10 @@ const TOPIC_FILTER_ICONS = {
 
 /** Smooth shimmer skeleton loader for community feed. */
 function CommunityLoadingShimmer() {
+  const { isDark } = useTheme()
+  const palette = useMemo(() => getCommunityPalette(isDark), [isDark])
   const { width = 375 } = useWindowDimensions();
-  const cardWidth = width - 32;
+  const cardWidth = width - 64;
   const imgH = Math.round(cardWidth * 0.75);
   const shimmer = useRef(new Animated.Value(0)).current;
 
@@ -127,39 +130,57 @@ function CommunityLoadingShimmer() {
       showsVerticalScrollIndicator={false}
     >
       {[1, 2, 3].map((i) => (
-        <View key={i} style={s.skeletonCard}>
-          <View style={{ paddingHorizontal: 16, paddingTop: 14, paddingBottom: 12 }}>
-            <View style={s.cardAuthorRow}>
-              <SkeletonBox style={s.skeletonAvatar} width={44} height={44} />
-              <View style={{ flex: 1, marginLeft: 12 }}>
-                <SkeletonBox width="50%" height={16} />
-                <SkeletonBox width="35%" height={12} style={{ marginTop: 6 }} />
+        <View
+          key={i}
+          style={[
+            s.skeletonGlassOuter,
+            isDark && { borderColor: 'rgba(148,148,158,0.28)' },
+          ]}
+        >
+          <BlurView
+            intensity={Platform.OS === 'ios' ? 52 : 32}
+            tint={isDark ? 'dark' : 'light'}
+            style={StyleSheet.absoluteFillObject}
+            pointerEvents="none"
+          />
+          <View
+            style={[s.skeletonGlassFrost, isDark && s.skeletonGlassFrostDark]}
+            pointerEvents="none"
+          />
+          <View style={s.skeletonGlassInner}>
+            <View style={{ paddingHorizontal: 16, paddingTop: 14, paddingBottom: 12 }}>
+              <View style={s.cardAuthorRow}>
+                <SkeletonBox style={s.skeletonAvatar} width={44} height={44} />
+                <View style={{ flex: 1, marginLeft: 12 }}>
+                  <SkeletonBox width="50%" height={16} />
+                  <SkeletonBox width="35%" height={12} style={{ marginTop: 6 }} />
+                </View>
               </View>
             </View>
-          </View>
-          <View style={{ height: imgH, width: '100%' }}>
-            <Animated.View style={[StyleSheet.absoluteFill, s.skeletonImage, { opacity }]} />
-          </View>
-          <View style={{ paddingHorizontal: 16 }}>
-            <SkeletonBox width="100%" height={14} style={{ marginTop: 14, marginBottom: 6 }} />
-            <SkeletonBox width="85%" height={14} style={{ marginBottom: 6 }} />
-            <SkeletonBox width="60%" height={14} style={{ marginBottom: 14 }} />
-            <View style={{ flexDirection: 'row', gap: 8, marginBottom: 12 }}>
-              <SkeletonBox width={70} height={24} style={{ borderRadius: 12 }} />
-              <SkeletonBox width={60} height={24} style={{ borderRadius: 12 }} />
+            <View style={{ height: imgH, width: '100%' }}>
+              <Animated.View style={[StyleSheet.absoluteFill, s.skeletonImage, { opacity }]} />
             </View>
-            <View style={{ 
-              flexDirection: 'row', 
-              gap: 24, 
-              paddingTop: 12, 
-              paddingBottom: 16, 
-              borderTopWidth: 1, 
-              borderTopColor: C.border + '40',
-              marginTop: 4,
-            }}>
-              <SkeletonBox width={60} height={22} />
-              <SkeletonBox width={50} height={22} />
-              <SkeletonBox width={30} height={22} />
+            <View style={{ paddingHorizontal: 16 }}>
+              <SkeletonBox width="100%" height={14} style={{ marginTop: 14, marginBottom: 6 }} />
+              <SkeletonBox width="85%" height={14} style={{ marginBottom: 6 }} />
+              <SkeletonBox width="60%" height={14} style={{ marginBottom: 14 }} />
+              <View style={{ flexDirection: 'row', gap: 8, marginBottom: 12 }}>
+                <SkeletonBox width={70} height={24} style={{ borderRadius: 12 }} />
+                <SkeletonBox width={60} height={24} style={{ borderRadius: 12 }} />
+              </View>
+              <View style={{ 
+                flexDirection: 'row', 
+                gap: 24, 
+                paddingTop: 12, 
+                paddingBottom: 16, 
+                borderTopWidth: 1, 
+                borderTopColor: palette.border + '40',
+                marginTop: 4,
+              }}>
+                <SkeletonBox width={60} height={22} />
+                <SkeletonBox width={50} height={22} />
+                <SkeletonBox width={30} height={22} />
+              </View>
             </View>
           </View>
         </View>
@@ -259,6 +280,7 @@ function QRScannerModal({ visible, onClose, onScanned }) {
 }
 
 function CreatePostModal({ visible, onClose, onPosted, initialPlace, initialClientUuid }) {
+  const { isDark } = useTheme();
   const insets = useSafeAreaInsets();
   const [body, setBody] = useState('');
   const [place, setPlace] = useState('');
@@ -383,6 +405,10 @@ function CreatePostModal({ visible, onClose, onPosted, initialPlace, initialClie
         style={[s.createRoot, { paddingTop: insets.top }]}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
+        <View style={s.createGlassShell}>
+          <BlurView intensity={Platform.OS === 'ios' ? 52 : 32} tint={isDark ? 'dark' : 'light'} style={StyleSheet.absoluteFillObject} />
+          <View style={[s.createGlassFrost, isDark && s.createGlassFrostDark]} pointerEvents="none" />
+          <View style={s.createGlassInner}>
         <View style={s.createHeader}>
           <TouchableOpacity onPress={handleClose} disabled={posting} style={s.createHeaderBtn} activeOpacity={0.7}>
             <Ionicons name="close" size={24} color={C.text} />
@@ -548,6 +574,8 @@ function CreatePostModal({ visible, onClose, onPosted, initialPlace, initialClie
             <Text style={s.createHint}>Fill in place, rating, review text, and at least one tag to post.</Text>
           )}
         </ScrollView>
+          </View>
+        </View>
 
         <Modal visible={showClientPicker} animationType="slide" transparent onRequestClose={() => setShowClientPicker(false)}>
           <View style={[s.pickerOverlay, { paddingTop: insets.top + 60 }]}>
@@ -786,7 +814,7 @@ export default function CommunitiesScreen() {
   const { isDark } = useTheme()
   const palette = useMemo(() => getCommunityPalette(isDark), [isDark])
   C = palette
-  const feedStyles = useMemo(() => buildCommunityFeedStyles(palette), [palette])
+  const feedStyles = useMemo(() => buildCommunityFeedStyles(palette, isDark), [palette, isDark])
   const insets = useSafeAreaInsets()
   const [posts, setPosts] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -797,6 +825,9 @@ export default function CommunitiesScreen() {
   const [scanInitialPlace, setScanInitialPlace] = useState(null);
   const [scanInitialClientUuid, setScanInitialClientUuid] = useState(null);
   const [fabExpanded, setFabExpanded] = useState(false);
+  const filterSlideAnim = useRef(new Animated.Value(0)).current;
+  const lastFeedScrollYRef = useRef(0);
+  const isFilterHiddenRef = useRef(false);
   const fabBottom = TAB_BAR_HEIGHT + 72 + (Platform.OS === 'android' ? insets.bottom : 0);
 
   const loadPosts = useCallback(async (opts = {}) => {
@@ -821,25 +852,23 @@ export default function CommunitiesScreen() {
 
   useEffect(() => { loadPosts(); }, [loadPosts]);
 
-  const handleUpvote = useCallback(async (item) => {
-    try {
-      const newCount = await upvoteCommunityPost(item.id);
-      const updater = (p) => (p.id === item.id ? { ...p, upvotes: newCount, upvoted: true } : p);
-      setPosts((prev) => prev.map(updater));
-    } catch (e) {
-      console.warn('[Community] upvote failed:', e);
-    }
+  const {
+    handleUpvoteToggle,
+    getUpvoteScaleAnim,
+    particlesVisible,
+    particlePosition,
+  } = useCommunityUpvoteToggle();
+
+  const syncCommunityPost = useCallback((updated) => {
+    setPosts((prev) => prev.map((p) => (p.id === updated.id ? { ...p, ...updated } : p)));
   }, []);
 
-  const handleRemoveUpvote = useCallback(async (item) => {
-    try {
-      const newCount = await removeUpvoteCommunityPost(item.id);
-      const updater = (p) => (p.id === item.id ? { ...p, upvotes: newCount, upvoted: false } : p);
-      setPosts((prev) => prev.map(updater));
-    } catch (e) {
-      console.warn('[Community] remove upvote failed:', e);
-    }
-  }, []);
+  const onCommunityUpvoteToggle = useCallback(
+    (item, e) => {
+      handleUpvoteToggle(item, e, syncCommunityPost);
+    },
+    [handleUpvoteToggle, syncCommunityPost],
+  );
 
   const handleOpenPost = useCallback((post) => {
     navigation.navigate('CommunityPostDetail', { post });
@@ -849,19 +878,68 @@ export default function CommunitiesScreen() {
     navigation.navigate('CommunityPostDetail', { post, focusComposer: true });
   }, [navigation]);
 
+  const setFilterHidden = useCallback((hidden) => {
+    if (isFilterHiddenRef.current === hidden) return
+    isFilterHiddenRef.current = hidden
+    Animated.timing(filterSlideAnim, {
+      toValue: hidden ? 1 : 0,
+      duration: 180,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: false,
+    }).start()
+  }, [filterSlideAnim])
+
+  const handleFeedScroll = useCallback((event) => {
+    const nextY = Math.max(0, event.nativeEvent.contentOffset.y || 0)
+    const delta = nextY - lastFeedScrollYRef.current
+
+    // Always show at top to avoid a hidden filter on pull-to-refresh.
+    if (nextY <= 8) {
+      setFilterHidden(false)
+      lastFeedScrollYRef.current = nextY
+      return
+    }
+
+    if (delta > 6) {
+      setFilterHidden(true)
+    } else if (delta < -6) {
+      setFilterHidden(false)
+    }
+
+    lastFeedScrollYRef.current = nextY
+  }, [setFilterHidden])
+
+  const filterTranslateY = filterSlideAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0, -16],
+  })
+  const filterOpacity = filterSlideAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [1, 0],
+  })
+  const filterMaxHeight = filterSlideAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [66, 0],
+  })
+
   return (
     <ScreenContainer style={s.screen}>
-      <View style={[s.topBar, { paddingTop: insets.top + 4 }]}>
+      <View style={[s.communityTopWrap, { paddingTop: insets.top + 4 }]}>
         <View style={s.header}>
-          <View style={s.headerSpacer} />
-          <View style={s.headerCenter}>
-            <Text style={s.headerTitle}>Community</Text>
-            <Text style={s.headerSubtitle}>Discover Bahrain together</Text>
-          </View>
-          <View style={s.headerSpacer} />
+          <Text style={s.headerTitle}>Community</Text>
+          <Text style={s.headerSubtitle}>Discover Bahrain together</Text>
         </View>
 
-        <View style={s.filterTabsWrap}>
+        <Animated.View
+          style={[
+            s.filterTabsWrap,
+            {
+              transform: [{ translateY: filterTranslateY }],
+              opacity: filterOpacity,
+              maxHeight: filterMaxHeight,
+            },
+          ]}
+        >
           <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.filterScroll}>
             {TOPICS.map((t) => {
               const on = activeTopic === t.id;
@@ -871,7 +949,8 @@ export default function CommunitiesScreen() {
                   key={t.id}
                   style={[s.filterChip, on && s.filterChipOn]}
                   onPress={() => setActiveTopic(t.id)}
-                  activeOpacity={0.75}
+                  activeOpacity={0.82}
+                  hitSlop={{ top: 4, bottom: 4, left: 2, right: 2 }}
                   accessibilityRole="button"
                   accessibilityLabel={t.label}
                   accessibilityState={{ selected: on }}
@@ -885,7 +964,7 @@ export default function CommunitiesScreen() {
               );
             })}
           </ScrollView>
-        </View>
+        </Animated.View>
       </View>
 
       {/* Ask Khalid — full-screen blurred modal */}
@@ -908,13 +987,15 @@ export default function CommunitiesScreen() {
                 styles={feedStyles}
                 onPress={handleOpenPost}
                 onCommentPress={handleOpenPostComments}
-                onUpvote={handleUpvote}
-                onRemoveUpvote={handleRemoveUpvote}
+                onUpvoteToggle={onCommunityUpvoteToggle}
+                upvoteScaleAnim={getUpvoteScaleAnim(item.id)}
               />
             </CommunityFeedCardWrapper>
           )}
           contentContainerStyle={feedStyles.feed}
           showsVerticalScrollIndicator={false}
+          onScroll={handleFeedScroll}
+          scrollEventThrottle={16}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => loadPosts({ isRefresh: true })} colors={[C.red]} />}
           ListEmptyComponent={(
             <View style={feedStyles.empty}>
@@ -958,55 +1039,83 @@ export default function CommunitiesScreen() {
         initialPlace={scanInitialPlace}
         initialClientUuid={scanInitialClientUuid}
       />
+      <UpvoteParticles
+        visible={particlesVisible}
+        position={particlePosition}
+        accentColor={C.green}
+      />
     </ScreenContainer>
   );
 }
 
 const s = StyleSheet.create({
   screen: { backgroundColor: C.bg },
-  topBar: {
-    backgroundColor: C.card,
-    paddingBottom: 8,
-    ...Platform.select({
-      ios: {
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.05,
-        shadowRadius: 8,
-      },
-      android: {
-        elevation: 2,
-      },
-    }),
+  communityTopWrap: {
+    paddingHorizontal: 10,
+    paddingBottom: 6,
   },
   header: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
-    paddingHorizontal: 20, paddingBottom: 8,
+    width: '100%',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+    paddingBottom: 8,
   },
-  headerSpacer: { flex: 1 },
-  headerCenter: { alignItems: 'center' },
-  headerTitle: { fontSize: 20, fontWeight: '800', color: C.text, letterSpacing: -0.5 },
-  headerSubtitle: { fontSize: 13, fontWeight: '500', color: C.sub, marginTop: 2, letterSpacing: 0.1 },
+  headerTitle: {
+    fontSize: 20,
+    fontWeight: '800',
+    color: C.text,
+    letterSpacing: -0.5,
+    textAlign: 'center',
+    width: '100%',
+  },
+  headerSubtitle: {
+    fontSize: 13,
+    fontWeight: '500',
+    color: C.sub,
+    marginTop: 2,
+    letterSpacing: 0.1,
+    textAlign: 'center',
+    width: '100%',
+  },
   filterTabsWrap: {
     paddingBottom: 4,
+    overflow: 'hidden',
   },
-  filterScroll: { paddingHorizontal: 20, paddingVertical: 6, gap: 6, flexDirection: 'row', alignItems: 'center' },
+  filterScroll: {
+    paddingLeft: 10,
+    paddingRight: 16,
+    paddingVertical: 6,
+    gap: 6,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
   filterChip: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    minWidth: 44,
-    minHeight: 44,
-    paddingVertical: 10,
-    paddingHorizontal: 10,
-    borderRadius: 22,
+    width: 48,
+    height: 48,
+    borderRadius: 24,
     backgroundColor: C.bg,
     borderWidth: 1.5,
     borderColor: C.border,
+    ...Platform.select({
+      ios: {
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 1 },
+        shadowOpacity: 0.06,
+        shadowRadius: 2,
+      },
+      android: { elevation: 2 },
+    }),
   },
   filterChipOn: {
     backgroundColor: C.red,
     borderColor: C.red,
+    ...Platform.select({
+      ios: { shadowColor: C.red, shadowOpacity: 0.35 },
+      android: { elevation: 4 },
+    }),
   },
   feed: { paddingHorizontal: 16, paddingBottom: 110 },
   feedHeader: { paddingTop: 18, paddingBottom: 14 },
@@ -1014,16 +1123,34 @@ const s = StyleSheet.create({
   feedHeaderSub: { fontSize: 14, color: C.muted, fontWeight: '500' },
   loadingWrap: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingVertical: 60 },
   loaderScroll: { flex: 1 },
-  loaderContent: { paddingHorizontal: 16, paddingTop: 12, paddingBottom: 40 },
-  skeletonCard: {
-    backgroundColor: C.card,
-    marginBottom: 20,
-    borderRadius: 20,
+  loaderContent: { paddingTop: 12, paddingBottom: 40 },
+  skeletonGlassOuter: {
+    marginHorizontal: 16,
+    marginBottom: 14,
+    borderRadius: 22,
     overflow: 'hidden',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(142,142,147,0.22)',
     ...Platform.select({
-      ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.08, shadowRadius: 12 },
+      ios: {
+        shadowColor: '#000000',
+        shadowOffset: { width: 0, height: 12 },
+        shadowOpacity: 0.08,
+        shadowRadius: 22,
+      },
       android: { elevation: 4 },
     }),
+  },
+  skeletonGlassFrost: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(255,255,255,0.78)',
+  },
+  skeletonGlassFrostDark: {
+    backgroundColor: 'rgba(28,28,30,0.88)',
+  },
+  skeletonGlassInner: {
+    position: 'relative',
+    zIndex: 2,
   },
   skeletonBox: {
     backgroundColor: C.chip,
@@ -1120,18 +1247,19 @@ const s = StyleSheet.create({
     justifyContent: 'center',
     gap: 8,
     paddingVertical: 12,
-    paddingHorizontal: 16,
-    minWidth: 56,
+    paddingHorizontal: 18,
+    minWidth: 118,
+    minHeight: 52,
+    borderRadius: 26,
+    borderWidth: 2,
+    borderColor: 'rgba(255,255,255,0.55)',
     ...Platform.select({
-      ios: { shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.25, shadowRadius: 8 },
+      ios: { shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.28, shadowRadius: 10 },
       android: { elevation: 8 },
     }),
   },
   fabOptionBtnPost: {
     backgroundColor: C.red,
-    borderRadius: 28,
-    borderWidth: 2,
-    borderColor: 'rgba(255,255,255,0.5)',
     ...Platform.select({
       ios: { shadowColor: C.red },
       android: {},
@@ -1139,9 +1267,6 @@ const s = StyleSheet.create({
   },
   fabOptionBtnScan: {
     backgroundColor: C.green,
-    borderRadius: 16,
-    borderWidth: 2,
-    borderColor: 'rgba(255,255,255,0.5)',
     ...Platform.select({
       ios: { shadowColor: C.green },
       android: {},
@@ -1292,14 +1417,43 @@ const s = StyleSheet.create({
   popReplyPlaceholder: { flex: 1, fontSize: 13, color: C.muted },
   // Create — warm color scheme
   createRoot: { flex: 1, backgroundColor: '#F5F5F4' },
+  createGlassShell: {
+    flex: 1,
+    minHeight: 0,
+    marginHorizontal: 10,
+    marginTop: 4,
+    marginBottom: 10,
+    borderRadius: 26,
+    overflow: 'hidden',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(142,142,147,0.22)',
+    ...Platform.select({
+      ios: {
+        shadowColor: '#000000',
+        shadowOffset: { width: 0, height: 14 },
+        shadowOpacity: 0.08,
+        shadowRadius: 28,
+      },
+      android: { elevation: 5 },
+    }),
+  },
+  createGlassFrost: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(255,255,255,0.78)',
+  },
+  createGlassFrostDark: {
+    backgroundColor: 'rgba(28,28,30,0.88)',
+  },
+  createGlassInner: {
+    flex: 1,
+    minHeight: 0,
+    zIndex: 2,
+    position: 'relative',
+  },
   createHeader: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
     paddingHorizontal: 16, paddingVertical: 12, paddingTop: 14,
-    backgroundColor: '#FFF',
-    ...Platform.select({
-      ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.06, shadowRadius: 4 },
-      android: { elevation: 3 },
-    }),
+    backgroundColor: 'transparent',
   },
   createHeaderBtn: { padding: 8, marginLeft: -8 },
   createHeaderCenter: { flex: 1, alignItems: 'center', justifyContent: 'center', marginHorizontal: 8 },

@@ -36,71 +36,15 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import ScreenContainer from '../components/ScreenContainer';
 import ClientProfileModal from '../components/ClientProfileModal';
 import { useAuth } from '../context/AuthContext';
+import { useUserPreferences } from '../context/UserPreferencesContext';
 import { useDoorTransition } from '../context/DoorTransitionContext';
 import { supabase } from '../config/supabase';
 import { ensureImageUrl } from '../utils/imageUrl';
-import { Gesture, GestureDetector } from 'react-native-gesture-handler';
-import Reanimated, { runOnJS, useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated';
 import { fetchFeedPage, trackInteraction, getVoterId, clearFeedCache } from '../services/feedService';
+import { LUXURY, luxuryCardShadow, luxurySoftShadow } from '../theme/luxuryPremium';
+import { PinchZoomPostImage, UpvoteParticles } from '../components/FeedUpvoteInteractions';
 
-const { width: WINDOW_WIDTH, height: WINDOW_HEIGHT } = Dimensions.get('window');
-
-const FEED_IMAGE_ZOOM_MAX = 4;
-const ReanimatedImage = Reanimated.createAnimatedComponent(Image);
-
-/** Pinch-to-zoom on feed photos; double-tap still triggers upvote (handled via onImageDoubleTap). */
-function PinchZoomPostImage({ uri, style, onImageDoubleTap, onLoad, onError }) {
-  const scale = useSharedValue(1);
-  const savedScale = useSharedValue(1);
-
-  const pinchGesture = Gesture.Pinch()
-    .onUpdate((event) => {
-      const next = savedScale.value * event.scale;
-      const clamped = Math.min(FEED_IMAGE_ZOOM_MAX, Math.max(1, next));
-      scale.value = clamped;
-    })
-    .onEnd(() => {
-      if (scale.value < 1.02) {
-        scale.value = withSpring(1, { damping: 18, stiffness: 280 });
-        savedScale.value = 1;
-      } else {
-        savedScale.value = scale.value;
-      }
-    });
-
-  const doubleTapGesture = Gesture.Tap()
-    .numberOfTaps(2)
-    .maxDuration(280)
-    .onEnd((event) => {
-      runOnJS(onImageDoubleTap)(event.absoluteX, event.absoluteY);
-    });
-
-  const composed = Gesture.Simultaneous(pinchGesture, doubleTapGesture);
-
-  const imageAnimatedStyle = useAnimatedStyle(() => ({
-    transform: [{ scale: scale.value }],
-  }));
-
-  return (
-    <View style={{ flex: 1, overflow: 'hidden', width: '100%' }} collapsable={false}>
-      <GestureDetector gesture={composed}>
-        <View style={{ flex: 1, overflow: 'hidden' }} collapsable={false}>
-          <ReanimatedImage
-            source={{ uri }}
-            style={[style, imageAnimatedStyle]}
-            resizeMode="cover"
-            onLoad={onLoad}
-            onError={onError}
-          />
-        </View>
-      </GestureDetector>
-    </View>
-  );
-}
-
-const PARTICLE_SIZE = 28;
-const PARTICLE_COUNT = 14;
-const BURST_EASING = Easing.out(Easing.cubic);
+const { width: WINDOW_WIDTH } = Dimensions.get('window');
 
 function getHomeStyles(colors) {
   const C = {
@@ -175,16 +119,13 @@ function getHomeStyles(colors) {
     headerIconBtn: {
       width: 38,
       height: 38,
-      borderRadius: 19,
+      borderRadius: 20,
       backgroundColor: C.cardBg,
       alignItems: 'center',
       justifyContent: 'center',
       borderWidth: 1,
       borderColor: C.borderLight,
-      ...Platform.select({
-        ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.08, shadowRadius: 6 },
-        android: { elevation: 3 },
-      }),
+      ...luxurySoftShadow,
     },
     headerIconBtnActive: {
       backgroundColor: C.primaryLight || C.borderLight,
@@ -215,15 +156,12 @@ function getHomeStyles(colors) {
       flexDirection: 'row',
       alignItems: 'center',
       backgroundColor: C.cardBg,
-      borderRadius: 14,
+      borderRadius: LUXURY.radiusInput,
       paddingHorizontal: 14,
       height: 44,
       borderWidth: 1,
       borderColor: C.borderLight,
-      ...Platform.select({
-        ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.08, shadowRadius: 8 },
-        android: { elevation: 3 },
-      }),
+      ...luxurySoftShadow,
     },
     searchText: {
       flex: 1,
@@ -283,10 +221,7 @@ function getHomeStyles(colors) {
       alignItems: 'center',
       justifyContent: 'center',
       marginBottom: 6,
-      ...Platform.select({
-        ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.06, shadowRadius: 4 },
-        android: { elevation: 2 },
-      }),
+      ...luxurySoftShadow,
     },
     filterCircleGradient: {
       width: 52,
@@ -297,8 +232,8 @@ function getHomeStyles(colors) {
       marginBottom: 6,
       overflow: 'hidden',
       ...Platform.select({
-        ios: { shadowColor: C.primary, shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.2, shadowRadius: 6 },
-        android: { elevation: 4 },
+        ios: { shadowColor: C.primary, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.22, shadowRadius: 10 },
+        android: { elevation: 5 },
       }),
     },
     filterLabel: {
@@ -321,16 +256,13 @@ function getHomeStyles(colors) {
     /** Shadow/elevation on outer so inner can clip zoomed images (Android breaks clip when both are on one view). */
     cardOuter: {
       marginHorizontal: 12,
-      marginBottom: 18,
-      borderRadius: 20,
-      ...Platform.select({
-        ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.1, shadowRadius: 12 },
-        android: { elevation: 5 },
-      }),
+      marginBottom: 20,
+      borderRadius: LUXURY.radiusCard,
+      ...luxuryCardShadow,
     },
     cardInner: {
       backgroundColor: C.cardBg,
-      borderRadius: 20,
+      borderRadius: LUXURY.radiusCard,
       overflow: 'hidden',
       borderWidth: 1,
       borderColor: C.borderLight,
@@ -455,12 +387,6 @@ function getHomeStyles(colors) {
     openNowDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: '#FFFFFF', marginRight: 6 },
     openNowText: { fontSize: 12, fontWeight: '600', color: '#FFFFFF' },
     imageWrap: { position: 'relative', backgroundColor: C.pillBg },
-    upvoteParticlesContainer: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 9999, pointerEvents: 'none' },
-    upvoteParticle: { position: 'absolute', left: 0, top: 0, justifyContent: 'center', alignItems: 'center' },
-    upvoteParticleIconWrap: {
-      width: PARTICLE_SIZE, height: PARTICLE_SIZE, borderRadius: PARTICLE_SIZE / 2, backgroundColor: '#FFFFFF', justifyContent: 'center', alignItems: 'center',
-      ...Platform.select({ ios: { shadowColor: C.success, shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.35, shadowRadius: 4 }, android: { elevation: 6 } }),
-    },
     description: { fontSize: 14, color: C.textSecondary, lineHeight: 20 },
     moreLessLink: { fontSize: 14, color: C.primary, fontWeight: '600' },
     khalidContextBanner: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 10, paddingHorizontal: 14, marginBottom: 8, backgroundColor: C.primary + '12', borderLeftWidth: 4, borderLeftColor: C.primary, borderRadius: 12, marginHorizontal: 0 },
@@ -488,110 +414,6 @@ function getHomeStyles(colors) {
     retryBtnText: { fontSize: 15, color: '#fff', fontWeight: '600' },
   };
 }
-
-function UpvoteParticles({ visible, position, UPVOTE_COLOR, colors }) {
-  const styles = StyleSheet.create(getHomeStyles(colors));
-  const particles = useRef(
-    Array.from({ length: PARTICLE_COUNT }, (_, i) => ({
-      id: i,
-      x: new Animated.Value(position?.x ?? WINDOW_WIDTH / 2),
-      y: new Animated.Value(position?.y ?? WINDOW_HEIGHT / 2),
-      opacity: new Animated.Value(1),
-      scale: new Animated.Value(0.5),
-    }))
-  ).current;
-
-  useEffect(() => {
-    if (!visible || position?.x == null || position?.y == null) return;
-    const startX = position.x ?? WINDOW_WIDTH / 2;
-    const startY = position.y ?? WINDOW_HEIGHT / 2;
-    const half = PARTICLE_SIZE / 2;
-    const centerX = startX - half;
-    const centerY = startY - half;
-
-    particles.forEach((particle, index) => {
-      if (!particle.x || !particle.y || !particle.opacity || !particle.scale) return;
-      const angle = (index * 360) / particles.length + (index % 2) * 12;
-      const distance = 80 + (index % 4) * 28;
-      const radians = (angle * Math.PI) / 180;
-      const endX = centerX + Math.cos(radians) * distance;
-      const endY = centerY + Math.sin(radians) * distance - 50;
-
-      particle.x.setValue(centerX);
-      particle.y.setValue(centerY);
-      particle.opacity.setValue(1);
-      particle.scale.setValue(0.3);
-
-      Animated.parallel([
-        Animated.timing(particle.x, {
-          toValue: endX,
-          duration: 650,
-          easing: BURST_EASING,
-          useNativeDriver: true,
-        }),
-        Animated.timing(particle.y, {
-          toValue: endY,
-          duration: 650,
-          easing: BURST_EASING,
-          useNativeDriver: true,
-        }),
-        Animated.sequence([
-          Animated.timing(particle.scale, {
-            toValue: 1.15,
-            duration: 120,
-            easing: Easing.out(Easing.quad),
-            useNativeDriver: true,
-          }),
-          Animated.timing(particle.scale, {
-            toValue: 0.5,
-            duration: 530,
-            easing: Easing.in(Easing.quad),
-            useNativeDriver: true,
-          }),
-        ]),
-        Animated.sequence([
-          Animated.delay(200),
-          Animated.timing(particle.opacity, {
-            toValue: 0,
-            duration: 400,
-            easing: Easing.in(Easing.quad),
-            useNativeDriver: true,
-          }),
-        ]),
-      ]).start();
-    });
-  }, [visible, position?.x, position?.y]);
-
-  if (!visible) return null;
-
-  return (
-    <View style={styles.upvoteParticlesContainer} pointerEvents="none">
-      {particles.map((particle) => (
-        <Animated.View
-          key={particle.id}
-          style={[
-            styles.upvoteParticle,
-            {
-              width: PARTICLE_SIZE,
-              height: PARTICLE_SIZE,
-              transform: [
-                { translateX: particle.x },
-                { translateY: particle.y },
-                { scale: particle.scale },
-              ],
-              opacity: particle.opacity,
-            },
-          ]}
-        >
-          <View style={styles.upvoteParticleIconWrap}>
-            <Ionicons name="arrow-up-circle" size={PARTICLE_SIZE} color={UPVOTE_COLOR || '#059669'} />
-          </View>
-        </Animated.View>
-      ))}
-    </View>
-  );
-}
-
 
 /** Map overlay quick-option ids to search keywords for matching posts. */
 const AI_OPTION_KEYWORDS = {
@@ -817,7 +639,7 @@ function PostCard({ item, isHighlighted = false, onHighlightDone, onUpvoteToggle
         style={[
           StyleSheet.absoluteFill,
           styles.cardHighlightGlow,
-          { opacity: glowOpacity, borderRadius: 20 },
+          { opacity: glowOpacity, borderRadius: LUXURY.radiusCard },
         ]}
       />
       <Animated.View
@@ -825,7 +647,7 @@ function PostCard({ item, isHighlighted = false, onHighlightDone, onUpvoteToggle
         style={[
           StyleSheet.absoluteFill,
           styles.cardHighlightBorder,
-          { opacity: glowOpacity, borderRadius: 20 },
+          { opacity: glowOpacity, borderRadius: LUXURY.radiusCard },
         ]}
       />
       <TouchableOpacity
@@ -1268,6 +1090,7 @@ export default function HomeScreen() {
   const route = useRoute();
   const navigation = useNavigation();
   const { profile } = useAuth();
+  const { preferences } = useUserPreferences();
   const { isAwaitingHomeOpen, notifyHomeReady } = useDoorTransition();
 
   const COLORS = useMemo(() => ({
@@ -1560,6 +1383,7 @@ export default function HomeScreen() {
         category: null,
         searchQuery: searchQuery.trim() || null,
         useCache: !append && !skipGlobalLoading,
+        userPersonaSummary: preferences?.profileSummary || '',
       });
       
       console.log('[Home] Feed result:', { 
@@ -1592,7 +1416,7 @@ export default function HomeScreen() {
       if (append) setLoadingMore(false);
       onDone?.();
     }
-  }, [nextCursor, userPosition?.latitude, userPosition?.longitude, searchQuery]);
+  }, [nextCursor, userPosition?.latitude, userPosition?.longitude, searchQuery, preferences?.profileSummary]);
 
   useEffect(() => {
     // Only fetch on mount, not when dependencies change
@@ -1639,6 +1463,7 @@ export default function HomeScreen() {
         searchQuery: searchQuery.trim() || null,
         useCache: false, // Always fetch fresh on refresh
         isRefresh: true, // Add randomization to scoring
+        userPersonaSummary: preferences?.profileSummary || '',
       });
       
       console.log('[Home] ✅ Refresh complete:', { 
@@ -1661,7 +1486,7 @@ export default function HomeScreen() {
       setRefreshing(false);
       refreshingRef.current = false;
     }
-  }, [userPosition?.latitude, userPosition?.longitude, searchQuery]);
+  }, [userPosition?.latitude, userPosition?.longitude, searchQuery, preferences?.profileSummary]);
   
   const handleLoadMore = useCallback(() => {
     if (loadingMore || !hasMore || loading || refreshing) return;
@@ -2090,6 +1915,7 @@ export default function HomeScreen() {
           searchQuery: searchQuery.trim() || null,
           useCache: false,
           isRefresh: true,
+          userPersonaSummary: preferences?.profileSummary || '',
         });
         
         setPosts(result.posts);
@@ -2211,6 +2037,7 @@ export default function HomeScreen() {
           searchQuery: searchQuery.trim() || null,
           useCache: false,
           isRefresh: false, // Don't randomize, pure distance
+          userPersonaSummary: preferences?.profileSummary || '',
         });
         
         console.log('[Home] Location-based posts loaded:', result.posts.length);
@@ -2758,7 +2585,7 @@ export default function HomeScreen() {
           </Animated.View>
         </KeyboardAvoidingView>
       </Modal>
-      <UpvoteParticles visible={upvoteParticlesVisible} position={upvoteParticlePosition} UPVOTE_COLOR={UPVOTE_COLOR} colors={colors} />
+      <UpvoteParticles visible={upvoteParticlesVisible} position={upvoteParticlePosition} accentColor={UPVOTE_COLOR} />
       
       {/* Map Loading Animation */}
       {showMapAnimation && (

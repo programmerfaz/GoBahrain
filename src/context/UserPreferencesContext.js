@@ -15,6 +15,8 @@ const defaultPreferences = {
   generalIds: [],
   activityIds: [],
   foodIds: [],
+  profileAnswers: {},
+  profileSummary: '',
 };
 
 const UserPreferencesContext = createContext(null);
@@ -39,6 +41,8 @@ export function UserPreferencesProvider({ children }) {
               generalIds: Array.isArray(parsed.generalIds) ? parsed.generalIds : [],
               activityIds: Array.isArray(parsed.activityIds) ? parsed.activityIds : [],
               foodIds: Array.isArray(parsed.foodIds) ? parsed.foodIds : [],
+              profileAnswers: parsed.profileAnswers && typeof parsed.profileAnswers === 'object' ? parsed.profileAnswers : {},
+              profileSummary: typeof parsed.profileSummary === 'string' ? parsed.profileSummary : '',
             });
           }
         } catch (_) {}
@@ -68,6 +72,12 @@ export function UserPreferencesProvider({ children }) {
         foodIds: next?.foodIds !== undefined
           ? (Array.isArray(next.foodIds) ? next.foodIds : defaultPreferences.foodIds)
           : (prev?.foodIds ?? defaultPreferences.foodIds),
+        profileAnswers: next?.profileAnswers !== undefined
+          ? (next.profileAnswers && typeof next.profileAnswers === 'object' ? next.profileAnswers : defaultPreferences.profileAnswers)
+          : (prev?.profileAnswers ?? defaultPreferences.profileAnswers),
+        profileSummary: next?.profileSummary !== undefined
+          ? (typeof next.profileSummary === 'string' ? next.profileSummary : defaultPreferences.profileSummary)
+          : (prev?.profileSummary ?? defaultPreferences.profileSummary),
       };
       return merged;
     });

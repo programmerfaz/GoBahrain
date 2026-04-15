@@ -1,5 +1,9 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase } from '../config/supabase';
+
+const REMEMBER_ME_EMAIL_KEY = '@gobahrain_remember_email';
+const REMEMBER_ME_PASSWORD_KEY = '@gobahrain_remember_password';
 
 const AuthContext = createContext(null);
 
@@ -122,8 +126,21 @@ export function AuthProvider({ children }) {
   }, [fetchProfile]);
 
   const signOut = useCallback(async () => {
-    await supabase.auth.signOut();
-    setProfile(null);
+    try {
+      const { error: globalErr } = await supabase.auth.signOut({ scope: 'global' });
+      if (globalErr) {
+        await supabase.auth.signOut({ scope: 'local' });
+      }
+    } catch (e) {
+      console.warn('[Auth] signOut failed', e?.message);
+      await supabase.auth.signOut({ scope: 'local' }).catch(() => {});
+    } finally {
+      setSession(null);
+      setProfile(null);
+      try {
+        await AsyncStorage.multiRemove([REMEMBER_ME_EMAIL_KEY, REMEMBER_ME_PASSWORD_KEY]);
+      } catch (_) {}
+    }
   }, []);
 
   const value = {

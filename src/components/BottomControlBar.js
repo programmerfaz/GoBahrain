@@ -24,6 +24,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { getFocusedRouteNameFromRoute } from '@react-navigation/native';
 import { BlurView } from 'expo-blur';
+import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { OPENAI_KEY } from '../config/keys';
 import { supabase } from '../config/supabase';
@@ -956,6 +957,29 @@ export default function BottomControlBar({ state, navigation }) {
       backgroundColor: isDark ? colors.surfaceElevated : '#111827',
       borderColor: isDark ? 'rgba(51,65,85,0.6)' : 'rgba(255,255,255,0.9)',
     },
+    fabPlanShell: {
+      backgroundColor: 'transparent',
+      borderColor: isDark ? 'rgba(248,250,252,0.22)' : 'rgba(255,255,255,0.95)',
+    },
+    fabPlanGradient: {
+      ...Platform.select({
+        ios: {
+          shadowColor: colors.primary,
+          shadowOffset: { width: 0, height: 2 },
+          shadowOpacity: isDark ? 0.35 : 0.28,
+          shadowRadius: 8,
+        },
+        android: { elevation: 6 },
+      }),
+    },
+    fabPlanLabel: {
+      color: colors.primary,
+      fontWeight: '700',
+    },
+    aiFabGlow: {
+      borderColor: isDark ? 'rgba(230,57,80,0.22)' : 'rgba(200,16,46,0.18)',
+      backgroundColor: isDark ? 'rgba(230,57,80,0.08)' : 'rgba(200,16,46,0.06)',
+    },
     fabLabel: { color: colors.textMuted },
     swipeUpRingTrack: { borderColor: colors.primaryMuted },
     swipeUpRingDot: { backgroundColor: colors.primary },
@@ -974,8 +998,7 @@ export default function BottomControlBar({ state, navigation }) {
     return getFocusedRouteNameFromRoute(route);
   }, [state]);
   const hideTabBarForCommunityDetail = communityFocusedChild === 'CommunityPostDetail';
-  const hideTabBarForAiPlan = currentRouteName === 'AI Plan';
-  const hideTabBar = hideTabBarForCommunityDetail || hideTabBarForAiPlan;
+  const hideTabBar = hideTabBarForCommunityDetail;
   const { generalLabels, activityLabels, foodLabels } = useUserPreferences();
   const [aiPlanSheetAnim, setAiPlanSheetAnim] = useState(null);
   useEffect(() => aiPlanSheetLink.subscribe(setAiPlanSheetAnim), []);
@@ -1759,6 +1782,7 @@ export default function BottomControlBar({ state, navigation }) {
                     pointerEvents="none"
                     style={[
                       styles.aiGlow,
+                      themeStyles.aiFabGlow,
                       {
                         opacity: glowOpacity,
                         transform: [{ scale: glowScale }],
@@ -1769,6 +1793,7 @@ export default function BottomControlBar({ state, navigation }) {
                     pointerEvents="none"
                     style={[
                       styles.aiImpulseGlow,
+                      themeStyles.aiFabGlow,
                       {
                         opacity: impulseOpacity,
                         transform: [{ scale: impulseScale }],
@@ -1776,15 +1801,19 @@ export default function BottomControlBar({ state, navigation }) {
                     ]}
                   />
                   <View style={styles.fabWrap} {...panResponder.panHandlers}>
-                    <View style={[styles.fab, themeStyles.fab]}>
-                      <Image
-                        source={require('../../assets/ai-button-logo.png')}
-                        style={styles.aiIcon}
-                        resizeMode="cover"
+                    <View style={[styles.fab, themeStyles.fabPlanShell, themeStyles.fabPlanGradient]}>
+                      <LinearGradient
+                        colors={[colors.primaryLight, colors.primaryDark]}
+                        start={{ x: 0, y: 0 }}
+                        end={{ x: 1, y: 1 }}
+                        style={styles.fabPlanFill}
                       />
+                      <Ionicons name="sparkles" size={22} color="rgba(255,255,255,0.96)" style={styles.fabPlanIcon} />
                     </View>
                   </View>
-                  <Text style={[styles.fabLabel, themeStyles.fabLabel]}>AI</Text>
+                  <Text style={[styles.fabLabel, themeStyles.fabPlanLabel]} numberOfLines={1}>
+                    Plan
+                  </Text>
                 </View>
               );
             }
@@ -2028,6 +2057,17 @@ const styles = StyleSheet.create({
     marginTop: 2,
     fontWeight: '600',
   },
+  fabPlanFill: {
+    position: 'absolute',
+    left: 2,
+    top: 2,
+    right: 2,
+    bottom: 2,
+    borderRadius: 22,
+  },
+  fabPlanIcon: {
+    zIndex: 1,
+  },
   fab: {
     width: 52,
     height: 52,
@@ -2104,11 +2144,6 @@ const styles = StyleSheet.create({
     height: 8,
     borderRadius: 4,
     backgroundColor: '#C8102E',
-  },
-  aiIcon: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
   },
   khalidRoot: {
     flex: 1,
