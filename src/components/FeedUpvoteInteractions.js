@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import {
   View,
   StyleSheet,
@@ -7,15 +7,188 @@ import {
   Image,
   Dimensions,
   Platform,
+  ActivityIndicator,
 } from 'react-native'
+import { Video, ResizeMode, Audio } from 'expo-av'
+import { prepareFeedVideoPlaybackUri, cacheRemoteVideoForPlayback } from '../utils/storagePlaybackUri'
 import { Gesture, GestureDetector } from 'react-native-gesture-handler'
 import Reanimated, { runOnJS, useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated'
 import { Ionicons } from '@expo/vector-icons'
+
+/** Public URLs that point at video files (feed post_image can be MP4, etc.). */
+export const isFeedVideoUri = (uri) => {
+  if (uri == null || typeof uri !== 'string') return false
+  const path = uri.split(/[?#]/)[0] || ''
+  return /\.(mp4|m4v|mov|webm|mkv)$/i.test(path)
+}
 
 const { width: WINDOW_WIDTH, height: WINDOW_HEIGHT } = Dimensions.get('window')
 
 const FEED_IMAGE_ZOOM_MAX = 4
 const ReanimatedImage = Reanimated.createAnimatedComponent(Image)
+
+function FeedPostVideo({
+  uri,
+  style,
+  onImageDoubleTap,
+  onLoad,
+  onError,
+  resizeMode = 'cover',
+}) {
+  const videoResize = resizeMode === 'contain' ? ResizeMode.CONTAIN : ResizeMode.COVER
+  const [playbackUri, setPlaybackUri] = useState(uri)
+  const [resolving, setResolving] = useState(true)
+  const playbackUriRef = useRef(uri)
+  const fallbackStepRef = useRef(0)
+  const uriGenRef = useRef(0)
+  const recoveryInFlightRef = useRef(false)
+
+  playbackUriRef.current = playbackUri
+
+  useEffect(() => {
+    Audio.setAudioModeAsync({
+      playsInSilentModeIOS: true,
+      staysActiveInBackground: false,
+      allowsRecordingIOS: false,
+    }).catch(() => {})
+  }, [])
+
+  useEffect(() => {
+    const gen = ++uriGenRef.current
+    fallbackStepRef.current = 0
+    recoveryInFlightRef.current = false
+    setPlaybackUri(uri)
+    setResolving(true)
+    let cancelled = false
+    ;(async () => {
+      try {
+        const next = await prepareFeedVideoPlaybackUri(uri)
+        if (cancelled || uriGenRef.current !== gen) return
+        setPlaybackUri(next)
+      } catch {
+        if (cancelled || uriGenRef.current !== gen) return
+        setPlaybackUri(uri)
+      } finally {
+        if (!cancelled && uriGenRef.current === gen) setResolving(false)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [uri])
+
+  const doubleTapGesture = Gesture.Tap()
+    .numberOfTaps(2)
+    .maxDuration(280)
+    .onEnd((event) => {
+      runOnJS(onImageDoubleTap)(event.absoluteX, event.absoluteY)
+    })
+
+  const handleReady = () => {
+    onLoad?.({ nativeEvent: {} })
+  }
+
+  const handlePlaybackFailure = (message) => {
+    if (recoveryInFlightRef.current) return
+    recoveryInFlightRef.current = true
+    const genAtError = uriGenRef.current
+    const messageText =
+      typeof message === 'string'
+        ? message
+        : message && typeof message === 'object' && 'message' in message
+          ? String(message.message)
+          : String(message ?? '')
+    void (async () => {
+      try {
+        if (uriGenRef.current !== genAtError) return
+
+        const tryCache = async (remote) => {
+          if (!remote || typeof remote !== 'string' || remote.startsWith('file://')) return null
+          return cacheRemoteVideoForPlayback(remote)
+        }
+
+        if (fallbackStepRef.current === 0) {
+          fallbackStepRef.current = 1
+          const local = await tryCache(playbackUriRef.current)
+          if (local && uriGenRef.current === genAtError) {
+            setPlaybackUri(local)
+            return
+          }
+        }
+
+        if (uriGenRef.current !== genAtError) return
+        if (fallbackStepRef.current === 1 && uri !== playbackUriRef.current) {
+          fallbackStepRef.current = 2
+          const local2 = await tryCache(uri)
+          if (local2 && uriGenRef.current === genAtError) {
+            setPlaybackUri(local2)
+            return
+          }
+        }
+
+        if (uriGenRef.current === genAtError) {
+          onError?.({ nativeEvent: { error: messageText || 'video' } })
+        }
+      } finally {
+        recoveryInFlightRef.current = false
+      }
+    })()
+  }
+
+  const handlePlaybackStatusUpdate = (status) => {
+    if (status?.isLoaded || !status?.error) return
+    handlePlaybackFailure(status.error)
+  }
+
+  return (
+    <View style={{ flex: 1, overflow: 'hidden', width: '100%' }} collapsable={false}>
+      <GestureDetector gesture={doubleTapGesture}>
+        <View style={{ flex: 1, overflow: 'hidden', backgroundColor: '#0f172a' }} collapsable={false}>
+          {resolving ? (
+            <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
+              <ActivityIndicator size="small" color="rgba(255,255,255,0.7)" />
+            </View>
+          ) : (
+            <>
+              <Video
+                key={playbackUri}
+                source={{ uri: playbackUri }}
+                style={[{ flex: 1, width: '100%', height: '100%' }, StyleSheet.flatten(style)]}
+                resizeMode={videoResize}
+                isLooping
+                shouldPlay
+                isMuted
+                useNativeControls={false}
+                onReadyForDisplay={handleReady}
+                onLoad={handleReady}
+                onError={handlePlaybackFailure}
+                onPlaybackStatusUpdate={handlePlaybackStatusUpdate}
+              />
+              <View
+                pointerEvents="none"
+                style={{
+                  position: 'absolute',
+                  right: 8,
+                  bottom: 8,
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  gap: 4,
+                  paddingHorizontal: 8,
+                  paddingVertical: 4,
+                  borderRadius: 8,
+                  backgroundColor: 'rgba(0,0,0,0.45)',
+                }}
+              >
+                <Ionicons name="videocam" size={14} color="rgba(255,255,255,0.95)" />
+                <Ionicons name="volume-mute" size={14} color="rgba(255,255,255,0.95)" />
+              </View>
+            </>
+          )}
+        </View>
+      </GestureDetector>
+    </View>
+  )
+}
 
 const PARTICLE_SIZE = 28
 const PARTICLE_COUNT = 14
@@ -23,9 +196,17 @@ const BURST_EASING = Easing.out(Easing.cubic)
 
 /**
  * Pinch-to-zoom on feed photos; double-tap triggers callback (e.g. upvote).
+ * Video URLs (mp4, mov, …) render with expo-av (muted loop, same double-tap).
  * When pinchEnabled is false, only double-tap runs (for carousels that scroll horizontally).
  */
-export function PinchZoomPostImage({
+export function PinchZoomPostImage(props) {
+  if (props.uri && isFeedVideoUri(props.uri)) {
+    return <FeedPostVideo {...props} />
+  }
+  return <PinchZoomPostImageInner {...props} />
+}
+
+function PinchZoomPostImageInner({
   uri,
   style,
   onImageDoubleTap,

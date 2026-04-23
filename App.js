@@ -1,16 +1,17 @@
-import React, { useRef, useEffect } from 'react'
+import React, { useCallback, useEffect, useRef } from 'react'
+import { useFonts } from 'expo-font'
+import * as SplashScreen from 'expo-splash-screen'
 import { StatusBar } from 'expo-status-bar'
 import { GestureHandlerRootView } from 'react-native-gesture-handler'
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context'
 import { NavigationContainer } from '@react-navigation/native'
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs'
 import { createNativeStackNavigator } from '@react-navigation/native-stack'
-import { StyleSheet, View, Animated, Easing, Text } from 'react-native'
-import { LinearGradient } from 'expo-linear-gradient'
-import { Ionicons } from '@expo/vector-icons'
+import { StyleSheet, View, Platform } from 'react-native'
+import { WEB_APP_MAX_CONTENT_WIDTH } from './src/constants/webLayout'
 import HomeScreen from './src/screens/HomeScreen'
 import ExploreScreen from './src/screens/ExploreScreen'
-import AIPlanScreen from './src/screens/AIPlanScreen'
+import AIPlanScreen from './src/screens/aiPlan/AIPlanScreenMain'
 import CommunitiesScreen from './src/screens/CommunitiesScreen'
 import CommunityPostDetailScreen from './src/screens/CommunityPostDetailScreen'
 import ProfileScreen from './src/screens/ProfileScreen'
@@ -24,6 +25,29 @@ import { DoorTransitionProvider } from './src/context/DoorTransitionContext'
 import { AuthProvider, useAuth } from './src/context/AuthContext'
 import { SavedPlacesProvider } from './src/context/SavedPlacesContext'
 import AuthScreen from './src/screens/AuthScreen'
+import { BRAND_WORDMARK_FONT } from './src/constants/brandFont'
+import BrandSplashScreen from './src/components/BrandSplashScreen'
+
+/** Hide native splash only after the first real layout so RN content is already painted (avoids blank frame). */
+function HideSplashAfterLayout({ children }) {
+  const hiddenRef = useRef(false)
+  const hide = useCallback(() => {
+    if (hiddenRef.current) return
+    hiddenRef.current = true
+    SplashScreen.hideAsync().catch(() => {})
+  }, [])
+
+  useEffect(() => {
+    const t = setTimeout(hide, 2800)
+    return () => clearTimeout(t)
+  }, [hide])
+
+  return (
+    <View style={styles.appFill} onLayout={hide}>
+      {children}
+    </View>
+  )
+}
 
 const Tab = createBottomTabNavigator()
 const Stack = createNativeStackNavigator()
@@ -92,50 +116,6 @@ function TabsNavigator() {
   )
 }
 
-function SplashLoader() {
-  const { colors, isDark } = useTheme()
-  const pulse = useRef(new Animated.Value(0.4)).current
-  const logoScale = useRef(new Animated.Value(0.8)).current
-  const logoOpacity = useRef(new Animated.Value(0)).current
-
-  useEffect(() => {
-    Animated.parallel([
-      Animated.spring(logoScale, { toValue: 1, damping: 12, stiffness: 100, useNativeDriver: true }),
-      Animated.timing(logoOpacity, { toValue: 1, duration: 500, useNativeDriver: true }),
-    ]).start()
-
-    Animated.loop(
-      Animated.sequence([
-        Animated.timing(pulse, { toValue: 1, duration: 800, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
-        Animated.timing(pulse, { toValue: 0.4, duration: 800, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
-      ])
-    ).start()
-  }, [pulse, logoScale, logoOpacity])
-
-  const bgColors = isDark
-    ? ['#0F172A', '#1A1033', '#0F172A']
-    : ['#F8FAFC', '#EFF6FF', '#F8FAFC']
-
-  return (
-    <View style={styles.loadingWrap}>
-      <LinearGradient colors={bgColors} style={StyleSheet.absoluteFill} />
-      <Animated.View style={{ transform: [{ scale: logoScale }], opacity: logoOpacity, alignItems: 'center' }}>
-        <View style={[styles.loadingLogo, { backgroundColor: `${colors.primary}15` }]}>
-          <Ionicons name="compass" size={36} color={colors.primary} />
-        </View>
-        <Text style={[styles.loadingBrand, { color: colors.primary }]}>Go Bahrain</Text>
-        <Animated.View style={{ opacity: pulse, marginTop: 20 }}>
-          <View style={[styles.loadingDots]}>
-            <View style={[styles.loadingDot, { backgroundColor: colors.primary }]} />
-            <View style={[styles.loadingDot, { backgroundColor: colors.primary, opacity: 0.6 }]} />
-            <View style={[styles.loadingDot, { backgroundColor: colors.primary, opacity: 0.3 }]} />
-          </View>
-        </Animated.View>
-      </Animated.View>
-    </View>
-  )
-}
-
 function AppContent() {
   const { isAuthenticated, authLoading } = useAuth()
   const { isOnboardingComplete, isLoading } = useUserPreferences()
@@ -143,96 +123,95 @@ function AppContent() {
 
   if (authLoading || isLoading) {
     return (
-      <>
+      <View style={styles.appStage}>
         <StatusBar style={isDark ? 'light' : 'dark'} />
-        <SplashLoader />
-      </>
+        <BrandSplashScreen />
+      </View>
     )
   }
 
   if (!isAuthenticated) {
     return (
-      <>
+      <View style={styles.appStage}>
         <StatusBar style={isDark ? 'light' : 'dark'} />
         <AuthScreen />
-      </>
+      </View>
     )
   }
 
   if (!isOnboardingComplete) {
     return (
-      <>
+      <View style={styles.appStage}>
         <StatusBar style={isDark ? 'light' : 'dark'} />
         <OnboardingScreen />
-      </>
+      </View>
     )
   }
 
   return (
-    <>
-      <StatusBar style={isDark ? 'light' : 'dark'} />
-      <Stack.Navigator screenOptions={{ headerShown: false }}>
-        <Stack.Screen name="Tabs" component={TabsNavigator} />
-        <Stack.Screen name="AR" component={ARScreen} options={({ route }) => ({
-          presentation: 'fullScreenModal',
-          animation: route.params?.fromExplore ? 'none' : 'default',
-        })} />
-      </Stack.Navigator>
-    </>
+    <NavigationContainer>
+      <View style={styles.appStage}>
+        <StatusBar style={isDark ? 'light' : 'dark'} />
+        <Stack.Navigator screenOptions={{ headerShown: false }}>
+          <Stack.Screen name="Tabs" component={TabsNavigator} />
+          <Stack.Screen name="AR" component={ARScreen} options={({ route }) => ({
+            presentation: 'fullScreenModal',
+            animation: route.params?.fromExplore ? 'none' : 'default',
+          })} />
+        </Stack.Navigator>
+      </View>
+    </NavigationContainer>
   )
 }
 
 export default function App() {
+  const [fontsLoaded, fontError] = useFonts({
+    [BRAND_WORDMARK_FONT]: require('./assets/fonts/RusticRoadway.otf'),
+  })
+
+  if (!fontsLoaded && !fontError) {
+    if (Platform.OS === 'web') {
+      return (
+        <GestureHandlerRootView style={{ flex: 1, backgroundColor: '#F8FAFC' }} />
+      )
+    }
+    return null
+  }
+
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
-      <SafeAreaProvider>
-        <ThemeProvider>
-          <AuthProvider>
-            <SavedPlacesProvider>
-              <UserPreferencesProvider>
-                <DoorTransitionProvider>
-                  <SafeAreaView style={styles.safeArea} edges={['left', 'right']}>
-                    <NavigationContainer>
-                      <AppContent />
-                    </NavigationContainer>
-                  </SafeAreaView>
-                </DoorTransitionProvider>
-              </UserPreferencesProvider>
-            </SavedPlacesProvider>
-          </AuthProvider>
-        </ThemeProvider>
-      </SafeAreaProvider>
+      <HideSplashAfterLayout>
+        <SafeAreaProvider>
+          <ThemeProvider>
+            <AuthProvider>
+              <SavedPlacesProvider>
+                <UserPreferencesProvider>
+                  <DoorTransitionProvider>
+                    <SafeAreaView style={styles.safeArea} edges={['left', 'right']}>
+                      <View style={Platform.OS === 'web' ? styles.webAppColumn : styles.appFill}>
+                        <AppContent />
+                      </View>
+                    </SafeAreaView>
+                  </DoorTransitionProvider>
+                </UserPreferencesProvider>
+              </SavedPlacesProvider>
+            </AuthProvider>
+          </ThemeProvider>
+        </SafeAreaProvider>
+      </HideSplashAfterLayout>
     </GestureHandlerRootView>
   )
 }
 
 const styles = StyleSheet.create({
   safeArea: { flex: 1 },
-  loadingWrap: {
+  appFill: { flex: 1 },
+  /** Fills parent so splash / auth / onboarding are not height-zero inside NavigationContainer */
+  appStage: { flex: 1 },
+  webAppColumn: {
     flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  loadingLogo: {
-    width: 72,
-    height: 72,
-    borderRadius: 22,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 16,
-  },
-  loadingBrand: {
-    fontSize: 24,
-    fontWeight: '800',
-    letterSpacing: -0.5,
-  },
-  loadingDots: {
-    flexDirection: 'row',
-    gap: 8,
-  },
-  loadingDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
+    width: '100%',
+    maxWidth: WEB_APP_MAX_CONTENT_WIDTH,
+    alignSelf: 'center',
   },
 })

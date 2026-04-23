@@ -9,15 +9,65 @@ const pickLabels = (ids, list) =>
     .map((id) => list.find((item) => item.id === id)?.label)
     .filter(Boolean)
 
-const buildFallbackSummary = ({ generalLabels, activityLabels, foodLabels, profileAnswers }) => {
+const findGeneralPreference = (id) => GENERAL_PREFERENCES.find((p) => p.id === id)
+
+const groupGeneralIdsByCategory = (ids) => {
+  const out = { companion: [], pace: [], budget: [], interests: [], planning: [], timing: [] }
+  for (const id of (Array.isArray(ids) ? ids : [])) {
+    const def = findGeneralPreference(id)
+    if (!def) continue
+    if (!out[def.group]) out[def.group] = []
+    out[def.group].push(def.label)
+  }
+  return out
+}
+
+/**
+ * Maps onboarding "interest" GENERAL_PREFERENCES ids to plan-generation
+ * activity ids (from PREFERENCES). Keeps the Pinecone query labels working
+ * even though the onboarding flow no longer asks the activities question directly.
+ */
+const INTEREST_TO_ACTIVITY_MAP = {
+  'culture-history': ['cultural', 'historical'],
+  'nature-outdoors': ['nature'],
+  foodie: [],
+  nightlife: ['leisure'],
+  shopping: ['sightseeing'],
+  'relaxation-wellness': ['leisure'],
+  adventure: ['adventure'],
+  'instagram-spots': ['instagram'],
+  'local-authentic': ['cultural', 'historical'],
+  'family-friendly': ['leisure'],
+  'art-museums': ['cultural'],
+  'beaches-sun': ['nature'],
+  'quiet-peaceful': ['leisure'],
+  'social-lively': [],
+  'hidden-gems': ['sightseeing'],
+}
+
+export const deriveActivityIdsFromInterestIds = (ids) => {
+  const out = new Set()
+  for (const id of (Array.isArray(ids) ? ids : [])) {
+    const mapped = INTEREST_TO_ACTIVITY_MAP[id]
+    if (Array.isArray(mapped)) mapped.forEach((x) => out.add(x))
+  }
+  return [...out]
+}
+
+const buildFallbackSummary = ({ grouped, activityLabels, foodLabels, profileAnswers }) => {
   const parts = []
-  if (generalLabels.length) parts.push(`Travel style: ${generalLabels.slice(0, 5).join(', ')}`)
-  if (activityLabels.length) parts.push(`Preferred activities: ${activityLabels.slice(0, 4).join(', ')}`)
-  if (foodLabels.length) parts.push(`Food preferences: ${foodLabels.slice(0, 4).join(', ')}`)
-  if (profileAnswers?.idealDay) parts.push(`Ideal day: ${String(profileAnswers.idealDay).trim()}`)
+  if (grouped.companion.length) parts.push(`Usually travels as: ${grouped.companion.join(' / ')}`)
+  if (grouped.pace.length) parts.push(`Ideal day pace: ${grouped.pace.join(' / ')}`)
+  if (grouped.budget.length) parts.push(`Budget comfort: ${grouped.budget.join(' / ')}`)
+  if (grouped.interests.length) parts.push(`Experiences they love: ${grouped.interests.slice(0, 6).join(', ')}`)
+  if (activityLabels.length) parts.push(`Activity leanings: ${activityLabels.slice(0, 4).join(', ')}`)
+  if (foodLabels.length) parts.push(`Food personality: ${foodLabels.slice(0, 4).join(', ')}`)
+  if (profileAnswers?.idealDay) parts.push(`Ideal day notes: ${String(profileAnswers.idealDay).trim()}`)
   if (profileAnswers?.avoidList) parts.push(`Avoid: ${String(profileAnswers.avoidList).trim()}`)
-  if (!parts.length) return 'Explorer profile: open to a balanced Bahrain experience with a mix of food, culture, and local highlights.'
-  return parts.join('. ')
+  if (!parts.length) {
+    return 'This user is open to a balanced Bahrain day — mixing a bit of culture, some food, and a relaxed vibe.'
+  }
+  return `This user — ${parts.join('. ')}.`
 }
 
 export async function generateUserPersonaSummary({
@@ -26,12 +76,12 @@ export async function generateUserPersonaSummary({
   foodIds = [],
   profileAnswers = {},
 }) {
-  const generalLabels = pickLabels(generalIds, GENERAL_PREFERENCES)
+  const grouped = groupGeneralIdsByCategory(generalIds)
   const activityLabels = pickLabels(activityIds, PREFERENCES)
   const foodLabels = pickLabels(foodIds, FOOD_CATEGORIES)
 
   const fallback = buildFallbackSummary({
-    generalLabels,
+    grouped,
     activityLabels,
     foodLabels,
     profileAnswers,
@@ -39,17 +89,25 @@ export async function generateUserPersonaSummary({
 
   if (!OPENAI_KEY) return fallback
 
-  const systemPrompt =
-    'You are a senior personalization strategist for a travel app. ' +
-    'Given onboarding answers, write one concise but rich profile paragraph (55-95 words) that captures: travel vibe, pace, budget tendency, social preference, top activity tastes, food direction, and constraints. ' +
-    'Use warm third-person wording like "This user...". Do not include bullet points.'
+  const systemPrompt = [
+    'You are a senior personalization strategist for a travel app in Bahrain.',
+    'Given a user\'s onboarding answers, write ONE rich, third-person profile paragraph (70–110 words) that feels like a real friend describing them.',
+    'Cover: who they travel with, the pace/energy they like, spending comfort, the 2–3 experience themes that matter most, food personality, and what they probably want to feel by the end of a great day.',
+    'Write in present tense. Use warm, specific language ("This traveler loves…"). No bullet lists. No headings. No hedging.',
+    'End with one short sentence that states the vibe their perfect Bahrain day should deliver — this sentence will guide later itinerary generation.',
+  ].join(' ')
 
   const userPrompt = [
-    `General profile labels: ${generalLabels.join(', ') || 'none'}`,
-    `Activity labels: ${activityLabels.join(', ') || 'none'}`,
-    `Food labels: ${foodLabels.join(', ') || 'none'}`,
-    `Ideal day text: ${profileAnswers?.idealDay ? String(profileAnswers.idealDay) : 'none'}`,
-    `Avoid list text: ${profileAnswers?.avoidList ? String(profileAnswers.avoidList) : 'none'}`,
+    `Companion: ${grouped.companion.join(', ') || 'unspecified'}`,
+    `Pace preference: ${grouped.pace.join(', ') || 'unspecified'}`,
+    `Budget comfort: ${grouped.budget.join(', ') || 'unspecified'}`,
+    `Core interests / experiences: ${grouped.interests.join(', ') || 'unspecified'}`,
+    `Planning style: ${grouped.planning.join(', ') || 'unspecified'}`,
+    `Timing preference: ${grouped.timing.join(', ') || 'unspecified'}`,
+    `Activity leanings: ${activityLabels.join(', ') || 'unspecified'}`,
+    `Food personality: ${foodLabels.join(', ') || 'unspecified'}`,
+    `Free-text ideal day: ${profileAnswers?.idealDay ? String(profileAnswers.idealDay) : 'none'}`,
+    `Free-text avoid list: ${profileAnswers?.avoidList ? String(profileAnswers.avoidList) : 'none'}`,
   ].join('\n')
 
   try {
@@ -61,8 +119,8 @@ export async function generateUserPersonaSummary({
       },
       body: JSON.stringify({
         model: 'gpt-4o-mini',
-        temperature: 0.45,
-        max_tokens: 220,
+        temperature: 0.55,
+        max_tokens: 320,
         messages: [
           { role: 'system', content: systemPrompt },
           { role: 'user', content: userPrompt },
@@ -105,6 +163,35 @@ export async function upsertUserPersonaSummary({
     )
   } catch (_) {
     // Optional path; keep app functional if table is absent.
+  }
+}
+
+/**
+ * Load the persisted personalization row for the signed-in user. Returns null
+ * when unauthenticated or the table is unreachable. Callers are expected to
+ * treat nulls as "no DB record yet" and fall back to local AsyncStorage data.
+ */
+export async function fetchUserPersonalization() {
+  try {
+    const { data: authData } = await supabase.auth.getUser()
+    const userId = authData?.user?.id
+    if (!userId) return null
+    const { data, error } = await supabase
+      .from('user_personalization')
+      .select('persona_summary, general_ids, activity_ids, food_ids, profile_answers, updated_at')
+      .eq('user_id', userId)
+      .maybeSingle()
+    if (error || !data) return null
+    return {
+      personaSummary: typeof data.persona_summary === 'string' ? data.persona_summary : '',
+      generalIds: Array.isArray(data.general_ids) ? data.general_ids : [],
+      activityIds: Array.isArray(data.activity_ids) ? data.activity_ids : [],
+      foodIds: Array.isArray(data.food_ids) ? data.food_ids : [],
+      profileAnswers: data.profile_answers && typeof data.profile_answers === 'object' ? data.profile_answers : {},
+      updatedAt: data.updated_at || null,
+    }
+  } catch (_) {
+    return null
   }
 }
 

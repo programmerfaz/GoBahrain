@@ -53,12 +53,43 @@ export const AnimatedPressable = ({
   )
 }
 
-export const FadeInView = ({ children, style, delay = 0, duration = 400, from = 20 }) => {
+/** iOS-like UIKit timing (approximate default ease curve) */
+const IOS_STANDARD = Easing.bezier(0.25, 0.1, 0.25, 1)
+
+export const FadeInView = ({
+  children,
+  style,
+  delay = 0,
+  duration = 400,
+  from = 20,
+  /** Softer fade-up: spring on Y + standard curve on opacity (cards, tiles) */
+  springUp = false,
+}) => {
   const opacity = useRef(new Animated.Value(0)).current
   const translateY = useRef(new Animated.Value(from)).current
 
   useEffect(() => {
+    opacity.setValue(0)
+    translateY.setValue(from)
     const timer = setTimeout(() => {
+      if (springUp) {
+        Animated.parallel([
+          Animated.timing(opacity, {
+            toValue: 1,
+            duration: Math.round(duration * 0.92),
+            easing: IOS_STANDARD,
+            useNativeDriver: true,
+          }),
+          Animated.spring(translateY, {
+            toValue: 0,
+            damping: 19,
+            stiffness: 300,
+            mass: 0.72,
+            useNativeDriver: true,
+          }),
+        ]).start()
+        return
+      }
       Animated.parallel([
         Animated.timing(opacity, {
           toValue: 1,
@@ -75,7 +106,7 @@ export const FadeInView = ({ children, style, delay = 0, duration = 400, from = 
       ]).start()
     }, delay)
     return () => clearTimeout(timer)
-  }, [delay, duration, opacity, translateY])
+  }, [delay, duration, from, opacity, translateY, springUp])
 
   return (
     <Animated.View style={[style, { opacity, transform: [{ translateY }] }]}>

@@ -1,0 +1,603 @@
+      <MapView
+        ref={mapRef}
+        style={StyleSheet.absoluteFill}
+        initialRegion={BAHRAIN_REGION}
+        mapType="standard"
+        showsUserLocation
+        showsMyLocationButton={false}
+        onPress={handleMapPress}
+        onRegionChange={handleRegionChange}
+        onRegionChangeComplete={handleRegionChangeComplete}
+      >
+        {/* Pre-plan: all clients with profile images as markers */}
+        {!dayPlan &&
+          allPlaceMarkers
+            .filter((mk) => markerMatchesPlanMapClientFilter(mk, activePlanMapClientFilter))
+            .map((mk) => {
+          const isEat = mapMarkerFilterCategoryKey(mk) === 'restaurant';
+          const isEvent = mapMarkerFilterCategoryKey(mk) === 'event';
+          const accent = isEat ? colors.dining : isEvent ? colors.event : colors.textSecondary;
+          return (
+            <AnimatedPlaceMarker
+              key={mk.clientId || `pre-${mk.idx}-${mk.lat}-${mk.lng}`}
+              mk={mk}
+              accent={accent}
+              isCurrent={false}
+              showBadge={false}
+              showCircle={false}
+              zoomScale={zoomScale}
+              onPress={() => handlePlaceMarkerPress(mk)}
+            />
+          );
+        })}
+        {/* Plan markers — reveal one by one with profile images and entrance animation */}
+        {dayPlan && (() => {
+          const markers = buildMapMarkers(dayPlan, allPlaceMarkers);
+          const maxVisible = revealingPins ? visiblePinCount : markers.length;
+          return markers
+            .filter((mk) => mk.idx < maxVisible)
+            .filter((mk) => markerMatchesPlanMapClientFilter(mk, activePlanMapClientFilter))
+            .map((mk) => {
+            const isEat = mapMarkerFilterCategoryKey(mk) === 'restaurant';
+            const isEvent = mapMarkerFilterCategoryKey(mk) === 'event';
+            const timeCols = { Morning: colors.morning, Afternoon: colors.afternoon, Evening: colors.evening };
+            const accent = isEat ? colors.dining : isEvent ? colors.event : (timeCols[mk.time] || colors.textSecondary);
+            const isCurrent = revealingPins && mk.idx === visiblePinCount - 1;
+            return (
+              <AnimatedPlaceMarker
+                key={mk.idx}
+                mk={mk}
+                accent={accent}
+                isCurrent={isCurrent}
+                zoomScale={zoomScale}
+                onPress={() => handlePlaceMarkerPress(mk)}
+              />
+            );
+          });
+        })()}
+      </MapView>
+
+      {isMarkerShowcaseActive ? (
+        <View
+          style={[styles.markerShowcaseExitWrap, { top: insets.top + 56 }]}
+          pointerEvents="box-none"
+        >
+          <TouchableOpacity
+            style={styles.markerShowcaseExitBtn}
+            onPress={exitMarkerShowcase}
+            activeOpacity={0.88}
+            accessibilityRole="button"
+            accessibilityLabel="Done viewing place"
+          >
+            <Text style={styles.markerShowcaseExitBtnText}>Done</Text>
+          </TouchableOpacity>
+        </View>
+      ) : null}
+
+      {isMarkerShowcaseActive && showcaseMarkerMk && !markerDetailSheetVisible ? (
+        <View
+          style={[
+            styles.markerViewDetailsWrapBase,
+            showcaseMorphAnchor
+              ? {
+                  position: 'absolute',
+                  left: Math.max(
+                    8,
+                    Math.min(SCREEN_WIDTH - 8 - 216, showcaseMorphAnchor.x - 108),
+                  ),
+                  top: Math.max(
+                    insets.top + 48,
+                    Math.min(
+                      SCREEN_HEIGHT - insets.bottom - 100,
+                      showcaseMorphAnchor.y + showcaseMorphAnchor.sizePx * 0.52 + 6,
+                    ),
+                  ),
+                  width: 216,
+                }
+              : [styles.markerViewDetailsWrapFallback, { bottom: insets.bottom + 112 }],
+          ]}
+          pointerEvents="box-none"
+        >
+          <Pressable
+            style={({ pressed }) => [
+              styles.markerViewDetailsPill,
+              pressed && { opacity: 0.92, transform: [{ scale: 0.98 }] },
+            ]}
+            onPress={() => {
+              void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+              setMarkerDetailSheetVisible(true);
+            }}
+            accessibilityRole="button"
+            accessibilityLabel="View more details about this place"
+          >
+            <Ionicons name="sparkles-outline" size={17} color={showcaseMarkerAccent} />
+            <Text style={[styles.markerViewDetailsPillText, { color: colors.textPrimary }]}>View details</Text>
+            <Ionicons name="chevron-up" size={18} color={showcaseMarkerAccent} />
+          </Pressable>
+        </View>
+      ) : null}
+
+      <MarkerShowcaseDetailSheet
+        visible={markerDetailSheetVisible}
+        mk={showcaseMarkerMk}
+        morphAnchor={showcaseMorphAnchor}
+        onDismiss={() => setMarkerDetailSheetVisible(false)}
+        insets={insets}
+        accent={showcaseMarkerAccent}
+        onViewProfile={(clientId) => {
+          if (clientId) setProfileClientId(clientId);
+        }}
+      />
+
+      <View style={[styles.topBarWrap, { paddingTop: insets.top + 2 }]} pointerEvents="box-none">
+        <View style={styles.topBarBalanceSpacer} pointerEvents="none" accessibilityElementsHidden />
+        <View style={styles.planMapFilterCenterWrap} pointerEvents="box-none">
+          <View style={styles.planMapFilterOuter}>
+            <View style={styles.planMapFilterTabsWrap}>
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={styles.planMapFilterScroll}
+                accessibilityRole="toolbar"
+                accessibilityLabel="Filter map pins by client type from the client table"
+              >
+                {PLAN_MAP_CLIENT_TYPE_FILTERS.map((t) => {
+                  const on = activePlanMapClientFilter === t.id;
+                  const P = communityPalette;
+                  return (
+                    <TouchableOpacity
+                      key={t.id}
+                      style={[
+                        styles.planMapFilterChipCommunity,
+                        {
+                          backgroundColor: on ? P.red : P.bg,
+                          borderColor: on ? P.red : P.border,
+                          ...(on
+                            ? Platform.select({
+                                ios: { shadowColor: P.red, shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.35, shadowRadius: 4 },
+                                android: { elevation: 4 },
+                              })
+                            : {}),
+                        },
+                      ]}
+                      onPress={() => handlePlanMapClientFilterPress(t.id)}
+                      activeOpacity={0.82}
+                      hitSlop={{ top: 4, bottom: 4, left: 2, right: 2 }}
+                      accessibilityRole="button"
+                      accessibilityLabel={t.label}
+                      accessibilityState={{ selected: on }}
+                    >
+                      <Ionicons name={t.icon} size={22} color={on ? '#FFF' : P.sub} />
+                    </TouchableOpacity>
+                  );
+                })}
+              </ScrollView>
+            </View>
+          </View>
+        </View>
+        <TouchableOpacity
+          style={[styles.searchButton, planReadOnly && { opacity: 0.4 }]}
+          activeOpacity={0.8}
+          onPress={() => {
+            if (planReadOnly) return
+            setShowSearchModal(true)
+          }}
+          disabled={planReadOnly}
+          accessibilityRole="button"
+          accessibilityLabel={dayPlan?.length ? 'Add a stop or browse places' : 'Search places'}
+        >
+          <Ionicons name={dayPlan?.length ? 'add' : 'search'} size={22} color={themeColors.primary} />
+        </TouchableOpacity>
+      </View>
+
+      {/* Scanning overlay during Hang tight removed (no radar effect) */}
+      <MapScanningOverlay visible={false} />
+
+      <Animated.View
+        style={[
+          styles.sheet,
+          drawerStep === 0 && styles.sheetStep0Tint,
+          drawerStep === 3 && styles.sheetPlanResultsTint,
+          drawerStep === 3 && styles.sheetPlanOverflowVisible,
+          {
+            paddingBottom: getPlanSheetBottomPadding(insets),
+            opacity: sheetOpacity,
+            transform: [{ translateY: sheetAnim }],
+          },
+        ]}
+      >
+        <View
+          style={styles.sheetDragArea}
+          {...panResponder.panHandlers}
+          hitSlop={{ top: 16, bottom: 6, left: 0, right: 0 }}
+          accessibilityRole="button"
+          accessibilityLabel="Swipe up to expand the plan, or drag down to see more map"
+        >
+          <View style={styles.grabber} />
+          <Text style={styles.sheetDragHint}>Swipe up</Text>
+        </View>
+
+        {/* Step 0 — Past Plans (modern hero layout) */}
+        {drawerStep === 0 && (
+          <View style={styles.pastPlansStepWrap}>
+            <View style={styles.sheetStep0GlassOuter}>
+              <BlurView intensity={Platform.OS === 'ios' ? 52 : 32} tint="light" style={styles.planMastheadBlur} />
+              <View style={styles.planMastheadFrost} pointerEvents="none" />
+              <ScrollView style={styles.sheetStep0GlassScroll} contentContainerStyle={styles.d0ScrollContent} showsVerticalScrollIndicator={false}>
+              {/* Build CTA */}
+              <AiStagger
+                delay={0}
+                entering={FadeIn.duration(340).delay(0)}
+              >
+                <Pressable
+                  style={({ pressed }) => [styles.d0CtaRow, pressed && { opacity: 0.93, transform: [{ scale: 0.98 }] }]}
+                  onPress={startSetup}
+                >
+                  <LinearGradient
+                    colors={[themeColors.primary, '#E63950']}
+                    start={{ x: 0, y: 0 }}
+                    end={{ x: 1, y: 1 }}
+                    style={styles.d0CtaGradient}
+                  >
+                    <View style={styles.d0CtaLogoWrap}>
+                      <CachedImage
+                        source={require('../../../assets/ai-button-logo.png')}
+                        style={styles.d0CtaLogo}
+                        resizeMode="cover"
+                      />
+                    </View>
+                    <View style={styles.d0CtaLeft}>
+                      <Text style={styles.d0CtaTitle}>Build my day</Text>
+                      <Text style={styles.d0CtaSub}>AI plans your perfect Bahrain day</Text>
+                    </View>
+                    <Ionicons name="chevron-forward" size={20} color="rgba(255,255,255,0.7)" />
+                  </LinearGradient>
+                </Pressable>
+              </AiStagger>
+
+              {/* Past plans section */}
+              <AiStagger delay={120}>
+                <View style={styles.d0JoinRow}>
+                  <Text style={styles.d0JoinLabel}>Open a shared plan</Text>
+                  <View style={styles.d0JoinInputRow}>
+                    <TextInput
+                      style={styles.d0JoinInput}
+                      value={joinCodeInput}
+                      onChangeText={(t) => setJoinCodeInput(t.toUpperCase())}
+                      placeholder="ENTER CODE"
+                      placeholderTextColor="#94A3B8"
+                      autoCapitalize="characters"
+                      autoCorrect={false}
+                      maxLength={12}
+                      editable={!joinCodeBusy}
+                      accessibilityLabel="Share code"
+                    />
+                    <TouchableOpacity
+                      style={styles.d0JoinBtn}
+                      activeOpacity={0.85}
+                      disabled={joinCodeBusy}
+                      onPress={() => applyShareCodeFromString(joinCodeInput)}
+                      accessibilityRole="button"
+                      accessibilityLabel="Open shared plan"
+                    >
+                      {joinCodeBusy ? (
+                        <ActivityIndicator color="#FFFFFF" size="small" />
+                      ) : (
+                        <Text style={styles.d0JoinBtnText}>Open</Text>
+                      )}
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              </AiStagger>
+              {savedPlansList.length > 0 && (
+                <>
+                  <AiStagger delay={140}>
+                    <View style={styles.d0SectionHeader}>
+                      <Text style={styles.d0SectionTitle}>Saved plans</Text>
+                      <View style={styles.d0SectionCount}>
+                        <Text style={styles.d0SectionCountText}>{savedPlansList.length}</Text>
+                      </View>
+                    </View>
+                  </AiStagger>
+                  {savedPlansList.map((plan, idx) => {
+                    const n = Array.isArray(plan.plan_data) ? plan.plan_data.length : 0
+                    return (
+                      <AiStagger key={plan.id} delay={180 + idx * 50}>
+                        <View style={styles.d0PlanCard}>
+                          <TouchableOpacity
+                            style={styles.d0PlanCardMainHit}
+                            activeOpacity={0.8}
+                            disabled={joinCodeBusy}
+                            onPress={() => handleOpenSavedPlanRow(plan)}
+                            accessibilityRole="button"
+                            accessibilityLabel={`Open saved plan ${plan.title}`}
+                          >
+                            <View style={styles.d0PlanIconWrap}>
+                              <Ionicons name="map" size={20} color={themeColors.primary} />
+                            </View>
+                            <View style={styles.d0PlanInfo}>
+                              <Text style={styles.d0PlanName}>{plan.title}</Text>
+                              <Text style={styles.d0PlanMeta}>
+                                {n} stops · {formatSavedPlanDate(plan.updated_at)}
+                              </Text>
+                            </View>
+                            <Ionicons name="chevron-forward" size={16} color="#CBD5E1" />
+                          </TouchableOpacity>
+                          <View style={styles.d0PlanRowActions}>
+                            <TouchableOpacity
+                              style={styles.d0PlanRowActionBtn}
+                              activeOpacity={0.75}
+                              disabled={joinCodeBusy}
+                              onPress={() => handleOpenEditSavedPlanTitle(plan.id)}
+                              accessibilityRole="button"
+                              accessibilityLabel={`Rename ${plan.title}`}
+                            >
+                              <Ionicons name="create-outline" size={20} color="#64748B" />
+                            </TouchableOpacity>
+                            <TouchableOpacity
+                              style={styles.d0PlanRowActionBtn}
+                              activeOpacity={0.75}
+                              disabled={joinCodeBusy}
+                              onPress={() => handleRequestDeleteSavedPlan(plan)}
+                              accessibilityRole="button"
+                              accessibilityLabel={`Delete ${plan.title}`}
+                            >
+                              <Ionicons name="trash-outline" size={20} color="#DC2626" />
+                            </TouchableOpacity>
+                          </View>
+                        </View>
+                      </AiStagger>
+                    )
+                  })}
+                </>
+              )}
+              {savedPlansLoading ? (
+                <Text style={[styles.d0CopyHint, { marginTop: 8 }]}>Loading saved plans…</Text>
+              ) : null}
+
+              {/* Share row */}
+              <AiStagger delay={280}>
+                <View style={styles.d0ShareRow}>
+                  <TouchableOpacity style={styles.d0ShareBtn} activeOpacity={0.75} onPress={handleSharePlanWithFriends}>
+                    <Ionicons name="share-social-outline" size={18} color="#64748B" />
+                    <Text style={styles.d0ShareBtnText}>Share with friends</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity style={styles.d0ShareBtn} activeOpacity={0.75} onPress={handleCopyShareText}>
+                    <Ionicons name="copy-outline" size={18} color="#64748B" />
+                    <Text style={styles.d0ShareBtnText}>Copy link</Text>
+                  </TouchableOpacity>
+                </View>
+                {shareCopyHint ? <Text style={styles.d0CopyHint}>Copied to clipboard</Text> : null}
+              </AiStagger>
+            </ScrollView>
+            </View>
+          </View>
+        )}
+
+        {/* Step 3 — Day plan results (steps 1–2 now in modal) */}
+        {drawerStep === 3 && (
+          <View style={styles.planStep3Body}>
+            {loading || error || !dayPlan?.length ? (
+              <View style={styles.drawerPageHeader}>
+                <TouchableOpacity
+                  style={styles.backButton}
+                  activeOpacity={0.8}
+                  onPress={() => {
+                    setDrawerStep(0)
+                    setDayPlan(null)
+                    setError(null)
+                    setActiveSavedPlanId(null)
+                    setSharedCollaboration(null)
+                  }}
+                  accessibilityRole="button"
+                  accessibilityLabel="Back to plans"
+                >
+                  <Ionicons name="chevron-back" size={20} color="#374151" />
+                </TouchableOpacity>
+                <View style={styles.drawerPageHeaderCenter} pointerEvents="none">
+                  {loading ? (
+                    <Text style={styles.drawerPageHeaderTitle} numberOfLines={1}>
+                      Building your day
+                    </Text>
+                  ) : error ? (
+                    <Text style={styles.drawerPageHeaderTitle} numberOfLines={1}>
+                      Something went wrong
+                    </Text>
+                  ) : (
+                    <Text style={styles.drawerPageHeaderTitle} numberOfLines={1}>
+                      Your plan
+                    </Text>
+                  )}
+                </View>
+                <View style={styles.drawerPageHeaderSpacer} />
+              </View>
+            ) : null}
+
+            {loading ? (
+              <Reanimated.View
+                style={[styles.planContentFill, styles.loadingWrap]}
+                entering={FadeInDown.duration(400).springify().damping(17).stiffness(200).mass(0.85)}
+              >
+                <View style={styles.planSheetLoadingGlassOuter}>
+                  <BlurView intensity={Platform.OS === 'ios' ? 52 : 32} tint="light" style={styles.planMastheadBlur} />
+                  <View style={styles.planMastheadFrost} pointerEvents="none" />
+                  <View style={styles.planSheetLoadingGlassInner}>
+                    <PlanDrawerLoadingPanel
+                      loading={loading}
+                      loadingStatus={loadingStatus}
+                      spotPreviews={spotPreviews}
+                      themePrimary={themeColors.primary}
+                    />
+                  </View>
+                </View>
+              </Reanimated.View>
+            ) : error ? (
+              <Reanimated.View
+                style={[styles.planContentFill, styles.errorWrap]}
+                entering={ZoomInEasyDown.duration(360).springify().damping(16).stiffness(220)}
+              >
+                <View style={styles.errorCard}>
+                  <View style={styles.errorIconWrap}>
+                    <Ionicons name="alert-circle" size={28} color="#DC2626" />
+                  </View>
+                  <Text style={styles.errorTitle}>Something went wrong</Text>
+                  <Text style={styles.errorText}>{error}</Text>
+                </View>
+                <TouchableOpacity style={styles.retryButton} activeOpacity={0.85} onPress={handleGenerate}>
+                  <Ionicons name="refresh" size={20} color={themeColors.primary} />
+                  <Text style={styles.retryButtonText}>Try again</Text>
+                </TouchableOpacity>
+              </Reanimated.View>
+            ) : !dayPlan || dayPlan.length === 0 ? (
+              <Reanimated.View
+                style={[styles.planContentFill, { paddingHorizontal: 20, justifyContent: 'center' }]}
+                entering={FadeIn.duration(320)}
+              >
+                <Text style={styles.emptyResults}>No plan generated.</Text>
+              </Reanimated.View>
+            ) : (
+              <View style={styles.planContentFill}>
+              <DraggableFlatList
+                style={styles.resultsScroll}
+                data={dayPlan}
+                keyExtractor={(item) => item._planRowKey || `fallback-${item.spot}`}
+                onDragEnd={({ data }) => {
+                  if (planReadOnly) return
+                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {})
+                  setDayPlan(data)
+                }}
+                activationDistance={planReadOnly ? 1000 : 12}
+                containerStyle={styles.planDraggableListContainer}
+                contentContainerStyle={styles.resultsContent}
+                contentInsetAdjustmentBehavior="never"
+                showsVerticalScrollIndicator={false}
+                keyboardShouldPersistTaps="handled"
+                ListHeaderComponent={renderPlanTimelineOverviewHeader}
+                ListFooterComponent={(
+                  <View style={styles.planListEndFooter}>
+                    <Text style={styles.planListEndFooterText}>
+                      Tap Add stop (above) or the + button on the map to add venues from our catalog · Long-press the grip to reorder · Tap a card for details · Navigate opens maps for that stop
+                    </Text>
+                  </View>
+                )}
+                renderItem={({ item, drag, isActive, getIndex }) => {
+                  const planIndex = getIndex() ?? 0
+                  const isEat = item.type === 'restaurant'
+                  const isEvent = item.type === 'event'
+                  const accent = isEat ? themeColors.dining : isEvent ? themeColors.event : colors.morning
+                  const galleryUris = pickPlanStopGalleryUris(item, allPlaceMarkers)
+                  const thumbUri = galleryUris[0] || null
+                  const hasImages = !!thumbUri
+                  const hasProfile = !!(item.clientId)
+                  const isExpanded = stopDetailIndex === planIndex
+                  const isVisible = planIndex < visibleStopCount
+                  const category = getLuxuryCategoryStyle(item)
+                  const canOpenMaps = item.lat != null && item.lng != null
+
+                  return (
+                    <ScaleDecorator>
+                      <AnimatedStopRow isVisible={isVisible} style={styles.planRowEnterWrap}>
+                        <View style={styles.planLuxuryStopBlock}>
+                          <View style={[styles.planLuxuryRowLayout, isActive && styles.planLuxuryRowLayoutActive]}>
+                            <View style={[styles.planLuxuryStopSurface, isActive && styles.planLuxuryStopSurfaceActive]}>
+                              <TouchableOpacity
+                                onLongPress={planReadOnly ? undefined : drag}
+                                delayLongPress={planReadOnly ? 60000 : 180}
+                                style={[styles.planLuxuryDragAffordance, planReadOnly && { opacity: 0.35 }]}
+                                activeOpacity={0.75}
+                                disabled={planReadOnly}
+                                accessibilityRole="button"
+                                accessibilityLabel="Drag to reorder stop"
+                              >
+                                <Ionicons name="reorder-three" size={22} color="#AEAEB2" />
+                              </TouchableOpacity>
+                              <Pressable
+                                style={styles.planLuxuryStopMainPress}
+                                onPress={() => {
+                                  if (stopDetailIndex === planIndex) {
+                                    setStopDetailIndex(null)
+                                    return
+                                  }
+                                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {})
+                                  clearMarkerShowcase()
+                                  goToStopDetailIndex(planIndex)
+                                }}
+                                accessibilityRole="button"
+                                accessibilityState={{ expanded: isExpanded }}
+                                accessibilityLabel={item.spot}
+                              >
+                                <View style={styles.planLuxuryStopThumb}>
+                                  {hasImages ? (
+                                    <PreviewImage uri={thumbUri} style={styles.planLuxuryStopThumbImg} noFade />
+                                  ) : (
+                                    <View style={[styles.planLuxuryStopThumbImg, styles.planLuxuryStopThumbPlaceholder, { backgroundColor: `${accent}22` }]}>
+                                      <Ionicons name={isEat ? 'restaurant' : isEvent ? 'calendar' : 'location'} size={22} color={accent} />
+                                    </View>
+                                  )}
+                                </View>
+                                <View style={styles.planLuxuryStopTextCol}>
+                                  <Text style={styles.planLuxuryStopTitle} numberOfLines={2}>
+                                    {item.spot}
+                                  </Text>
+                                  <View style={styles.planLuxuryCategoryRow}>
+                                    <View style={[styles.planLuxuryCategoryPill, { backgroundColor: category.bg }]}>
+                                      <Ionicons name={category.icon} size={12} color={category.fg} />
+                                      <Text style={[styles.planLuxuryCategoryPillText, { color: category.fg }]}>{category.label}</Text>
+                                    </View>
+                                    {item.userAdded ? (
+                                      <View style={styles.planLuxuryUserPickPill} accessibilityRole="text" accessibilityLabel="You added this stop">
+                                        <Ionicons name="person" size={11} color="#059669" />
+                                        <Text style={styles.planLuxuryUserPickPillText}>Your pick</Text>
+                                      </View>
+                                    ) : null}
+                                  </View>
+                                  {item.rating != null && (
+                                    <View style={styles.planLuxuryRatingRow}>
+                                      <Ionicons name="star" size={12} color="#FF9F00" />
+                                      <Text style={styles.planLuxuryRatingText}>{Number(item.rating).toFixed(1)}</Text>
+                                    </View>
+                                  )}
+                                </View>
+                              </Pressable>
+                              <TouchableOpacity
+                                style={styles.planLuxuryConnectorNavBtn}
+                                activeOpacity={0.85}
+                                onPress={() => {
+                                  if (canOpenMaps) openGoogleMapsDirections(item.lat, item.lng)
+                                }}
+                                disabled={!canOpenMaps}
+                                accessibilityRole="button"
+                                accessibilityLabel="Open directions for this stop"
+                              >
+                                <Ionicons name="navigate" size={17} color="#FFFFFF" />
+                              </TouchableOpacity>
+                              <TouchableOpacity
+                                style={styles.planLuxuryEnhanceBtn}
+                                activeOpacity={0.85}
+                                onPress={() => handleEnhanceStop(planIndex)}
+                                disabled={enhancingIndex !== null || planReadOnly}
+                                accessibilityRole="button"
+                                accessibilityLabel="Enhance with AI, replace this stop"
+                              >
+                                {enhancingIndex === planIndex ? (
+                                  <ActivityIndicator size="small" color={themeColors.primary} />
+                                ) : (
+                                  <>
+                                    <Ionicons name="sparkles" size={15} color={themeColors.primary} />
+                                    <Text style={styles.planLuxuryEnhanceBtnText}>AI</Text>
+                                  </>
+                                )}
+                              </TouchableOpacity>
+                            </View>
+                          </View>
+                        </View>
+                      </AnimatedStopRow>
+                    </ScaleDecorator>
+                  )
+                }}
+              />
+              </View>
+            )}
+          </View>
+        )}
+      </Animated.View>

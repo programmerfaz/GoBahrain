@@ -4,6 +4,7 @@ import {
   Text,
   StyleSheet,
   TouchableOpacity,
+  Pressable,
   Platform,
   Animated,
   Easing,
@@ -24,6 +25,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { getFocusedRouteNameFromRoute } from '@react-navigation/native';
 import { BlurView } from 'expo-blur';
+import * as Haptics from 'expo-haptics';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { OPENAI_KEY } from '../config/keys';
@@ -33,20 +35,28 @@ import { useUserPreferences } from '../context/UserPreferencesContext';
 import ClientProfileModal from './ClientProfileModal';
 import { useTheme } from '../context/ThemeContext';
 import { colors as themeColors } from '../theme/designTokens';
-import { ensureImageUrl } from '../utils/imageUrl';
+import { ensureImageUrl, resolvePublicImageUrl } from '../utils/imageUrl';
+import { CachedImage } from './CachedImage';
 import { aiPlanSheetLink } from '../utils/aiPlanSheetLink';
+import { khalidChatLink } from '../utils/khalidChatLink';
+import { usePlanMapOrbitActive } from '../screens/aiPlan/planMapOrbitStore';
+import { ORBIT_TAB_BAR_PULL_DOWN } from '../screens/aiPlan/constants';
+import HomeLogoIcon from './HomeLogoIcon';
+import SettingsLogoIcon from './SettingsLogoIcon';
+import CommunityLogoIcon from './CommunityLogoIcon';
+import SearchLogoIcon from './SearchLogoIcon';
+import MapLogoIcon from './MapLogoIcon';
 
 const OPENAI_CHAT_URL = 'https://api.openai.com/v1/chat/completions';
+
+/** Side tabs that use selection + press scale animation */
+const NAV_TAB_SCREENS = ['Home', 'Explore', 'Community', 'Profile'];
 
 const PICS_LIKE_QUERIES = ['pic', 'pics', 'photo', 'photos', 'image', 'images', 'picture', 'pictures', 'show me', 'posts', 'feed'];
 
 function getPostImageUrl(row) {
-  const url = row.post_image ?? row.image ?? null;
-  if (url != null && String(url).trim() !== '') {
-    const raw = String(url).trim();
-    return ensureImageUrl(raw) || raw;
-  }
-  return null;
+  const raw = row.post_image ?? row.image ?? null;
+  return resolvePublicImageUrl(raw);
 }
 
 async function fetchPostsByQuery(query) {
@@ -86,7 +96,8 @@ async function fetchPostsByQuery(query) {
   let clientMap = {};
   if (clientIds.length > 0) {
     const { data: clients } = await supabase.from('client').select('client_a_uuid, business_name, name').in('client_a_uuid', clientIds);
-    (clients || []).forEach((c) => {
+    const safeClients = Array.isArray(clients) ? clients : []
+    safeClients.forEach((c) => {
       const id = c.client_a_uuid;
       clientMap[id] = c?.business_name || c?.name || null;
     });
@@ -126,7 +137,7 @@ async function fetchReviewsByPlace(place) {
   });
   const reviews = filtered.slice(0, 5).map((r) => {
     const rawImages = parseReviewImages(r.image);
-    const images = rawImages.map((u) => ensureImageUrl(u) || u).filter(Boolean);
+    const images = rawImages.map((u) => resolvePublicImageUrl(u)).filter(Boolean);
     return {
       id: r.community_uuid,
       body: (r.review_text || '').trim().slice(0, 200),
@@ -157,8 +168,10 @@ async function fetchClientsByQuery(query, clientType = '') {
       }
       
       if (q) {
-        // Enhanced search: check multiple fields with better matching
-        clientQuery = clientQuery.or(`business_name.ilike.%${q}%,name.ilike.%${q}%,description.ilike.%${q}%,category.ilike.%${q}%,cuisine.ilike.%${q}%,cuisine_type.ilike.%${q}%,location.ilike.%${q}%,address.ilike.%${q}%`);
+        const safe = q.replace(/[,()*]/g, ' ').trim();
+        clientQuery = clientQuery.or(
+          `business_name.ilike.%${safe}%,description.ilike.%${safe}%,ai_summary.ilike.%${safe}%`
+        );
       }
       
       const { data, error } = await clientQuery.order('rating', { ascending: false, nullsLast: true }).limit(12);
@@ -191,11 +204,16 @@ async function fetchClientsByQuery(query, clientType = '') {
       }
       
       if (data && data.length > 0) {
-        // Filter results in memory for more flexible matching
         rows = data.filter((r) => {
+          const tagsText = (() => {
+            try {
+              if (!r.tags) return ''
+              if (typeof r.tags === 'string') return r.tags
+              return JSON.stringify(r.tags)
+            } catch (_) { return '' }
+          })()
           const searchText = [
-            r.business_name, r.name, r.description, r.category, 
-            r.cuisine, r.cuisine_type, r.location, r.address
+            r.business_name, r.description, r.ai_summary, tagsText, r.price_range, r.client_type
           ].filter(Boolean).join(' ').toLowerCase();
           return searchText.includes(q);
         });
@@ -293,7 +311,8 @@ async function fetchClientsByQuery(query, clientType = '') {
       
       console.log('[Khalid] Found', (posts || []).length, 'community posts');
       
-      (posts || []).forEach((post) => {
+      const safePosts = Array.isArray(posts) ? posts : []
+      safePosts.forEach((post) => {
         const cid = post.client_a_uuid;
         
         // Count reviews
@@ -303,9 +322,10 @@ async function fetchClientsByQuery(query, clientType = '') {
         if (post.image) {
           if (!imagesMap[cid]) imagesMap[cid] = [];
           const rawImages = parseReviewImages(post.image);
-          rawImages.forEach((img) => {
-            const cleanImg = ensureImageUrl(img) || img;
-            if (cleanImg && !imagesMap[cid].includes(cleanImg)) {
+          const safeRawImages = Array.isArray(rawImages) ? rawImages : []
+          safeRawImages.forEach((img) => {
+            const cleanImg = resolvePublicImageUrl(img);
+            if (cleanImg && typeof cleanImg === 'string' && !imagesMap[cid].includes(cleanImg)) {
               imagesMap[cid].push(cleanImg);
             }
           });
@@ -316,7 +336,7 @@ async function fetchClientsByQuery(query, clientType = '') {
     // Build enhanced results with all available information
     const results = rows.map((r) => {
       const postImages = imagesMap[r.client_a_uuid] || [];
-      const profileImage = r.client_image ? (ensureImageUrl(r.client_image) || r.client_image) : null;
+      const profileImage = resolvePublicImageUrl(r.client_image);
       
       // Format price range display
       let priceDisplay = null;
@@ -329,22 +349,30 @@ async function fetchClientsByQuery(query, clientType = '') {
         else priceDisplay = r.price_range;
       }
       
+      const tagsObj = (() => {
+        try {
+          if (!r.tags) return {}
+          if (typeof r.tags === 'string') return JSON.parse(r.tags)
+          return r.tags
+        } catch (_) { return {} }
+      })()
+      const locationFromCoords = (r.lat != null && r.long != null) ? `${r.lat}, ${r.long}` : ''
       return {
         id: r.client_a_uuid,
-        name: r.business_name || r.name || 'Place',
-        description: (r.description || '').slice(0, 200),
+        name: r.business_name || 'Place',
+        description: (r.description || r.ai_summary || '').slice(0, 200),
         postImages: postImages.slice(0, 8),
         profileImage: profileImage,
         clientType: (r.client_type || '').toLowerCase(),
-        category: r.category || '',
+        category: tagsObj.category || '',
         rating: r.rating != null ? Number(r.rating) : null,
         priceRange: priceDisplay,
-        location: r.location || r.address || '',
-        cuisine: r.cuisine || r.cuisine_type || '',
-        phone: r.phone || null,
-        email: r.email || null,
-        website: r.website || null,
-        openingHours: r.opening_hours || null,
+        location: tagsObj.location || tagsObj.address || locationFromCoords,
+        cuisine: tagsObj.cuisine || tagsObj.cuisine_type || '',
+        phone: tagsObj.phone || null,
+        email: tagsObj.email || null,
+        website: tagsObj.website || null,
+        openingHours: r.timings || tagsObj.opening_hours || null,
         reviewCount: reviewCounts[r.client_a_uuid] || 0,
       };
     });
@@ -497,9 +525,12 @@ function KhalidClientBlock({ client, onViewProfile, onAskAbout, navigation }) {
     : '#3B82F6';
   const ratingStars = client.rating ? Math.round(Math.min(5, Math.max(0, client.rating))) : 0;
   
-  const postImages = client.postImages || [];
+  const postImages = (client.postImages || []).filter((x) => typeof x === 'string' && x.trim() !== '');
   const hasPostImages = postImages.length > 0;
-  const displayImages = postImages.slice(0, 4);
+  const heroImage = postImages[0] || null;
+  const thumbImages = postImages.slice(1, 4);
+  const extraCount = Math.max(0, postImages.length - 4);
+  const typeLabel = client.clientType === 'restaurant' ? 'Restaurant' : client.clientType === 'event' ? 'Event' : 'Place';
 
   const handleViewProfile = () => {
     if (client.id && navigation) {
@@ -511,31 +542,68 @@ function KhalidClientBlock({ client, onViewProfile, onAskAbout, navigation }) {
 
   return (
     <View style={styles.khalidClientBlockNew}>
-      {/* Post Images Grid - Large and Prominent */}
       {hasPostImages ? (
-        <View style={styles.khalidClientImageGridLarge}>
-          {displayImages.map((img, idx) => (
-            <View key={idx} style={styles.khalidClientGridImageWrapLarge}>
-              <Image source={{ uri: img }} style={styles.khalidClientGridImage} resizeMode="cover" />
-            </View>
-          ))}
-          {postImages.length > 4 ? (
-            <View style={styles.khalidClientMoreImagesOverlay}>
-              <Text style={styles.khalidClientMoreImagesText}>+{postImages.length - 4}</Text>
+        <View style={styles.khalidClientHeroWrap}>
+          <CachedImage
+            source={{ uri: heroImage }}
+            style={styles.khalidClientHeroImage}
+            contentFit="cover"
+          />
+          <LinearGradient
+            colors={['rgba(0,0,0,0)', 'rgba(0,0,0,0)', 'rgba(7,6,10,0.85)']}
+            start={{ x: 0.5, y: 0 }}
+            end={{ x: 0.5, y: 1 }}
+            style={StyleSheet.absoluteFill}
+            pointerEvents="none"
+          />
+          <LinearGradient
+            colors={[`${typeColor}EE`, `${typeColor}AA`]}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={styles.khalidClientTypeBadgeOverlay}
+          >
+            <Ionicons name={typeIcon} size={11} color="#FFFFFF" />
+            <Text style={styles.khalidClientTypeBadgeOverlayText}>{typeLabel}</Text>
+          </LinearGradient>
+          {client.rating != null ? (
+            <View style={styles.khalidClientHeroRatingChip}>
+              <Ionicons name="star" size={11} color="#FBBF24" />
+              <Text style={styles.khalidClientHeroRatingText}>{client.rating.toFixed(1)}</Text>
             </View>
           ) : null}
-          {/* Type badge over image */}
-          <View style={[styles.khalidClientTypeBadgeOverlay, { backgroundColor: typeColor + 'DD' }]}>
-            <Ionicons name={typeIcon} size={10} color="#FFFFFF" />
-            <Text style={styles.khalidClientTypeBadgeOverlayText}>
-              {client.clientType === 'restaurant' ? 'Restaurant' : client.clientType === 'event' ? 'Event' : 'Place'}
-            </Text>
+          <View style={styles.khalidClientHeroTitleWrap} pointerEvents="none">
+            <Text style={styles.khalidClientHeroTitle} numberOfLines={1}>{client.name}</Text>
+            {(client.cuisine || client.category) ? (
+              <Text style={styles.khalidClientHeroSubtitle} numberOfLines={1}>
+                {[client.cuisine, client.category].filter(Boolean).join(' · ')}
+              </Text>
+            ) : null}
           </View>
+          {thumbImages.length > 0 ? (
+            <View style={styles.khalidClientThumbStrip}>
+              {thumbImages.map((img, idx) => (
+                <View key={idx} style={styles.khalidClientThumbWrap}>
+                  <CachedImage source={{ uri: img }} style={StyleSheet.absoluteFill} contentFit="cover" />
+                </View>
+              ))}
+              {extraCount > 0 ? (
+                <View style={[styles.khalidClientThumbWrap, styles.khalidClientThumbMore]}>
+                  <Text style={styles.khalidClientThumbMoreText}>+{extraCount}</Text>
+                </View>
+              ) : null}
+            </View>
+          ) : null}
         </View>
       ) : (
         <View style={styles.khalidClientNoImagesLarge}>
-          <Ionicons name={typeIcon} size={40} color={typeColor + '55'} />
-          <Text style={styles.khalidClientNoImagesText}>No photos available</Text>
+          <LinearGradient
+            colors={[`${typeColor}30`, 'rgba(15,23,42,0.6)']}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={StyleSheet.absoluteFill}
+          />
+          <Ionicons name={typeIcon} size={36} color={`${typeColor}AA`} />
+          <Text style={styles.khalidClientNoImagesText}>No photos yet</Text>
         </View>
       )}
 
@@ -543,8 +611,8 @@ function KhalidClientBlock({ client, onViewProfile, onAskAbout, navigation }) {
       <View style={styles.khalidClientContentBelow}>
         {/* Header with profile pic and name */}
         <View style={styles.khalidClientHeaderBelow}>
-          {client.profileImage ? (
-            <Image source={{ uri: client.profileImage }} style={styles.khalidClientProfilePicSmall} />
+          {client.profileImage && typeof client.profileImage === 'string' ? (
+            <CachedImage source={{ uri: client.profileImage }} style={styles.khalidClientProfilePicSmall} contentFit="cover" />
           ) : (
             <View style={[styles.khalidClientProfilePicSmall, styles.khalidClientProfilePlaceholder, { backgroundColor: typeColor + '22' }]}>
               <Ionicons name={typeIcon} size={12} color={typeColor} />
@@ -714,24 +782,43 @@ function KhalidCardRow({ item, onViewProfile, onAskAbout, navigation }) {
                   key={post.id || idx}
                   style={[styles.khalidCardPostBlock, idx === posts.length - 1 && styles.khalidCardPostBlockLast]}
                 >
-                  {post.imageUri ? (
+                  {post.imageUri && typeof post.imageUri === 'string' ? (
                     <View style={styles.khalidCardPostImageWrap}>
-                      <Image source={{ uri: post.imageUri }} style={styles.khalidCardPostImage} resizeMode="cover" />
-                      <View style={styles.khalidCardPostImageShade} />
+                      <CachedImage source={{ uri: post.imageUri }} style={styles.khalidCardPostImage} contentFit="cover" />
+                      <LinearGradient
+                        colors={['rgba(0,0,0,0)', 'rgba(7,6,10,0.85)']}
+                        start={{ x: 0.5, y: 0.4 }}
+                        end={{ x: 0.5, y: 1 }}
+                        style={styles.khalidCardPostImageShade}
+                        pointerEvents="none"
+                      />
+                      <View style={styles.khalidCardPostTitleOverlay} pointerEvents="none">
+                        {(post.businessName || post.description) ? (
+                          <Text style={styles.khalidCardPostTitleOverlayText} numberOfLines={1}>
+                            {post.businessName || post.description || 'Post'}
+                          </Text>
+                        ) : null}
+                        {post.description ? (
+                          <Text style={styles.khalidCardPostDescOverlay} numberOfLines={2}>
+                            {post.description}
+                          </Text>
+                        ) : null}
+                      </View>
                     </View>
-                  ) : null}
-                  <View style={styles.khalidCardPostBody}>
-                    {(post.businessName || post.description) ? (
-                      <Text style={styles.khalidCardPostTitle} numberOfLines={1}>
-                        {post.businessName || post.description || 'Post'}
-                      </Text>
-                    ) : null}
-                    {post.description ? (
-                      <Text style={styles.khalidCardPostDesc} numberOfLines={3}>
-                        {post.description}
-                      </Text>
-                    ) : null}
-                  </View>
+                  ) : (
+                    <View style={styles.khalidCardPostBody}>
+                      {(post.businessName || post.description) ? (
+                        <Text style={styles.khalidCardPostTitle} numberOfLines={1}>
+                          {post.businessName || post.description || 'Post'}
+                        </Text>
+                      ) : null}
+                      {post.description ? (
+                        <Text style={styles.khalidCardPostDesc} numberOfLines={3}>
+                          {post.description}
+                        </Text>
+                      ) : null}
+                    </View>
+                  )}
                 </View>
               ))}
             </View>
@@ -744,11 +831,19 @@ function KhalidCardRow({ item, onViewProfile, onAskAbout, navigation }) {
               ) : (
                 (data.reviews || []).slice(0, 3).map((rev, idx) => (
                   <View key={rev.id || idx} style={styles.khalidCardReviewBlock}>
-                    {rev.imageUri ? (
-                      <Image source={{ uri: rev.imageUri }} style={styles.khalidCardReviewImage} resizeMode="cover" />
+                    {rev.imageUri && typeof rev.imageUri === 'string' ? (
+                      <View style={styles.khalidCardReviewImageWrap}>
+                        <CachedImage source={{ uri: rev.imageUri }} style={styles.khalidCardReviewImage} contentFit="cover" />
+                        {rev.rating != null ? (
+                          <View style={styles.khalidCardReviewRatingChip}>
+                            <Ionicons name="star" size={11} color="#FBBF24" />
+                            <Text style={styles.khalidCardReviewRatingChipText}>{rev.rating}</Text>
+                          </View>
+                        ) : null}
+                      </View>
                     ) : null}
                     <View style={styles.khalidCardReviewContent}>
-                      {rev.rating != null ? (
+                      {(!rev.imageUri || typeof rev.imageUri !== 'string') && rev.rating != null ? (
                         <View style={styles.khalidCardReviewRating}>
                           <Ionicons name="star" size={14} color="#FBBF24" />
                           <Text style={styles.khalidCardReviewRatingText}>{rev.rating}</Text>
@@ -774,6 +869,154 @@ function KhalidCardRow({ item, onViewProfile, onAskAbout, navigation }) {
       </Animated.View>
     </View>
   );
+}
+
+/* ─── Khalid premium chat helpers ────────────────────────────────────────── */
+
+const BAHRAIN_RED = '#C8102E'
+const BAHRAIN_RED_DEEP = '#8B0719'
+const BAHRAIN_GOLD = '#E9C877'
+
+/* Aurora backdrop — two drifting gradient blobs tinted gold/red that breathe
+ * behind the blurred panel for a premium cinematic look. */
+function ChatAuroraBackdrop() {
+  const a = useRef(new Animated.Value(0)).current
+  const b = useRef(new Animated.Value(0)).current
+  useEffect(() => {
+    const loopA = Animated.loop(
+      Animated.sequence([
+        Animated.timing(a, { toValue: 1, duration: 9000, easing: Easing.inOut(Easing.sin), useNativeDriver: true }),
+        Animated.timing(a, { toValue: 0, duration: 9000, easing: Easing.inOut(Easing.sin), useNativeDriver: true }),
+      ])
+    )
+    const loopB = Animated.loop(
+      Animated.sequence([
+        Animated.timing(b, { toValue: 1, duration: 11000, easing: Easing.inOut(Easing.sin), useNativeDriver: true }),
+        Animated.timing(b, { toValue: 0, duration: 11000, easing: Easing.inOut(Easing.sin), useNativeDriver: true }),
+      ])
+    )
+    loopA.start(); loopB.start()
+    return () => { loopA.stop(); loopB.stop() }
+  }, [a, b])
+
+  const tx1 = a.interpolate({ inputRange: [0, 1], outputRange: [-40, 60] })
+  const ty1 = a.interpolate({ inputRange: [0, 1], outputRange: [-20, 40] })
+  const tx2 = b.interpolate({ inputRange: [0, 1], outputRange: [50, -70] })
+  const ty2 = b.interpolate({ inputRange: [0, 1], outputRange: [100, 40] })
+  const op1 = a.interpolate({ inputRange: [0, 0.5, 1], outputRange: [0.55, 0.85, 0.55] })
+  const op2 = b.interpolate({ inputRange: [0, 0.5, 1], outputRange: [0.4, 0.7, 0.4] })
+
+  return (
+    <View pointerEvents="none" style={StyleSheet.absoluteFill}>
+      <Animated.View style={[styles.khalidAuroraBlob, { opacity: op1, transform: [{ translateX: tx1 }, { translateY: ty1 }] }]}>
+        <LinearGradient
+          colors={['rgba(200,16,46,0.55)', 'rgba(200,16,46,0)']}
+          style={StyleSheet.absoluteFill}
+          start={{ x: 0.5, y: 0.5 }}
+          end={{ x: 1, y: 1 }}
+        />
+      </Animated.View>
+      <Animated.View style={[styles.khalidAuroraBlob, styles.khalidAuroraBlobGold, { opacity: op2, transform: [{ translateX: tx2 }, { translateY: ty2 }] }]}>
+        <LinearGradient
+          colors={['rgba(233,200,119,0.45)', 'rgba(233,200,119,0)']}
+          style={StyleSheet.absoluteFill}
+          start={{ x: 0.5, y: 0.5 }}
+          end={{ x: 1, y: 1 }}
+        />
+      </Animated.View>
+    </View>
+  )
+}
+
+/* Breathing halo ring behind the avatar — a rotating conic-like gradient
+ * (faked with a LinearGradient ring) plus a subtle pulse scale. */
+function AvatarHaloRing({ size = 48, children, active = true }) {
+  const rotate = useRef(new Animated.Value(0)).current
+  const pulse = useRef(new Animated.Value(0)).current
+  useEffect(() => {
+    if (!active) return undefined
+    const r = Animated.loop(
+      Animated.timing(rotate, { toValue: 1, duration: 6000, easing: Easing.linear, useNativeDriver: true })
+    )
+    const p = Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulse, { toValue: 1, duration: 1800, easing: Easing.inOut(Easing.sin), useNativeDriver: true }),
+        Animated.timing(pulse, { toValue: 0, duration: 1800, easing: Easing.inOut(Easing.sin), useNativeDriver: true }),
+      ])
+    )
+    r.start(); p.start()
+    return () => { r.stop(); p.stop() }
+  }, [active, rotate, pulse])
+  const rot = rotate.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '360deg'] })
+  const s = pulse.interpolate({ inputRange: [0, 1], outputRange: [1, 1.06] })
+  const op = pulse.interpolate({ inputRange: [0, 1], outputRange: [0.7, 1] })
+  const ringSize = size + 6
+  return (
+    <View style={{ width: ringSize, height: ringSize, alignItems: 'center', justifyContent: 'center' }}>
+      <Animated.View
+        pointerEvents="none"
+        style={{
+          position: 'absolute',
+          width: ringSize,
+          height: ringSize,
+          borderRadius: ringSize / 2,
+          opacity: op,
+          transform: [{ rotate: rot }, { scale: s }],
+        }}
+      >
+        <LinearGradient
+          colors={[BAHRAIN_GOLD, BAHRAIN_RED, 'rgba(233,200,119,0)', BAHRAIN_GOLD]}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={{ flex: 1, borderRadius: ringSize / 2 }}
+        />
+      </Animated.View>
+      <View style={{ width: size, height: size, borderRadius: size / 2, backgroundColor: '#0F1626', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
+        {children}
+      </View>
+    </View>
+  )
+}
+
+/* Waveform typing indicator — 5 vertical bars that ripple like an audio
+ * waveform with a gold→red gradient. Replaces the plain 3 dots. */
+function WaveformTyping() {
+  const bars = useRef([0, 1, 2, 3, 4].map(() => new Animated.Value(0))).current
+  useEffect(() => {
+    const loops = bars.map((v, i) => Animated.loop(
+      Animated.sequence([
+        Animated.delay(i * 90),
+        Animated.timing(v, { toValue: 1, duration: 420, easing: Easing.inOut(Easing.quad), useNativeDriver: true }),
+        Animated.timing(v, { toValue: 0, duration: 420, easing: Easing.inOut(Easing.quad), useNativeDriver: true }),
+      ])
+    ))
+    const safeLoops = Array.isArray(loops) ? loops : []
+    safeLoops.forEach((l) => l.start())
+    return () => safeLoops.forEach((l) => l.stop())
+  }, [bars])
+  return (
+    <View style={styles.khalidWaveWrap}>
+      {bars.map((v, i) => {
+        const scaleY = v.interpolate({ inputRange: [0, 1], outputRange: [0.35, 1] })
+        return (
+          <Animated.View
+            key={i}
+            style={[
+              styles.khalidWaveBar,
+              { transform: [{ scaleY }] },
+            ]}
+          >
+            <LinearGradient
+              colors={[BAHRAIN_GOLD, BAHRAIN_RED]}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 0, y: 1 }}
+              style={{ flex: 1, borderRadius: 3 }}
+            />
+          </Animated.View>
+        )
+      })}
+    </View>
+  )
 }
 
 function BubbleIn({ isUser, children }) {
@@ -806,16 +1049,23 @@ function buildKhalidSystemPrompt(pineconePlacesContext, userPreferences = {}) {
   const generalLabels = userPreferences.generalLabels || [];
   const activityLabels = userPreferences.activityLabels || [];
   const foodLabels = userPreferences.foodLabels || [];
+  const personaSummary = typeof userPreferences.personaSummary === 'string' ? userPreferences.personaSummary.trim() : '';
+  const hasPersona = personaSummary.length > 0;
   const hasGeneral = generalLabels.length > 0;
   const hasPlanPrefs = activityLabels.length > 0 || foodLabels.length > 0;
+  const personaBlock = hasPersona
+    ? `\n\n═══ WHO YOU'RE TALKING TO (use this as ground truth for tone + picks) ═══
+${personaSummary}
+Speak to them like you already know them. Recommend places that fit this person — not generic tourists. Your "reply" sentence should subtly reflect their vibe, not a one-size-fits-all blurb.\n`
+    : '';
   const prefsBlock = (hasGeneral || hasPlanPrefs)
     ? `\n\nUSER PREFERENCES (personalize recommendations based on these):
 ${hasGeneral ? `Travel Style: ${generalLabels.join(', ')}. Tailor suggestions to match their interests and pace.\n` : ''}${hasPlanPrefs ? `Preferred Activities: ${activityLabels.length ? activityLabels.join(', ') : 'open to anything'}
 Preferred Cuisines: ${foodLabels.length ? foodLabels.join(', ') : 'open to anything'}
 Prioritize these preferences when making recommendations.\n` : ''}\n`
     : '';
-  return `You are Khalid, a friendly and knowledgeable Bahraini local guide for Go Bahrain. Your goal is to help tourists discover the best of Bahrain by providing helpful, conversational responses with visual results.
-${prefsBlock}
+  return `You are Khalid, a friendly and knowledgeable Bahraini local guide for SiyahaBH. Your goal is to help tourists discover the best of Bahrain by providing helpful, conversational responses with visual results.
+${personaBlock}${prefsBlock}
 
 YOUR PERSONALITY:
 - Warm, welcoming, and enthusiastic about Bahrain
@@ -946,39 +1196,83 @@ export default function BottomControlBar({ state, navigation }) {
   const { colors, isDark } = useTheme();
   const themeStyles = React.useMemo(() => ({
     wrapper: { backgroundColor: 'transparent' },
-    bar: {
-      backgroundColor: isDark ? 'rgba(15,23,42,0.95)' : 'rgba(255,255,255,0.92)',
-      borderTopColor: isDark ? 'rgba(51,65,85,0.5)' : 'rgba(226,232,240,0.6)',
-      backdropFilter: 'blur(20px)',
+    /** Transparent host — real chrome is floatingDock */
+    floatingBarHost: {
+      backgroundColor: 'transparent',
     },
-    navLabel: { color: colors.textMuted },
-    navLabelActive: { color: colors.primary, fontWeight: '700' },
+    floatingDock: {
+      backgroundColor: isDark ? '#1C1C1E' : '#FFFFFF',
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: isDark ? 'rgba(255,255,255,0.1)' : 'rgba(15,23,42,0.08)',
+      ...Platform.select({
+        ios: {
+          shadowColor: '#000',
+          shadowOffset: { width: 0, height: 10 },
+          shadowOpacity: isDark ? 0.5 : 0.14,
+          shadowRadius: 24,
+        },
+        android: {
+          elevation: 18,
+        },
+      }),
+    },
+    /** Tab icons: inactive gray; active = brand primary (filled icons read as red) */
+    navIconInactive: isDark ? '#A8A8A8' : '#8E8E8E',
+    navIconActive: colors.primary,
+    /** Selected tab “liquid glass” (iOS-style frosted capsule behind glyph) */
+    navTabGlassAndroidFallback: {
+      backgroundColor: isDark ? 'rgba(72,72,78,0.78)' : 'rgba(255,255,255,0.78)',
+    },
+    navTabGlassBorder: {
+      borderColor: isDark ? 'rgba(255,255,255,0.2)' : 'rgba(255,255,255,0.92)',
+    },
+    navTabGlassSheenTop: isDark ? 'rgba(255,255,255,0.16)' : 'rgba(255,255,255,0.72)',
+    navTabGlassSheenMid: isDark ? 'rgba(255,255,255,0.04)' : 'rgba(255,255,255,0.22)',
+    navTabGlassSheenBot: isDark ? 'rgba(0,0,0,0.12)' : 'rgba(255,255,255,0.06)',
+    navTabGlassShadowIos: {
+      shadowColor: '#000',
+      shadowOffset: { width: 0, height: 2 },
+      shadowOpacity: isDark ? 0.4 : 0.12,
+      shadowRadius: 10,
+    },
     fab: {
       backgroundColor: isDark ? colors.surfaceElevated : '#111827',
       borderColor: isDark ? 'rgba(51,65,85,0.6)' : 'rgba(255,255,255,0.9)',
     },
     fabPlanShell: {
       backgroundColor: 'transparent',
-      borderColor: isDark ? 'rgba(248,250,252,0.22)' : 'rgba(255,255,255,0.95)',
+      borderColor: isDark ? '#E9C877' : '#E3B85A',
     },
     fabPlanGradient: {
       ...Platform.select({
         ios: {
-          shadowColor: colors.primary,
-          shadowOffset: { width: 0, height: 2 },
-          shadowOpacity: isDark ? 0.35 : 0.28,
-          shadowRadius: 8,
+          shadowColor: colors.primaryDark,
+          shadowOffset: { width: 0, height: 6 },
+          shadowOpacity: isDark ? 0.45 : 0.32,
+          shadowRadius: 14,
         },
-        android: { elevation: 6 },
+        android: { elevation: 10 },
       }),
     },
+    /** When not on AI Plan: looks like other inactive tabs (not “always selected”) */
+    fabPlanInactiveFab: {
+      backgroundColor: 'transparent',
+      borderColor: isDark ? 'rgba(233,200,119,0.88)' : 'rgba(227,184,90,0.92)',
+      ...Platform.select({
+        ios: {
+          shadowColor: '#0F172A',
+          shadowOffset: { width: 0, height: 3 },
+          shadowOpacity: isDark ? 0.35 : 0.08,
+          shadowRadius: 8,
+        },
+        android: { elevation: 4 },
+      }),
+    },
+    fabPlanInactiveGradient0: isDark ? '#3D4F63' : '#FFFFFF',
+    fabPlanInactiveGradient1: isDark ? '#2A3648' : '#E8EEF5',
     fabPlanLabel: {
       color: colors.primary,
       fontWeight: '700',
-    },
-    aiFabGlow: {
-      borderColor: isDark ? 'rgba(230,57,80,0.22)' : 'rgba(200,16,46,0.18)',
-      backgroundColor: isDark ? 'rgba(230,57,80,0.08)' : 'rgba(200,16,46,0.06)',
     },
     fabLabel: { color: colors.textMuted },
     swipeUpRingTrack: { borderColor: colors.primaryMuted },
@@ -992,6 +1286,11 @@ export default function BottomControlBar({ state, navigation }) {
   }), [colors, isDark])
   const insets = useSafeAreaInsets();
   const currentRouteName = state.routes[state.index]?.name;
+  /** PanResponder is created once; closures must read latest route/nav via refs */
+  const currentRouteNameRef = useRef(currentRouteName);
+  const navigationRef = useRef(navigation);
+  currentRouteNameRef.current = currentRouteName;
+  navigationRef.current = navigation;
   const communityFocusedChild = React.useMemo(() => {
     const route = state.routes[state.index];
     if (route?.name !== 'Community' || route.state == null) return null;
@@ -999,13 +1298,22 @@ export default function BottomControlBar({ state, navigation }) {
   }, [state]);
   const hideTabBarForCommunityDetail = communityFocusedChild === 'CommunityPostDetail';
   const hideTabBar = hideTabBarForCommunityDetail;
-  const { generalLabels, activityLabels, foodLabels } = useUserPreferences();
+  const { generalLabels, activityLabels, foodLabels, preferences } = useUserPreferences();
+  const personaSummary = preferences?.profileSummary || '';
+
+  const navTabPressAnim = React.useMemo(() => {
+    const o = {};
+    const navScreens = Array.isArray(NAV_TAB_SCREENS) ? NAV_TAB_SCREENS : []
+    navScreens.forEach((name) => {
+      o[name] = new Animated.Value(1);
+    });
+    return o;
+  }, []);
   const [aiPlanSheetAnim, setAiPlanSheetAnim] = useState(null);
   useEffect(() => aiPlanSheetLink.subscribe(setAiPlanSheetAnim), []);
 
-  // Pulsing idle glow + press impulse for AI button (center)
-  const pulse = useRef(new Animated.Value(0)).current;
-  const impulse = useRef(new Animated.Value(0)).current;
+  /** Plan FAB press feedback — opacity only (no scale) so the SVG map icon stays crisp */
+  const planPressOpacity = useRef(new Animated.Value(1)).current;
   const longPressTriggeredRef = useRef(false);
   const [showKhalidOverlay, setShowKhalidOverlay] = useState(false);
   const [isHoldingForKhalid, setIsHoldingForKhalid] = useState(false);
@@ -1027,57 +1335,17 @@ export default function BottomControlBar({ state, navigation }) {
   ]);
   const [khalidInput, setKhalidInput] = useState('');
   const [khalidLoading, setKhalidLoading] = useState(false);
+  const [khalidInputFocused, setKhalidInputFocused] = useState(false);
   const [khalidError, setKhalidError] = useState(null);
+  const lastOrbitChatTsRef = useRef(0);
   const khalidListRef = useRef(null);
+  const khalidPrefetchRef = useRef({ key: '', context: '', inflight: null });
+  const khalidPrefetchTimerRef = useRef(null);
   const typingDot1 = useRef(new Animated.Value(0)).current;
   const typingDot2 = useRef(new Animated.Value(0)).current;
   const typingDot3 = useRef(new Animated.Value(0)).current;
   const siriOrbScale = useRef(new Animated.Value(1)).current;
   const siriOrbOpacity = useRef(new Animated.Value(0.7)).current;
-
-  useEffect(() => {
-    const animation = Animated.loop(
-      Animated.sequence([
-        Animated.timing(pulse, {
-          toValue: 1,
-          duration: 1200,
-          easing: Easing.out(Easing.quad),
-          useNativeDriver: true,
-        }),
-        Animated.timing(pulse, {
-          toValue: 0,
-          duration: 1200,
-          easing: Easing.in(Easing.quad),
-          useNativeDriver: true,
-        }),
-      ]),
-    );
-    animation.start();
-
-    return () => {
-      animation.stop();
-    };
-  }, [pulse]);
-
-  const glowScale = pulse.interpolate({
-    inputRange: [0, 1],
-    outputRange: [1, 1.25],
-  });
-
-  const glowOpacity = pulse.interpolate({
-    inputRange: [0, 1],
-    outputRange: [0.35, 0],
-  });
-
-  const impulseScale = impulse.interpolate({
-    inputRange: [0, 1],
-    outputRange: [1, 1.6],
-  });
-
-  const impulseOpacity = impulse.interpolate({
-    inputRange: [0, 1],
-    outputRange: [0, 0.5],
-  });
 
   const swipeRingRotation = dragProgress.interpolate({
     inputRange: [0, 1],
@@ -1171,7 +1439,39 @@ export default function BottomControlBar({ state, navigation }) {
   useEffect(() => {
     if (!showKhalidOverlay) return;
     runKhalidEntranceAnimation();
+    const seedParts = [
+      'best things to do in Bahrain today',
+      ...(activityLabels || []).slice(0, 2),
+      ...(foodLabels || []).slice(0, 2),
+    ].filter(Boolean);
+    const seedQuery = seedParts.join(', ');
+    if (seedQuery) startKhalidPrefetch(seedQuery);
   }, [showKhalidOverlay]);
+
+  useEffect(() => {
+    const unsubscribe = khalidChatLink.subscribe((payload) => {
+      if (!payload || payload.source !== 'orbit') return;
+      const ts = Number(payload.ts || 0);
+      if (!ts || ts === lastOrbitChatTsRef.current) return;
+      lastOrbitChatTsRef.current = ts;
+      const place = String(payload.place || 'this place').trim();
+      const summary = String(payload.summary || '').trim();
+      const text = summary || 'I do not have a summary yet for this place.';
+      setShowKhalidOverlay(true);
+      setKhalidError(null);
+      setKhalidInput('');
+      setKhalidMessages((prev) => ([
+        ...prev,
+        {
+          id: `orbit-summary-${ts}`,
+          role: 'assistant',
+          text: `About ${place}:\n\n${text}`,
+        },
+      ]));
+      setTimeout(scrollKhalidToEnd, 120);
+    });
+    return unsubscribe;
+  }, []);
 
   const typingLoopRef = useRef(null);
   const siriOrbLoopRef = useRef(null);
@@ -1262,21 +1562,6 @@ export default function BottomControlBar({ state, navigation }) {
     swipeTriggeredRef.current = true;
     longPressTriggeredRef.current = true;
     if (Platform.OS !== 'web') Vibration.vibrate(80);
-    impulse.setValue(0);
-    Animated.sequence([
-      Animated.timing(impulse, {
-        toValue: 1,
-        duration: 350,
-        easing: Easing.out(Easing.circle),
-        useNativeDriver: true,
-      }),
-      Animated.timing(impulse, {
-        toValue: 0,
-        duration: 280,
-        easing: Easing.in(Easing.circle),
-        useNativeDriver: true,
-      }),
-    ]).start();
     khalidBackdropOpacity.setValue(0);
     khalidBackdropScale.setValue(1);
     khalidContentScale.setValue(0.86);
@@ -1294,6 +1579,12 @@ export default function BottomControlBar({ state, navigation }) {
         swipeTriggeredRef.current = false;
         setIsHoldingForKhalid(true);
         dragProgress.setValue(0);
+        Animated.spring(planPressOpacity, {
+          toValue: 0.88,
+          useNativeDriver: true,
+          friction: 8,
+          tension: 220,
+        }).start();
       },
       onPanResponderMove: (_, gestureState) => {
         if (swipeTriggeredRef.current) return;
@@ -1308,26 +1599,24 @@ export default function BottomControlBar({ state, navigation }) {
           !swipeTriggeredRef.current &&
           Math.abs(gestureState.dy) <= TAP_MAX_MOVE &&
           elapsed < TAP_MAX_MS;
+        Animated.spring(planPressOpacity, {
+          toValue: 1,
+          friction: 5,
+          tension: 120,
+          useNativeDriver: true,
+        }).start();
         setIsHoldingForKhalid(false);
         dragProgress.setValue(0);
         if (swipeTriggeredRef.current) return;
         if (isTap) {
           longPressTriggeredRef.current = false;
           if (Platform.OS !== 'web') Vibration.vibrate(40);
-          impulse.setValue(0);
-          Animated.sequence([
-            Animated.timing(impulse, {
-              toValue: 1,
-              duration: 550,
-              easing: Easing.out(Easing.circle),
-              useNativeDriver: true,
-            }),
-            Animated.timing(impulse, { toValue: 0, duration: 350, easing: Easing.in(Easing.circle), useNativeDriver: true }),
-          ]).start();
-          if (currentRouteName === 'AI Plan') {
-            navigation.navigate('AI Plan', { openPlanModal: Date.now() });
+          const nav = navigationRef.current;
+          if (currentRouteNameRef.current === 'AI Plan') {
+            // No longer triggering build mode picker from nav button tap per user request
+            nav.navigate('AI Plan');
           } else {
-            navigation.navigate('AI Plan');
+            nav.navigate('AI Plan');
           }
         }
       },
@@ -1457,6 +1746,57 @@ export default function BottomControlBar({ state, navigation }) {
     }
   };
 
+  const buildPrefetchKey = (text) => {
+    const t = String(text || '').trim().toLowerCase();
+    const g = (generalLabels || []).join(',');
+    const a = (activityLabels || []).join(',');
+    const f = (foodLabels || []).join(',');
+    const p = personaSummary ? personaSummary.slice(0, 80) : '';
+    return `${t}|${g}|${a}|${f}|${p}`;
+  };
+
+  const startKhalidPrefetch = (text) => {
+    const trimmed = String(text || '').trim();
+    if (trimmed.length < 4) return;
+    const key = buildPrefetchKey(trimmed);
+    const cache = khalidPrefetchRef.current;
+    if (cache.key === key && (cache.context !== '' || cache.inflight)) return;
+    const inflight = fetchPineconePlacesForChat(trimmed, {
+      generalLabels,
+      activityLabels,
+      foodLabels,
+      personaSummary,
+    })
+      .then((ctx) => {
+        if (khalidPrefetchRef.current.key === key) {
+          khalidPrefetchRef.current = { key, context: ctx || '', inflight: null };
+        }
+        return ctx || '';
+      })
+      .catch(() => {
+        if (khalidPrefetchRef.current.key === key) {
+          khalidPrefetchRef.current = { key, context: '', inflight: null };
+        }
+        return '';
+      });
+    khalidPrefetchRef.current = { key, context: '', inflight };
+  };
+
+  const scheduleKhalidPrefetch = (text) => {
+    if (khalidPrefetchTimerRef.current) {
+      clearTimeout(khalidPrefetchTimerRef.current);
+      khalidPrefetchTimerRef.current = null;
+    }
+    khalidPrefetchTimerRef.current = setTimeout(() => {
+      startKhalidPrefetch(text);
+    }, 450);
+  };
+
+  const handleKhalidInputChange = (text) => {
+    setKhalidInput(text);
+    scheduleKhalidPrefetch(text);
+  };
+
   const sendMessageWithText = async (text) => {
     const trimmed = String(text).trim();
     if (!trimmed || khalidLoading) return;
@@ -1486,8 +1826,28 @@ export default function BottomControlBar({ state, navigation }) {
           content: m.text,
         }));
 
-      const pineconePlacesContext = await fetchPineconePlacesForChat(trimmed, { generalLabels, activityLabels, foodLabels });
-      const systemPrompt = buildKhalidSystemPrompt(pineconePlacesContext, { generalLabels, activityLabels, foodLabels });
+      const cacheKey = buildPrefetchKey(trimmed);
+      const cache = khalidPrefetchRef.current;
+      let pineconePlacesContext = '';
+      if (cache.key === cacheKey && cache.context) {
+        pineconePlacesContext = cache.context;
+      } else if (cache.key === cacheKey && cache.inflight) {
+        pineconePlacesContext = (await cache.inflight) || '';
+      } else {
+        pineconePlacesContext = await fetchPineconePlacesForChat(trimmed, {
+          generalLabels,
+          activityLabels,
+          foodLabels,
+          personaSummary,
+        });
+        khalidPrefetchRef.current = { key: cacheKey, context: pineconePlacesContext || '', inflight: null };
+      }
+      const systemPrompt = buildKhalidSystemPrompt(pineconePlacesContext, {
+        generalLabels,
+        activityLabels,
+        foodLabels,
+        personaSummary,
+      });
 
       const res = await fetch(OPENAI_CHAT_URL, {
         method: 'POST',
@@ -1608,7 +1968,8 @@ export default function BottomControlBar({ state, navigation }) {
 
       if (actions && actions.length > 0) {
         console.log('[Khalid] Processing actions:', actions);
-        (actions || []).forEach(handleKhalidAction);
+        const safeActions = Array.isArray(actions) ? actions : [];
+        safeActions.forEach(handleKhalidAction);
       } else {
         console.log('[Khalid] No actions to process');
       }
@@ -1659,6 +2020,23 @@ export default function BottomControlBar({ state, navigation }) {
               isUser ? styles.khalidBubbleUser : styles.khalidBubbleAssistant,
             ]}
           >
+            {isUser ? (
+              <LinearGradient
+                colors={[BAHRAIN_RED, BAHRAIN_RED_DEEP]}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 1 }}
+                style={[StyleSheet.absoluteFill, styles.khalidBubbleGradient]}
+              />
+            ) : (
+              <LinearGradient
+                colors={['rgba(255,255,255,0.08)', 'rgba(255,255,255,0)']}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 0, y: 1 }}
+                style={[StyleSheet.absoluteFill, styles.khalidBubbleGradient]}
+                pointerEvents="none"
+              />
+            )}
+            {!isUser && <View style={styles.khalidBubbleAccent} pointerEvents="none" />}
             <AnimatedMessageText
               text={item.text}
               isUser={isUser}
@@ -1686,22 +2064,7 @@ export default function BottomControlBar({ state, navigation }) {
             />
           </View>
           <View style={[styles.khalidBubble, styles.khalidBubbleAssistant, styles.khalidTypingBubble]}>
-            <View style={styles.khalidTypingDots}>
-              {[typingDot1, typingDot2, typingDot3].map((dot, i) => (
-                <Animated.View
-                  key={i}
-                  style={[
-                    styles.khalidTypingDot,
-                    {
-                      transform: [{
-                        translateY: dot.interpolate({ inputRange: [0, 1], outputRange: [0, -8] }),
-                      }],
-                      opacity: dot.interpolate({ inputRange: [0, 0.5, 1], outputRange: [0.45, 1, 0.45] }),
-                    },
-                  ]}
-                />
-              ))}
-            </View>
+            <WaveformTyping />
           </View>
         </View>
       </BubbleIn>
@@ -1719,19 +2082,48 @@ export default function BottomControlBar({ state, navigation }) {
     navigation.navigate(screenName);
   };
 
+  const handleNavPressIn = (screenName) => {
+    if (!NAV_TAB_SCREENS.includes(screenName)) return;
+    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    Animated.spring(navTabPressAnim[screenName], {
+      toValue: 0.9,
+      friction: 5,
+      tension: 400,
+      useNativeDriver: true,
+    }).start();
+  };
+
+  const handleNavPressOut = (screenName) => {
+    if (!NAV_TAB_SCREENS.includes(screenName)) return;
+    Animated.spring(navTabPressAnim[screenName], {
+      toValue: 1,
+      friction: 5,
+      tension: 280,
+      useNativeDriver: true,
+    }).start();
+  };
+
   const navItems = [
-    { screen: 'Home', icon: 'home', label: 'Home' },
-    { screen: 'Explore', icon: 'compass', label: 'Explore' },
+    { screen: 'Home', label: 'Home' },
+    { screen: 'Explore', label: 'Explore' },
     null, // center slot for AI Plan
-    { screen: 'Community', icon: 'people', label: 'Community' },
-    { screen: 'Profile', icon: 'person-circle-outline', label: 'Profile' },
+    { screen: 'Community', label: 'Community' },
+    { screen: 'Profile', label: 'Settings' },
   ];
 
-  // Room for 52px FAB + label; pulse/glow rings extend past the row and need visible overflow
-  const barContentHeight = 64;
-  const bottomInset = Math.max(insets.bottom, 12);
-  const totalBarHeight = barContentHeight + bottomInset;
-  const tabBarHeight = hideTabBar ? 0 : totalBarHeight;
+  const isPlanRouteActive = currentRouteName === 'AI Plan';
+  const isPlanMapOrbit = usePlanMapOrbitActive();
+  const orbitTabBarShift = isPlanMapOrbit && isPlanRouteActive ? ORBIT_TAB_BAR_PULL_DOWN : 0;
+
+  /** Slightly larger than default so filled tab SVGs read bolder in the 40×40 hit area */
+  const navIconSize = 28;
+  const planIconSize = 32;
+
+  /** Bottom bar: full width; room above row for raised center FAB */
+  const FLOAT_NAV_H_MARGIN = 0;
+  const FAB_FLOAT_LIFT = 90;
+  /** Dock sits on safe-area bottom only — no extra gap so the bar sits as low as possible */
+  const bottomInset = insets.bottom;
   const tabBarBottomPad = hideTabBar ? 0 : bottomInset;
 
   const TabBarRoot = aiPlanSheetAnim ? Animated.View : View;
@@ -1743,22 +2135,38 @@ export default function BottomControlBar({ state, navigation }) {
     <TabBarRoot style={tabBarRootStyle}>
       <View
         style={[
-          styles.bar,
-          themeStyles.bar,
+          styles.floatingBarHost,
+          themeStyles.floatingBarHost,
           {
-            height: tabBarHeight,
-            paddingBottom: tabBarBottomPad,
+            paddingBottom: 0,
+            paddingHorizontal: FLOAT_NAV_H_MARGIN,
+            paddingTop: FAB_FLOAT_LIFT,
             opacity: hideTabBar ? 0 : 1,
             overflow: 'visible',
+            transform: orbitTabBarShift ? [{ translateY: orbitTabBarShift }] : undefined,
           },
         ]}
         pointerEvents={hideTabBar ? 'none' : 'auto'}
       >
-        <View style={styles.navRow}>
+        <View
+          style={[
+            styles.floatingDock,
+            themeStyles.floatingDock,
+            {
+              paddingBottom: hideTabBar ? 0 : tabBarBottomPad,
+              borderBottomLeftRadius: 0,
+              borderBottomRightRadius: 0,
+            },
+          ]}
+        >
+          <View style={styles.navRow}>
           {navItems.map((item, index) => {
             if (item === null) {
               return (
-                <View key="ai" style={styles.aiContainer}>
+                <View
+                  key="ai"
+                  style={[styles.aiContainer, { marginTop: -FAB_FLOAT_LIFT, zIndex: 2 }]}
+                >
                   {isHoldingForKhalid ? (
                     <Animated.View
                       pointerEvents="none"
@@ -1778,72 +2186,169 @@ export default function BottomControlBar({ state, navigation }) {
                       </Animated.View>
                     </Animated.View>
                   ) : null}
-                  <Animated.View
-                    pointerEvents="none"
-                    style={[
-                      styles.aiGlow,
-                      themeStyles.aiFabGlow,
-                      {
-                        opacity: glowOpacity,
-                        transform: [{ scale: glowScale }],
-                      },
-                    ]}
-                  />
-                  <Animated.View
-                    pointerEvents="none"
-                    style={[
-                      styles.aiImpulseGlow,
-                      themeStyles.aiFabGlow,
-                      {
-                        opacity: impulseOpacity,
-                        transform: [{ scale: impulseScale }],
-                      },
-                    ]}
-                  />
                   <View style={styles.fabWrap} {...panResponder.panHandlers}>
-                    <View style={[styles.fab, themeStyles.fabPlanShell, themeStyles.fabPlanGradient]}>
-                      <LinearGradient
-                        colors={[colors.primaryLight, colors.primaryDark]}
-                        start={{ x: 0, y: 0 }}
-                        end={{ x: 1, y: 1 }}
-                        style={styles.fabPlanFill}
-                      />
-                      <Ionicons name="sparkles" size={22} color="rgba(255,255,255,0.96)" style={styles.fabPlanIcon} />
-                    </View>
+                    <Animated.View style={{ opacity: planPressOpacity }}>
+                      <View
+                        style={[
+                          styles.fab,
+                          themeStyles.fabPlanShell,
+                          isPlanRouteActive ? themeStyles.fabPlanGradient : themeStyles.fabPlanInactiveFab,
+                        ]}
+                      >
+                        {isPlanRouteActive ? (
+                          <>
+                            <LinearGradient
+                              colors={[colors.primaryDark, colors.primary, colors.primaryLight]}
+                              locations={[0, 0.48, 1]}
+                              start={{ x: 0.1, y: 0 }}
+                              end={{ x: 0.9, y: 1 }}
+                              style={styles.fabPlanFill}
+                            />
+                            <LinearGradient
+                              colors={[
+                                'rgba(255,255,255,0.34)',
+                                'rgba(255,255,255,0.08)',
+                                'rgba(0,0,0,0)',
+                                'rgba(0,0,0,0.12)',
+                              ]}
+                              locations={[0, 0.22, 0.55, 1]}
+                              start={{ x: 0.5, y: 0 }}
+                              end={{ x: 0.5, y: 1 }}
+                              style={styles.fabPlanGloss}
+                            />
+                          </>
+                        ) : (
+                          <LinearGradient
+                            colors={[
+                              themeStyles.fabPlanInactiveGradient0,
+                              themeStyles.fabPlanInactiveGradient1,
+                            ]}
+                            start={{ x: 0.2, y: 0 }}
+                            end={{ x: 0.85, y: 1 }}
+                            style={styles.fabPlanFill}
+                          />
+                        )}
+                        <View style={styles.fabPlanIcon}>
+                          <MapLogoIcon
+                            size={planIconSize}
+                            color={isPlanRouteActive ? '#FFFFFF' : themeStyles.navIconInactive}
+                            accessibilityLabel="Plan — Bahrain"
+                            accessible
+                          />
+                        </View>
+                      </View>
+                    </Animated.View>
                   </View>
-                  <Text style={[styles.fabLabel, themeStyles.fabPlanLabel]} numberOfLines={1}>
+                  <Text
+                    style={[
+                      styles.planFabLabel,
+                      isPlanRouteActive ? themeStyles.fabPlanLabel : themeStyles.fabLabel,
+                      !isPlanRouteActive && styles.planFabLabelInactive,
+                    ]}
+                    numberOfLines={1}
+                  >
                     Plan
                   </Text>
                 </View>
               );
             }
             const isActive = currentRouteName === item.screen;
+            const iconName = isActive ? item.iconActive : item.icon;
+            const navTabIconColor = isActive ? themeStyles.navIconActive : themeStyles.navIconInactive;
             return (
-              <TouchableOpacity
+              <Pressable
                 key={item.screen}
                 style={styles.navItem}
-                activeOpacity={0.7}
                 onPress={() => handleNavigate(item.screen)}
+                onPressIn={() => handleNavPressIn(item.screen)}
+                onPressOut={() => handleNavPressOut(item.screen)}
+                accessibilityRole="tab"
+                accessibilityState={{ selected: isActive }}
+                accessibilityLabel={item.label}
+                hitSlop={{ top: 12, bottom: 12, left: 8, right: 8 }}
+                android_ripple={
+                  Platform.OS === 'android'
+                    ? { color: isDark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.08)' }
+                    : undefined
+                }
               >
-                <Ionicons
-                  name={item.icon}
-                  size={24}
-                  color={isActive ? colors.primary : colors.textMuted}
-                />
-                <Text
+                <Animated.View
                   style={[
-                    styles.navLabel,
-                    themeStyles.navLabel,
-                    isActive && styles.navLabelActive,
-                    isActive && themeStyles.navLabelActive,
+                    { transform: [{ scale: navTabPressAnim[item.screen] }] },
+                    isActive && Platform.OS === 'ios' && themeStyles.navTabGlassShadowIos,
                   ]}
-                  numberOfLines={1}
                 >
-                  {item.label}
-                </Text>
-              </TouchableOpacity>
+                  <View
+                    style={[
+                      styles.navTabIconWrap,
+                      isActive && styles.navTabIconWrapGlassElev,
+                    ]}
+                  >
+                    {isActive ? (
+                      <>
+                        {Platform.OS === 'ios' ? (
+                          <BlurView
+                            pointerEvents="none"
+                            intensity={isDark ? 38 : 34}
+                            tint={isDark ? 'dark' : 'light'}
+                            style={[StyleSheet.absoluteFillObject, styles.navTabIconGlassBlurRadius]}
+                          />
+                        ) : (
+                          <View
+                            pointerEvents="none"
+                            style={[
+                              StyleSheet.absoluteFillObject,
+                              styles.navTabIconGlassBlurRadius,
+                              themeStyles.navTabGlassAndroidFallback,
+                            ]}
+                          />
+                        )}
+                        <LinearGradient
+                          pointerEvents="none"
+                          colors={[
+                            themeStyles.navTabGlassSheenTop,
+                            themeStyles.navTabGlassSheenMid,
+                            themeStyles.navTabGlassSheenBot,
+                          ]}
+                          locations={[0, 0.38, 1]}
+                          start={{ x: 0.5, y: 0 }}
+                          end={{ x: 0.5, y: 1 }}
+                          style={[StyleSheet.absoluteFillObject, styles.navTabIconGlassBlurRadius]}
+                        />
+                        <View
+                          pointerEvents="none"
+                          style={[
+                            StyleSheet.absoluteFillObject,
+                            styles.navTabIconGlassBlurRadius,
+                            styles.navTabGlassBorderHairline,
+                            themeStyles.navTabGlassBorder,
+                          ]}
+                        />
+                      </>
+                    ) : null}
+                    <View style={styles.navTabIconGlyphLayer}>
+                      {item.screen === 'Home' ? (
+                        <HomeLogoIcon size={navIconSize} color={navTabIconColor} accessible={false} />
+                      ) : item.screen === 'Explore' ? (
+                        <SearchLogoIcon size={navIconSize} color={navTabIconColor} accessible={false} />
+                      ) : item.screen === 'Community' ? (
+                        <CommunityLogoIcon size={navIconSize} color={navTabIconColor} accessible={false} />
+                      ) : item.screen === 'Profile' ? (
+                        <SettingsLogoIcon size={navIconSize} color={navTabIconColor} accessible={false} />
+                      ) : (
+                        <Ionicons
+                          name={iconName}
+                          size={navIconSize}
+                          color={navTabIconColor}
+                        />
+                      )}
+                    </View>
+                  </View>
+                </Animated.View>
+              </Pressable>
             );
           })}
+          </View>
         </View>
       </View>
       {/* Khalid overlay: Siri/Gemini-style assistant over the whole app */}
@@ -1880,6 +2385,7 @@ export default function BottomControlBar({ state, navigation }) {
             <View style={styles.khalidContentBlur}>
               <BlurView intensity={55} tint="dark" style={StyleSheet.absoluteFill} />
               <View style={styles.khalidContentOverlay} />
+              <ChatAuroraBackdrop />
             </View>
 
             {/* Drag handle */}
@@ -1890,16 +2396,30 @@ export default function BottomControlBar({ state, navigation }) {
             <View style={styles.khalidHeader}>
               <View style={styles.khalidHeaderLeft}>
                 <View style={styles.khalidHeaderAvatarWrap}>
-                  <Image
-                    source={require('../../assets/ai-button-logo.png')}
-                    style={styles.khalidHeaderAvatarImage}
-                    resizeMode="cover"
-                  />
+                  <AvatarHaloRing size={48} active>
+                    <Image
+                      source={require('../../assets/ai-button-logo.png')}
+                      style={styles.khalidHeaderAvatarImage}
+                      resizeMode="cover"
+                    />
+                  </AvatarHaloRing>
                   <View style={styles.khalidHeaderOnlineDot} />
                 </View>
                 <View>
                   <Text style={styles.khalidHeaderTitle}>Khalid</Text>
-                  <Text style={styles.khalidHeaderSubtitle}>AI · Your Bahrain guide</Text>
+                  <View style={styles.khalidHeaderSubtitleRow}>
+                    {khalidLoading ? (
+                      <>
+                        <View style={styles.khalidHeaderStatusDotThinking} />
+                        <Text style={styles.khalidHeaderSubtitleThinking}>Thinking…</Text>
+                      </>
+                    ) : (
+                      <>
+                        <View style={styles.khalidHeaderStatusDotOnline} />
+                        <Text style={styles.khalidHeaderSubtitle}>AI · Your Bahrain guide</Text>
+                      </>
+                    )}
+                  </View>
                 </View>
               </View>
               <TouchableOpacity
@@ -1908,9 +2428,16 @@ export default function BottomControlBar({ state, navigation }) {
                 hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
                 activeOpacity={0.7}
               >
-                <Ionicons name="chevron-down" size={24} color="rgba(148,163,184,0.85)" />
+                <Ionicons name="chevron-down" size={24} color="rgba(148,163,184,0.9)" />
               </TouchableOpacity>
             </View>
+            <LinearGradient
+              colors={['rgba(233,200,119,0)', 'rgba(233,200,119,0.45)', 'rgba(200,16,46,0.35)', 'rgba(233,200,119,0)']}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 0 }}
+              style={styles.khalidHeaderDivider}
+              pointerEvents="none"
+            />
 
             <FlatList
               ref={khalidListRef}
@@ -1934,18 +2461,28 @@ export default function BottomControlBar({ state, navigation }) {
             {!khalidLoading && !khalidMessages.some((m) => m.role === 'user') ? (
               <View style={styles.khalidSuggestionsWrap}>
                 <View style={styles.khalidSuggestionsLabelRow}>
-                  <Ionicons name="sparkles" size={12} color="rgba(200,16,46,0.85)" />
+                  <Ionicons name="sparkles" size={12} color={BAHRAIN_GOLD} />
                   <Text style={styles.khalidSuggestionsLabel}>Quick suggestions</Text>
                 </View>
                 <View style={styles.khalidSuggestionsRow}>
                   {getSmartSuggestions(generalLabels, activityLabels, foodLabels).map((s) => (
                     <TouchableOpacity
                       key={s}
-                      style={styles.khalidSuggestionChip}
                       onPress={() => sendMessageWithText(s)}
                       activeOpacity={0.75}
+                      style={styles.khalidSuggestionChipWrap}
                     >
-                      <Text style={styles.khalidSuggestionChipText} numberOfLines={1}>{s}</Text>
+                      <LinearGradient
+                        colors={['rgba(233,200,119,0.7)', 'rgba(200,16,46,0.7)']}
+                        start={{ x: 0, y: 0 }}
+                        end={{ x: 1, y: 1 }}
+                        style={styles.khalidSuggestionChipBorder}
+                      >
+                        <View style={styles.khalidSuggestionChipInner}>
+                          <Ionicons name="sparkles-outline" size={12} color={BAHRAIN_GOLD} style={{ marginRight: 6 }} />
+                          <Text style={styles.khalidSuggestionChipText} numberOfLines={1}>{s}</Text>
+                        </View>
+                      </LinearGradient>
                     </TouchableOpacity>
                   ))}
                 </View>
@@ -1953,32 +2490,59 @@ export default function BottomControlBar({ state, navigation }) {
             ) : null}
 
             <View style={styles.khalidInputWrap}>
-              <TextInput
-                style={styles.khalidInput}
-                placeholder="Ask Khalid anything…"
-                placeholderTextColor="rgba(148,163,184,0.7)"
-                value={khalidInput}
-                onChangeText={setKhalidInput}
-                editable={!khalidLoading}
-                onSubmitEditing={sendKhalidMessage}
-                returnKeyType="send"
-                multiline
-                maxLength={500}
-              />
+              <View
+                style={[
+                  styles.khalidInputPill,
+                  khalidInputFocused && styles.khalidInputPillFocused,
+                ]}
+              >
+                {khalidInputFocused && (
+                  <LinearGradient
+                    colors={['rgba(233,200,119,0.55)', 'rgba(200,16,46,0.55)']}
+                    start={{ x: 0, y: 0 }}
+                    end={{ x: 1, y: 0 }}
+                    style={styles.khalidInputGlow}
+                    pointerEvents="none"
+                  />
+                )}
+                <TextInput
+                  style={styles.khalidInput}
+                  placeholder="Ask Khalid anything…"
+                  placeholderTextColor="rgba(148,163,184,0.7)"
+                  value={khalidInput}
+                  onChangeText={handleKhalidInputChange}
+                  editable={!khalidLoading}
+                  onSubmitEditing={sendKhalidMessage}
+                  onFocus={() => setKhalidInputFocused(true)}
+                  onBlur={() => setKhalidInputFocused(false)}
+                  returnKeyType="send"
+                  multiline
+                  maxLength={500}
+                />
+              </View>
               <TouchableOpacity
                 style={[
                   styles.khalidSendBtn,
-                  themeStyles.khalidSendBtn,
                   (!khalidInput.trim() || khalidLoading) && styles.khalidSendBtnDisabled,
                 ]}
                 onPress={sendKhalidMessage}
                 disabled={!khalidInput.trim() || khalidLoading}
-                activeOpacity={0.8}
+                activeOpacity={0.85}
               >
+                <LinearGradient
+                  colors={
+                    !khalidInput.trim() || khalidLoading
+                      ? ['rgba(71,85,105,0.7)', 'rgba(51,65,85,0.7)']
+                      : [BAHRAIN_GOLD, BAHRAIN_RED, BAHRAIN_RED_DEEP]
+                  }
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 1, y: 1 }}
+                  style={styles.khalidSendBtnGradient}
+                />
                 {khalidLoading ? (
                   <ActivityIndicator size="small" color="#FFFFFF" />
                 ) : (
-                  <Ionicons name="arrow-up" size={18} color="#FFFFFF" />
+                  <Ionicons name="arrow-up" size={20} color="#FFFFFF" />
                 )}
               </TouchableOpacity>
             </View>
@@ -2002,48 +2566,70 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     bottom: 0,
+    /** Stay above tab scenes (e.g. AI Plan sheet elevation, map filter chips) so the dock is never covered */
+    zIndex: 2000,
+    ...Platform.select({
+      ios: {},
+      android: { elevation: 48 },
+    }),
   },
-  bar: {
+  floatingBarHost: {
     left: 0,
     right: 0,
     bottom: 0,
     position: 'absolute',
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: '#E5E7EB',
-    paddingHorizontal: 4,
-    backgroundColor: '#FFFFFF',
     overflow: 'visible',
-    ...Platform.select({
-      ios: {
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: -2 },
-        shadowOpacity: 0.08,
-        shadowRadius: 10,
-      },
-      android: {
-        elevation: 16,
-      },
-    }),
+  },
+  /** Top-rounded bar flush to screen bottom; center FAB overlaps upward */
+  floatingDock: {
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
+    overflow: 'visible',
+    minHeight: 60,
+    paddingTop: 8,
+    paddingHorizontal: 4,
   },
   navRow: {
     flex: 1,
     flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-around',
+    alignItems: 'flex-end',
+    justifyContent: 'space-between',
+    paddingHorizontal: 2,
+    paddingBottom: 0,
   },
   navItem: {
     alignItems: 'center',
     justifyContent: 'center',
     flex: 1,
+    minHeight: 48,
   },
-  navLabel: {
-    fontSize: 10,
-    color: '#9CA3AF',
-    marginTop: 2,
-    fontWeight: '500',
+  /** Tab icon tile — slightly squircle so glass reads closer to iOS frosted controls */
+  navTabIconWrap: {
+    width: 42,
+    height: 42,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'hidden',
   },
-  navLabelActive: {
-    color: '#C8102E',
+  navTabIconWrapGlassElev: {
+    ...Platform.select({
+      android: {
+        elevation: 5,
+      },
+    }),
+  },
+  navTabIconGlassBlurRadius: {
+    borderRadius: 14,
+  },
+  navTabGlassBorderHairline: {
+    borderWidth: StyleSheet.hairlineWidth,
+    backgroundColor: 'transparent',
+  },
+  navTabIconGlyphLayer: {
+    zIndex: 2,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   aiContainer: {
     flex: 1,
@@ -2053,25 +2639,49 @@ const styles = StyleSheet.create({
   },
   fabLabel: {
     fontSize: 10,
-    color: '#6B7280',
+    color: '#262626',
     marginTop: 2,
     fontWeight: '600',
+    letterSpacing: 0.15,
+  },
+  planFabLabel: {
+    fontSize: 10,
+    color: '#262626',
+    marginTop: 4,
+    fontWeight: '700',
+    letterSpacing: 0.35,
+  },
+  planFabLabelInactive: {
+    opacity: 0.88,
   },
   fabPlanFill: {
     position: 'absolute',
-    left: 2,
-    top: 2,
-    right: 2,
-    bottom: 2,
-    borderRadius: 22,
+    left: 0,
+    top: 0,
+    right: 0,
+    bottom: 0,
+    borderRadius: 31,
   },
-  fabPlanIcon: {
+  fabPlanGloss: {
+    position: 'absolute',
+    left: 0,
+    top: 0,
+    right: 0,
+    bottom: 0,
+    borderRadius: 31,
     zIndex: 1,
   },
+  fabPlanIcon: {
+    zIndex: 2,
+    width: 32,
+    height: 32,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   fab: {
-    width: 52,
-    height: 52,
-    borderRadius: 26,
+    width: 62,
+    height: 62,
+    borderRadius: 31,
     backgroundColor: '#111827',
     borderWidth: 2,
     borderColor: '#FFFFFF',
@@ -2081,65 +2691,51 @@ const styles = StyleSheet.create({
     ...Platform.select({
       ios: {
         shadowColor: '#000',
-        shadowOffset: { width: 0, height: 4 },
-        shadowOpacity: 0.16,
-        shadowRadius: 10,
+        shadowOffset: { width: 0, height: 5 },
+        shadowOpacity: 0.18,
+        shadowRadius: 12,
       },
       android: {
-        elevation: 8,
+        elevation: 9,
       },
     }),
   },
-  aiGlow: {
+  fabWrap: {
+    position: 'relative',
+    zIndex: 2,
+    alignItems: 'center',
+    justifyContent: 'center',
+    minWidth: 76,
+    minHeight: 68,
+  },
+  swipeUpRing: {
     position: 'absolute',
     width: 82,
     height: 82,
     borderRadius: 41,
-    borderWidth: 1,
-    borderColor: 'rgba(17,24,39,0.3)',
-    backgroundColor: 'rgba(17,24,39,0.08)',
-  },
-  aiImpulseGlow: {
-    position: 'absolute',
-    width: 96,
-    height: 96,
-    borderRadius: 48,
-    borderWidth: 1,
-    borderColor: 'rgba(17,24,39,0.25)',
-    backgroundColor: 'rgba(17,24,39,0.10)',
-  },
-  fabWrap: {
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  swipeUpRing: {
-    position: 'absolute',
-    width: 72,
-    height: 72,
-    borderRadius: 36,
     alignItems: 'center',
     justifyContent: 'center',
   },
   swipeUpRingTrack: {
     position: 'absolute',
-    width: 72,
-    height: 72,
-    borderRadius: 36,
+    width: 82,
+    height: 82,
+    borderRadius: 41,
     borderWidth: 2.5,
     borderColor: 'rgba(200,16,46,0.2)',
     backgroundColor: 'transparent',
   },
   swipeUpRingFillWrap: {
     position: 'absolute',
-    width: 72,
-    height: 72,
+    width: 82,
+    height: 82,
     alignItems: 'center',
     justifyContent: 'flex-start',
   },
   swipeUpRingDot: {
     position: 'absolute',
     top: 2,
-    left: 32,
+    left: 37,
     width: 8,
     height: 8,
     borderRadius: 4,
@@ -2182,6 +2778,22 @@ const styles = StyleSheet.create({
     borderTopLeftRadius: 28,
     borderTopRightRadius: 28,
   },
+  khalidAuroraBlob: {
+    position: 'absolute',
+    top: -60,
+    left: -40,
+    width: 320,
+    height: 320,
+    borderRadius: 160,
+    overflow: 'hidden',
+  },
+  khalidAuroraBlobGold: {
+    top: 200,
+    left: 120,
+    width: 280,
+    height: 280,
+    borderRadius: 140,
+  },
   // Drag handle
   khalidDragHandleWrap: {
     alignItems: 'center',
@@ -2210,29 +2822,29 @@ const styles = StyleSheet.create({
   },
   khalidHeaderAvatarWrap: {
     position: 'relative',
-    width: 44,
-    height: 44,
+    width: 54,
+    height: 54,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   khalidHeaderAvatarImage: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    borderWidth: 2,
-    borderColor: 'rgba(255,255,255,0.25)',
+    width: 48,
+    height: 48,
+    borderRadius: 24,
   },
   khalidHeaderOnlineDot: {
     position: 'absolute',
-    bottom: 1,
-    right: 1,
-    width: 11,
-    height: 11,
-    borderRadius: 5.5,
+    bottom: 2,
+    right: 2,
+    width: 12,
+    height: 12,
+    borderRadius: 6,
     backgroundColor: '#4ADE80',
     borderWidth: 2,
-    borderColor: 'rgba(10,18,34,0.9)',
+    borderColor: 'rgba(10,18,34,0.95)',
     ...Platform.select({
-      ios: { shadowColor: '#4ADE80', shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.8, shadowRadius: 4 },
-      android: {},
+      ios: { shadowColor: '#4ADE80', shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.9, shadowRadius: 6 },
+      android: { elevation: 3 },
     }),
   },
   khalidHeaderTitle: {
@@ -2241,11 +2853,48 @@ const styles = StyleSheet.create({
     color: '#F9FAFB',
     letterSpacing: 0.1,
   },
+  khalidHeaderSubtitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: 2,
+  },
   khalidHeaderSubtitle: {
     fontSize: 12,
-    color: 'rgba(148,163,184,0.85)',
-    marginTop: 1,
+    color: 'rgba(203,213,225,0.85)',
     fontWeight: '500',
+    letterSpacing: 0.2,
+  },
+  khalidHeaderSubtitleThinking: {
+    fontSize: 12,
+    color: BAHRAIN_GOLD,
+    fontWeight: '700',
+    letterSpacing: 0.3,
+  },
+  khalidHeaderStatusDotOnline: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: '#4ADE80',
+    ...Platform.select({
+      ios: { shadowColor: '#4ADE80', shadowOpacity: 0.8, shadowRadius: 4 },
+      android: { elevation: 2 },
+    }),
+  },
+  khalidHeaderStatusDotThinking: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: BAHRAIN_GOLD,
+    ...Platform.select({
+      ios: { shadowColor: BAHRAIN_GOLD, shadowOpacity: 0.9, shadowRadius: 5 },
+      android: { elevation: 2 },
+    }),
+  },
+  khalidHeaderDivider: {
+    height: 1,
+    marginHorizontal: 8,
+    marginTop: 2,
   },
   khalidCloseBtn: {
     width: 38,
@@ -2296,29 +2945,56 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 12,
     borderRadius: 22,
+    overflow: 'hidden',
+    position: 'relative',
     ...Platform.select({
-      ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.14, shadowRadius: 10 },
-      android: { elevation: 4 },
+      ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.18, shadowRadius: 12 },
+      android: { elevation: 5 },
     }),
   },
+  khalidBubbleGradient: {
+    borderRadius: 22,
+  },
   khalidBubbleUser: {
-    backgroundColor: '#B80E21',
-    borderBottomRightRadius: 5,
+    backgroundColor: 'transparent',
+    borderBottomRightRadius: 6,
     borderWidth: 0,
     ...Platform.select({
-      ios: { shadowColor: '#C8102E', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.35, shadowRadius: 12 },
-      android: { elevation: 6 },
+      ios: { shadowColor: BAHRAIN_RED, shadowOffset: { width: 0, height: 5 }, shadowOpacity: 0.45, shadowRadius: 14 },
+      android: { elevation: 7 },
     }),
   },
   khalidBubbleAssistant: {
-    backgroundColor: 'rgba(30,42,62,0.9)',
-    borderBottomLeftRadius: 5,
+    backgroundColor: 'rgba(20,28,46,0.82)',
+    borderBottomLeftRadius: 6,
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.08)',
+    borderColor: 'rgba(255,255,255,0.1)',
+  },
+  khalidBubbleAccent: {
+    position: 'absolute',
+    left: 0,
+    top: 12,
+    bottom: 12,
+    width: 2,
+    borderRadius: 1,
+    backgroundColor: BAHRAIN_GOLD,
+    opacity: 0.7,
   },
   khalidTypingBubble: {
     paddingVertical: 14,
     paddingHorizontal: 18,
+  },
+  khalidWaveWrap: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    height: 20,
+  },
+  khalidWaveBar: {
+    width: 3,
+    height: 18,
+    borderRadius: 2,
+    overflow: 'hidden',
   },
   khalidSiriOrbWrap: {
     width: 32,
@@ -2462,18 +3138,22 @@ const styles = StyleSheet.create({
   khalidCardPostBlock: {
     width: '100%',
     marginBottom: 14,
-    borderRadius: 14,
+    borderRadius: 18,
     overflow: 'hidden',
     backgroundColor: 'rgba(15,23,42,0.5)',
     borderWidth: 1,
-    borderColor: 'rgba(148,163,184,0.08)',
+    borderColor: 'rgba(233,200,119,0.12)',
+    ...Platform.select({
+      ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 5 }, shadowOpacity: 0.3, shadowRadius: 12 },
+      android: { elevation: 6 },
+    }),
   },
   khalidCardPostBlockLast: {
     marginBottom: 0,
   },
   khalidCardPostImageWrap: {
     width: '100%',
-    height: 168,
+    height: 200,
     position: 'relative',
     overflow: 'hidden',
   },
@@ -2487,8 +3167,29 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     bottom: 0,
-    height: 72,
-    backgroundColor: 'rgba(15,23,42,0.7)',
+    height: 110,
+  },
+  khalidCardPostTitleOverlay: {
+    position: 'absolute',
+    left: 14,
+    right: 14,
+    bottom: 12,
+    gap: 3,
+  },
+  khalidCardPostTitleOverlayText: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#FFFFFF',
+    letterSpacing: 0.2,
+    textShadowColor: 'rgba(0,0,0,0.6)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 6,
+  },
+  khalidCardPostDescOverlay: {
+    fontSize: 12,
+    color: 'rgba(255,255,255,0.88)',
+    lineHeight: 17,
+    letterSpacing: 0.15,
   },
   khalidCardPostBody: {
     width: '100%',
@@ -2520,17 +3221,47 @@ const styles = StyleSheet.create({
   },
   khalidCardReviewBlock: {
     width: '100%',
-    borderRadius: 14,
+    borderRadius: 16,
     overflow: 'hidden',
-    backgroundColor: 'rgba(15,23,42,0.45)',
+    backgroundColor: 'rgba(15,23,42,0.55)',
     borderWidth: 1,
-    borderColor: 'rgba(148,163,184,0.1)',
+    borderColor: 'rgba(233,200,119,0.12)',
     marginBottom: 10,
+    ...Platform.select({
+      ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.25, shadowRadius: 8 },
+      android: { elevation: 4 },
+    }),
+  },
+  khalidCardReviewImageWrap: {
+    width: '100%',
+    height: 140,
+    position: 'relative',
+    overflow: 'hidden',
   },
   khalidCardReviewImage: {
     width: '100%',
-    height: 110,
+    height: '100%',
     backgroundColor: 'rgba(30,41,59,0.5)',
+  },
+  khalidCardReviewRatingChip: {
+    position: 'absolute',
+    top: 10,
+    right: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingVertical: 4,
+    paddingHorizontal: 9,
+    borderRadius: 999,
+    backgroundColor: 'rgba(7,6,10,0.8)',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(251,191,36,0.5)',
+  },
+  khalidCardReviewRatingChipText: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#FBBF24',
+    letterSpacing: 0.2,
   },
   khalidCardReviewContent: {
     padding: 12,
@@ -2743,12 +3474,16 @@ const styles = StyleSheet.create({
   },
   // New client block design styles
   khalidClientBlockNew: {
-    backgroundColor: 'rgba(30,41,59,0.6)',
-    borderRadius: 16,
-    padding: 14,
+    backgroundColor: 'rgba(18,28,46,0.95)',
+    borderRadius: 18,
     marginBottom: 12,
     borderWidth: 1,
-    borderColor: 'rgba(71,85,105,0.4)',
+    borderColor: 'rgba(233,200,119,0.14)',
+    overflow: 'hidden',
+    ...Platform.select({
+      ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.35, shadowRadius: 14 },
+      android: { elevation: 8 },
+    }),
   },
   khalidClientHeader: {
     flexDirection: 'row',
@@ -2951,49 +3686,119 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     letterSpacing: 0.2,
   },
-  // New image-focused layout styles
-  khalidClientImageGridLarge: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 4,
-    marginBottom: 0,
-    borderRadius: 14,
-    overflow: 'hidden',
+  // Premium hero + thumb strip layout
+  khalidClientHeroWrap: {
+    width: '100%',
+    height: 200,
     position: 'relative',
-  },
-  khalidClientGridImageWrapLarge: {
-    width: '49.5%',
-    aspectRatio: 1,
     overflow: 'hidden',
     backgroundColor: 'rgba(15,23,42,0.8)',
   },
+  khalidClientHeroImage: {
+    width: '100%',
+    height: '100%',
+    backgroundColor: 'rgba(30,41,59,0.6)',
+  },
   khalidClientTypeBadgeOverlay: {
     position: 'absolute',
-    top: 10,
-    left: 10,
+    top: 12,
+    left: 12,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
-    paddingVertical: 5,
-    paddingHorizontal: 10,
-    borderRadius: 8,
+    gap: 5,
+    paddingVertical: 6,
+    paddingHorizontal: 11,
+    borderRadius: 999,
+    ...Platform.select({
+      ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.35, shadowRadius: 6 },
+      android: { elevation: 3 },
+    }),
   },
   khalidClientTypeBadgeOverlayText: {
     fontSize: 10,
     fontWeight: '800',
     color: '#FFFFFF',
-    letterSpacing: 0.4,
+    letterSpacing: 0.6,
+    textTransform: 'uppercase',
+  },
+  khalidClientHeroRatingChip: {
+    position: 'absolute',
+    top: 12,
+    right: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingVertical: 5,
+    paddingHorizontal: 9,
+    borderRadius: 999,
+    backgroundColor: 'rgba(7,6,10,0.75)',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(251,191,36,0.5)',
+  },
+  khalidClientHeroRatingText: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#FBBF24',
+    letterSpacing: 0.2,
+  },
+  khalidClientHeroTitleWrap: {
+    position: 'absolute',
+    left: 14,
+    right: 14,
+    bottom: 56,
+  },
+  khalidClientHeroTitle: {
+    fontSize: 20,
+    fontWeight: '800',
+    color: '#FFFFFF',
+    letterSpacing: 0.2,
+    textShadowColor: 'rgba(0,0,0,0.6)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 6,
+  },
+  khalidClientHeroSubtitle: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: 'rgba(255,255,255,0.85)',
+    marginTop: 2,
+    letterSpacing: 0.2,
+  },
+  khalidClientThumbStrip: {
+    position: 'absolute',
+    left: 12,
+    right: 12,
+    bottom: 10,
+    flexDirection: 'row',
+    gap: 6,
+  },
+  khalidClientThumbWrap: {
+    width: 44,
+    height: 44,
+    borderRadius: 10,
+    overflow: 'hidden',
+    backgroundColor: 'rgba(15,23,42,0.6)',
+    borderWidth: 1.5,
+    borderColor: 'rgba(255,255,255,0.35)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  khalidClientThumbMore: {
+    backgroundColor: 'rgba(7,6,10,0.8)',
+  },
+  khalidClientThumbMoreText: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#FFFFFF',
+    letterSpacing: 0.2,
   },
   khalidClientNoImagesLarge: {
-    height: 180,
-    borderRadius: 14,
+    height: 140,
     backgroundColor: 'rgba(15,23,42,0.6)',
     alignItems: 'center',
     justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: 'rgba(71,85,105,0.3)',
     gap: 8,
-    marginBottom: 0,
+    overflow: 'hidden',
+    position: 'relative',
   },
   khalidClientContentBelow: {
     padding: 12,
@@ -3092,35 +3897,62 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: 'rgba(255,255,255,0.07)',
   },
-  khalidInput: {
+  khalidInputPill: {
     flex: 1,
-    minHeight: 46,
+    minHeight: 48,
     maxHeight: 110,
+    borderRadius: 26,
     backgroundColor: 'rgba(255,255,255,0.08)',
-    borderRadius: 24,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.14)',
+    overflow: 'hidden',
+    justifyContent: 'center',
+    position: 'relative',
+  },
+  khalidInputPillFocused: {
+    borderColor: 'rgba(233,200,119,0.55)',
+    backgroundColor: 'rgba(255,255,255,0.12)',
+    ...Platform.select({
+      ios: { shadowColor: BAHRAIN_GOLD, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.45, shadowRadius: 10 },
+      android: { elevation: 4 },
+    }),
+  },
+  khalidInputGlow: {
+    position: 'absolute',
+    top: -1,
+    left: -1,
+    right: -1,
+    height: 2,
+    opacity: 0.9,
+  },
+  khalidInput: {
+    minHeight: 46,
+    maxHeight: 108,
     paddingHorizontal: 18,
     paddingTop: Platform.OS === 'ios' ? 13 : 11,
     paddingBottom: Platform.OS === 'ios' ? 13 : 11,
     fontSize: 15,
     color: '#F8FAFC',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.12)',
+    backgroundColor: 'transparent',
   },
   khalidSendBtn: {
-    width: 46,
-    height: 46,
-    borderRadius: 23,
-    backgroundColor: '#C8102E',
+    width: 48,
+    height: 48,
+    borderRadius: 24,
     alignItems: 'center',
     justifyContent: 'center',
+    overflow: 'hidden',
     ...Platform.select({
-      ios: { shadowColor: '#C8102E', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.45, shadowRadius: 10 },
-      android: { elevation: 6 },
+      ios: { shadowColor: BAHRAIN_RED, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.55, shadowRadius: 12 },
+      android: { elevation: 7 },
     }),
   },
+  khalidSendBtnGradient: {
+    ...StyleSheet.absoluteFillObject,
+    borderRadius: 24,
+  },
   khalidSendBtnDisabled: {
-    backgroundColor: 'rgba(71,85,105,0.7)',
-    opacity: 0.8,
+    opacity: 0.85,
     ...Platform.select({
       ios: { shadowOpacity: 0 },
       android: { elevation: 0 },
@@ -3158,28 +3990,42 @@ const styles = StyleSheet.create({
     marginBottom: 10,
   },
   khalidSuggestionsLabel: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: 'rgba(148,163,184,0.85)',
-    letterSpacing: 0.3,
+    fontSize: 11,
+    fontWeight: '800',
+    color: BAHRAIN_GOLD,
+    letterSpacing: 1.4,
+    textTransform: 'uppercase',
   },
   khalidSuggestionsRow: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 8,
   },
-  khalidSuggestionChip: {
-    paddingVertical: 9,
-    paddingHorizontal: 15,
+  khalidSuggestionChipWrap: {
     borderRadius: 22,
-    backgroundColor: 'rgba(200,16,46,0.1)',
-    borderWidth: 1,
-    borderColor: 'rgba(200,16,46,0.28)',
+    overflow: 'hidden',
+    ...Platform.select({
+      ios: { shadowColor: BAHRAIN_GOLD, shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.25, shadowRadius: 6 },
+      android: { elevation: 2 },
+    }),
+  },
+  khalidSuggestionChipBorder: {
+    padding: 1,
+    borderRadius: 22,
+  },
+  khalidSuggestionChipInner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    borderRadius: 21,
+    backgroundColor: 'rgba(18,28,46,0.92)',
   },
   khalidSuggestionChipText: {
     fontSize: 13,
-    color: '#E2E8F0',
-    fontWeight: '500',
+    color: '#F1F5F9',
+    fontWeight: '600',
+    letterSpacing: 0.2,
   },
 });
 

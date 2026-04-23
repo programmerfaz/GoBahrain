@@ -18,7 +18,6 @@ import {
   KeyboardAvoidingView,
   InteractionManager,
   ActivityIndicator,
-  Dimensions,
   RefreshControl,
   Alert,
 } from 'react-native';
@@ -40,11 +39,18 @@ import { useUserPreferences } from '../context/UserPreferencesContext';
 import { useDoorTransition } from '../context/DoorTransitionContext';
 import { supabase } from '../config/supabase';
 import { ensureImageUrl } from '../utils/imageUrl';
-import { fetchFeedPage, trackInteraction, getVoterId, clearFeedCache } from '../services/feedService';
+import {
+  fetchFeedPage,
+  buildRefreshExcludePostIds,
+  trackInteraction,
+  getVoterId,
+  clearFeedCache,
+  markPostsSeen,
+  flushSeenPostIds,
+  prefetchPersonalization,
+} from '../services/feedService';
 import { LUXURY, luxuryCardShadow, luxurySoftShadow } from '../theme/luxuryPremium';
 import { PinchZoomPostImage, UpvoteParticles } from '../components/FeedUpvoteInteractions';
-
-const { width: WINDOW_WIDTH } = Dimensions.get('window');
 
 function getHomeStyles(colors) {
   const C = {
@@ -77,12 +83,8 @@ function getHomeStyles(colors) {
       left: 0,
       right: 0,
       zIndex: 10,
+      /** Solid bar like Community — no blur (avoids grey frosted strip under status bar) */
       backgroundColor: C.screenBg,
-    },
-    headerBlur: {
-      ...StyleSheet.absoluteFillObject,
-      zIndex: 0,
-      backgroundColor: Platform.OS === 'android' ? C.screenBg : 'transparent',
     },
     headerContent: {
       paddingBottom: 0,
@@ -98,7 +100,7 @@ function getHomeStyles(colors) {
       alignItems: 'center',
       justifyContent: 'space-between',
       paddingHorizontal: 16,
-      height: 44,
+      minHeight: 44,
     },
     headerCenter: {
       flex: 1,
@@ -114,39 +116,46 @@ function getHomeStyles(colors) {
     headerRight: {
       flexDirection: 'row',
       alignItems: 'center',
-      gap: 4,
+      gap: 6,
     },
+    /** Match Community filter chip style; slightly smaller than topic chips (44) */
     headerIconBtn: {
-      width: 38,
-      height: 38,
-      borderRadius: 20,
-      backgroundColor: C.cardBg,
+      width: 44,
+      height: 44,
+      borderRadius: 22,
+      backgroundColor: C.screenBg,
       alignItems: 'center',
       justifyContent: 'center',
-      borderWidth: 1,
-      borderColor: C.borderLight,
-      ...luxurySoftShadow,
+      borderWidth: 1.5,
+      borderColor: C.border,
+      ...Platform.select({
+        ios: {
+          shadowColor: '#000',
+          shadowOffset: { width: 0, height: 1 },
+          shadowOpacity: 0.06,
+          shadowRadius: 2,
+        },
+        android: { elevation: 2 },
+      }),
     },
     headerIconBtnActive: {
-      backgroundColor: C.primaryLight || C.borderLight,
+      backgroundColor: C.primary,
+      borderColor: C.primary,
+      ...Platform.select({
+        ios: {
+          shadowColor: C.primary,
+          shadowOffset: { width: 0, height: 1 },
+          shadowOpacity: 0.35,
+          shadowRadius: 2,
+        },
+        android: { elevation: 4 },
+      }),
     },
-    locationBtnInner: {
-      width: 36,
-      height: 36,
+    headerLeft: {
+      flexDirection: 'row',
       alignItems: 'center',
-      justifyContent: 'center',
-    },
-    locationBtnRing: {
-      position: 'absolute',
-      width: 36,
-      height: 36,
-      borderRadius: 18,
-      borderWidth: 2,
-      backgroundColor: 'transparent',
-    },
-    locationSuccessIconWrap: {
-      alignItems: 'center',
-      justifyContent: 'center',
+      justifyContent: 'flex-start',
+      minWidth: 44,
     },
     searchBarContainer: {
       paddingHorizontal: 16,
@@ -178,10 +187,6 @@ function getHomeStyles(colors) {
     },
     searchClearBtn: {
       marginLeft: 4,
-      padding: 4,
-    },
-    aiSparkle: {
-      marginLeft: 8,
       padding: 4,
     },
     filtersSection: {
@@ -248,6 +253,7 @@ function getHomeStyles(colors) {
     },
     feedList: {
       flex: 1,
+      backgroundColor: C.screenBg,
     },
     feedContent: {
       paddingVertical: 8,
@@ -407,8 +413,14 @@ function getHomeStyles(colors) {
     overlayInputRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
     overlayInput: { flex: 1, backgroundColor: 'rgba(255,255,255,0.2)', borderRadius: 14, paddingVertical: 16, paddingHorizontal: 18, fontSize: 16, color: '#FFFFFF', borderWidth: 1, borderColor: 'rgba(255,255,255,0.35)' },
     overlaySubmitBtn: { width: 52, height: 52, borderRadius: 14, backgroundColor: 'rgba(255,255,255,0.3)', alignItems: 'center', justifyContent: 'center' },
-    pageContentWrap: { flex: 1 },
-    loadingWrap: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingTop: 80 },
+    pageContentWrap: { flex: 1, backgroundColor: C.screenBg },
+    loadingWrap: {
+      flex: 1,
+      alignItems: 'center',
+      justifyContent: 'center',
+      paddingTop: 80,
+      backgroundColor: C.screenBg,
+    },
     emptyText: { marginTop: 12, fontSize: 16, color: C.textMuted, fontWeight: '500' },
     retryBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 16, paddingVertical: 10, paddingHorizontal: 20, backgroundColor: C.primary, borderRadius: 10 },
     retryBtnText: { fontSize: 15, color: '#fff', fontWeight: '600' },
@@ -690,7 +702,7 @@ function PostCard({ item, isHighlighted = false, onHighlightDone, onUpvoteToggle
             onError={(e) => console.error(`[PostCard] ERROR: ${item.imageUri}`, e.nativeEvent.error)}
           />
         ) : (
-          <View style={[styles.cardImage, { width: WINDOW_WIDTH, height: WINDOW_WIDTH, alignItems: 'center', justifyContent: 'center' }]}>
+          <View style={[styles.cardImage, { width: '100%', height: '100%', alignItems: 'center', justifyContent: 'center' }]}>
             <Ionicons name="image-outline" size={48} color={COLORS.textMuted} />
           </View>
         )}
@@ -786,6 +798,64 @@ function PostCard({ item, isHighlighted = false, onHighlightDone, onUpvoteToggle
   );
 }
 
+/** Location / GPS filter chip — same visual language as category chips; toggles distance-sorted feed. */
+function LocationFilterChip({ selected, busy, onPress, colors }) {
+  const styles = StyleSheet.create(getHomeStyles(colors));
+  const scaleAnim = useRef(new Animated.Value(1)).current;
+  const locColor = colors.primary;
+  const handlePressIn = () => {
+    Animated.spring(scaleAnim, {
+      toValue: 0.92,
+      useNativeDriver: true,
+      speed: 50,
+      bounciness: 4,
+    }).start();
+  };
+  const handlePressOut = () => {
+    Animated.spring(scaleAnim, {
+      toValue: 1,
+      useNativeDriver: true,
+      speed: 50,
+      bounciness: 8,
+    }).start();
+  };
+  return (
+    <TouchableOpacity
+      activeOpacity={1}
+      onPress={onPress}
+      onPressIn={handlePressIn}
+      onPressOut={handlePressOut}
+      disabled={busy}
+      style={styles.filterChipTouchable}
+      accessibilityRole="button"
+      accessibilityLabel={selected ? 'Location on, sorted by distance' : 'Use my location'}
+      accessibilityState={{ selected, busy }}
+    >
+      <Animated.View style={[styles.filterChip, selected && styles.filterChipSelected, { transform: [{ scale: scaleAnim }] }]}>
+        {busy ? (
+          <View style={[styles.filterCircle, { borderColor: locColor }]}>
+            <ActivityIndicator size="small" color={locColor} />
+          </View>
+        ) : selected ? (
+          <LinearGradient
+            colors={[`${locColor}E6`, locColor]}
+            style={styles.filterCircleGradient}
+          >
+            <Ionicons name="location" size={18} color="#FFFFFF" />
+          </LinearGradient>
+        ) : (
+          <View style={[styles.filterCircle, { borderColor: locColor }]}>
+            <Ionicons name="location-outline" size={16} color={locColor} />
+          </View>
+        )}
+        <Text style={[styles.filterLabel, selected && styles.filterLabelSelected]} numberOfLines={1}>
+          Location
+        </Text>
+      </Animated.View>
+    </TouchableOpacity>
+  );
+}
+
 /** Animated category chip with scale-on-press and selected gradient (21st/AuraUI-style). */
 function CategoryChip({ cat, selected, onPress, colors }) {
   const styles = StyleSheet.create(getHomeStyles(colors));
@@ -846,247 +916,62 @@ const AI_QUICK_OPTIONS = [
 
 const ESTIMATED_CARD_HEIGHT = 440;
 const SMOOTH_SCROLL_DURATION_MS = 900;
-const SCROLL_THRESHOLD = 80;
-const SCROLL_DIRECTION_THRESHOLD = 5;
-const HEADER_ANIM_DURATION = 300;
-const SCROLL_TO_TOP_SHOW_AT = 400;
-const SCROLL_TO_TOP_HIDE_AT = 80;
+const SCROLL_THRESHOLD = 100;
+const SCROLL_DIRECTION_THRESHOLD = 8;
+const HEADER_ANIM_DURATION = 280;
+const SCROLL_TO_TOP_SHOW_AT = 480;
+const SCROLL_TO_TOP_HIDE_AT = 120;
+
+/** Home feed: one network page size (matches feedService BATCH_SIZE). */
+const FEED_PAGE_SIZE = 15;
+/** When the user has scrolled this far through the list, prefetch the next page (Instagram-style). */
+const FEED_PREFETCH_SCROLL_PROGRESS = 0.75;
 
 function easeInOutCubic(t) {
   return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
 }
 
-/** Wraps a feed item and runs a staggered fade-in + slide-up on mount. */
-function StaggeredFeedItem({ index, children, isRefreshing = false }) {
-  const opacity = useRef(new Animated.Value(0)).current;
-  const translateY = useRef(new Animated.Value(24)).current;
-  const scale = useRef(new Animated.Value(0.95)).current;
-  
+/** Light entrance — only first rows animate (scroll + load-more stays buttery). */
+function StaggeredFeedItem({ index, children }) {
+  const skip = index > 10;
+  const opacity = useRef(new Animated.Value(skip ? 1 : 0)).current;
+  const translateY = useRef(new Animated.Value(skip ? 0 : 6)).current;
+
   useEffect(() => {
-    // Reset animations
+    if (skip) return;
     opacity.setValue(0);
-    translateY.setValue(24);
-    scale.setValue(0.95);
-    
-    const delay = Math.min(index * 58, 420);
+    translateY.setValue(6);
+    const delay = Math.min(index * 18, 90);
     Animated.sequence([
       Animated.delay(delay),
       Animated.parallel([
         Animated.timing(opacity, {
           toValue: 1,
-          duration: 360,
-          easing: Easing.out(Easing.cubic),
+          duration: 200,
+          easing: Easing.out(Easing.quad),
           useNativeDriver: true,
         }),
-        Animated.spring(translateY, {
+        Animated.timing(translateY, {
           toValue: 0,
-          tension: 120,
-          friction: 10,
-          useNativeDriver: true,
-        }),
-        Animated.spring(scale, {
-          toValue: 1,
-          tension: 140,
-          friction: 9,
+          duration: 200,
+          easing: Easing.out(Easing.quad),
           useNativeDriver: true,
         }),
       ]),
     ]).start();
-  }, [index, isRefreshing]);
-  
+  }, [index, skip]);
+
   return (
-    <Animated.View style={{ opacity, transform: [{ translateY }, { scale }] }}>
+    <Animated.View style={{ opacity, transform: [{ translateY }] }}>
       {children}
     </Animated.View>
   );
 }
 
-function CoolRefreshControl({ scrollY, refreshing, topInset, colors }) {
-  const spinValue = useRef(new Animated.Value(0)).current;
-  const scaleValue = useRef(new Animated.Value(1)).current;
-  const dotsRotate = useRef(new Animated.Value(0)).current;
-  
-  useEffect(() => {
-    if (refreshing) {
-      // Smooth continuous spin
-      Animated.loop(
-        Animated.timing(spinValue, {
-          toValue: 1,
-          duration: 800,
-          easing: Easing.linear,
-          useNativeDriver: true,
-        })
-      ).start();
-      
-      // Pulse effect
-      Animated.loop(
-        Animated.sequence([
-          Animated.timing(scaleValue, {
-            toValue: 1.1,
-            duration: 800,
-            easing: Easing.inOut(Easing.ease),
-            useNativeDriver: true,
-          }),
-          Animated.timing(scaleValue, {
-            toValue: 1,
-            duration: 800,
-            easing: Easing.inOut(Easing.ease),
-            useNativeDriver: true,
-          }),
-        ])
-      ).start();
-      
-      // Orbiting dots
-      Animated.loop(
-        Animated.timing(dotsRotate, {
-          toValue: 1,
-          duration: 2000,
-          easing: Easing.linear,
-          useNativeDriver: true,
-        })
-      ).start();
-    } else {
-      spinValue.setValue(0);
-      scaleValue.setValue(1);
-      dotsRotate.setValue(0);
-      spinValue.stopAnimation();
-      scaleValue.stopAnimation();
-      dotsRotate.stopAnimation();
-    }
-  }, [refreshing, spinValue, scaleValue, dotsRotate]);
-
-  const scale = scrollY.interpolate({
-    inputRange: [-120, -60, 0],
-    outputRange: [1, 1, 0],
-    extrapolate: 'clamp',
-  });
-
-  const pullRotate = scrollY.interpolate({
-    inputRange: [-150, 0],
-    outputRange: ['360deg', '0deg'],
-    extrapolate: 'clamp',
-  });
-  
-  const spin = spinValue.interpolate({
-    inputRange: [0, 1],
-    outputRange: ['0deg', '360deg']
-  });
-  
-  const dotsRotation = dotsRotate.interpolate({
-    inputRange: [0, 1],
-    outputRange: ['0deg', '360deg']
-  });
-
-  const translateY = scrollY.interpolate({
-    inputRange: [-150, 0],
-    outputRange: [10, -50],
-    extrapolate: 'clamp',
-  });
-
-  return (
-    <View style={{
-      position: 'absolute',
-      top: topInset + 20,
-      left: 0,
-      right: 0,
-      alignItems: 'center',
-      justifyContent: 'center',
-      zIndex: 1,
-      pointerEvents: 'none'
-    }}>
-      <Animated.View style={{
-        transform: [{ translateY }, { scale }],
-        opacity: scale
-      }}>
-        <Animated.View style={{
-          transform: [
-            { scale: scaleValue },
-            { rotate: refreshing ? spin : pullRotate }
-          ]
-        }}>
-          {/* Main gradient circle */}
-          <View style={{
-            width: 44,
-            height: 44,
-            borderRadius: 22,
-            overflow: 'hidden',
-            backgroundColor: colors.surface,
-            ...Platform.select({
-              ios: {
-                shadowColor: colors.primary,
-                shadowOffset: { width: 0, height: 4 },
-                shadowOpacity: 0.25,
-                shadowRadius: 12,
-              },
-              android: {
-                elevation: 6,
-              }
-            })
-          }}>
-            <LinearGradient
-              colors={[colors.primary, colors.primaryLight || colors.primary, colors.primary]}
-              start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 1 }}
-              style={{
-                width: '100%',
-                height: '100%',
-                alignItems: 'center',
-                justifyContent: 'center',
-              }}
-            >
-              {refreshing ? (
-                <View style={{ width: 24, height: 24, alignItems: 'center', justifyContent: 'center' }}>
-                  {/* Three dots loader */}
-                  <View style={{ flexDirection: 'row', gap: 4 }}>
-                    <View style={{ width: 4, height: 4, borderRadius: 2, backgroundColor: '#FFFFFF' }} />
-                    <View style={{ width: 4, height: 4, borderRadius: 2, backgroundColor: '#FFFFFF', opacity: 0.7 }} />
-                    <View style={{ width: 4, height: 4, borderRadius: 2, backgroundColor: '#FFFFFF', opacity: 0.4 }} />
-                  </View>
-                </View>
-              ) : (
-                <Ionicons name="chevron-down" size={20} color="#FFFFFF" />
-              )}
-            </LinearGradient>
-          </View>
-          
-          {/* Orbiting dots when refreshing */}
-          {refreshing && (
-            <Animated.View style={{
-              position: 'absolute',
-              width: 70,
-              height: 70,
-              alignItems: 'center',
-              justifyContent: 'center',
-              transform: [{ rotate: dotsRotation }]
-            }}>
-              {[0, 120, 240].map((angle, i) => (
-                <View
-                  key={i}
-                  style={{
-                    position: 'absolute',
-                    width: 6,
-                    height: 6,
-                    borderRadius: 3,
-                    backgroundColor: colors.primary,
-                    opacity: 0.6,
-                    transform: [
-                      { translateX: Math.cos((angle * Math.PI) / 180) * 35 },
-                      { translateY: Math.sin((angle * Math.PI) / 180) * 35 },
-                    ]
-                  }}
-                />
-              ))}
-            </Animated.View>
-          )}
-        </Animated.View>
-      </Animated.View>
-    </View>
-  );
-}
 
 export default function HomeScreen() {
   const insets = useSafeAreaInsets();
-  const { colors } = useTheme();
+  const { colors, isDark } = useTheme();
   const route = useRoute();
   const navigation = useNavigation();
   const { profile } = useAuth();
@@ -1130,11 +1015,6 @@ export default function HomeScreen() {
   const [userPosition, setUserPosition] = useState(null);
   const [locationModeActive, setLocationModeActive] = useState(false);
   const [selectedCategory, setSelectedCategory] = useState('all');
-  const locationBtnScale = useRef(new Animated.Value(1)).current;
-  const locationBtnRingScale = useRef(new Animated.Value(1)).current;
-  const locationBtnRingOpacity = useRef(new Animated.Value(0)).current;
-  const locationSuccessOpacity = useRef(new Animated.Value(0)).current;
-  const locationBtnBlinkOpacity = useRef(new Animated.Value(1)).current;
   const pageEntranceOpacity = useRef(new Animated.Value(0)).current;
   const pageEntranceScale = useRef(new Animated.Value(0.97)).current;
   const [showAIOverlay, setShowAIOverlay] = useState(false);
@@ -1158,7 +1038,6 @@ export default function HomeScreen() {
   const [upvoteParticlePosition, setUpvoteParticlePosition] = useState({ x: 0, y: 0 });
   const [selectedClientId, setSelectedClientId] = useState(null);
   const [showMapAnimation, setShowMapAnimation] = useState(false);
-  const [feedRefreshKey, setFeedRefreshKey] = useState(0);
   const mapAnimOpacity = useRef(new Animated.Value(0)).current;
   const mapAnimScale = useRef(new Animated.Value(0)).current;
   const mapAnimRotate = useRef(new Animated.Value(0)).current;
@@ -1170,14 +1049,24 @@ export default function HomeScreen() {
   const upvoteAnimations = useRef({}).current;
   const upvoteInFlightRef = useRef(new Set());
   const refreshingRef = useRef(false);
+  const appendInFlightRef = useRef(false);
+  const pagingRef = useRef({
+    filteredLen: 0,
+    hasMore: true,
+    loadingMore: false,
+    loading: true,
+    refreshing: false,
+    loadMore: () => {},
+  });
+  const lastViewTrackedPostIdRef = useRef(null);
   const lastScrollY = useRef(0);
   const headerTranslateY = useRef(new Animated.Value(0)).current;
   const headerVisibleRef = useRef(true);
-  // Reserve space so first post is not covered. Must match header: paddingTop (2) + title row (44) + search (52) + filters row + buffer
+  // Reserve space so first post is not covered. Must match header: paddingTop (4) + title row (44) + search (52) + filters row + buffer
   const FILTERS_SECTION_EXPANDED_HEIGHT = 96;
   const HEADER_TITLE_ROW_HEIGHT = 44;
   const SEARCH_BAR_HEIGHT = 52; // searchHeight outputRange max
-  const HEADER_TOP_PADDING = 2;
+  const HEADER_TOP_PADDING = 4;
   const HEADER_BOTTOM_BUFFER = 20; // extra space below header before first post
   const headerBarHeight =
     insets.top +
@@ -1188,6 +1077,33 @@ export default function HomeScreen() {
     HEADER_BOTTOM_BUFFER;
   const khalidCommandRef = useRef(null);
   const [khalidContextBanner, setKhalidContextBanner] = useState(null);
+
+  const smoothScrollToIndex = useCallback((index, onDone) => {
+    if (scrollAnimationRef.current != null) return;
+    const list = flatListRef.current;
+    if (!list) {
+      onDone?.();
+      return;
+    }
+    const startOffset = scrollOffsetRef.current;
+    const targetOffset = Math.max(0, index * ESTIMATED_CARD_HEIGHT - 60);
+    const startTime = { current: null };
+    const animate = () => {
+      if (startTime.current == null) startTime.current = Date.now();
+      const elapsed = Date.now() - startTime.current;
+      const t = Math.min(elapsed / SMOOTH_SCROLL_DURATION_MS, 1);
+      const eased = easeInOutCubic(t);
+      const offset = startOffset + (targetOffset - startOffset) * eased;
+      list.scrollToOffset({ offset, animated: false });
+      if (t < 1) {
+        scrollAnimationRef.current = requestAnimationFrame(animate);
+      } else {
+        scrollAnimationRef.current = null;
+        onDone?.();
+      }
+    };
+    scrollAnimationRef.current = requestAnimationFrame(animate);
+  }, []);
 
   useEffect(() => {
     Animated.spring(searchAnim, {
@@ -1225,42 +1141,20 @@ export default function HomeScreen() {
     setFiltersExpanded((prev) => !prev);
   }, []);
 
-  // Continuous blink for location icon so it stays noticeable
-  useEffect(() => {
-    const blink = Animated.loop(
-      Animated.sequence([
-        Animated.timing(locationBtnBlinkOpacity, {
-          toValue: 0.42,
-          duration: 850,
-          easing: Easing.inOut(Easing.ease),
-          useNativeDriver: true,
-        }),
-        Animated.timing(locationBtnBlinkOpacity, {
-          toValue: 1,
-          duration: 850,
-          easing: Easing.inOut(Easing.ease),
-          useNativeDriver: true,
-        }),
-      ])
-    );
-    blink.start();
-    return () => blink.stop();
-  }, [locationBtnBlinkOpacity]);
-
-  // Page entrance: fade + scale when content is ready
+  // Page entrance: short timing-only motion (springs + long fades fight scroll)
   useEffect(() => {
     if (!loading) {
       Animated.parallel([
         Animated.timing(pageEntranceOpacity, {
           toValue: 1,
-          duration: 420,
+          duration: 320,
           easing: Easing.out(Easing.cubic),
           useNativeDriver: true,
         }),
-        Animated.spring(pageEntranceScale, {
+        Animated.timing(pageEntranceScale, {
           toValue: 1,
-          friction: 11,
-          tension: 80,
+          duration: 340,
+          easing: Easing.out(Easing.cubic),
           useNativeDriver: true,
         }),
       ]).start();
@@ -1366,18 +1260,31 @@ export default function HomeScreen() {
     locationModeActive,
   ]);
 
+  const filteredTopPostId = filteredPosts[0]?.id ?? null;
+  /** First 3 visible cells — exclude on refresh so the same few posts cannot cycle as #1–#3. */
+  const filteredLeaderPostIds = useMemo(
+    () => filteredPosts.slice(0, 3).map((p) => p.id).filter(Boolean),
+    [filteredPosts]
+  );
+  const refreshSpinGuardRef = useRef([]);
+
   const fetchPosts = useCallback(async (opts = {}) => {
     const { skipGlobalLoading = false, onDone, append = false } = opts;
+    if (append && appendInFlightRef.current) {
+      onDone?.();
+      return;
+    }
+    if (append) appendInFlightRef.current = true;
     try {
       setFetchError(null);
       if (!skipGlobalLoading && !append) setLoading(true);
       if (append) setLoadingMore(true);
-      
-      console.log('[Home] Fetching feed page...');
-      
+
+      console.log('[Home] Fetching feed page...', { append, cursor: append ? nextCursor : null });
+
       const result = await fetchFeedPage({
         cursor: append ? nextCursor : null,
-        limit: 15,
+        limit: FEED_PAGE_SIZE,
         userLat: userPosition?.latitude,
         userLng: userPosition?.longitude,
         category: null,
@@ -1385,26 +1292,31 @@ export default function HomeScreen() {
         useCache: !append && !skipGlobalLoading,
         userPersonaSummary: preferences?.profileSummary || '',
       });
-      
-      console.log('[Home] Feed result:', { 
-        posts: result.posts.length, 
+
+      console.log('[Home] Feed result:', {
+        posts: result.posts.length,
         hasMore: result.hasMore,
-        nextCursor: result.nextCursor 
+        nextCursor: result.nextCursor,
       });
-      
+
       if (append) {
-        setPosts(prev => [...prev, ...result.posts]);
+        setPosts((prev) => {
+          const seen = new Set(prev.map((p) => p.id));
+          const merged = [...prev];
+          for (const p of result.posts) {
+            if (!seen.has(p.id)) {
+              seen.add(p.id);
+              merged.push(p);
+            }
+          }
+          return merged;
+        });
       } else {
         setPosts(result.posts);
       }
-      
+
       setNextCursor(result.nextCursor);
       setHasMore(result.hasMore);
-      
-      // Only trigger re-animation for full refresh, not append
-      if (!append && !skipGlobalLoading) {
-        setFeedRefreshKey(prev => prev + 1);
-      }
     } catch (err) {
       console.error('[Home] Failed to fetch posts:', err);
       const errMsg = String(err?.message ?? err ?? '');
@@ -1414,12 +1326,14 @@ export default function HomeScreen() {
     } finally {
       if (!skipGlobalLoading && !append) setLoading(false);
       if (append) setLoadingMore(false);
+      if (append) appendInFlightRef.current = false;
       onDone?.();
     }
   }, [nextCursor, userPosition?.latitude, userPosition?.longitude, searchQuery, preferences?.profileSummary]);
 
   useEffect(() => {
-    // Only fetch on mount, not when dependencies change
+    // Warm the persona cache in parallel so the first page is personalized + fast.
+    prefetchPersonalization(preferences?.profileSummary || '');
     fetchPosts();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -1444,6 +1358,19 @@ export default function HomeScreen() {
     
     console.log('[Home] 🔄 REFRESH STARTED - Clearing cache...');
     await clearFeedCache();
+    await flushSeenPostIds();
+    // Also exclude every post currently in the list — a quick pull-to-refresh
+    // shouldn't leave the same items on top just because viewability hadn't
+    // registered them as "seen" yet.
+    const priorTopId = filteredLeaderPostIds[0] ?? filteredTopPostId ?? posts[0]?.id ?? null;
+    const spinGuard = refreshSpinGuardRef.current.filter(Boolean);
+    const mustExcludeLeaders = [...new Set([...filteredLeaderPostIds, ...spinGuard])];
+    const excludePostIds = buildRefreshExcludePostIds(
+      [],
+      [],
+      undefined,
+      mustExcludeLeaders
+    );
     setNextCursor(null);
     setHasMore(true);
     
@@ -1452,18 +1379,20 @@ export default function HomeScreen() {
       setFetchError(null);
       setLoading(false);
       
-      console.log('[Home] 🔄 Fetching fresh feed with randomization...');
+      console.log('[Home] 🔄 Fetching fresh feed (newest-first, excluding seen)...');
       
       const result = await fetchFeedPage({
         cursor: null,
-        limit: 15,
+        limit: FEED_PAGE_SIZE,
         userLat: userPosition?.latitude,
         userLng: userPosition?.longitude,
         category: null,
         searchQuery: searchQuery.trim() || null,
         useCache: false, // Always fetch fresh on refresh
-        isRefresh: true, // Add randomization to scoring
+        isRefresh: true,
         userPersonaSummary: preferences?.profileSummary || '',
+        excludePostIds,
+        neverFirstPostId: priorTopId || undefined,
       });
       
       console.log('[Home] ✅ Refresh complete:', { 
@@ -1476,7 +1405,10 @@ export default function HomeScreen() {
       setPosts(result.posts);
       setNextCursor(result.nextCursor);
       setHasMore(result.hasMore);
-      setFeedRefreshKey(prev => prev + 1); // Trigger re-animation
+      const newLeaders = result.posts.slice(0, 3).map((p) => p.id).filter(Boolean);
+      refreshSpinGuardRef.current = [
+        ...new Set([...newLeaders, ...filteredLeaderPostIds, ...refreshSpinGuardRef.current].filter(Boolean)),
+      ].slice(0, 40);
     } catch (err) {
       console.error('[Home] Failed to refresh:', err);
       const errMsg = String(err?.message ?? err ?? '');
@@ -1486,34 +1418,47 @@ export default function HomeScreen() {
       setRefreshing(false);
       refreshingRef.current = false;
     }
-  }, [userPosition?.latitude, userPosition?.longitude, searchQuery, preferences?.profileSummary]);
+  }, [
+    userPosition?.latitude,
+    userPosition?.longitude,
+    searchQuery,
+    preferences?.profileSummary,
+    posts,
+    filteredTopPostId,
+    filteredLeaderPostIds,
+  ]);
   
   const handleLoadMore = useCallback(() => {
-    if (loadingMore || !hasMore || loading || refreshing) return;
-    
+    if (loadingMore || !hasMore || loading || refreshing || appendInFlightRef.current) return;
+
     console.log('[Home] Loading more posts...');
     fetchPosts({ skipGlobalLoading: true, append: true });
   }, [loadingMore, hasMore, loading, refreshing, fetchPosts]);
 
-  const handleViewableItemsChanged = useRef(({ viewableItems }) => {
-    if (viewableItems.length > 0) {
-      const viewable = viewableItems[0]?.item;
-      if (viewable?.id) {
-        trackInteraction('VIEW', { 
-          postId: viewable.id, 
+  const handleViewableItemsChanged = useCallback(({ viewableItems }) => {
+    const seenIds = viewableItems.map((v) => v.item?.id).filter(Boolean);
+    if (seenIds.length > 0) {
+      markPostsSeen(seenIds);
+    }
+    const viewable = viewableItems[0]?.item;
+    if (viewable?.id) {
+      if (lastViewTrackedPostIdRef.current !== viewable.id) {
+        lastViewTrackedPostIdRef.current = viewable.id;
+        trackInteraction('VIEW', {
+          postId: viewable.id,
           clientId: viewable.clientId,
-          tags: viewable.tags 
+          tags: viewable.tags,
         });
       }
     }
-  }).current;
+  }, []);
   
   const viewabilityConfig = useRef({
-    itemVisiblePercentThreshold: 50,
-    minimumViewTime: 1000,
+    itemVisiblePercentThreshold: 40,
+    minimumViewTime: 120,
   }).current;
 
-  const handleUpvoteToggle = useCallback(async (post, event) => {
+  const handleUpvoteToggle = useCallback((post, event) => {
     const adding = !post.hasUpvoted;
     if (upvoteInFlightRef.current.has(post.id)) return;
     upvoteInFlightRef.current.add(post.id);
@@ -1522,6 +1467,7 @@ export default function HomeScreen() {
     const scaleAnim = upvoteAnimations[post.id].scale;
 
     const newCount = Math.max(0, post.upvotes + (adding ? 1 : -1));
+    const previousUpvotes = post.upvotes ?? 0;
     setPosts((prev) =>
       prev.map((p) =>
         p.id === post.id ? { ...p, hasUpvoted: adding, upvotes: newCount } : p
@@ -1549,11 +1495,11 @@ export default function HomeScreen() {
           useNativeDriver: true,
         }),
       ]).start();
-      
-      trackInteraction('LIKE', { 
-        postId: post.id, 
+
+      trackInteraction('LIKE', {
+        postId: post.id,
         clientId: post.clientId,
-        tags: post.tags 
+        tags: post.tags,
       });
     } else {
       Animated.sequence([
@@ -1571,26 +1517,91 @@ export default function HomeScreen() {
       ]).start();
     }
 
-    try {
-      const voterId = await getVoterId();
-      if (adding) {
-        const { error } = await supabase.from('post_upvote').insert({ post_uuid: post.id, voter_id: voterId });
-        if (error) throw error;
-      } else {
-        const { error } = await supabase.from('post_upvote').delete().eq('post_uuid', post.id).eq('voter_id', voterId);
-        if (error) throw error;
+    const persistUpvote = async () => {
+      try {
+        const voterId = await getVoterId();
+        if (adding) {
+          const { error } = await supabase
+            .from('post_upvote')
+            .insert({ post_uuid: post.id, voter_id: voterId });
+          if (error) throw error;
+        } else {
+          const { error } = await supabase
+            .from('post_upvote')
+            .delete()
+            .eq('post_uuid', post.id)
+            .eq('voter_id', voterId);
+          if (error) throw error;
+        }
+      } catch (err) {
+        console.warn('[Home] Upvote failed:', err?.message ?? err);
+        setPosts((prev) =>
+          prev.map((p) =>
+            p.id === post.id ? { ...p, hasUpvoted: !adding, upvotes: previousUpvotes } : p
+          )
+        );
+      } finally {
+        upvoteInFlightRef.current.delete(post.id);
       }
-    } catch (err) {
-      console.warn('[Home] Upvote failed:', err?.message ?? err);
-      setPosts((prev) =>
-        prev.map((p) =>
-          p.id === post.id ? { ...p, hasUpvoted: !adding, upvotes: post.upvotes } : p
-        )
-      );
-    } finally {
-      upvoteInFlightRef.current.delete(post.id);
-    }
+    };
+
+    setTimeout(persistUpvote, 0);
   }, [upvoteAnimations]);
+
+  const feedListHeader = useMemo(
+    () => (
+      <>
+        {khalidContextBanner ? (
+          <View style={styles.khalidContextBanner}>
+            <Ionicons name="sparkles" size={16} color={COLORS.primary} />
+            <Text style={styles.khalidContextBannerText} numberOfLines={1}>
+              Khalid showed you: {khalidContextBanner}
+            </Text>
+            <TouchableOpacity onPress={() => setKhalidContextBanner(null)} hitSlop={8}>
+              <Ionicons name="close-circle" size={20} color={COLORS.textMuted} />
+            </TouchableOpacity>
+          </View>
+        ) : null}
+      </>
+    ),
+    [khalidContextBanner, styles, COLORS.primary, COLORS.textMuted],
+  );
+
+  const renderFeedItem = useCallback(
+    ({ item, index }) => {
+      if (!upvoteAnimations[item.id]) upvoteAnimations[item.id] = { scale: new Animated.Value(1) };
+      return (
+        <StaggeredFeedItem index={index}>
+          <PostCard
+            item={item}
+            isHighlighted={item.id === highlightedPostId}
+            onHighlightDone={() => setHighlightedPostId(null)}
+            onUpvoteToggle={handleUpvoteToggle}
+            onClientPress={(post) => {
+              if (post?.clientId) {
+                trackInteraction('PROFILE_VIEW', { clientId: post.clientId });
+                setSelectedClientId(post.clientId);
+              }
+            }}
+            upvoteScaleAnim={upvoteAnimations[item.id].scale}
+            styles={styles}
+            COLORS={COLORS}
+            ACTION_BUTTONS_LEFT={ACTION_BUTTONS_LEFT}
+            UPVOTE_COLOR={UPVOTE_COLOR}
+          />
+        </StaggeredFeedItem>
+      );
+    },
+    [
+      highlightedPostId,
+      styles,
+      COLORS,
+      ACTION_BUTTONS_LEFT,
+      UPVOTE_COLOR,
+      handleUpvoteToggle,
+      upvoteAnimations,
+    ],
+  );
 
   const overlayBackdropOpacity = useRef(new Animated.Value(0)).current;
   const overlayContentScale = useRef(new Animated.Value(0.92)).current;
@@ -1659,7 +1670,7 @@ export default function HomeScreen() {
 
     navigation.setParams({ fromKhalid: undefined });
     return () => clearTimeout(bannerTimeout);
-  }, [posts, navigation, flatListRef, smoothScrollToIndex, setHighlightedPostId]);
+  }, [posts, navigation, smoothScrollToIndex, setHighlightedPostId]);
 
   useEffect(() => {
     if (!showAIOverlay) {
@@ -1785,33 +1796,6 @@ export default function HomeScreen() {
     });
   };
 
-  const smoothScrollToIndex = (index, onDone) => {
-    if (scrollAnimationRef.current != null) return;
-    const list = flatListRef.current;
-    if (!list) {
-      onDone?.();
-      return;
-    }
-    const startOffset = scrollOffsetRef.current;
-    const targetOffset = Math.max(0, index * ESTIMATED_CARD_HEIGHT - 60);
-    const startTime = { current: null };
-    const animate = () => {
-      if (startTime.current == null) startTime.current = Date.now();
-      const elapsed = Date.now() - startTime.current;
-      const t = Math.min(elapsed / SMOOTH_SCROLL_DURATION_MS, 1);
-      const eased = easeInOutCubic(t);
-      const offset = startOffset + (targetOffset - startOffset) * eased;
-      list.scrollToOffset({ offset, animated: false });
-      if (t < 1) {
-        scrollAnimationRef.current = requestAnimationFrame(animate);
-      } else {
-        scrollAnimationRef.current = null;
-        onDone?.();
-      }
-    };
-    scrollAnimationRef.current = requestAnimationFrame(animate);
-  };
-
   const handleAISubmit = (choice) => {
     const isQuickOption = typeof choice === 'string' && AI_QUICK_OPTIONS.some((o) => o.id === choice);
     const nextQuery = isQuickOption ? choice : (customQuery.trim() || (typeof choice === 'string' ? choice : ''));
@@ -1843,6 +1827,25 @@ export default function HomeScreen() {
             const diff = y - lastScrollY.current;
             lastScrollY.current = y;
             scrollOffsetRef.current = y;
+
+            const { contentSize, layoutMeasurement } = e.nativeEvent;
+            const contentH = contentSize?.height ?? 0;
+            const viewH = layoutMeasurement?.height ?? 0;
+            if (contentH > 1 && viewH > 1) {
+              const maxScrollY = contentH - viewH;
+              const s = pagingRef.current;
+              const canLoad = s.hasMore && !s.loadingMore && !s.loading && !s.refreshing;
+              if (canLoad) {
+                if (maxScrollY <= 8) {
+                  s.loadMore();
+                } else {
+                  const progress = y / maxScrollY;
+                  if (progress >= FEED_PREFETCH_SCROLL_PROGRESS) {
+                    s.loadMore();
+                  }
+                }
+              }
+            }
 
             if (y > SCROLL_TO_TOP_SHOW_AT) setShowScrollToTop(true);
             else if (y < SCROLL_TO_TOP_HIDE_AT) setShowScrollToTop(false);
@@ -1891,15 +1894,7 @@ export default function HomeScreen() {
       // Turn OFF location mode - back to default algorithm
       setLocationModeActive(false);
       setUserPosition(null);
-      
-      // Animate button back to normal
-      Animated.spring(locationBtnScale, {
-        toValue: 1,
-        useNativeDriver: true,
-        friction: 8,
-        tension: 120,
-      }).start();
-      
+
       // Refetch with default algorithm
       await clearFeedCache();
       setNextCursor(null);
@@ -1908,7 +1903,7 @@ export default function HomeScreen() {
       try {
         const result = await fetchFeedPage({
           cursor: null,
-          limit: 15,
+          limit: FEED_PAGE_SIZE,
           userLat: null,
           userLng: null,
           category: null,
@@ -1921,7 +1916,6 @@ export default function HomeScreen() {
         setPosts(result.posts);
         setNextCursor(result.nextCursor);
         setHasMore(result.hasMore);
-        setFeedRefreshKey(prev => prev + 1); // Trigger re-animation
       } catch (err) {
         console.error('[Home] Failed to reset feed:', err);
       }
@@ -2044,7 +2038,6 @@ export default function HomeScreen() {
         setPosts(result.posts);
         setNextCursor(result.nextCursor);
         setHasMore(result.hasMore);
-        setFeedRefreshKey(prev => prev + 1); // Trigger re-animation
       } catch (err) {
         console.error('[Home] Failed to fetch location-based posts:', err);
       }
@@ -2081,158 +2074,72 @@ export default function HomeScreen() {
           flatListRef.current?.scrollToOffset({ offset: 0, animated: true });
         }, 100);
       });
-
-      // Cool button animation: pulse + radar ring
-      locationBtnRingOpacity.setValue(0.7);
-      locationBtnRingScale.setValue(1);
-      locationSuccessOpacity.setValue(0);
-      Animated.sequence([
-        Animated.parallel([
-          Animated.spring(locationBtnScale, {
-            toValue: 1.35,
-            useNativeDriver: true,
-            friction: 6,
-            tension: 200,
-          }),
-          Animated.timing(locationBtnRingOpacity, {
-            toValue: 0,
-            duration: 500,
-            useNativeDriver: true,
-            easing: Easing.out(Easing.cubic),
-          }),
-          Animated.timing(locationBtnRingScale, {
-            toValue: 2.2,
-            duration: 500,
-            useNativeDriver: true,
-            easing: Easing.out(Easing.cubic),
-          }),
-        ]),
-        Animated.spring(locationBtnScale, {
-          toValue: 1,
-          useNativeDriver: true,
-          friction: 7,
-          tension: 120,
-        }),
-        Animated.sequence([
-          Animated.timing(locationSuccessOpacity, {
-            toValue: 1,
-            duration: 120,
-            useNativeDriver: true,
-          }),
-          Animated.delay(600),
-          Animated.timing(locationSuccessOpacity, {
-            toValue: 0,
-            duration: 200,
-            useNativeDriver: true,
-          }),
-        ]),
-      ]).start();
-
-      // No alert dialog - animation is the feedback
     } catch (e) {
       Alert.alert('Location', e?.message ?? 'Could not get or save location.');
     } finally {
       setLocationUpdating(false);
     }
-  }, [profile?.user?.user_a_uuid, locationModeActive, locationBtnScale, locationBtnRingScale, locationBtnRingOpacity, locationSuccessOpacity, mapAnimOpacity, mapAnimScale, mapAnimRotate, mapPulse]);
+  }, [profile?.user?.user_a_uuid, locationModeActive, mapAnimOpacity, mapAnimScale, mapAnimRotate, mapPulse, searchQuery, preferences?.profileSummary]);
+
+  pagingRef.current = {
+    filteredLen: filteredPosts.length,
+    hasMore,
+    loadingMore,
+    loading,
+    refreshing,
+    loadMore: handleLoadMore,
+  };
 
   return (
     <ScreenContainer style={styles.screen}>
       <View style={styles.screenGradientWrap} pointerEvents="none">
         <LinearGradient
-          colors={[COLORS.screenBg, '#F1F5F9', COLORS.screenBg]}
-          locations={[0, 0.4, 1]}
+          colors={[COLORS.screenBg, COLORS.cardBg, COLORS.screenBg]}
+          locations={[0, 0.42, 1]}
           style={StyleSheet.absoluteFill}
         />
       </View>
       <Animated.View
         style={[
           styles.headerFloatingWrap,
-          { paddingTop: insets.top + 2, transform: [{ translateY: headerTranslateY }] },
+          { paddingTop: insets.top + 4, transform: [{ translateY: headerTranslateY }] },
         ]}
         pointerEvents="box-none"
       >
-        <BlurView intensity={Platform.OS === 'ios' ? 80 : 0} tint={colors.mode === 'dark' ? 'dark' : 'light'} style={styles.headerBlur} />
         <View style={styles.headerContent}>
           <View style={styles.instagramHeader}>
-            <TouchableOpacity
-              style={[styles.headerIconBtn, locationModeActive && styles.headerIconBtnActive]}
-              onPress={handleUpdateLocation}
-              disabled={locationUpdating}
-              activeOpacity={0.7}
-            >
-              <View style={styles.locationBtnInner}>
-                <Animated.View
-                  style={[
-                    styles.locationBtnRing,
-                    {
-                      transform: [{ scale: locationBtnRingScale }],
-                      opacity: locationBtnRingOpacity,
-                      borderColor: COLORS.primary,
-                    },
-                  ]}
-                />
-                <Animated.View style={{ transform: [{ scale: locationBtnScale }] }}>
-                  {locationUpdating ? (
-                    <ActivityIndicator size="small" color={COLORS.textPrimary} />
-                  ) : locationModeActive ? (
-                    <>
-                      <Animated.View
-                        style={{
-                          opacity: locationBtnBlinkOpacity,
-                        }}
-                      >
-                        <Ionicons name="location" size={24} color={COLORS.primary} />
-                      </Animated.View>
-                    </>
-                  ) : (
-                    <>
-                      <Animated.View
-                        style={{
-                          opacity: Animated.multiply(
-                            Animated.subtract(1, locationSuccessOpacity),
-                            locationBtnBlinkOpacity
-                          ),
-                        }}
-                      >
-                        <Ionicons name="location-outline" size={24} color={COLORS.textPrimary} />
-                      </Animated.View>
-                      <Animated.View
-                        style={[
-                          StyleSheet.absoluteFill,
-                          styles.locationSuccessIconWrap,
-                          { opacity: locationSuccessOpacity },
-                        ]}
-                        pointerEvents="none"
-                      >
-                        <Ionicons name="location" size={24} color={COLORS.primary} />
-                      </Animated.View>
-                    </>
-                  )}
-                </Animated.View>
-              </View>
-            </TouchableOpacity>
-            <View style={styles.headerCenter}>
-              <Text style={styles.instagramLogo}>Go Bahrain</Text>
-            </View>
-            <View style={styles.headerRight}>
+            <View style={styles.headerLeft}>
               <TouchableOpacity
                 style={[styles.headerIconBtn, filtersExpanded && styles.headerIconBtnActive]}
                 activeOpacity={0.7}
                 onPress={toggleFilters}
+                accessibilityRole="button"
+                accessibilityLabel="Filters"
+                accessibilityState={{ expanded: filtersExpanded }}
               >
                 <Ionicons
-                  name={filtersExpanded ? "options" : "options-outline"}
-                  size={24}
-                  color={filtersExpanded ? COLORS.primary : COLORS.textPrimary}
+                  name={filtersExpanded ? 'funnel' : 'funnel-outline'}
+                  size={20}
+                  color={filtersExpanded ? '#FFFFFF' : COLORS.textSecondary}
                 />
               </TouchableOpacity>
+            </View>
+            <View style={styles.headerCenter}>
+              <Text style={styles.instagramLogo}>Home</Text>
+            </View>
+            <View style={styles.headerRight}>
               <TouchableOpacity
-                style={styles.headerIconBtn}
+                style={[styles.headerIconBtn, searchExpanded && styles.headerIconBtnActive]}
                 activeOpacity={0.7}
                 onPress={toggleSearch}
+                accessibilityRole="button"
+                accessibilityLabel={searchExpanded ? "Close search" : "Search"}
               >
-                <Ionicons name={searchExpanded ? "close-outline" : "search-outline"} size={24} color={COLORS.textPrimary} />
+                <Ionicons
+                  name={searchExpanded ? "close-outline" : "search-outline"}
+                  size={20}
+                  color={searchExpanded ? '#FFFFFF' : COLORS.textSecondary}
+                />
               </TouchableOpacity>
             </View>
           </View>
@@ -2271,15 +2178,7 @@ export default function HomeScreen() {
                 >
                   <Ionicons name="close-circle" size={20} color={COLORS.textMuted} />
                 </TouchableOpacity>
-              ) : (
-                <TouchableOpacity
-                  onPress={() => setShowAIOverlay(true)}
-                  hitSlop={8}
-                  style={styles.aiSparkle}
-                >
-                  <Ionicons name="sparkles" size={18} color={COLORS.primary} />
-                </TouchableOpacity>
-              )}
+              ) : null}
             </View>
           </Animated.View>
 
@@ -2301,6 +2200,12 @@ export default function HomeScreen() {
               contentContainerStyle={styles.filtersScroll}
               style={[styles.filtersScrollView, { height: FILTERS_SECTION_EXPANDED_HEIGHT }]}
             >
+              <LocationFilterChip
+                selected={locationModeActive}
+                busy={locationUpdating}
+                onPress={handleUpdateLocation}
+                colors={colors}
+              />
               {CATEGORIES.map((cat) => {
                 const selected = selectedCategory === cat.id;
                 return (
@@ -2318,13 +2223,6 @@ export default function HomeScreen() {
         </View>
       </Animated.View>
 
-      <CoolRefreshControl 
-        scrollY={scrollY} 
-        refreshing={refreshing} 
-        topInset={headerBarHeight} 
-        colors={colors} 
-      />
-
       {loading ? (
         <View style={styles.loadingWrap}>
           <ActivityIndicator size="large" color={COLORS.primary} />
@@ -2336,6 +2234,8 @@ export default function HomeScreen() {
           {
             opacity: pageEntranceOpacity,
             transform: [{ scale: pageEntranceScale }],
+            zIndex: 0,
+            elevation: 0,
           },
         ]}
       >
@@ -2400,54 +2300,23 @@ export default function HomeScreen() {
           ref={flatListRef}
           data={filteredPosts}
           keyExtractor={(item) => item.id}
-          renderItem={({ item, index }) => {
-            if (!upvoteAnimations[item.id]) upvoteAnimations[item.id] = { scale: new Animated.Value(1) };
-            return (
-              <StaggeredFeedItem key={`${item.id}-${feedRefreshKey}`} index={index} isRefreshing={refreshing}>
-                <PostCard
-                  item={item}
-                  isHighlighted={item.id === highlightedPostId}
-                  onHighlightDone={() => setHighlightedPostId(null)}
-                  onUpvoteToggle={handleUpvoteToggle}
-                  onClientPress={(post) => {
-                    if (post?.clientId) {
-                      trackInteraction('PROFILE_VIEW', { clientId: post.clientId });
-                      setSelectedClientId(post.clientId);
-                    }
-                  }}
-                  upvoteScaleAnim={upvoteAnimations[item.id].scale}
-                  styles={styles}
-                  COLORS={COLORS}
-                  ACTION_BUTTONS_LEFT={ACTION_BUTTONS_LEFT}
-                  UPVOTE_COLOR={UPVOTE_COLOR}
-                />
-              </StaggeredFeedItem>
-            );
-          }}
-          ListHeaderComponent={
-            <>
-              {khalidContextBanner ? (
-                <View style={styles.khalidContextBanner}>
-                  <Ionicons name="sparkles" size={16} color={COLORS.primary} />
-                  <Text style={styles.khalidContextBannerText} numberOfLines={1}>
-                    Khalid showed you: {khalidContextBanner}
-                  </Text>
-                  <TouchableOpacity onPress={() => setKhalidContextBanner(null)} hitSlop={8}>
-                    <Ionicons name="close-circle" size={20} color={COLORS.textMuted} />
-                  </TouchableOpacity>
-                </View>
-              ) : null}
-              {refreshing ? null : null}
-            </>
-          }
+          renderItem={renderFeedItem}
+          ListHeaderComponent={feedListHeader}
+          extraData={highlightedPostId}
           contentContainerStyle={[styles.feedContent, { paddingTop: headerBarHeight }]}
           style={styles.feedList}
           showsVerticalScrollIndicator={false}
           onScrollToIndexFailed={() => {}}
           onScroll={handleScroll}
           scrollEventThrottle={16}
+          windowSize={7}
+          maxToRenderPerBatch={5}
+          initialNumToRender={4}
+          updateCellsBatchingPeriod={80}
+          removeClippedSubviews={Platform.OS === 'android'}
+          keyboardShouldPersistTaps="handled"
           onEndReached={handleLoadMore}
-          onEndReachedThreshold={0.3}
+          onEndReachedThreshold={0.35}
           onViewableItemsChanged={handleViewableItemsChanged}
           viewabilityConfig={viewabilityConfig}
           ListFooterComponent={
@@ -2470,11 +2339,10 @@ export default function HomeScreen() {
             <RefreshControl
               refreshing={refreshing}
               onRefresh={handleRefresh}
-              colors={[COLORS.primary]} 
-              tintColor={COLORS.primary}
-              progressBackgroundColor={COLORS.cardBg}
-              title="Pull to refresh"
-              titleColor={COLORS.textMuted}
+              tintColor="transparent"
+              colors={['transparent']}
+              progressBackgroundColor="transparent"
+              {...(Platform.OS === 'android' ? { progressViewOffset: -9999 } : {})}
             />
           }
         />

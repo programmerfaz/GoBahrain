@@ -1,0 +1,356 @@
+
+      {/* Clients search modal — all clients by Restaurants, Places, Events */}
+      <Modal
+        visible={showSearchModal}
+        animationType="slide"
+        presentationStyle="pageSheet"
+        onRequestClose={() => {
+          if (addingPlanStop) return
+          setShowSearchModal(false)
+        }}
+      >
+        <View style={[styles.searchModalRoot, { paddingTop: insets.top + 4 }]}>
+          {searchModalLoading ? (
+            <View style={styles.searchModalLoading}>
+              <ActivityIndicator size="large" color={themeColors.primary} />
+              <Text style={styles.searchModalLoadingText}>Loading clients…</Text>
+            </View>
+          ) : (
+            <>
+              <View style={styles.searchModalHeadingWrap}>
+                <Text style={styles.searchModalHeading}>
+                  {addToPlanMode ? 'Add to your day' : 'Browse clients'}
+                </Text>
+                {addToPlanMode ? (
+                  <Text style={styles.searchModalSubheading}>
+                    Tap a restaurant, place, or event — it is added to the end of your list. Long-press a card to reorder anytime.
+                  </Text>
+                ) : null}
+              </View>
+              <View style={styles.searchModalHeaderRow}>
+                <View style={styles.searchModalSearchWrap}>
+                  <Ionicons name="search" size={20} color={themeColors.primary} style={styles.searchModalSearchIcon} />
+                  <TextInput
+                    style={styles.searchModalSearchInput}
+                    placeholder="Search restaurants, places, events…"
+                    placeholderTextColor="#94A3B8"
+                    value={searchModalQuery}
+                    onChangeText={setSearchModalQuery}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    returnKeyType="search"
+                  />
+                  {searchModalQuery.length > 0 && (
+                    <TouchableOpacity
+                      onPress={() => setSearchModalQuery('')}
+                      style={styles.searchModalSearchClear}
+                      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                    >
+                      <Ionicons name="close-circle" size={20} color="#94A3B8" />
+                    </TouchableOpacity>
+                  )}
+                </View>
+                <TouchableOpacity
+                  style={styles.searchModalCloseBtn}
+                  activeOpacity={0.8}
+                  onPress={() => {
+                    if (addingPlanStop) return
+                    setShowSearchModal(false)
+                  }}
+                  accessibilityState={{ disabled: addingPlanStop }}
+                >
+                  <Ionicons name="close" size={20} color={themeColors.primary} />
+                </TouchableOpacity>
+              </View>
+              <ScrollView
+                style={styles.searchModalScroll}
+                contentContainerStyle={styles.searchModalContent}
+                showsVerticalScrollIndicator={false}
+                keyboardShouldPersistTaps="handled"
+              >
+                {['restaurants', 'places', 'events'].map((key) => {
+                  const sectionLabel = key === 'restaurants' ? 'Restaurants' : key === 'places' ? 'Places' : 'Events';
+                  const rawItems = searchModalClients[key] || [];
+                  const q = (searchModalQuery || '').trim().toLowerCase();
+                  const items = q
+                    ? rawItems.filter(
+                        (c) =>
+                          (c.name || c.business_name || '').toLowerCase().includes(q) ||
+                          (c.business_name_ar || '').toLowerCase().includes(q)
+                      )
+                    : rawItems;
+                const accent = key === 'restaurants' ? colors.dining : key === 'events' ? colors.event : colors.textSecondary;
+                if (q && items.length === 0) return null;
+                return (
+                  <View key={key} style={styles.searchModalSection}>
+                    <View style={styles.searchModalSectionHeader}>
+                      <View style={[styles.searchModalSectionIcon, { backgroundColor: `${accent}18` }]}>
+                        <Ionicons
+                          name={key === 'restaurants' ? 'restaurant' : key === 'events' ? 'calendar' : 'location'}
+                          size={20}
+                          color={accent}
+                        />
+                      </View>
+                      <Text style={[styles.searchModalSectionTitle, { color: accent }]}>{sectionLabel}</Text>
+                    </View>
+                    {items.length === 0 ? (
+                      <Text style={styles.searchModalEmpty}>
+                        {q ? `No ${sectionLabel.toLowerCase()} match "${searchModalQuery.trim()}"` : `No ${sectionLabel.toLowerCase()} yet`}
+                      </Text>
+                    ) : (
+                      <ScrollView
+                        horizontal
+                        showsHorizontalScrollIndicator={false}
+                        contentContainerStyle={styles.searchModalHorizontalContent}
+                      >
+                        {items.map((client) => {
+                          const imageUrl = resolvePublicImageUrl(client.client_image);
+                          return (
+                            <TouchableOpacity
+                              key={client.client_a_uuid || client.clientId}
+                              style={styles.searchModalClientCard}
+                              activeOpacity={0.7}
+                              disabled={addingPlanStop}
+                              onPress={() => {
+                                if (addToPlanMode) {
+                                  handleAddClientToPlan(client)
+                                  return
+                                }
+                                setShowSearchModal(false);
+                                setProfileClientId(client.client_a_uuid || client.clientId);
+                              }}
+                            >
+                              <View style={[styles.searchModalClientCircle, { borderColor: accent }]}>
+                                {imageUrl ? (
+                                  <CachedImage source={{ uri: imageUrl }} style={styles.searchModalClientImage} recyclingKey={imageUrl} resizeMode="cover" />
+                                ) : (
+                                  <Ionicons
+                                    name={key === 'restaurants' ? 'restaurant' : key === 'events' ? 'calendar' : 'location'}
+                                    size={32}
+                                    color={accent}
+                                  />
+                                )}
+                              </View>
+                              <Text style={styles.searchModalClientName} numberOfLines={2}>
+                                {client.name || client.business_name || 'Spot'}
+                              </Text>
+                            </TouchableOpacity>
+                          );
+                        })}
+                      </ScrollView>
+                    )}
+                  </View>
+                );
+              })}
+              </ScrollView>
+            </>
+          )}
+          {addingPlanStop && !searchModalLoading ? (
+            <View style={styles.searchModalAddingOverlay} pointerEvents="box-none">
+              <ActivityIndicator size="large" color={themeColors.primary} />
+              <Text style={styles.searchModalAddingOverlayText}>Adding to your plan…</Text>
+            </View>
+          ) : null}
+        </View>
+      </Modal>
+
+      <Modal
+        visible={showSharePlanModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowSharePlanModal(false)}
+      >
+        <View style={styles.sharePlanModalRoot}>
+          <TouchableOpacity
+            style={StyleSheet.absoluteFill}
+            activeOpacity={1}
+            onPress={() => setShowSharePlanModal(false)}
+            accessibilityLabel="Dismiss share dialog"
+            accessibilityRole="button"
+          />
+          <View style={styles.sharePlanModalCard} pointerEvents="box-none">
+            <Text style={styles.sharePlanModalTitle}>Share plan</Text>
+            <Text style={styles.sharePlanModalSub}>
+              Friends open this in SiyahaBH using your link or code. Choose view-only, or let them edit the same plan.
+            </Text>
+            {shareModalCode ? (
+              <View style={styles.sharePlanModalCodeBox}>
+                <Text style={styles.sharePlanModalCode}>{shareModalCode}</Text>
+              </View>
+            ) : (
+              <Text style={[styles.sharePlanModalSub, { marginBottom: 12 }]}>Enable sharing to create a code.</Text>
+            )}
+            <View style={styles.sharePlanModalPermRow}>
+              <TouchableOpacity
+                style={[
+                  styles.sharePlanModalPermChip,
+                  sharePermissionDraft === 'view' && styles.sharePlanModalPermChipActive,
+                ]}
+                onPress={() => setSharePermissionDraft('view')}
+                accessibilityRole="button"
+                accessibilityLabel="View only"
+              >
+                <Text style={styles.sharePlanModalPermChipText}>View only</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[
+                  styles.sharePlanModalPermChip,
+                  sharePermissionDraft === 'edit' && styles.sharePlanModalPermChipActive,
+                ]}
+                onPress={() => setSharePermissionDraft('edit')}
+                accessibilityRole="button"
+                accessibilityLabel="Can edit"
+              >
+                <Text style={styles.sharePlanModalPermChipText}>Can edit</Text>
+              </TouchableOpacity>
+            </View>
+            <View style={styles.sharePlanModalActions}>
+              <TouchableOpacity
+                style={[styles.sharePlanModalBtn, styles.sharePlanModalBtnSecondary]}
+                onPress={handleCopyShareLinkOnly}
+                disabled={!shareModalCode || shareModalBusy}
+              >
+                <Text style={[styles.sharePlanModalBtnText, styles.sharePlanModalBtnTextDark]}>Copy</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.sharePlanModalBtn}
+                onPress={handleConfirmShareSettings}
+                disabled={shareModalBusy}
+              >
+                <Text style={styles.sharePlanModalBtnText}>
+                  {shareModalBusy ? '…' : shareModalCode ? 'Apply' : 'Enable'}
+                </Text>
+              </TouchableOpacity>
+            </View>
+            {shareModalCode ? (
+              <TouchableOpacity
+                onPress={handleDisableSharing}
+                style={{ marginTop: 14, alignItems: 'center' }}
+                accessibilityRole="button"
+                accessibilityLabel="Turn off sharing"
+              >
+                <Text style={{ fontSize: 13, fontWeight: '700', color: '#DC2626' }}>Turn off sharing</Text>
+              </TouchableOpacity>
+            ) : null}
+            <TouchableOpacity
+              onPress={() => setShowSharePlanModal(false)}
+              style={{ marginTop: 16, alignItems: 'center' }}
+              accessibilityRole="button"
+            >
+              <Text style={{ fontSize: 15, fontWeight: '700', color: '#64748B' }}>Close</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal
+        visible={showEditSavedPlanTitleModal}
+        transparent
+        animationType="fade"
+        onRequestClose={handleCloseEditSavedPlanTitleModal}
+      >
+        <View style={styles.sharePlanModalRoot}>
+          <TouchableOpacity
+            style={StyleSheet.absoluteFill}
+            activeOpacity={1}
+            onPress={handleCloseEditSavedPlanTitleModal}
+            accessibilityLabel="Dismiss rename dialog"
+            accessibilityRole="button"
+          />
+          <KeyboardAvoidingView
+            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+            style={{ zIndex: 2, maxWidth: 400, width: '100%', alignSelf: 'center' }}
+          >
+            <View style={styles.sharePlanModalCard} pointerEvents="box-none">
+              <Text style={styles.sharePlanModalTitle}>Plan name</Text>
+              <Text style={styles.sharePlanModalSub}>Choose a short name so you can find this plan later.</Text>
+              <TextInput
+                style={styles.editSavedPlanTitleModalInput}
+                value={editSavedPlanTitleDraft}
+                onChangeText={setEditSavedPlanTitleDraft}
+                placeholder="My plan"
+                placeholderTextColor="#94A3B8"
+                maxLength={120}
+                editable={!editSavedPlanTitleBusy}
+                autoFocus
+                accessibilityLabel="Plan title"
+                returnKeyType="done"
+                onSubmitEditing={handleSubmitEditSavedPlanTitle}
+              />
+              <View style={styles.sharePlanModalActions}>
+                <TouchableOpacity
+                  style={[styles.sharePlanModalBtn, styles.sharePlanModalBtnSecondary]}
+                  onPress={handleCloseEditSavedPlanTitleModal}
+                  disabled={editSavedPlanTitleBusy}
+                  accessibilityRole="button"
+                  accessibilityLabel="Cancel rename"
+                >
+                  <Text style={[styles.sharePlanModalBtnText, styles.sharePlanModalBtnTextDark]}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.sharePlanModalBtn}
+                  onPress={handleSubmitEditSavedPlanTitle}
+                  disabled={editSavedPlanTitleBusy}
+                  accessibilityRole="button"
+                  accessibilityLabel="Save plan name"
+                >
+                  <Text style={styles.sharePlanModalBtnText}>{editSavedPlanTitleBusy ? '…' : 'Save'}</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </KeyboardAvoidingView>
+        </View>
+      </Modal>
+
+      <ClientProfileModal
+        visible={!!profileClientId}
+        clientId={profileClientId}
+        onClose={() => setProfileClientId(null)}
+        insets={insets}
+        onOpenARNavigate={(dest) => {
+          setProfileClientId(null);
+          if (dest?.lat != null && dest?.lng != null) {
+            navigation.navigate('AR', { navigateTo: { lat: dest.lat, lng: dest.lng, name: dest.name || 'Destination' } });
+          }
+        }}
+      />
+
+      {doorVisible && (() => {
+        const TOOTH_COUNT = 5
+        const toothH = SCREEN_HEIGHT / TOOTH_COUNT
+        const toothW = SCREEN_WIDTH * 0.12
+        return (
+          <Animated.View style={[styles.doorOverlay, { opacity: doorFade }]} pointerEvents="box-none">
+            <Animated.View style={[styles.doorHalf, styles.doorLeft, { transform: [{ translateX: doorLeft }] }]}>
+              <View style={[StyleSheet.absoluteFill, { backgroundColor: '#FFFFFF' }]} />
+            </Animated.View>
+            <Animated.View style={[styles.doorHalf, styles.doorRight, { transform: [{ translateX: doorRight }] }]}>
+              <View style={[StyleSheet.absoluteFill, { backgroundColor: '#CE1126' }]} />
+            </Animated.View>
+            <Animated.View style={[styles.doorZigzag, { transform: [{ translateX: doorLeft }] }]}>
+              {Array.from({ length: TOOTH_COUNT }, (_, i) => (
+                <View key={i} style={{
+                  width: 0,
+                  height: 0,
+                  borderTopWidth: toothH / 2,
+                  borderBottomWidth: toothH / 2,
+                  borderLeftWidth: toothW,
+                  borderTopColor: 'transparent',
+                  borderBottomColor: 'transparent',
+                  borderLeftColor: '#FFFFFF',
+                }} />
+              ))}
+            </Animated.View>
+            <Animated.View style={[styles.doorIconWrap, { transform: [{ scale: doorIconScale }], opacity: doorIconOpacity }]}>
+              <View style={styles.doorLogoShadow}>
+                <CachedImage
+                  source={require('../../../assets/ai-button-logo.png')}
+                  style={styles.doorLogoImage}
+                  resizeMode="cover"
+                />
+              </View>
+              <Text style={styles.doorFlagLabel}>SiyahaBH</Text>
+            </Animated.View>
+          </Animated.View>
+        )
+      })()}

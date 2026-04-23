@@ -124,13 +124,121 @@ async function fetchClientImagesForPosts(rows) {
   return map;
 }
 
+/** Matches home feed page size for consistent infinite-scroll behaviour. */
+export const COMMUNITY_FEED_PAGE_SIZE = 15
+
+function escapePostgrestQuotes(value) {
+  return String(value ?? '').replace(/'/g, "''")
+}
+
+function quoteTimestamptz(value) {
+  const iso =
+    typeof value === 'string' && value.includes('T')
+      ? value
+      : value
+        ? new Date(value).toISOString()
+        : new Date(0).toISOString()
+  return `'${escapePostgrestQuotes(iso)}'`
+}
+
+function quoteUuid(value) {
+  return `'${escapePostgrestQuotes(value)}'`
+}
+
+/** Keyset for newest-first with stable tie-break (created_at DESC, community_uuid ASC). */
+function buildRecentKeysetOr(createdAt, communityUuid) {
+  const ts = quoteTimestamptz(createdAt)
+  const id = quoteUuid(communityUuid)
+  return `created_at.lt.${ts},and(created_at.eq.${ts},community_uuid.gt.${id})`
+}
+
+/** Keyset for trending: num_of_upvote DESC, created_at DESC, community_uuid DESC. */
+function buildTrendingKeysetOr(votes, createdAt, communityUuid) {
+  const v = Number(votes ?? 0)
+  const ts = quoteTimestamptz(createdAt)
+  const id = quoteUuid(communityUuid)
+  return `num_of_upvote.lt.${v},and(num_of_upvote.eq.${v},created_at.lt.${ts}),and(num_of_upvote.eq.${v},created_at.eq.${ts},community_uuid.lt.${id})`
+}
+
 /**
- * Fetch community posts from Supabase.
- * - all: all posts, newest first
- * - trending: top 40 by upvotes (descending)
- * - other topicId: filter by hashtags, newest first
- * Uses direct join to user→account for author names. Run supabase/community-author-rls.sql for RLS.
+ * One page of community posts (cursor-based; avoids loading the entire table).
+ * @param {{ topicId?: string, limit?: number, cursor?: { kind: 'recent', created_at: string, community_uuid: string } | { kind: 'trending', num_of_upvote: number, created_at: string, community_uuid: string } | null }} opts
+ * @returns {Promise<{ posts: Array, hasMore: boolean, nextCursor: object | null }>}
  */
+export async function fetchCommunityPostsPage({
+  topicId = 'all',
+  limit = COMMUNITY_FEED_PAGE_SIZE,
+  cursor = null,
+} = {}) {
+  const pageLimit = Math.min(Math.max(1, Number(limit) || COMMUNITY_FEED_PAGE_SIZE), 50)
+  const take = pageLimit + 1
+  const isTrending = topicId === 'trending'
+
+  let query = supabase.from('community').select(COMMUNITY_SELECT_WITH_AUTHOR)
+
+  if (!isTrending && topicId && topicId !== 'all') {
+    query = query.ilike('hashtags', `%${topicId}%`)
+  }
+
+  if (isTrending) {
+    query = query
+      .order('num_of_upvote', { ascending: false })
+      .order('created_at', { ascending: false })
+      .order('community_uuid', { ascending: false })
+
+    if (cursor?.kind === 'trending' && cursor.created_at && cursor.community_uuid) {
+      query = query.or(
+        buildTrendingKeysetOr(cursor.num_of_upvote, cursor.created_at, cursor.community_uuid)
+      )
+    }
+  } else {
+    query = query.order('created_at', { ascending: false }).order('community_uuid', { ascending: true })
+
+    if (cursor?.kind === 'recent' && cursor.created_at && cursor.community_uuid) {
+      query = query.or(buildRecentKeysetOr(cursor.created_at, cursor.community_uuid))
+    }
+  }
+
+  query = query.limit(take)
+
+  const { data: rows, error } = await query
+
+  if (error) {
+    console.error('[Community] fetchCommunityPostsPage error:', error)
+    return { posts: [], hasMore: false, nextCursor: null }
+  }
+
+  const raw = rows || []
+  const hasMore = raw.length > pageLimit
+  const pageRows = hasMore ? raw.slice(0, pageLimit) : raw
+
+  const clientMap = await fetchClientImagesForPosts(pageRows)
+  const posts = pageRows.map((row) => mapRowToPost(row, clientMap))
+  const commentMap = await fetchCommentCountsByCommunityIds(posts.map((p) => p.id))
+  const hydrated = posts.map((p) => ({ ...p, comments: commentMap[p.id] ?? p.comments ?? 0 }))
+
+  let nextCursor = null
+  const last = pageRows[pageRows.length - 1]
+  if (hasMore && last?.community_uuid) {
+    if (isTrending) {
+      nextCursor = {
+        kind: 'trending',
+        num_of_upvote: Number(last.num_of_upvote ?? 0),
+        created_at: last.created_at,
+        community_uuid: last.community_uuid,
+      }
+    } else {
+      nextCursor = {
+        kind: 'recent',
+        created_at: last.created_at,
+        community_uuid: last.community_uuid,
+      }
+    }
+  }
+
+  return { posts: hydrated, hasMore, nextCursor }
+}
+
 /** Count comments per post from community_comment (empty map if table missing or error). */
 export async function fetchCommentCountsByCommunityIds(communityUuids) {
   const ids = [...new Set((communityUuids || []).filter(Boolean))];
@@ -146,31 +254,6 @@ export async function fetchCommentCountsByCommunityIds(communityUuids) {
     if (id) map[id] = (map[id] || 0) + 1;
   });
   return map;
-}
-
-export async function fetchCommunityPosts(topicId = 'all') {
-  let query = supabase.from('community').select(COMMUNITY_SELECT_WITH_AUTHOR);
-
-  if (topicId === 'trending') {
-    query = query.order('num_of_upvote', { ascending: false }).limit(40);
-  } else {
-    query = query.order('created_at', { ascending: false });
-    if (topicId && topicId !== 'all') {
-      query = query.ilike('hashtags', `%${topicId}%`);
-    }
-  }
-
-  const { data: rows, error } = await query;
-
-  if (error) {
-    console.error('[Community] fetchCommunityPosts error:', error);
-    return [];
-  }
-
-  const clientMap = await fetchClientImagesForPosts(rows || []);
-  const posts = (rows || []).map((row) => mapRowToPost(row, clientMap));
-  const commentMap = await fetchCommentCountsByCommunityIds(posts.map((p) => p.id));
-  return posts.map((p) => ({ ...p, comments: commentMap[p.id] ?? p.comments ?? 0 }));
 }
 
 /**

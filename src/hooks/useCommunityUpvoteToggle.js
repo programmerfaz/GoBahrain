@@ -53,13 +53,16 @@ export const useCommunityUpvoteToggle = () => {
   }, [getUpvoteScaleAnim])
 
   const handleUpvoteToggle = useCallback(
-    async (post, event, syncPost) => {
+    (post, event, syncPost) => {
       if (!post?.id || typeof syncPost !== 'function') return
       const adding = !post.upvoted
       if (upvoteInFlightRef.current.has(post.id)) return
       upvoteInFlightRef.current.add(post.id)
 
       const prev = { upvoted: !!post.upvoted, upvotes: post.upvotes ?? 0 }
+
+      const nextCount = Math.max(0, prev.upvotes + (adding ? 1 : -1))
+      syncPost({ ...post, upvoted: adding, upvotes: nextCount })
 
       runScaleAnim(post.id, adding)
 
@@ -74,20 +77,21 @@ export const useCommunityUpvoteToggle = () => {
         setTimeout(() => setParticlesVisible(false), 1000)
       }
 
-      const nextCount = Math.max(0, prev.upvotes + (adding ? 1 : -1))
-      syncPost({ ...post, upvoted: adding, upvotes: nextCount })
-
-      try {
-        const count = adding
-          ? await upvoteCommunityPost(post.id)
-          : await removeUpvoteCommunityPost(post.id)
-        syncPost({ ...post, upvoted: adding, upvotes: count })
-      } catch (e) {
-        console.warn('[Community] upvote toggle failed:', e)
-        syncPost({ ...post, upvoted: prev.upvoted, upvotes: prev.upvotes })
-      } finally {
-        upvoteInFlightRef.current.delete(post.id)
+      const persist = async () => {
+        try {
+          const count = adding
+            ? await upvoteCommunityPost(post.id)
+            : await removeUpvoteCommunityPost(post.id)
+          syncPost({ ...post, upvoted: adding, upvotes: count })
+        } catch (e) {
+          console.warn('[Community] upvote toggle failed:', e)
+          syncPost({ ...post, upvoted: prev.upvoted, upvotes: prev.upvotes })
+        } finally {
+          upvoteInFlightRef.current.delete(post.id)
+        }
       }
+
+      setTimeout(persist, 0)
     },
     [runScaleAnim],
   )

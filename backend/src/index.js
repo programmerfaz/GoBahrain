@@ -16,5 +16,5 @@ app.get('/health', (_, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`GoBahrain API listening on http://localhost:${PORT}`);
+  console.log(`SiyahaBH API listening on http://localhost:${PORT}`);
 });

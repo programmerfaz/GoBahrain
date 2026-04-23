@@ -1,0 +1,179 @@
+  const handleOpenInGoogleMaps = useCallback(async () => {
+    if (!dayPlan || openingMaps) return
+    setOpeningMaps(true)
+    try {
+      await openAllStopsInGoogleMaps(dayPlan)
+    } finally {
+      setOpeningMaps(false)
+    }
+  }, [dayPlan, openingMaps])
+
+  const closeStopDetailDialog = useCallback(() => {
+    setStopDetailIndex(null);
+  }, []);
+
+  useEffect(() => {
+    if (!dayPlan?.length) {
+      setStopDetailIndex(null)
+      return
+    }
+    setStopDetailIndex((prev) => {
+      if (prev == null) return prev
+      return Math.min(prev, dayPlan.length - 1)
+    })
+  }, [dayPlan]);
+
+  const stopDetailSlides = useMemo(() => {
+    if (!Array.isArray(dayPlan) || dayPlan.length === 0) return []
+    return dayPlan.map((item, planIndex) => {
+      const isEat = item.type === 'restaurant'
+      const isEvent = item.type === 'event'
+      const accent = isEat ? themeColors.dining : isEvent ? themeColors.event : colors.morning
+      const images = pickPlanStopGalleryUris(item, allPlaceMarkers)
+      return {
+        item,
+        planIndex,
+        accent,
+        isEat,
+        isEvent,
+        hasImages: !!images[0],
+        images,
+        hasProfile: !!item.clientId,
+        category: getLuxuryCategoryStyle(item),
+      }
+    })
+  }, [allPlaceMarkers, dayPlan])
+
+  const stopDetailPayload = useMemo(() => {
+    if (stopDetailIndex == null) return null
+    return stopDetailSlides[stopDetailIndex] || null
+  }, [stopDetailSlides, stopDetailIndex])
+
+  const stopDetailStackPeekNext = useMemo(() => {
+    if (stopDetailIndex == null) return null
+    return stopDetailSlides[stopDetailIndex + 1] || null
+  }, [stopDetailIndex, stopDetailSlides])
+
+  const goToStopDetailIndex = useCallback((nextIndex) => {
+    if (!stopDetailSlides.length) return
+    const clamped = Math.max(0, Math.min(nextIndex, stopDetailSlides.length - 1))
+    setStopDetailIndex(clamped)
+  }, [stopDetailSlides.length])
+
+  useEffect(() => {
+    stopDetailIndexSV.value = stopDetailIndex ?? 0
+  }, [stopDetailIndex, stopDetailIndexSV])
+
+  useEffect(() => {
+    stopDetailSlidesLenSV.value = stopDetailSlides.length
+  }, [stopDetailSlides.length, stopDetailSlidesLenSV])
+
+  useEffect(() => {
+    stopDetailSwipeX.value = 0
+    stopDetailSwipeRotate.value = 0
+  }, [stopDetailIndex, stopDetailSwipeRotate, stopDetailSwipeX])
+
+  const stopDetailCardAnimatedStyle = useAnimatedStyle(() => {
+    'worklet'
+    const tx = stopDetailSwipeX.value
+    const abs = Math.abs(tx)
+    const lift = abs * 0.022
+    const scale = 1 - Math.min(abs / 980, 0.038)
+    const opacity = 1 - Math.min(abs / 1400, 0.07)
+    return {
+      opacity,
+      transform: [
+        { translateX: tx },
+        { translateY: -lift },
+        { rotate: `${stopDetailSwipeRotate.value}deg` },
+        { scale },
+      ],
+    }
+  })
+
+  const stopDetailPeekAnimatedStyle = useAnimatedStyle(() => {
+    'worklet'
+    const tx = stopDetailSwipeX.value
+    const idx = stopDetailIndexSV.value
+    const len = stopDetailSlidesLenSV.value
+    let progress = 0
+    if (tx < 0 && len > 0 && idx < len - 1) {
+      progress = Math.min(Math.abs(tx) / STOP_DETAIL_SWIPE_PEEK_RANGE, 1)
+    } else if (tx > 0 && idx > 0) {
+      progress = Math.min(tx / (STOP_DETAIL_SWIPE_PEEK_RANGE * 1.1), 1) * 0.35
+    }
+    const scale = 0.93 + progress * 0.075
+    const translateY = 4 - progress * 3
+    const opacity = 0.9 + progress * 0.1
+    return {
+      opacity,
+      transform: [{ scale }, { translateY }],
+    }
+  })
+
+  const handleStopDetailSwipeNext = useCallback(() => {
+    setStopDetailIndex((prev) => {
+      const n = stopDetailSlides.length
+      if (n <= 0 || prev == null) return prev
+      return Math.min(prev + 1, n - 1)
+    })
+    stopDetailSwipeX.value = 0
+    stopDetailSwipeRotate.value = 0
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {})
+  }, [stopDetailSlides.length, stopDetailSwipeRotate, stopDetailSwipeX])
+
+  const handleStopDetailSwipePrev = useCallback(() => {
+    setStopDetailIndex((prev) => {
+      if (prev == null) return prev
+      return Math.max(prev - 1, 0)
+    })
+    stopDetailSwipeX.value = 0
+    stopDetailSwipeRotate.value = 0
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {})
+  }, [stopDetailSwipeRotate, stopDetailSwipeX])
+
+  const stopDetailPanGesture = useMemo(() => Gesture.Pan()
+    .activeOffsetX([-10, 10])
+    .failOffsetY([-14, 14])
+    .onUpdate((e) => {
+      'worklet'
+      const tx = e.translationX
+      const idx = stopDetailIndexSV.value
+      const len = stopDetailSlidesLenSV.value
+      let damp = tx
+      if (idx <= 0 && tx > 0) damp = tx * 0.28
+      if (len > 0 && idx >= len - 1 && tx < 0) damp = tx * 0.28
+      stopDetailSwipeX.value = damp
+      stopDetailSwipeRotate.value = (damp / 235) * 8.2
+    })
+    .onEnd((e) => {
+      'worklet'
+      const tx = stopDetailSwipeX.value
+      const vx = e.velocityX
+      const idx = stopDetailIndexSV.value
+      const len = stopDetailSlidesLenSV.value
+      const threshold = 64
+      const shouldNext = (tx < -threshold || vx < -460) && len > 0 && idx < len - 1
+      const shouldPrev = (tx > threshold || vx > 460) && idx > 0
+      const rotVel = (vx / 235) * 8.2
+      if (shouldNext) {
+        stopDetailSwipeX.value = withSpring(
+          -STOP_DETAIL_EXIT_X,
+          { ...STOP_DETAIL_SWIPE_COMMIT, velocity: vx },
+          (finished) => {
+            if (finished) runOnJS(handleStopDetailSwipeNext)()
+          }
+        )
+      } else if (shouldPrev) {
+        stopDetailSwipeX.value = withSpring(
+          STOP_DETAIL_EXIT_X,
+          { ...STOP_DETAIL_SWIPE_COMMIT, velocity: vx },
+          (finished) => {
+            if (finished) runOnJS(handleStopDetailSwipePrev)()
+          }
+        )
+      } else {
+        stopDetailSwipeX.value = withSpring(0, { ...STOP_DETAIL_SWIPE_SNAP_BACK, velocity: vx })
+        stopDetailSwipeRotate.value = withSpring(0, { ...STOP_DETAIL_SWIPE_SNAP_BACK, velocity: rotVel })
+      }
+    }), [handleStopDetailSwipeNext, handleStopDetailSwipePrev, stopDetailSwipeRotate, stopDetailSwipeX, stopDetailIndexSV, stopDetailSlidesLenSV])

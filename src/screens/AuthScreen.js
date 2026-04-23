@@ -29,11 +29,8 @@ import { LUXURY, luxuryElevated, luxurySoftShadow } from '../theme/luxuryPremium
 const REMEMBER_ME_EMAIL_KEY = '@gobahrain_remember_email'
 const REMEMBER_ME_PASSWORD_KEY = '@gobahrain_remember_password'
 
-const CLIENT_TYPES = [
-  { id: 'place', label: 'Place', icon: 'location-outline' },
-  { id: 'restaurant', label: 'Restaurant', icon: 'restaurant-outline' },
-  { id: 'cafe', label: 'Cafe', icon: 'cafe-outline' },
-]
+/** RN Web has no native animated driver; false avoids console noise and JS fallback. */
+const useNativeAnimDriver = Platform.OS !== 'web'
 
 const FloatingBubble = ({ size, color, startX, startY, duration, delay }) => {
   const anim = useRef(new Animated.Value(0)).current
@@ -48,13 +45,13 @@ const FloatingBubble = ({ size, color, startX, startY, duration, delay }) => {
               toValue: 1, 
               duration, 
               easing: Easing.bezier(0.4, 0, 0.6, 1), 
-              useNativeDriver: true 
+              useNativeDriver: useNativeAnimDriver 
             }),
             Animated.timing(anim, { 
               toValue: 0, 
               duration, 
               easing: Easing.bezier(0.4, 0, 0.6, 1), 
-              useNativeDriver: true 
+              useNativeDriver: useNativeAnimDriver 
             }),
           ])
         ),
@@ -64,13 +61,13 @@ const FloatingBubble = ({ size, color, startX, startY, duration, delay }) => {
               toValue: 1, 
               duration: duration * 1.3, 
               easing: Easing.inOut(Easing.sin), 
-              useNativeDriver: true 
+              useNativeDriver: useNativeAnimDriver 
             }),
             Animated.timing(floatAnim, { 
               toValue: 0, 
               duration: duration * 1.3, 
               easing: Easing.inOut(Easing.sin), 
-              useNativeDriver: true 
+              useNativeDriver: useNativeAnimDriver 
             }),
           ])
         ),
@@ -186,7 +183,7 @@ export default function AuthScreen() {
   const { colors, isDark } = useTheme()
   const { signIn, signUp, ensureProfileAfterSignUp } = useAuth()
   const { isOnboardingComplete } = useUserPreferences()
-  const { width = 375 } = useWindowDimensions()
+  const { width = 375, height = 812 } = useWindowDimensions()
 
   const contentOpacity = useRef(new Animated.Value(1)).current
   const contentTranslateY = useRef(new Animated.Value(0)).current
@@ -220,16 +217,13 @@ export default function AuthScreen() {
   const [password, setPassword] = useState('')
   const [userName, setUserName] = useState('')
   const [phone, setPhone] = useState('')
-  const [accountType, setAccountType] = useState('user')
   const [uType, setUType] = useState('local')
-  const [businessName, setBusinessName] = useState('')
-  const [description, setDescription] = useState('')
-  const [clientType, setClientType] = useState('place')
   const [loading, setLoading] = useState(false)
   const [rememberBootstrapLoading, setRememberBootstrapLoading] = useState(true)
   const [securePassword, setSecurePassword] = useState(true)
   const [signUpSuccessMessage, setSignUpSuccessMessage] = useState(null)
   const [rememberMe, setRememberMe] = useState(true)
+  const accountType = 'user'
 
   useEffect(() => {
     let cancelled = false
@@ -293,19 +287,19 @@ export default function AuthScreen() {
         toValue: 0, 
         duration: 200, 
         easing: Easing.bezier(0.4, 0, 1, 1),
-        useNativeDriver: true 
+        useNativeDriver: useNativeAnimDriver 
       }),
       Animated.timing(contentScale, { 
         toValue: 0.95, 
         duration: 200, 
         easing: Easing.bezier(0.4, 0, 1, 1),
-        useNativeDriver: true 
+        useNativeDriver: useNativeAnimDriver 
       }),
       Animated.timing(contentTranslateY, { 
         toValue: 20, 
         duration: 200,
         easing: Easing.bezier(0.4, 0, 1, 1),
-        useNativeDriver: true 
+        useNativeDriver: useNativeAnimDriver 
       }),
     ]).start(() => {
       setStep(newStep)
@@ -316,19 +310,19 @@ export default function AuthScreen() {
           toValue: 1, 
           damping: 20,
           stiffness: 120,
-          useNativeDriver: true 
+          useNativeDriver: useNativeAnimDriver 
         }),
         Animated.spring(contentScale, { 
           toValue: 1, 
           damping: 18,
           stiffness: 140,
-          useNativeDriver: true 
+          useNativeDriver: useNativeAnimDriver 
         }),
         Animated.spring(contentTranslateY, { 
           toValue: 0, 
           damping: 20,
           stiffness: 120,
-          useNativeDriver: true 
+          useNativeDriver: useNativeAnimDriver 
         }),
       ]).start()
     })
@@ -375,20 +369,17 @@ export default function AuthScreen() {
         accountType,
         userName: userName.trim(),
         phone: phone.trim() || null,
-        uType: accountType === 'user' ? uType : undefined,
-        businessName: accountType === 'client' ? businessName.trim() : undefined,
-        description: accountType === 'client' ? description.trim() || null : undefined,
-        clientType: accountType === 'client' ? clientType : undefined,
+        uType,
       })
       if (newSession) {
         await ensureProfileAfterSignUp({
           accountType,
           userName: userName.trim(),
           phone: phone.trim() || null,
-          uType: accountType === 'user' ? uType : 'local',
-          businessName: accountType === 'client' ? businessName.trim() : '',
-          description: accountType === 'client' ? description.trim() || null : null,
-          clientType: accountType === 'client' ? clientType : 'place',
+          uType,
+          businessName: '',
+          description: null,
+          clientType: 'place',
         })
         if (isOnboardingComplete) {
           await yieldTwoFrames()
@@ -448,20 +439,6 @@ export default function AuthScreen() {
       } else if (step === 3) {
         animateStep(4)
       } else if (step === 4) {
-        if (accountType === 'user') {
-          handleSignUp()
-        } else {
-          animateStep(5)
-        }
-      } else if (step === 5) {
-        if (!businessName.trim()) {
-          Alert.alert('Required', 'Please enter business name.')
-          return
-        }
-        animateStep(6)
-      } else if (step === 6) {
-        animateStep(7)
-      } else if (step === 7) {
         handleSignUp()
       }
     } else {
@@ -483,12 +460,12 @@ export default function AuthScreen() {
 
   const switchMode = () => {
     Animated.sequence([
-      Animated.timing(contentOpacity, { toValue: 0, duration: 150, useNativeDriver: true }),
+      Animated.timing(contentOpacity, { toValue: 0, duration: 150, useNativeDriver: useNativeAnimDriver }),
     ]).start(() => {
       setMode(mode === 'login' ? 'signup' : 'login')
       setStep(0)
       setSignUpSuccessMessage(null)
-      Animated.spring(contentOpacity, { toValue: 1, damping: 15, useNativeDriver: true }).start()
+      Animated.spring(contentOpacity, { toValue: 1, damping: 15, useNativeDriver: useNativeAnimDriver }).start()
     })
   }
 
@@ -572,126 +549,99 @@ export default function AuthScreen() {
           </View>
         )
       } else if (step === 4) {
+        const personaOptions = [
+          {
+            id: 'local',
+            label: 'Local',
+            subtitle: 'I live in Bahrain — lean on neighborhood picks and timely events.',
+            icon: 'home',
+          },
+          {
+            id: 'tourist',
+            label: 'Tourist',
+            subtitle: 'I am visiting — prioritize highlights, routes, and easy discovery.',
+            icon: 'airplane',
+          },
+        ]
         return (
           <View style={s.stepContent}>
-            <Text style={[s.question, { color: C.text }]}>What type of account?</Text>
-            <View style={s.optionsColumn}>
-              {[
-                { id: 'user', label: 'User', subtitle: 'Explore and discover Bahrain', icon: 'person-outline' },
-                { id: 'client', label: 'Business', subtitle: 'Promote your business', icon: 'business-outline' },
-              ].map((t) => {
-                const sel = accountType === t.id
-                return (
-                  <AnimatedPressable
-                    key={t.id}
-                    style={[s.optionCard, { 
-                      borderColor: sel ? C.primary : C.border, 
-                      backgroundColor: sel ? `${C.primary}10` : C.inputBg 
-                    }]}
-                    onPress={() => setAccountType(t.id)}
-                    scaleDown={0.97}
-                  >
-                    <View style={[s.optionIconWrap, { backgroundColor: sel ? `${C.primary}18` : 'rgba(148,163,184,0.1)' }]}>
-                      <Ionicons name={t.icon} size={28} color={sel ? C.primary : C.label} />
-                    </View>
-                    <View style={s.optionTextWrap}>
-                      <Text style={[s.optionLabel, { color: sel ? C.primary : C.text }]}>{t.label}</Text>
-                      <Text style={[s.optionSubtitle, { color: C.textMuted }]}>{t.subtitle}</Text>
-                    </View>
-                    {sel && (
-                      <View style={[s.checkCircle, { backgroundColor: C.primary }]}>
-                        <Ionicons name="checkmark" size={16} color="#FFF" />
-                      </View>
-                    )}
-                  </AnimatedPressable>
-                )
-              })}
+            <View style={s.personaHeader}>
+              <Text style={[s.question, { color: C.text, marginBottom: 10 }]}>Local or tourist?</Text>
+              <Text style={[s.personaLead, { color: C.textMuted }]}>
+                This shapes how we rank places, pacing, and tips in your feed and plans.
+              </Text>
             </View>
-            {accountType === 'user' && (
-              <View style={s.subOptionsWrap}>
-                <Text style={[s.subLabel, { color: C.label }]}>I am</Text>
-                <View style={s.chipRow}>
-                  {[
-                    { id: 'local', label: 'Local', icon: 'home-outline' },
-                    { id: 'tourist', label: 'Tourist', icon: 'airplane-outline' },
-                  ].map((t) => {
-                    const sel = uType === t.id
-                    return (
-                      <AnimatedPressable
-                        key={t.id}
-                        style={[s.chip, { 
-                          borderColor: sel ? C.primary : C.border, 
-                          backgroundColor: sel ? `${C.primary}15` : C.inputBg 
-                        }]}
-                        onPress={() => setUType(t.id)}
-                        scaleDown={0.95}
-                      >
-                        <Ionicons name={t.icon} size={20} color={sel ? C.primary : C.label} />
-                        <Text style={[s.chipLabel, { color: sel ? C.primary : C.label }]}>{t.label}</Text>
-                      </AnimatedPressable>
-                    )
-                  })}
-                </View>
-              </View>
-            )}
-          </View>
-        )
-      } else if (step === 5) {
-        return (
-          <View style={s.stepContent}>
-            <Text style={[s.question, { color: C.text }]}>Business name</Text>
-            <MorphingInput
-              value={businessName}
-              onChangeText={setBusinessName}
-              placeholder="Your business name"
-              editable={!loading}
-              autoFocus
-              C={C}
-            />
-          </View>
-        )
-      } else if (step === 6) {
-        return (
-          <View style={s.stepContent}>
-            <Text style={[s.question, { color: C.text }]}>Short description</Text>
-            <Text style={[s.optionalLabel, { color: C.textMuted }]}>Optional</Text>
-            <MorphingInput
-              value={description}
-              onChangeText={setDescription}
-              placeholder="Describe your business"
-              editable={!loading}
-              autoFocus
-              C={C}
-              style={s.textAreaContainer}
-            />
-          </View>
-        )
-      } else if (step === 7) {
-        return (
-          <View style={s.stepContent}>
-            <Text style={[s.question, { color: C.text }]}>Business type</Text>
-            <View style={s.optionsColumn}>
-              {CLIENT_TYPES.map((t) => {
-                const sel = clientType === t.id
+            <View
+              style={s.personaCardsColumn}
+              accessibilityRole="radiogroup"
+              accessibilityLabel="Are you a local or a tourist?"
+            >
+              {personaOptions.map((t) => {
+                const sel = uType === t.id
+                const borderColor = sel ? C.primary : C.border
+                const baseBg = isDark ? 'rgba(30,41,59,0.55)' : C.inputBg
                 return (
                   <AnimatedPressable
                     key={t.id}
-                    style={[s.optionCard, { 
-                      borderColor: sel ? C.primary : C.border, 
-                      backgroundColor: sel ? `${C.primary}10` : C.inputBg 
-                    }]}
-                    onPress={() => setClientType(t.id)}
-                    scaleDown={0.97}
+                    onPress={() => setUType(t.id)}
+                    scaleDown={0.98}
+                    accessibilityRole="radio"
+                    accessibilityState={{ selected: sel }}
+                    accessibilityLabel={`${t.label}. ${t.subtitle}`}
                   >
-                    <View style={[s.optionIconWrap, { backgroundColor: sel ? `${C.primary}18` : 'rgba(148,163,184,0.1)' }]}>
-                      <Ionicons name={t.icon} size={28} color={sel ? C.primary : C.label} />
-                    </View>
-                    <Text style={[s.optionLabel, { color: sel ? C.primary : C.text }]}>{t.label}</Text>
-                    {sel && (
-                      <View style={[s.checkCircle, { backgroundColor: C.primary }]}>
-                        <Ionicons name="checkmark" size={16} color="#FFF" />
+                    <View
+                      style={[
+                        s.personaCardOuter,
+                        {
+                          borderColor,
+                          backgroundColor: baseBg,
+                        },
+                      ]}
+                    >
+                      {sel ? (
+                        <LinearGradient
+                          colors={[`${C.primary}26`, `${C.primary}10`, `${C.primary}00`]}
+                          locations={[0, 0.38, 1]}
+                          start={{ x: 0, y: 0 }}
+                          end={{ x: 1, y: 1 }}
+                          style={StyleSheet.absoluteFill}
+                        />
+                      ) : null}
+                      <View style={s.personaCardInner}>
+                        <View
+                          style={[
+                            s.personaIconRing,
+                            {
+                              backgroundColor: sel ? `${C.primary}20` : isDark ? 'rgba(15,23,42,0.65)' : 'rgba(255,255,255,0.9)',
+                              borderColor: sel ? `${C.primary}55` : C.border,
+                            },
+                          ]}
+                        >
+                          <Ionicons
+                            name={t.icon}
+                            size={26}
+                            color={sel ? C.primary : C.label}
+                          />
+                        </View>
+                        <View style={s.personaTextCol}>
+                          <Text style={[s.personaCardTitle, { color: C.text }]}>{t.label}</Text>
+                          <Text style={[s.personaCardSubtitle, { color: C.textMuted }]}>{t.subtitle}</Text>
+                        </View>
+                        <View
+                          style={[
+                            s.personaRadio,
+                            {
+                              borderColor: sel ? C.primary : C.border,
+                              backgroundColor: sel ? C.primary : 'transparent',
+                            },
+                          ]}
+                        >
+                          {sel ? (
+                            <Ionicons name="checkmark" size={16} color="#FFF" />
+                          ) : null}
+                        </View>
                       </View>
-                    )}
+                    </View>
                   </AnimatedPressable>
                 )
               })}
@@ -750,18 +700,10 @@ export default function AuthScreen() {
 
   const getButtonText = () => {
     if (isSignUp) {
-      const lastStep = accountType === 'client' ? 7 : 4
+      const lastStep = 4
       return step === lastStep ? 'Create Account' : 'Continue'
     }
     return step === 1 ? 'Sign In' : 'Continue'
-  }
-
-  const getProgressPercent = () => {
-    if (isSignUp) {
-      const totalSteps = accountType === 'client' ? 8 : 5
-      return ((step + 1) / totalSteps) * 100
-    }
-    return ((step + 1) / 2) * 100
   }
 
   return (
@@ -796,72 +738,75 @@ export default function AuthScreen() {
             )}
           </View>
 
-          <View style={s.progressBarWrap}>
-            <View style={[s.progressTrack, { backgroundColor: `${C.primary}12` }]}>
-              <Animated.View style={[s.progressFill, { backgroundColor: C.primary, width: `${getProgressPercent()}%` }]} />
-            </View>
-          </View>
-
           <ScrollView
             style={s.scroll}
-            contentContainerStyle={s.scrollContent}
+            contentContainerStyle={[
+              s.scrollContent,
+              { paddingTop: Math.max(40, Math.round(height * 0.11)) },
+            ]}
             keyboardShouldPersistTaps="handled"
             showsVerticalScrollIndicator={false}
             bounces={false}
           >
-            <Animated.View
-              style={[
-                s.contentWrap,
-                {
-                  opacity: contentOpacity,
-                  transform: [
-                    { translateY: contentTranslateY },
-                    { scale: contentScale },
-                  ],
-                },
-              ]}
-            >
-              {renderStepContent()}
-            </Animated.View>
+            <View style={s.centerColumn}>
+              <Animated.View
+                style={[
+                  s.contentWrap,
+                  {
+                    opacity: contentOpacity,
+                    transform: [
+                      { translateY: contentTranslateY },
+                      { scale: contentScale },
+                    ],
+                  },
+                ]}
+              >
+                {renderStepContent()}
+              </Animated.View>
 
-            {signUpSuccessMessage ? (
-              <FadeInView from={10}>
-                <View style={[s.successBanner, { backgroundColor: `${C.primary}15`, borderColor: C.primary }]}>
-                  <View style={[s.successIconWrap, { backgroundColor: `${C.primary}20` }]}>
-                    <Ionicons name="mail-outline" size={22} color={C.primary} />
+              {signUpSuccessMessage ? (
+                <FadeInView from={10}>
+                  <View style={[s.successBanner, { backgroundColor: `${C.primary}15`, borderColor: C.primary }]}>
+                    <View style={[s.successIconWrap, { backgroundColor: `${C.primary}20` }]}>
+                      <Ionicons name="mail-outline" size={22} color={C.primary} />
+                    </View>
+                    <Text style={[s.successBannerText, { color: C.text }]}>{signUpSuccessMessage}</Text>
                   </View>
-                  <Text style={[s.successBannerText, { color: C.text }]}>{signUpSuccessMessage}</Text>
-                </View>
-              </FadeInView>
-            ) : null}
+                </FadeInView>
+              ) : null}
+            </View>
           </ScrollView>
 
-          <View style={s.footer}>
-          <GradientButton
-            onPress={handleContinue}
-            disabled={loading}
-            style={s.continueBtn}
-          >
-            {loading ? (
-              <ActivityIndicator size="small" color="#FFF" />
-            ) : (
-              <>
-                <Text style={s.continueBtnText}>{getButtonText()}</Text>
-                <Ionicons name="arrow-forward" size={20} color="#FFF" />
-              </>
-            )}
-          </GradientButton>
+          <View style={s.footerWrap}>
+            <View style={s.centerColumn}>
+              <View style={s.footer}>
+                <GradientButton
+                  onPress={handleContinue}
+                  disabled={loading}
+                  style={s.continueBtn}
+                >
+                  {loading ? (
+                    <ActivityIndicator size="small" color="#FFF" />
+                  ) : (
+                    <>
+                      <Text style={s.continueBtnText}>{getButtonText()}</Text>
+                      <Ionicons name="arrow-forward" size={20} color="#FFF" />
+                    </>
+                  )}
+                </GradientButton>
 
-          <TouchableOpacity
-            style={s.switchModeBtn}
-            onPress={switchMode}
-            activeOpacity={0.7}
-          >
-            <Text style={[s.switchModeText, { color: C.textMuted }]}>
-              {isSignUp ? 'Already have an account? ' : "Don't have an account? "}
-            </Text>
-            <Text style={[s.switchModeLink, { color: C.primary }]}>{isSignUp ? 'Sign in' : 'Sign up'}</Text>
-          </TouchableOpacity>
+                <TouchableOpacity
+                  style={s.switchModeBtn}
+                  onPress={switchMode}
+                  activeOpacity={0.7}
+                >
+                  <Text style={[s.switchModeText, { color: C.textMuted }]}>
+                    {isSignUp ? 'Already have an account? ' : "Don't have an account? "}
+                  </Text>
+                  <Text style={[s.switchModeLink, { color: C.primary }]}>{isSignUp ? 'Sign in' : 'Sign up'}</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
           </View>
         </View>
       </KeyboardAvoidingView>
@@ -873,6 +818,11 @@ const s = StyleSheet.create({
   safe: { flex: 1 },
   container: { flex: 1 },
   inner: { flex: 1 },
+  centerColumn: {
+    width: '100%',
+    maxWidth: 440,
+    alignSelf: 'center',
+  },
   topBar: {
     minHeight: 44,
     paddingHorizontal: 12,
@@ -889,47 +839,108 @@ const s = StyleSheet.create({
     paddingHorizontal: 8,
   },
   backBtnTopText: { fontSize: 16, fontWeight: '600' },
-  progressBarWrap: {
-    paddingHorizontal: 24,
-    marginBottom: 24,
-  },
   scroll: { flex: 1 },
   scrollContent: {
     flexGrow: 1,
+    justifyContent: 'flex-start',
     paddingBottom: 16,
+  },
+  footerWrap: {
+    width: '100%',
+    flexShrink: 0,
+    paddingBottom: Platform.OS === 'ios' ? 24 : 16,
   },
   bootstrapLoaderWrap: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  progressTrack: {
-    height: 4,
-    borderRadius: 2,
-    overflow: 'hidden',
-  },
-  progressFill: {
-    height: '100%',
-    borderRadius: 2,
-  },
   contentWrap: {
     paddingHorizontal: 24,
-    paddingTop: 8,
-    justifyContent: 'flex-start',
+    justifyContent: 'center',
+    width: '100%',
   },
   stepContent: { 
     width: '100%',
+    alignItems: 'center',
   },
   question: { 
     fontSize: 28, 
     fontWeight: '700', 
-    marginBottom: 8,
+    marginBottom: 4,
     letterSpacing: -0.5,
+    textAlign: 'center',
   },
   optionalLabel: {
     fontSize: 15,
     marginBottom: 16,
     fontWeight: '500',
+    textAlign: 'center',
+  },
+  personaHeader: {
+    width: '100%',
+    alignItems: 'center',
+    marginBottom: 4,
+    paddingHorizontal: 4,
+  },
+  personaLead: {
+    fontSize: 15,
+    lineHeight: 22,
+    fontWeight: '500',
+    textAlign: 'center',
+    maxWidth: 360,
+  },
+  personaCardsColumn: {
+    width: '100%',
+    marginTop: 22,
+    gap: 14,
+    alignSelf: 'stretch',
+  },
+  personaCardOuter: {
+    width: '100%',
+    borderRadius: LUXURY.radiusCard,
+    borderWidth: 2,
+    overflow: 'hidden',
+    ...luxuryElevated,
+  },
+  personaCardInner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 18,
+    paddingHorizontal: 16,
+    gap: 14,
+    zIndex: 1,
+  },
+  personaIconRing: {
+    width: 54,
+    height: 54,
+    borderRadius: 27,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  personaTextCol: {
+    flex: 1,
+    minWidth: 0,
+  },
+  personaCardTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    letterSpacing: -0.3,
+    marginBottom: 4,
+  },
+  personaCardSubtitle: {
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '500',
+  },
+  personaRadio: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    borderWidth: 2,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   inputContainer: {
     flexDirection: 'row',
@@ -938,7 +949,7 @@ const s = StyleSheet.create({
     borderRadius: LUXURY.radiusInput,
     paddingHorizontal: 18,
     minHeight: 58,
-    marginTop: 16,
+    marginTop: 8,
     ...luxurySoftShadow,
   },
   input: { 
@@ -990,30 +1001,6 @@ const s = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  subOptionsWrap: { marginTop: 28 },
-  subLabel: { 
-    fontSize: 13, 
-    fontWeight: '700', 
-    marginBottom: 12,
-    textTransform: 'uppercase',
-    letterSpacing: 0.8,
-  },
-  chipRow: { 
-    flexDirection: 'row', 
-    flexWrap: 'wrap', 
-    gap: 10,
-  },
-  chip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    paddingVertical: 12,
-    paddingHorizontal: 18,
-    borderRadius: LUXURY.radiusChip + 2,
-    borderWidth: 2,
-    ...luxurySoftShadow,
-  },
-  chipLabel: { fontSize: 15, fontWeight: '600' },
   rememberRow: { 
     flexDirection: 'row', 
     alignItems: 'center', 
@@ -1033,9 +1020,9 @@ const s = StyleSheet.create({
   rememberLabel: { fontSize: 15, fontWeight: '500' },
   footer: {
     paddingHorizontal: 24,
-    paddingBottom: Platform.OS === 'ios' ? 28 : 20,
-    paddingTop: 8,
+    paddingTop: 12,
     gap: 12,
+    width: '100%',
   },
   continueBtn: { 
     width: '100%',
@@ -1061,7 +1048,11 @@ const s = StyleSheet.create({
     borderRadius: LUXURY.radiusInput,
     borderWidth: 1,
     marginHorizontal: 24,
-    marginBottom: 16,
+    marginTop: 16,
+    marginBottom: 8,
+    alignSelf: 'center',
+    width: '100%',
+    maxWidth: '100%',
     ...luxuryElevated,
   },
   successIconWrap: {

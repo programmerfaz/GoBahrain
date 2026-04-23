@@ -20,8 +20,12 @@ import {
   Modal,
   Platform,
 } from 'react-native'
+import { LinearGradient } from 'expo-linear-gradient'
 import { useAuth } from './AuthContext'
 import { useUserPreferences } from './UserPreferencesContext'
+import { useTheme } from './ThemeContext'
+import { gradients } from '../theme/designTokens'
+import { BRAND_WORDMARK_FONT } from '../constants/brandFont'
 
 const DoorTransitionContext = createContext(null)
 
@@ -40,6 +44,7 @@ const yieldTwoFrames = () =>
 
 function DoorRevealOverlay() {
   const { width, height } = useWindowDimensions()
+  const { isDark } = useTheme()
   const ctx = useContext(DoorTransitionContext)
 
   useEffect(() => {
@@ -50,6 +55,9 @@ function DoorRevealOverlay() {
 
   const {
     phase,
+    blockKind,
+    fadeGateOpacity,
+    fadeGateScale,
     doorLeft,
     doorRight,
     doorIconScale,
@@ -59,6 +67,42 @@ function DoorRevealOverlay() {
   } = ctx
 
   const visible = phase !== 'idle'
+  const gateGrad = isDark ? gradients.heroDark : gradients.heroLight
+
+  if (blockKind === 'fadeGate') {
+    return (
+      <Modal
+        visible={visible}
+        animationType="none"
+        transparent
+        statusBarTranslucent
+        presentationStyle={Platform.OS === 'ios' ? 'overFullScreen' : undefined}
+        hardwareAccelerated={Platform.OS === 'android'}
+      >
+        <View
+          style={modalStyles.fill}
+          pointerEvents="auto"
+          onLayout={(e) => setLayoutWidth(e.nativeEvent.layout.width)}
+        >
+          <Animated.View
+            style={{
+              flex: 1,
+              opacity: fadeGateOpacity,
+              transform: [{ scale: fadeGateScale }],
+            }}
+          >
+            <LinearGradient
+              colors={gateGrad}
+              start={{ x: 0.1, y: 0 }}
+              end={{ x: 0.95, y: 1 }}
+              style={StyleSheet.absoluteFillObject}
+            />
+          </Animated.View>
+        </View>
+      </Modal>
+    )
+  }
+
   const half = width / 2
   const TOOTH_COUNT = 5
   const toothH = height / TOOTH_COUNT
@@ -115,7 +159,7 @@ function DoorRevealOverlay() {
                 resizeMode="cover"
               />
             </View>
-            <Text style={overlayStyles.doorFlagLabel}>GoBahrain</Text>
+            <Text style={overlayStyles.doorFlagLabel}>SiyahaBH</Text>
           </Animated.View>
         </Animated.View>
       </View>
@@ -185,10 +229,11 @@ const overlayStyles = StyleSheet.create({
   },
   doorFlagLabel: {
     marginTop: 16,
-    fontSize: 20,
-    fontWeight: '900',
+    fontFamily: BRAND_WORDMARK_FONT,
+    fontSize: 22,
+    fontWeight: '400',
     color: '#FFFFFF',
-    letterSpacing: 3,
+    letterSpacing: 2,
     textTransform: 'uppercase',
     textShadowColor: 'rgba(0,0,0,0.4)',
     textShadowOffset: { width: 0, height: 2 },
@@ -201,11 +246,16 @@ export function DoorTransitionProvider({ children }) {
   const { isOnboardingComplete } = useUserPreferences()
 
   const [phase, setPhase] = useState('idle')
+  /** 'door' = Bahrain door reveal after auth; 'fadeGate' = solid fade overlay until Home is ready (post-onboarding) */
+  const [blockKind, setBlockKind] = useState('door')
+  const blockKindRef = useRef('door')
   const doorLeft = useRef(new Animated.Value(0)).current
   const doorRight = useRef(new Animated.Value(0)).current
   const doorIconScale = useRef(new Animated.Value(1)).current
   const doorIconOpacity = useRef(new Animated.Value(1)).current
   const doorFade = useRef(new Animated.Value(1)).current
+  const fadeGateOpacity = useRef(new Animated.Value(0)).current
+  const fadeGateScale = useRef(new Animated.Value(1)).current
   const layoutWidthRef = useRef(Dimensions.get('window').width)
   const openingRef = useRef(false)
   const phaseRef = useRef('idle')
@@ -238,9 +288,15 @@ export function DoorTransitionProvider({ children }) {
     clearFailSafe()
     openingRef.current = false
     resetDoorValuesClosed()
+    fadeGateOpacity.stopAnimation()
+    fadeGateScale.stopAnimation()
+    fadeGateOpacity.setValue(0)
+    fadeGateScale.setValue(1)
+    blockKindRef.current = 'door'
+    setBlockKind('door')
     phaseRef.current = 'idle'
     setPhase('idle')
-  }, [clearFailSafe, resetDoorValuesClosed])
+  }, [clearFailSafe, resetDoorValuesClosed, fadeGateOpacity, fadeGateScale])
 
   const armDoorForNextAuthSuccess = useCallback(() => {
     armDoorAfterNextAuthSuccessRef.current = true
@@ -253,9 +309,37 @@ export function DoorTransitionProvider({ children }) {
   const openDoorsInternal = useCallback(() => {
     if (openingRef.current) return
     openingRef.current = true
+    clearFailSafe()
+
+    if (blockKindRef.current === 'fadeGate') {
+      phaseRef.current = 'blocking'
+      Animated.parallel([
+        Animated.timing(fadeGateOpacity, {
+          toValue: 0,
+          duration: 820,
+          easing: Easing.out(Easing.cubic),
+          useNativeDriver: true,
+        }),
+        Animated.timing(fadeGateScale, {
+          toValue: 1.05,
+          duration: 820,
+          easing: Easing.out(Easing.cubic),
+          useNativeDriver: true,
+        }),
+      ]).start(() => {
+        fadeGateOpacity.setValue(0)
+        fadeGateScale.setValue(1)
+        blockKindRef.current = 'door'
+        setBlockKind('door')
+        phaseRef.current = 'idle'
+        openingRef.current = false
+        setPhase('idle')
+      })
+      return
+    }
+
     phaseRef.current = 'opening'
     setPhase('opening')
-    clearFailSafe()
 
     const doorW = layoutWidthRef.current
     const half = doorW / 2
@@ -299,7 +383,7 @@ export function DoorTransitionProvider({ children }) {
       openingRef.current = false
       setPhase('idle')
     })
-  }, [doorLeft, doorRight, doorIconScale, doorIconOpacity, doorFade, clearFailSafe, resetDoorValuesClosed])
+  }, [doorLeft, doorRight, doorIconScale, doorIconOpacity, doorFade, fadeGateOpacity, fadeGateScale, clearFailSafe, resetDoorValuesClosed])
 
   const scheduleFailSafe = useCallback(() => {
     clearFailSafe()
@@ -320,11 +404,63 @@ export function DoorTransitionProvider({ children }) {
     }
     clearFailSafe()
     openingRef.current = false
+    blockKindRef.current = 'door'
+    setBlockKind('door')
+    fadeGateOpacity.stopAnimation()
+    fadeGateScale.stopAnimation()
+    fadeGateOpacity.setValue(0)
+    fadeGateScale.setValue(1)
     resetDoorValuesClosed()
     phaseRef.current = 'blocking'
     setPhase('blocking')
     scheduleFailSafe()
-  }, [clearFailSafe, resetDoorValuesClosed, scheduleFailSafe])
+  }, [clearFailSafe, resetDoorValuesClosed, scheduleFailSafe, fadeGateOpacity, fadeGateScale])
+
+  /**
+   * Fades a full-screen gate in, then caller should await and call `completeOnboarding()`.
+   * HomeScreen calls `notifyHomeReady` when the first feed load finishes (`loading` false) while this gate is up.
+   */
+  const startFadeGateUntilHomeReady = useCallback(() => {
+    if (phaseRef.current === 'opening' || openingRef.current) {
+      return Promise.resolve()
+    }
+    if (phaseRef.current === 'blocking') {
+      scheduleFailSafe()
+      return Promise.resolve()
+    }
+    clearFailSafe()
+    openingRef.current = false
+    blockKindRef.current = 'fadeGate'
+    setBlockKind('fadeGate')
+    fadeGateOpacity.stopAnimation()
+    fadeGateScale.stopAnimation()
+    fadeGateOpacity.setValue(0)
+    fadeGateScale.setValue(0.9)
+    resetDoorValuesClosed()
+    phaseRef.current = 'blocking'
+    setPhase('blocking')
+    scheduleFailSafe()
+
+    return (async () => {
+      await yieldTwoFrames()
+      return new Promise((resolve) => {
+        Animated.parallel([
+          Animated.timing(fadeGateOpacity, {
+            toValue: 1,
+            duration: 760,
+            easing: Easing.out(Easing.cubic),
+            useNativeDriver: true,
+          }),
+          Animated.spring(fadeGateScale, {
+            toValue: 1,
+            friction: 10,
+            tension: 72,
+            useNativeDriver: true,
+          }),
+        ]).start(() => resolve())
+      })
+    })()
+  }, [clearFailSafe, resetDoorValuesClosed, scheduleFailSafe, fadeGateOpacity, fadeGateScale])
 
   useLayoutEffect(() => {
     if (!isAuthenticated) {
@@ -357,12 +493,16 @@ export function DoorTransitionProvider({ children }) {
   const value = useMemo(
     () => ({
       startDoorToHome,
+      startFadeGateUntilHomeReady,
       notifyHomeReady,
       cancelDoorTransition,
       armDoorForNextAuthSuccess,
       disarmDoorForNextAuthSuccess,
       isAwaitingHomeOpen: phase === 'blocking',
       phase,
+      blockKind,
+      fadeGateOpacity,
+      fadeGateScale,
       doorLeft,
       doorRight,
       doorIconScale,
@@ -372,11 +512,15 @@ export function DoorTransitionProvider({ children }) {
     }),
     [
       startDoorToHome,
+      startFadeGateUntilHomeReady,
       notifyHomeReady,
       cancelDoorTransition,
       armDoorForNextAuthSuccess,
       disarmDoorForNextAuthSuccess,
       phase,
+      blockKind,
+      fadeGateOpacity,
+      fadeGateScale,
       doorLeft,
       doorRight,
       doorIconScale,

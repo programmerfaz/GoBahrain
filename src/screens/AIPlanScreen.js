@@ -15,11 +15,11 @@ import {
   Modal,
   KeyboardAvoidingView,
   Easing,
-  Image,
   Linking,
   Alert,
   Share,
 } from 'react-native';
+import { CachedImage, prefetchImageUrls } from '../components/CachedImage';
 import * as Clipboard from 'expo-clipboard';
 import * as Haptics from 'expo-haptics';
 import Reanimated, {
@@ -32,15 +32,19 @@ import Reanimated, {
   useSharedValue,
   useAnimatedStyle,
   withSpring,
+  withTiming,
+  interpolate,
+  Extrapolation,
   runOnJS,
 } from 'react-native-reanimated';
-import { Gesture, GestureDetector } from 'react-native-gesture-handler';
+import { Gesture, GestureDetector, ScrollView as GHScrollView, TouchableOpacity as GHTouchableOpacity } from 'react-native-gesture-handler';
 import * as Location from 'expo-location';
 import { BlurView } from 'expo-blur';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRoute, useNavigation, useFocusEffect } from '@react-navigation/native';
 import * as ExpoLinking from 'expo-linking';
+import { openGoogleMapsDirections } from '../utils/googleMapsDirections';
 import MapView, { Marker, Circle } from 'react-native-maps';
 import { Ionicons } from '@expo/vector-icons';
 import DraggableFlatList, { ScaleDecorator } from 'react-native-draggable-flatlist';
@@ -52,17 +56,21 @@ import {
   generateDayPlan,
   fetchClientsWithLocation,
   enhancePlanStopAtIndex,
+  retrievalPersonaCacheKey,
 } from '../services/aiPipeline';
 import { useUserPreferences } from '../context/UserPreferencesContext';
 import { colors as themeColors } from '../theme/designTokens';
 import styles from './AIPlanScreen.styles';
+import { luxurySoftShadow } from '../theme/luxuryPremium';
 import { useTheme } from '../context/ThemeContext';
 import { supabase } from '../config/supabase';
 import { useAuth } from '../context/AuthContext';
+import { getCommunityPalette } from '../components/community/CommunityReviewViews';
 import {
   listSavedPlans,
   createSavedPlan,
   updateSavedPlan,
+  deleteSavedPlan,
   fetchSharedPlanByCode,
   pushSharedPlanUpdate,
   serializePlanForStorage,
@@ -72,6 +80,18 @@ import {
 } from '../services/savedPlans';
 import ClientProfileModal from '../components/ClientProfileModal';
 import { ensureImageUrl, parseStorageImageUrl, resolvePublicImageUrl } from '../utils/imageUrl';
+import { gsap } from 'gsap';
+import { useGSAP } from '@gsap/react';
+
+gsap.registerPlugin(useGSAP);
+
+/** Plan map: same chip row as Community (All + Food/Places/Events icons); ids align with `client.client_type` buckets. */
+const PLAN_MAP_CLIENT_TYPE_FILTERS = [
+  { id: 'all', label: 'All', icon: 'apps-outline' },
+  { id: 'restaurant', label: 'Restaurants', icon: 'restaurant-outline' },
+  { id: 'place', label: 'Places', icon: 'location-outline' },
+  { id: 'event', label: 'Events', icon: 'calendar-outline' },
+];
 
 const { height: SCREEN_HEIGHT, width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -152,15 +172,6 @@ const getLuxuryCategoryStyle = (item) => {
   return { label: 'Attractions', bg: '#FFE4F0', fg: '#DB2777', icon: 'location-outline' }
 }
 
-const openInMaps = (lat, lng, name) => {
-  const label = encodeURIComponent(name || 'Destination');
-  const url = Platform.select({
-    ios: `maps:0,0?q=${label}@${lat},${lng}`,
-    android: `geo:0,0?q=${lat},${lng}(${label})`,
-  });
-  Linking.openURL(url).catch(() => {});
-};
-
 // Open Google Maps with directions from current location through all plan stops in order
 const openAllStopsInGoogleMaps = async (plan) => {
   const markers = (plan || []).map((item) => {
@@ -196,10 +207,10 @@ function formatPlanShareMessage(plan) {
   if (!plan || plan.length === 0) {
     return {
       message:
-        '🇧🇭 Plan an amazing day in Bahrain with Go Bahrain!\n\n' +
+        '🇧🇭 Plan an amazing day in Bahrain with SiyahaBH!\n\n' +
         'AI-crafted itineraries — dining, culture, and events — tailored to you.\n\n' +
         'Download the app and tap "Build my day". Yalla!',
-      title: 'Go Bahrain',
+      title: 'SiyahaBH',
     };
   }
   const meals = plan.filter((i) => i.type === 'restaurant').length;
@@ -220,7 +231,7 @@ function formatPlanShareMessage(plan) {
     return block;
   });
   return {
-    message: `${header}\n${lines.join('\n\n')}\n\n— Shared from Go Bahrain`,
+    message: `${header}\n${lines.join('\n\n')}\n\n— Shared from SiyahaBH`,
     title: 'My Bahrain itinerary',
   };
 }
@@ -302,24 +313,18 @@ const hexToRgba = (hex, alpha) => {
 
 function AnimatedOptionChip({ item, isSelected, onPress }) {
   const scaleAnim = useRef(new Animated.Value(1)).current
-  const bounceAnim = useRef(new Animated.Value(0)).current
 
   useEffect(() => {
     if (isSelected) {
-      Animated.parallel([
-        Animated.spring(scaleAnim, { toValue: 1.06, tension: 280, friction: 8, useNativeDriver: true }),
-        Animated.sequence([
-          Animated.timing(bounceAnim, { toValue: -4, duration: 80, useNativeDriver: true }),
-          Animated.spring(bounceAnim, { toValue: 0, tension: 350, friction: 5, useNativeDriver: true }),
-        ]),
-      ]).start()
+      Animated.spring(scaleAnim, { toValue: 1.02, tension: 260, friction: 11, useNativeDriver: true }).start()
     } else {
-      Animated.spring(scaleAnim, { toValue: 1, tension: 200, friction: 12, useNativeDriver: true }).start()
+      Animated.spring(scaleAnim, { toValue: 1, tension: 230, friction: 13, useNativeDriver: true }).start()
     }
-  }, [isSelected, scaleAnim, bounceAnim])
+  }, [isSelected, scaleAnim])
 
   return (
-    <Animated.View style={{ transform: [{ scale: scaleAnim }, { translateY: bounceAnim }] }}>
+    <Animated.View style={styles.pmChipWrap}>
+      <Animated.View style={{ transform: [{ scale: scaleAnim }] }}>
       <TouchableOpacity
         style={[
           styles.pmChip,
@@ -357,19 +362,22 @@ function AnimatedOptionChip({ item, isSelected, onPress }) {
         <Text style={[styles.pmChipText, isSelected && styles.pmChipTextSelected]}>
           {item.label}
         </Text>
-        {isSelected && (
-          <View style={styles.pmChipCheck}>
+        <View style={styles.pmChipCheckSlot}>
+          {isSelected ? (
+            <View style={styles.pmChipCheck}>
             <Ionicons name="checkmark" size={12} color="#FFFFFF" />
-          </View>
-        )}
+            </View>
+          ) : null}
+        </View>
       </TouchableOpacity>
+      </Animated.View>
     </Animated.View>
   )
 }
 
 
-/** Bottom inset for plan sheet / marker sheet — matches BottomControlBar (64px row + safe area) + breathing room */
-const PLAN_TAB_BAR_ROW_HEIGHT = 64
+/** Bottom inset for plan sheet / marker sheet — matches floating BottomControlBar (lifted FAB + dock) + safe area */
+const PLAN_TAB_BAR_ROW_HEIGHT = 100
 const getPlanSheetBottomPadding = (insets) => {
   const bottomInset = Math.max(insets?.bottom ?? 0, 12)
   return PLAN_TAB_BAR_ROW_HEIGHT + bottomInset + 16
@@ -457,7 +465,7 @@ function parseCoordsFromClientRow(row) {
   );
 }
 
-import { PREFERENCES, FOOD_CATEGORIES } from '../constants/preferences';
+import { PREFERENCES, FOOD_CATEGORIES, TRAVEL_EXPLORE_OPTIONS } from '../constants/preferences';
 
 const SURPRISE_THEMES = [
   { label: 'Scenic Day', icon: 'heart', color: themeColors.evening, prefs: ['Landmarks', 'Leisure'], food: ['Italian', 'Seafood'] },
@@ -629,7 +637,7 @@ async function fetchSpotPreviewsFromSupabase() {
   }
 
   shuffleInPlace(merged);
-  merged.forEach((p) => p.image && Image.prefetch(p.image).catch(() => {}));
+  void prefetchImageUrls(merged.map((p) => p.image).filter(Boolean)).catch(() => {});
   return merged;
 }
 
@@ -706,7 +714,7 @@ async function getCachedFeedImages() {
       if (!added) break;
     }
     shuffleInPlace(merged);
-    merged.forEach((p) => p.image && Image.prefetch(p.image).catch(() => {}));
+    void prefetchImageUrls(merged.map((p) => p.image).filter(Boolean)).catch(() => {});
     return merged;
   } catch {
     return [];
@@ -740,8 +748,7 @@ async function enrichSpotPreviewsWithClientImages(previews) {
     const url = p.clientId ? imageByClientId[p.clientId] : null;
     return url ? { ...p, image: url } : p;
   });
-  // Prefetch images immediately so they appear faster in the banner
-  enriched.filter((p) => p.image).forEach((p) => Image.prefetch(p.image).catch(() => {}));
+  void prefetchImageUrls(enriched.map((p) => p.image).filter(Boolean)).catch(() => {});
   return enriched;
 }
 
@@ -1014,9 +1021,10 @@ async function enrichPlanWithClientData(plan, pineconeMatches, loadedClientMarke
   if (clientIds.length > 0) {
     const { data: clients } = await supabase
       .from('client')
-      .select('client_a_uuid, client_image, lat, long, latitude, longitude')
+      .select('client_a_uuid, client_image, client_type, lat, long, latitude, longitude')
       .in('client_a_uuid', clientIds);
     const coordByClientId = {};
+    const clientTypeByUuid = {};
     (clients || []).forEach((c) => {
       if (c.client_a_uuid && c.client_image) {
         const u = resolvePublicImageUrl(String(c.client_image).trim());
@@ -1024,11 +1032,19 @@ async function enrichPlanWithClientData(plan, pineconeMatches, loadedClientMarke
       }
       const u = unswapLatLng(c.lat ?? c.latitude, c.long ?? c.longitude ?? c.lng);
       if (u && c.client_a_uuid) coordByClientId[c.client_a_uuid] = u;
+      if (c.client_a_uuid && c.client_type != null && String(c.client_type).trim() !== '') {
+        clientTypeByUuid[c.client_a_uuid] = c.client_type;
+      }
     });
     enriched = enriched.map((item) => {
       const u = item.clientId ? coordByClientId[item.clientId] : null;
-      if (u) return { ...item, lat: u.lat, lng: u.lng };
-      return item;
+      const ct = item.clientId ? clientTypeByUuid[item.clientId] : null;
+      let next = item;
+      if (ct != null && String(ct).trim() !== '') {
+        next = { ...next, client_type: ct };
+      }
+      if (u) return { ...next, lat: u.lat, lng: u.lng };
+      return next;
     });
   }
 
@@ -1036,7 +1052,7 @@ async function enrichPlanWithClientData(plan, pineconeMatches, loadedClientMarke
   // This avoids wrong map pins from model/Pinecone coords drift.
   const { data: allClients } = await supabase
     .from('client')
-    .select('client_a_uuid, business_name, name, business_name_ar, client_image, rating, lat, long, latitude, longitude, description')
+    .select('client_a_uuid, business_name, name, business_name_ar, client_image, client_type, rating, lat, long, latitude, longitude, description')
     .limit(600);
   const clientsList = allClients || [];
   const clientById = new Map(clientsList.map((c) => [c.client_a_uuid, c]));
@@ -1054,6 +1070,7 @@ async function enrichPlanWithClientData(plan, pineconeMatches, loadedClientMarke
       ...item,
       image: resolvePublicImageUrl(item.image) || img,
       clientId: item.clientId || client.client_a_uuid,
+      client_type: client.client_type ?? item.client_type ?? null,
       rating: item.rating != null ? item.rating : (client.rating != null ? client.rating : null),
       ...(placeDescription ? { placeDescription } : {}),
       ...(dbCoords ? { lat: dbCoords.lat, lng: dbCoords.lng } : {}),
@@ -1242,12 +1259,13 @@ function PreviewImage({ uri, style, noFade }) {
           <View style={[StyleSheet.absoluteFill, { backgroundColor: '#ECECF0' }]} pointerEvents="none" />
         )}
         {!failed ? (
-          <Image
+          <CachedImage
             source={{ uri: resolvedUri }}
             style={StyleSheet.absoluteFill}
             resizeMode="cover"
+            recyclingKey={resolvedUri}
+            transition={0}
             onLoad={() => setLoaded(true)}
-            onLoadEnd={() => setLoaded(true)}
             onError={() => {
               setFailed(true)
               setLoaded(true)
@@ -1267,12 +1285,13 @@ function PreviewImage({ uri, style, noFade }) {
         </Animated.View>
       )}
       <Animated.View style={[StyleSheet.absoluteFill, { opacity: fadeAnim }]}>
-        <Image
+        <CachedImage
           source={{ uri: resolvedUri }}
           style={StyleSheet.absoluteFill}
           resizeMode="cover"
+          recyclingKey={resolvedUri}
+          transition={0}
           onLoad={() => setLoaded(true)}
-          onLoadEnd={() => setLoaded(true)}
           onError={() => {
             setFailed(true);
             setLoaded(true);
@@ -1479,9 +1498,7 @@ function KhalidScoutPhotoMosaic({ spotPreviews, variant }) {
   const applySlice = useCallback((rows) => {
     setSlice(rows || [])
     const imgs = (rows || []).map((p) => p?.image).filter(Boolean)
-    imgs.forEach((u) => {
-      void Image.prefetch(u).catch(() => {})
-    })
+    void prefetchImageUrls(imgs).catch(() => {})
   }, [])
 
   useLayoutEffect(() => {
@@ -1490,9 +1507,7 @@ function KhalidScoutPhotoMosaic({ spotPreviews, variant }) {
 
   useEffect(() => {
     const urls = (spotPreviews || []).map((p) => p?.image).filter(Boolean)
-    urls.forEach((u) => {
-      void Image.prefetch(u).catch(() => {})
-    })
+    void prefetchImageUrls(urls).catch(() => {})
   }, [spotPreviews])
 
   useEffect(() => {
@@ -2003,6 +2018,57 @@ function PlanLoadingFactStrip({ compact }) {
   )
 }
 
+/** Drawer step-3 sheet loading card — GSAP stagger on web only (DOM); native keeps RN layout */
+function PlanDrawerLoadingPanel({ loading, loadingStatus, spotPreviews, themePrimary }) {
+  const sheetLoadRefs = useRef([])
+  const setSheetLoadRef = useCallback((index) => (node) => {
+    sheetLoadRefs.current[index] = node
+  }, [])
+
+  useGSAP(() => {
+    if (Platform.OS !== 'web' || !loading) return
+    const nodes = sheetLoadRefs.current.filter(Boolean)
+    if (nodes.length === 0) return
+    gsap.from(nodes, {
+      opacity: 0,
+      y: 20,
+      duration: 0.52,
+      stagger: 0.09,
+      ease: 'power3.out',
+    })
+  }, { dependencies: [loading], revertOnUpdate: true })
+
+  return (
+    <View style={styles.loadingBumpCard}>
+      <View ref={setSheetLoadRef(0)} collapsable={false}>
+        <Text style={styles.loadingScoutTitle} accessibilityRole="header">
+          <Text style={styles.loadingScoutTitleAccent}>Khalid</Text>
+          {' is scouting the perfect places for you'}
+        </Text>
+      </View>
+      <View ref={setSheetLoadRef(1)} style={{ width: '100%', alignItems: 'center' }} collapsable={false}>
+        <KhalidScoutPlanVisual spotPreviews={spotPreviews} variant="sheet" />
+      </View>
+      <View ref={setSheetLoadRef(2)} collapsable={false}>
+        <PlanLoadingFactStrip compact />
+      </View>
+      <View ref={setSheetLoadRef(3)} style={styles.loadingProgressBar} collapsable={false}>
+        <LinearGradient
+          colors={[themePrimary, '#E63950']}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 0 }}
+          style={[styles.loadingProgressFill, (() => {
+            const s = (loadingStatus || '').toLowerCase()
+            if (s.includes('crafting') || s.includes('stitch')) return { width: '100%' }
+            if (s.includes('shortlisting') || s.includes('restaurant')) return { width: '66%' }
+            return { width: '33%' }
+          })()]}
+        />
+      </View>
+    </View>
+  )
+}
+
 function PlanModalLoadingView({ loadingStatus, showSuccess, spotPreviews }) {
   const fadeIn = useRef(new Animated.Value(0)).current
   const contentOpacity = useRef(new Animated.Value(1)).current
@@ -2170,6 +2236,24 @@ function PlanModalLoadingView({ loadingStatus, showSuccess, spotPreviews }) {
   const isFinished = showSuccess || showCelebration
   const showLoadingContent = !allStepsDone
 
+  const loadSectionRefs = useRef([])
+  const setLoadSectionRef = useCallback((index) => (node) => {
+    loadSectionRefs.current[index] = node
+  }, [])
+
+  useGSAP(() => {
+    if (Platform.OS !== 'web' || !showLoadingContent) return
+    const nodes = loadSectionRefs.current.filter(Boolean)
+    if (nodes.length === 0) return
+    gsap.from(nodes, {
+      opacity: 0,
+      y: 20,
+      duration: 0.52,
+      stagger: 0.1,
+      ease: 'power3.out',
+    })
+  }, { dependencies: [showLoadingContent], revertOnUpdate: true })
+
   return (
     <Animated.View style={[styles.ldWrap, { opacity: fadeIn }]}>
       <View style={styles.ldBodyColumn}>
@@ -2181,7 +2265,7 @@ function PlanModalLoadingView({ loadingStatus, showSuccess, spotPreviews }) {
           bounces={false}
         >
           <View style={styles.ldTopLoadingBlockInner}>
-            <View style={styles.ldPlanLoadTitleBlock}>
+            <View ref={setLoadSectionRef(0)} style={styles.ldPlanLoadTitleBlock} collapsable={false}>
               {showLoadingContent ? (
                 <Animated.View style={{ opacity: titleOpacity, transform: [{ scale: titleScale }] }}>
                   <Text style={styles.ldTitle} accessibilityRole="header">
@@ -2208,12 +2292,16 @@ function PlanModalLoadingView({ loadingStatus, showSuccess, spotPreviews }) {
 
             {showLoadingContent ? (
               <>
-                <Animated.View style={{ opacity: contentOpacity, width: '100%', alignItems: 'center' }}>
-                  <KhalidScoutPlanVisual spotPreviews={spotPreviews} variant="modal" />
-                </Animated.View>
-                <Animated.View style={{ opacity: contentOpacity, width: '100%' }}>
-                  <PlanLoadingFactStrip compact={false} />
-                </Animated.View>
+                <View ref={setLoadSectionRef(1)} style={{ width: '100%', alignItems: 'center' }} collapsable={false}>
+                  <Animated.View style={{ opacity: contentOpacity, width: '100%', alignItems: 'center' }}>
+                    <KhalidScoutPlanVisual spotPreviews={spotPreviews} variant="modal" />
+                  </Animated.View>
+                </View>
+                <View ref={setLoadSectionRef(2)} style={{ width: '100%' }} collapsable={false}>
+                  <Animated.View style={{ opacity: contentOpacity, width: '100%' }}>
+                    <PlanLoadingFactStrip compact={false} />
+                  </Animated.View>
+                </View>
               </>
             ) : null}
           </View>
@@ -2283,29 +2371,31 @@ function PlanModalLoadingView({ loadingStatus, showSuccess, spotPreviews }) {
         )}
 
         {showLoadingContent && (
-          <Animated.View
-            style={[
-              styles.lsSteps,
-              styles.ldStepsFooter,
-              { opacity: stepsOpacity, transform: [{ scale: stepsScale }], zIndex: 90, elevation: 90 },
-            ]}
-          >
-            {steps.map((s, i) => {
-              const isDone = allStepsDone ? true : completedSteps.includes(i)
-              const isActive = !isDone && completedSteps.length === i
-              const isPending = !isDone && !isActive
-              return (
-                <LoadingStepCard
-                  key={s.key}
-                  step={s}
-                  index={i}
-                  isDone={isDone}
-                  isActive={isActive}
-                  isPending={isPending}
-                />
-              )
-            })}
-          </Animated.View>
+          <View ref={setLoadSectionRef(3)} collapsable={false} style={{ width: '100%', zIndex: 90, elevation: 90 }}>
+            <Animated.View
+              style={[
+                styles.lsSteps,
+                styles.ldStepsFooter,
+                { opacity: stepsOpacity, transform: [{ scale: stepsScale }] },
+              ]}
+            >
+              {steps.map((s, i) => {
+                const isDone = allStepsDone ? true : completedSteps.includes(i)
+                const isActive = !isDone && completedSteps.length === i
+                const isPending = !isDone && !isActive
+                return (
+                  <LoadingStepCard
+                    key={s.key}
+                    step={s}
+                    index={i}
+                    isDone={isDone}
+                    isActive={isActive}
+                    isPending={isPending}
+                  />
+                )
+              })}
+            </Animated.View>
+          </View>
         )}
       </View>
     </Animated.View>
@@ -2367,7 +2457,8 @@ function AnimatedPlaceMarker({ mk, accent, isCurrent, onPress, showBadge = true,
   const combinedScale = Animated.multiply(scaleAnim, breatheScale);
   const showLabel = zoomScale >= 0.55;
 
-  const pinIcon = mk.type === 'restaurant' ? 'restaurant' : mk.type === 'event' ? 'calendar' : 'location';
+  const mkCat = mapMarkerFilterCategoryKey(mk);
+  const pinIcon = mkCat === 'restaurant' ? 'restaurant' : mkCat === 'event' ? 'calendar' : 'location';
   const imageUrl = resolvePublicImageUrl(mk.image);
 
   const showRadius = showCircle
@@ -2383,260 +2474,566 @@ function AnimatedPlaceMarker({ mk, accent, isCurrent, onPress, showBadge = true,
           strokeWidth={1.5}
         />
       )}
-      <Marker coordinate={{ latitude: mk.lat, longitude: mk.lng }} onPress={onPress} anchor={{ x: 0.5, y: 0.5 }}>
+      <Marker coordinate={{ latitude: mk.lat, longitude: mk.lng }} onPress={onPress} anchor={{ x: 0.5, y: 1 }}>
         <Animated.View style={[styles.animatedMarkerWrap, { opacity: opacityAnim, transform: [{ scale: Animated.multiply(combinedScale, zoomScale) }] }]}>
-          <View style={styles.animatedMarkerAnchor}>
-            {pulseActive && (
-              <Animated.View
-                style={[
-                  styles.animatedMarkerPulseRing,
-                  {
-                    borderColor: accent,
-                    transform: [{ scale: ringScale }],
-                    opacity: ringOpacity,
-                  },
-                ]}
-              />
-            )}
+          {showLabel ? (
             <View
               style={[
-                styles.animatedMarkerLuxShell,
-                typeof accent === 'string' && accent.length === 7 ? { borderColor: `${accent}55` } : { borderColor: 'rgba(180, 160, 140, 0.42)' },
+                styles.animatedMarkerLabel,
+                typeof accent === 'string' && accent.length === 7
+                  ? { borderColor: `${accent}44` }
+                  : null,
               ]}
             >
-              <View style={[styles.animatedMarkerAvatar, { borderColor: accent }]}>
-                {imageUrl ? (
-                  <Image source={{ uri: imageUrl }} style={styles.animatedMarkerImage} />
-                ) : (
-                  <>
-                    <View style={[styles.animatedMarkerIconBg, { backgroundColor: accent }]}>
-                      <Ionicons name={pinIcon} size={20} color="#FFF" />
-                    </View>
-                    {showBadge && (
-                      <View style={[styles.animatedMarkerBadge, { backgroundColor: accent }]}>
-                        <Text style={styles.animatedMarkerBadgeText}>{mk.idx + 1}</Text>
-                      </View>
-                    )}
-                  </>
+              <Text style={[styles.animatedMarkerLabelText, { color: accent }]} numberOfLines={1}>{mk.spot}</Text>
+            </View>
+          ) : null}
+          <View style={styles.animatedMarkerAnchor}>
+            <View style={styles.animatedMarkerPinColumn}>
+              <View style={styles.animatedMarkerPinHeadWrap}>
+                {pulseActive && (
+                  <Animated.View
+                    style={[
+                      styles.animatedMarkerPulseRing,
+                      {
+                        borderColor: accent,
+                        transform: [{ scale: ringScale }],
+                        opacity: ringOpacity,
+                      },
+                    ]}
+                  />
                 )}
-              </View>
-              {imageUrl && showBadge ? (
-                <View style={[styles.animatedMarkerBadge, styles.animatedMarkerBadgeOnImage, { backgroundColor: accent }]}>
-                  <Text style={styles.animatedMarkerBadgeText}>{mk.idx + 1}</Text>
+                <View
+                  style={[
+                    styles.animatedMarkerPinHead,
+                    typeof accent === 'string' && accent.length === 7 ? { borderColor: accent } : { borderColor: accent || '#94a3b8' },
+                  ]}
+                >
+                  {imageUrl ? (
+                    <CachedImage source={{ uri: imageUrl }} style={styles.animatedMarkerImage} recyclingKey={imageUrl} resizeMode="cover" />
+                  ) : (
+                    <>
+                      <View style={[styles.animatedMarkerIconBg, { backgroundColor: accent }]}>
+                        <Ionicons name={pinIcon} size={18} color="#FFF" />
+                      </View>
+                      {showBadge ? (
+                        <View style={[styles.animatedMarkerBadge, { backgroundColor: accent }]}>
+                          <Text style={styles.animatedMarkerBadgeText}>{mk.idx + 1}</Text>
+                        </View>
+                      ) : null}
+                    </>
+                  )}
+                  {imageUrl && showBadge ? (
+                    <View style={[styles.animatedMarkerBadge, styles.animatedMarkerBadgeOnImage, { backgroundColor: accent }]}>
+                      <Text style={styles.animatedMarkerBadgeText}>{mk.idx + 1}</Text>
+                    </View>
+                  ) : null}
                 </View>
-              ) : null}
+              </View>
+              <View style={[styles.animatedMarkerPinStem, { borderTopColor: accent }]} />
             </View>
           </View>
-          {showLabel && (
-            <>
-              <View
-                style={[
-                  styles.animatedMarkerLabel,
-                  typeof accent === 'string' && accent.length === 7 ? { borderColor: `${accent}55` } : null,
-                ]}
-              >
-                <Text style={[styles.animatedMarkerLabelText, { color: accent }]} numberOfLines={1}>{mk.spot}</Text>
-              </View>
-              <View style={[styles.animatedMarkerArrow, { borderTopColor: accent }]} />
-            </>
-          )}
         </Animated.View>
       </Marker>
     </React.Fragment>
   );
 }
 
-const MAP_MARKER_QUICK_OPTIONS = [
-  { key: 'profile', icon: 'person', label: 'Profile' },
-  { key: 'directions', icon: 'navigate', label: 'Directions' },
-  { key: 'ar', icon: 'camera', label: 'AR' },
-];
+/** Hero height when detail is open (full-screen feel) — must match styles.markerDetailHeroFrame height */
+const MARKER_DETAIL_HERO_H = SCREEN_HEIGHT * 0.48;
 
-const filterMarkerQuickOptions = (marker) =>
-  MAP_MARKER_QUICK_OPTIONS.filter((opt) => {
-    if (opt.key === 'profile') return !!marker?.clientId;
-    if (opt.key === 'directions' || opt.key === 'ar') return marker?.lat != null && marker?.lng != null;
-    return true;
-  });
+function parseMarkerCommunityImage(imageColumn) {
+  if (!imageColumn) return null;
+  try {
+    const parsed = typeof imageColumn === 'string' ? JSON.parse(imageColumn) : imageColumn;
+    const arr = Array.isArray(parsed) ? parsed : [parsed];
+    const raw = arr[0] || null;
+    return raw ? resolvePublicImageUrl(raw) : null;
+  } catch {
+    return typeof imageColumn === 'string' ? resolvePublicImageUrl(imageColumn) : null;
+  }
+}
 
-const MARKER_BOTTOM_SHEET_SLIDE = Math.round(SCREEN_HEIGHT * 0.5);
+function MarkerDetailStarRow({ rating, size = 13 }) {
+  if (rating == null || rating <= 0) return null;
+  return (
+    <View style={styles.markerDetailStarRow}>
+      {[1, 2, 3, 4, 5].map((i) => (
+        <Ionicons
+          key={i}
+          name={rating >= i ? 'star' : rating >= i - 0.5 ? 'star-half' : 'star-outline'}
+          size={size}
+          color={rating >= i - 0.5 ? '#C9A227' : 'rgba(15, 23, 42, 0.2)'}
+        />
+      ))}
+    </View>
+  );
+}
 
-const markerKindLabel = (type) => {
-  if (type === 'restaurant') return 'Restaurant';
-  if (type === 'event') return 'Event';
-  return 'Place';
-};
-
-const markerHeroIconName = (type) => {
-  if (type === 'restaurant') return 'restaurant';
-  if (type === 'event') return 'calendar';
-  return 'location';
-};
-
-/** Place details + actions; slides up from bottom over the map. */
-function MarkerDetailsBottomSheet({ visible, marker, insets, accentColor, onAction, onClose }) {
-  const translateY = useRef(new Animated.Value(MARKER_BOTTOM_SHEET_SLIDE)).current;
-  const backdropOp = useRef(new Animated.Value(0)).current;
-
-  const runClose = useCallback(() => {
-    Animated.parallel([
-      Animated.timing(translateY, {
-        toValue: MARKER_BOTTOM_SHEET_SLIDE,
-        duration: 280,
-        easing: Easing.in(Easing.cubic),
-        useNativeDriver: true,
-      }),
-      Animated.timing(backdropOp, {
-        toValue: 0,
-        duration: 260,
-        easing: Easing.out(Easing.quad),
-        useNativeDriver: true,
-      }),
-    ]).start(({ finished }) => {
-      if (finished) onClose();
-    });
-  }, [translateY, backdropOp, onClose]);
+/** Glass luxury full-screen sheet: one CachedImage expands from marker rect (not a duplicate layer). */
+function MarkerShowcaseDetailSheet({ visible, mk, onDismiss, insets, accent, onViewProfile, morphAnchor }) {
+  const { colors } = useTheme();
+  const [feedPosts, setFeedPosts] = useState([]);
+  const [feedReviews, setFeedReviews] = useState([]);
+  const [feedLoading, setFeedLoading] = useState(false);
+  const openProgress = useSharedValue(0);
+  const dragY = useSharedValue(0);
+  const backdropOpacity = useSharedValue(0);
+  const anchorX = useSharedValue(SCREEN_WIDTH / 2);
+  const anchorY = useSharedValue(SCREEN_HEIGHT * 0.42);
+  const anchorSize = useSharedValue(58);
+  const onDismissRef = useRef(onDismiss);
+  const onViewProfileRef = useRef(onViewProfile);
+  onDismissRef.current = onDismiss;
+  onViewProfileRef.current = onViewProfile;
 
   useEffect(() => {
-    if (!visible || !marker) return undefined;
-    translateY.setValue(MARKER_BOTTOM_SHEET_SLIDE);
-    backdropOp.setValue(0);
-    Animated.parallel([
-      Animated.spring(translateY, {
-        toValue: 0,
-        useNativeDriver: true,
-        tension: 68,
-        friction: 14,
-      }),
-      Animated.timing(backdropOp, {
-        toValue: 1,
-        duration: 280,
-        easing: Easing.out(Easing.quad),
-        useNativeDriver: true,
-      }),
-    ]).start();
-    return undefined;
-  }, [visible, marker?.lat, marker?.lng, marker?.clientId, translateY, backdropOp]);
+    if (morphAnchor && typeof morphAnchor.x === 'number' && typeof morphAnchor.y === 'number') {
+      anchorX.value = morphAnchor.x;
+      anchorY.value = morphAnchor.y;
+      anchorSize.value = morphAnchor.sizePx ?? 58;
+    }
+  }, [morphAnchor]);
 
-  const backdropOpacity = backdropOp.interpolate({ inputRange: [0, 1], outputRange: [0, 0.42] });
+  useEffect(() => {
+    if (!visible || !mk) {
+      setFeedPosts([]);
+      setFeedReviews([]);
+      setFeedLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setFeedLoading(true);
+    const spot = (mk.spot || '').trim();
+    const clientId = mk.clientId || null;
+    (async () => {
+      try {
+        if (clientId) {
+          const [postsRes, revRes] = await Promise.all([
+            supabase
+              .from('posts')
+              .select('post_uuid, post_image, description, created_at')
+              .eq('client_a_uuid', clientId)
+              .order('created_at', { ascending: false })
+              .limit(16),
+            supabase
+              .from('community')
+              .select('community_uuid, review_text, rating, badge, image, created_at')
+              .eq('client_a_uuid', clientId)
+              .order('created_at', { ascending: false })
+              .limit(12),
+          ]);
+          if (cancelled) return;
+          const posts = (postsRes.data || [])
+            .map((r) => ({
+              id: r.post_uuid,
+              imageUri: resolvePublicImageUrl(r.post_image),
+              description: (r.description || '').trim(),
+            }))
+            .filter((p) => p.imageUri);
+          setFeedPosts(posts);
+          const reviews = (revRes.data || []).map((r) => ({
+            id: r.community_uuid,
+            body: (r.review_text || '').trim(),
+            rating: r.rating != null ? Number(r.rating) : null,
+            place: r.badge || null,
+            imageUri: parseMarkerCommunityImage(r.image),
+          }));
+          setFeedReviews(reviews);
+        } else if (spot.length >= 2) {
+          const { data: communityRows } = await supabase
+            .from('community')
+            .select('community_uuid, review_text, rating, badge, image, created_at')
+            .ilike('badge', `%${spot.slice(0, 28)}%`)
+            .order('created_at', { ascending: false })
+            .limit(12);
+          if (cancelled) return;
+          setFeedPosts([]);
+          setFeedReviews(
+            (communityRows || []).map((r) => ({
+              id: r.community_uuid,
+              body: (r.review_text || '').trim(),
+              rating: r.rating != null ? Number(r.rating) : null,
+              place: r.badge || null,
+              imageUri: parseMarkerCommunityImage(r.image),
+            })),
+          );
+        } else {
+          if (!cancelled) {
+            setFeedPosts([]);
+            setFeedReviews([]);
+          }
+        }
+      } catch (e) {
+        if (!cancelled) {
+          setFeedPosts([]);
+          setFeedReviews([]);
+        }
+      } finally {
+        if (!cancelled) setFeedLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [visible, mk]);
 
-  if (!visible || !marker) return null;
+  const runDismissFromUI = useCallback(() => {
+    onDismissRef.current();
+  }, []);
 
-  const handleAction = (key) => {
-    onAction(key);
-    onClose();
+  const finishDismissAndProfile = useCallback((clientId) => {
+    onDismissRef.current();
+    if (clientId != null) onViewProfileRef.current?.(clientId);
+  }, []);
+
+  const closeWithMorph = useCallback(() => {
+    dragY.value = withTiming(0, { duration: 50 });
+    backdropOpacity.value = withTiming(0, { duration: 340 });
+    openProgress.value = withTiming(0, { duration: 400 }, (finished) => {
+      if (finished) runOnJS(runDismissFromUI)();
+    });
+  }, [backdropOpacity, dragY, openProgress, runDismissFromUI]);
+
+  useEffect(() => {
+    if (visible && mk) {
+      dragY.value = 0;
+      openProgress.value = 0;
+      backdropOpacity.value = 0;
+      openProgress.value = withSpring(1, { damping: 17, stiffness: 188, mass: 0.78 });
+      backdropOpacity.value = withTiming(1, { duration: 360 });
+    }
+  }, [visible, mk, backdropOpacity, dragY, openProgress]);
+
+  const panGesture = useMemo(
+    () =>
+      Gesture.Pan()
+        .activeOffsetY(8)
+        .failOffsetX([-28, 28])
+        .onUpdate((e) => {
+          'worklet';
+          if (e.translationY > 0) dragY.value = e.translationY;
+        })
+        .onEnd((e) => {
+          'worklet';
+          if (dragY.value > 88 || e.velocityY > 620) {
+            dragY.value = withTiming(0, { duration: 40 });
+            backdropOpacity.value = withTiming(0, { duration: 340 });
+            openProgress.value = withTiming(0, { duration: 400 }, (finished) => {
+              if (finished) runOnJS(runDismissFromUI)();
+            });
+          } else {
+            dragY.value = withSpring(0, { damping: 18, stiffness: 220 });
+          }
+        }),
+    [backdropOpacity, dragY, openProgress, runDismissFromUI],
+  );
+
+  /** One shared hero: same CachedImage expands from marker pixel rect to full hero (layout, not a second copy). */
+  const heroImageExpandStyle = useAnimatedStyle(() => {
+    const dragFactor = Math.min(dragY.value / 520, 0.3);
+    const p = openProgress.value * (1 - dragFactor);
+    const ax = anchorX.value;
+    const ay = anchorY.value;
+    const sz = anchorSize.value;
+    const dragLift = dragY.value * 0.42;
+    const left = interpolate(p, [0, 1], [ax - sz / 2, 0], Extrapolation.CLAMP);
+    const top = interpolate(p, [0, 1], [ay - sz / 2, 0], Extrapolation.CLAMP) + dragLift;
+    const width = interpolate(p, [0, 1], [sz, SCREEN_WIDTH], Extrapolation.CLAMP);
+    const height = interpolate(p, [0, 1], [sz, MARKER_DETAIL_HERO_H], Extrapolation.CLAMP);
+    const borderRadius = interpolate(p, [0, 1], [sz * 0.5, 0], Extrapolation.CLAMP);
+    const shadowOp = interpolate(p, [0, 0.45, 1], [0.38, 0.14, 0.08], Extrapolation.CLAMP);
+    const shadowR = interpolate(p, [0, 1], [18, 4], Extrapolation.CLAMP);
+    const elev = Math.round(interpolate(p, [0, 1], [12, 3], Extrapolation.CLAMP));
+    return {
+      position: 'absolute',
+      left,
+      top,
+      width,
+      height,
+      borderRadius,
+      overflow: 'hidden',
+      zIndex: 8,
+      shadowColor: '#0f0a08',
+      shadowOffset: { width: 0, height: 10 },
+      shadowOpacity: shadowOp,
+      shadowRadius: shadowR,
+      elevation: elev,
+    };
+  });
+
+  /** Glass + scroll sits directly under the expanding image (same frame math). */
+  const glassPanelStyle = useAnimatedStyle(() => {
+    const dragFactor = Math.min(dragY.value / 520, 0.3);
+    const p = openProgress.value * (1 - dragFactor);
+    const ax = anchorX.value;
+    const ay = anchorY.value;
+    const sz = anchorSize.value;
+    const dragLift = dragY.value * 0.42;
+    const top = interpolate(p, [0, 1], [ay - sz / 2, 0], Extrapolation.CLAMP) + dragLift;
+    const h = interpolate(p, [0, 1], [sz, MARKER_DETAIL_HERO_H], Extrapolation.CLAMP);
+    const fade = interpolate(p, [0, 0.22, 0.5, 1], [0, 0.35, 0.92, 1], Extrapolation.CLAMP);
+    return {
+      position: 'absolute',
+      left: 0,
+      right: 0,
+      top: top + h,
+      bottom: 0,
+      opacity: fade,
+      zIndex: 10,
+    };
+  });
+
+  const grabberStyle = useAnimatedStyle(() => {
+    const dragFactor = Math.min(dragY.value / 520, 0.3);
+    const p = openProgress.value * (1 - dragFactor);
+    const o = interpolate(p, [0, 0.55, 1], [0, 0.85, 1], Extrapolation.CLAMP);
+    return { opacity: o };
+  });
+
+  const backdropStyle = useAnimatedStyle(() => ({
+    opacity: backdropOpacity.value * (1 - Math.min(dragY.value / 700, 0.35)),
+  }));
+
+  if (!visible || !mk) return null;
+
+  const imageUrl = resolvePublicImageUrl(mk.image);
+  const mkCat = mapMarkerFilterCategoryKey(mk);
+  const pinIcon = mkCat === 'restaurant' ? 'restaurant' : mkCat === 'event' ? 'calendar' : 'location';
+  const typeLabel = mkCat === 'restaurant' ? 'Dining' : mkCat === 'event' ? 'Event' : 'Place';
+  const hasCoords = Number.isFinite(Number(mk.lat)) && Number.isFinite(Number(mk.lng));
+  const lat = Number(mk.lat);
+  const lng = Number(mk.lng);
+
+  const handleOpenMaps = () => {
+    if (!hasCoords) return;
+    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    openGoogleMapsDirections(lat, lng);
   };
 
-  const actions = filterMarkerQuickOptions(marker);
-  const bottomPad = 20 + getPlanSheetBottomPadding(insets)
-
-  const heroUri = resolvePublicImageUrl(marker.image);
-  const heroIcon = markerHeroIconName(marker.type);
-  const gradEnd = `${accentColor}E6`;
-  const gradMid = `${accentColor}99`;
+  const handleViewProfilePress = () => {
+    if (!mk.clientId) return;
+    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    const cid = mk.clientId;
+    backdropOpacity.value = withTiming(0, { duration: 300 });
+    openProgress.value = withTiming(0, { duration: 380 }, (finished) => {
+      if (finished) {
+        runOnJS(finishDismissAndProfile)(cid);
+      }
+    });
+  };
 
   return (
-    <View style={styles.markerBottomSheetRoot} pointerEvents="box-none">
-      <Animated.View style={[styles.markerBottomSheetBackdrop, { opacity: backdropOpacity }]} pointerEvents="box-none">
-        <Pressable style={StyleSheet.absoluteFill} onPress={runClose} accessibilityLabel="Dismiss" accessibilityRole="button" />
-      </Animated.View>
-      <Animated.View
-        style={[
-          styles.markerBottomSheetPanel,
-          {
-            paddingBottom: bottomPad,
-            transform: [{ translateY }],
-          },
-        ]}
-      >
-        <View style={styles.markerBottomSheetGrab} accessible={false} />
-        <View style={styles.markerBottomSheetHeroWrap}>
-          {heroUri ? (
-            <Image source={{ uri: heroUri }} style={styles.markerBottomSheetHeroImg} resizeMode="cover" />
-          ) : (
-            <LinearGradient
-              colors={[gradEnd, gradMid, `${accentColor}33`]}
-              start={{ x: 0.1, y: 0 }}
-              end={{ x: 0.9, y: 1 }}
-              style={styles.markerBottomSheetHeroPlaceholder}
+    <Modal visible={visible} transparent animationType="none" statusBarTranslucent onRequestClose={closeWithMorph}>
+      <View style={styles.markerDetailModalRoot} pointerEvents="box-none">
+        <Reanimated.View style={[styles.markerDetailBackdropDim, backdropStyle]} pointerEvents="none" />
+        <Pressable
+          style={styles.markerDetailBackdropPress}
+          onPress={closeWithMorph}
+          accessibilityRole="button"
+          accessibilityLabel="Close place details"
+        />
+
+        <View style={styles.markerDetailModalContent} pointerEvents="box-none">
+          <GestureDetector gesture={panGesture}>
+            <View
+              style={[
+                styles.markerDetailHeroGestureLayer,
+                { height: MARKER_DETAIL_HERO_H + insets.top + 52 },
+              ]}
+              pointerEvents="box-none"
             >
-              <View style={styles.markerBottomSheetHeroPlaceholderIcon}>
-                <Ionicons name={heroIcon} size={52} color="rgba(255,255,255,0.42)" />
-              </View>
-            </LinearGradient>
-          )}
-          <LinearGradient
-            colors={['transparent', 'rgba(15,23,42,0.5)', 'rgba(15,23,42,0.88)']}
-            locations={[0, 0.45, 1]}
-            style={styles.markerBottomSheetHeroScrim}
-            pointerEvents="none"
-          />
-          <Pressable
-            onPress={runClose}
-            style={({ pressed }) => [styles.markerBottomSheetHeroClose, pressed && { opacity: 0.88 }]}
-            hitSlop={8}
-            accessibilityLabel="Close"
-            accessibilityRole="button"
-          >
-            <View style={styles.markerBottomSheetHeroCloseInner}>
-              <Ionicons name="close" size={22} color="#FFFFFF" />
-            </View>
-          </Pressable>
-          <View style={styles.markerBottomSheetHeroFoot} pointerEvents="none">
-            <View style={styles.markerBottomSheetHeroTypePill}>
-              <Ionicons name={heroIcon} size={13} color="#FFFFFF" style={styles.markerBottomSheetHeroTypeIcon} />
-              <Text style={styles.markerBottomSheetHeroTypeText}>{markerKindLabel(marker.type)}</Text>
-            </View>
-            <Text style={styles.markerBottomSheetHeroTitle} numberOfLines={2}>
-              {marker.spot || 'Place'}
-            </Text>
-            {marker.time ? (
-              <View style={styles.markerBottomSheetHeroTimeRow}>
-                <Ionicons name="time-outline" size={15} color="rgba(255,255,255,0.9)" />
-                <Text style={styles.markerBottomSheetHeroTimeText}>{marker.time}</Text>
-              </View>
-            ) : null}
-          </View>
-        </View>
-
-        {marker.reason ? (
-          <View style={styles.markerBottomSheetReasonCard}>
-            <View style={styles.markerBottomSheetReasonHeader}>
-              <Ionicons name="sparkles" size={18} color={accentColor} />
-              <Text style={styles.markerBottomSheetReasonTitle}>Why visit</Text>
-            </View>
-            <ScrollView style={styles.markerBottomSheetReasonScroll} showsVerticalScrollIndicator={false} nestedScrollEnabled>
-              <Text style={styles.markerBottomSheetReason}>{marker.reason}</Text>
-            </ScrollView>
-          </View>
-        ) : null}
-
-        <View style={styles.markerBottomSheetActions}>
-          <Text style={styles.markerBottomSheetActionsHeading}>Quick actions</Text>
-          <View style={styles.markerBottomSheetActionGrid}>
-            {actions.map((opt) => (
-              <Pressable
-                key={opt.key}
-                style={({ pressed }) => [styles.markerBottomSheetActionCell, pressed && { opacity: 0.92, transform: [{ scale: 0.97 }] }]}
-                onPress={() => handleAction(opt.key)}
-                accessibilityRole="button"
-                accessibilityLabel={opt.label}
-              >
+              {/* Single image: expands from marker on map to full hero — same URI as the pin */}
+              <Reanimated.View style={heroImageExpandStyle}>
+                {imageUrl ? (
+                  <CachedImage
+                    source={{ uri: imageUrl }}
+                    style={styles.markerDetailHeroImageFill}
+                    resizeMode="cover"
+                    recyclingKey={imageUrl}
+                  />
+                ) : (
+                  <View style={[styles.markerDetailHeroPlaceholder, { backgroundColor: `${accent}33` }]}>
+                    <Ionicons name={pinIcon} size={48} color={accent} />
+                  </View>
+                )}
                 <LinearGradient
-                  colors={[accentColor, themeColors.primary]}
-                  start={{ x: 0, y: 0 }}
-                  end={{ x: 1, y: 1 }}
-                  style={styles.markerBottomSheetActionGradient}
+                  pointerEvents="none"
+                  colors={['rgba(255,255,255,0.12)', 'transparent', 'rgba(15,23,42,0.12)', 'rgba(15,23,42,0.58)']}
+                  locations={[0, 0.2, 0.55, 1]}
+                  style={styles.markerDetailHeroScrim}
+                />
+                <LinearGradient
+                  pointerEvents="none"
+                  colors={['rgba(255,255,255,0.35)', 'transparent']}
+                  start={{ x: 0.2, y: 0 }}
+                  end={{ x: 0.85, y: 0.65 }}
+                  style={styles.markerDetailHeroLuxSheen}
+                />
+              </Reanimated.View>
+
+              <Reanimated.View style={[styles.markerDetailGrabberFloat, { paddingTop: insets.top + 6 }, grabberStyle]} pointerEvents="box-none">
+                <View style={styles.markerDetailGrabberHit} accessibilityRole="adjustable" accessibilityLabel="Drag down to close">
+                  <View style={styles.markerDetailGrabber} />
+                </View>
+              </Reanimated.View>
+            </View>
+          </GestureDetector>
+
+          <Reanimated.View style={glassPanelStyle} pointerEvents="box-none">
+            <BlurView intensity={Platform.OS === 'ios' ? 86 : 56} tint="light" style={styles.markerDetailGlassBlur}>
+              <View style={styles.markerDetailGlassBody}>
+                <View style={styles.markerDetailGlassFrost} pointerEvents="none" />
+                <GHScrollView
+                  style={styles.markerDetailScroll}
+                  contentContainerStyle={[styles.markerDetailScrollContent, { paddingBottom: insets.bottom + 28 }]}
+                  showsVerticalScrollIndicator={false}
+                  bounces
                 >
-                  <Ionicons name={opt.icon} size={26} color="#FFFFFF" />
-                  <Text style={styles.markerBottomSheetActionGradientLabel}>{opt.label}</Text>
-                </LinearGradient>
-              </Pressable>
-            ))}
-          </View>
+                  <LinearGradient
+                    colors={[`${accent}55`, `${accent}18`, 'transparent']}
+                    start={{ x: 0, y: 0.5 }}
+                    end={{ x: 1, y: 0.5 }}
+                    style={styles.markerDetailPremiumAccentBar}
+                  />
+                  <Text style={[styles.markerDetailTitle, styles.markerDetailTitlePremium]} numberOfLines={3}>{mk.spot}</Text>
+                  <View style={styles.markerDetailMetaRow}>
+                    <View style={[styles.markerDetailTypeChip, styles.markerDetailTypeChipLux, { borderColor: `${accent}55`, backgroundColor: `${accent}12` }]}>
+                      <Ionicons name={pinIcon} size={14} color={accent} />
+                      <Text style={[styles.markerDetailTypeChipText, { color: accent }]}>{typeLabel}</Text>
+                    </View>
+                    {mk.time ? (
+                      <Text style={styles.markerDetailTimeText}>{mk.time}</Text>
+                    ) : null}
+                  </View>
+                  {mk.reason ? (
+                    <Text style={styles.markerDetailReason}>{mk.reason}</Text>
+                  ) : (
+                    <Text style={styles.markerDetailHint}>Explore this stop on your map — open directions or the full profile when linked.</Text>
+                  )}
+
+                  {feedLoading ? (
+                    <View style={styles.markerDetailFeedLoading} accessibilityLabel="Loading feed">
+                      <ActivityIndicator size="small" color={accent} />
+                      <Text style={styles.markerDetailFeedLoadingText}>Loading moments & reviews…</Text>
+                    </View>
+                  ) : null}
+
+                  {feedPosts.length > 0 ? (
+                    <View style={styles.markerDetailSection}>
+                      <View style={styles.markerDetailSectionHeader}>
+                        <Ionicons name="images-outline" size={18} color={accent} />
+                        <Text style={styles.markerDetailSectionTitle}>From the feed</Text>
+                      </View>
+                      <Text style={styles.markerDetailSectionSub}>Recent posts featuring this place</Text>
+                      <ScrollView
+                        horizontal
+                        nestedScrollEnabled
+                        showsHorizontalScrollIndicator={false}
+                        contentContainerStyle={styles.markerDetailPostStripContent}
+                      >
+                        {feedPosts.map((post) => (
+                          <View key={post.id} style={[styles.markerDetailPostTile, { borderColor: `${accent}30` }]}>
+                            <CachedImage
+                              source={{ uri: post.imageUri }}
+                              style={styles.markerDetailPostTileImg}
+                              resizeMode="cover"
+                              recyclingKey={post.imageUri}
+                            />
+                            <LinearGradient
+                              pointerEvents="none"
+                              colors={['transparent', 'rgba(15,23,42,0.65)']}
+                              style={styles.markerDetailPostTileScrim}
+                            />
+                            {post.description ? (
+                              <Text style={styles.markerDetailPostCaption} numberOfLines={2}>{post.description}</Text>
+                            ) : null}
+                          </View>
+                        ))}
+                      </ScrollView>
+                    </View>
+                  ) : null}
+
+                  {feedReviews.length > 0 ? (
+                    <View style={styles.markerDetailSection}>
+                      <View style={styles.markerDetailSectionHeader}>
+                        <Ionicons name="chatbubbles-outline" size={18} color={accent} />
+                        <Text style={styles.markerDetailSectionTitle}>Community</Text>
+                      </View>
+                      <Text style={styles.markerDetailSectionSub}>What locals are saying</Text>
+                      {feedReviews.map((rev) => (
+                        <View key={rev.id} style={[styles.markerDetailReviewCard, luxurySoftShadow]}>
+                          <View style={styles.markerDetailReviewCardInner}>
+                            <View style={styles.markerDetailReviewTop}>
+                              <MarkerDetailStarRow rating={rev.rating} size={14} />
+                              {rev.rating != null && Number.isFinite(rev.rating) ? (
+                                <Text style={styles.markerDetailReviewScore}>{Number(rev.rating).toFixed(1)}</Text>
+                              ) : null}
+                            </View>
+                            <View style={styles.markerDetailReviewBodyRow}>
+                              {rev.imageUri ? (
+                                <CachedImage
+                                  source={{ uri: rev.imageUri }}
+                                  style={styles.markerDetailReviewThumb}
+                                  resizeMode="cover"
+                                  recyclingKey={rev.imageUri}
+                                />
+                              ) : null}
+                              <Text style={styles.markerDetailReviewBody} numberOfLines={rev.imageUri ? 5 : 8}>
+                                {rev.body || '—'}
+                              </Text>
+                            </View>
+                            {rev.place ? (
+                              <View style={styles.markerDetailReviewPlaceRow}>
+                                <Ionicons name="location-outline" size={13} color={accent} />
+                                <Text style={styles.markerDetailReviewPlace} numberOfLines={1}>{rev.place}</Text>
+                              </View>
+                            ) : null}
+                          </View>
+                        </View>
+                      ))}
+                    </View>
+                  ) : null}
+
+                  {!feedLoading && feedPosts.length === 0 && feedReviews.length === 0 && (
+                    <Text style={styles.markerDetailEmptyFeed}>No feed posts or reviews linked yet — open the full profile when available.</Text>
+                  )}
+
+                  <View style={styles.markerDetailActions}>
+                    <GHTouchableOpacity
+                      style={[styles.markerDetailBtn, styles.markerDetailBtnPrimary, { borderColor: `${accent}55` }]}
+                      onPress={() => {
+                        void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                        handleOpenMaps();
+                      }}
+                      disabled={!hasCoords}
+                      activeOpacity={0.88}
+                      accessibilityRole="button"
+                      accessibilityLabel="Open in maps"
+                    >
+                      <Ionicons name="navigate" size={18} color={accent} />
+                      <Text style={[styles.markerDetailBtnText, { color: accent }]}>Directions</Text>
+                    </GHTouchableOpacity>
+                    {mk.clientId ? (
+                      <GHTouchableOpacity
+                        style={[styles.markerDetailBtn, styles.markerDetailBtnGhost]}
+                        onPress={handleViewProfilePress}
+                        activeOpacity={0.88}
+                        accessibilityRole="button"
+                        accessibilityLabel="View full profile"
+                      >
+                        <Ionicons name="person-circle-outline" size={20} color={colors.textSecondary} />
+                        <Text style={[styles.markerDetailBtnText, { color: colors.textSecondary }]}>Profile</Text>
+                      </GHTouchableOpacity>
+                    ) : null}
+                  </View>
+                </GHScrollView>
+              </View>
+            </BlurView>
+          </Reanimated.View>
         </View>
-      </Animated.View>
-    </View>
+      </View>
+    </Modal>
   );
 }
 
@@ -2818,6 +3215,57 @@ function MapScanningOverlay({ visible }) {
   );
 }
 
+function mapCategoryKeyFromClientTableType(clientTypeRaw) {
+  const ct = String(clientTypeRaw ?? '').toLowerCase().trim();
+  if (ct === 'restaurant') return 'restaurant';
+  if (ct === 'event') return 'event';
+  return 'place';
+}
+
+/** Prefer `client.client_type` from Supabase; used for map pins and filters. */
+function resolveClientTypeForPlanMapItem(item, loadedClientMarkers) {
+  if (item?.client_type != null && String(item.client_type).trim() !== '') {
+    return item.client_type;
+  }
+  const id = item?.clientId || null;
+  if (id && Array.isArray(loadedClientMarkers)) {
+    const hit = loadedClientMarkers.find((r) => r.clientId === id);
+    if (hit?.client_type != null && String(hit.client_type).trim() !== '') {
+      return hit.client_type;
+    }
+  }
+  if (item?.spot && Array.isArray(loadedClientMarkers)) {
+    const spotNorm = normName(item.spot || '');
+    if (spotNorm) {
+      for (const row of loadedClientMarkers) {
+        const markerNorm = normName(row.spot || '');
+        if (!markerNorm) continue;
+        if (markerNorm === spotNorm || markerNorm.includes(spotNorm) || spotNorm.includes(markerNorm)) {
+          if (row.client_type != null && String(row.client_type).trim() !== '') {
+            return row.client_type;
+          }
+          break;
+        }
+      }
+    }
+  }
+  return null;
+}
+
+/** Map filter chip keys — uses `client_type` from the client table when present. */
+function mapMarkerFilterCategoryKey(mk) {
+  if (mk?.client_type != null && String(mk.client_type).trim() !== '') {
+    return mapCategoryKeyFromClientTableType(mk.client_type);
+  }
+  return mapCategoryKeyFromClientTableType(mk?.type);
+}
+
+/** Single-select like Community feed: `all` shows every pin; otherwise match `client_type` via `mapMarkerFilterCategoryKey`. */
+function markerMatchesPlanMapClientFilter(mk, activeFilter) {
+  if (!mk || activeFilter === 'all' || activeFilter == null) return true;
+  return mapMarkerFilterCategoryKey(mk) === activeFilter;
+}
+
 function buildMapMarkers(plan, loadedClientMarkers = []) {
   if (!plan) return [];
   return plan.map((item, idx) => {
@@ -2825,11 +3273,13 @@ function buildMapMarkers(plan, loadedClientMarkers = []) {
     if (!fixed) return null;
     const { lat, lng } = fixed;
     const image = resolvePublicImageUrl(item.image || item.client_image);
+    const client_type = resolveClientTypeForPlanMapItem(item, loadedClientMarkers);
     return {
       idx,
       spot: item.spot,
       time: item.time,
       type: item.type,
+      client_type,
       reason: item.reason,
       lat,
       lng,
@@ -2840,7 +3290,8 @@ function buildMapMarkers(plan, loadedClientMarkers = []) {
 }
 
 export default function AIPlanScreen() {
-  const { colors } = useTheme();
+  const { colors, isDark } = useTheme();
+  const communityPalette = useMemo(() => getCommunityPalette(!!isDark), [isDark]);
   const insets = useSafeAreaInsets();
   const route = useRoute();
   const navigation = useNavigation();
@@ -2848,15 +3299,235 @@ export default function AIPlanScreen() {
   const { user } = useAuth();
 
   const mapRef = useRef(null);
+  /** Latest GPS fix for map fitting and native user dot (`showsUserLocation`) */
+  const userLocationRef = useRef(null);
+  const dayPlanRef = useRef(null);
+  const locationWatchRef = useRef(null);
+  /** True while the map is moving programmatically — avoids clamp / region logic fighting the camera */
+  const mapProgrammaticMoveRef = useRef(false);
+  const mapProgrammaticMoveClearTimerRef = useRef(null);
+  /** Only auto-center on user once (tab refocus was re-animating every time) */
+  const hasInitialUserCenterRef = useRef(false);
+  /** Cancel staged camera orbit legs when another pin is pressed or showcase exits */
+  const markerShowcaseRef = useRef({ generation: 0, timeoutIds: [] });
+  const [mapRegion, setMapRegion] = useState(BAHRAIN_REGION);
+  /** Pin selected on map — tap map or Done to exit; drives “View details” + detail sheet */
+  const [isMarkerShowcaseActive, setIsMarkerShowcaseActive] = useState(false);
+  const [showcaseMarkerMk, setShowcaseMarkerMk] = useState(null);
+  const [showcaseMorphAnchor, setShowcaseMorphAnchor] = useState(null);
+  const [markerDetailSheetVisible, setMarkerDetailSheetVisible] = useState(false);
+  /** Map pins: one active chip like Community (`all` | `restaurant` | `place` | `event`), keyed off `client.client_type`. */
+  const [activePlanMapClientFilter, setActivePlanMapClientFilter] = useState('all');
+
+  const handlePlanMapClientFilterPress = useCallback((id) => {
+    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setActivePlanMapClientFilter(id);
+  }, []);
+
+  const markProgrammaticMapMove = useCallback((durationMs = 1200) => {
+    mapProgrammaticMoveRef.current = true;
+    if (mapProgrammaticMoveClearTimerRef.current) {
+      clearTimeout(mapProgrammaticMoveClearTimerRef.current);
+    }
+    mapProgrammaticMoveClearTimerRef.current = setTimeout(() => {
+      mapProgrammaticMoveRef.current = false;
+      mapProgrammaticMoveClearTimerRef.current = null;
+    }, durationMs);
+  }, []);
+
+  const clearMarkerShowcaseTimers = useCallback(() => {
+    const box = markerShowcaseRef.current;
+    if (!box) return;
+    box.generation += 1;
+    const ids = Array.isArray(box.timeoutIds) ? box.timeoutIds : [];
+    ids.forEach(clearTimeout);
+    box.timeoutIds = [];
+  }, []);
+
+  const clearMarkerShowcase = useCallback(() => {
+    clearMarkerShowcaseTimers();
+    setIsMarkerShowcaseActive(false);
+    setShowcaseMarkerMk(null);
+    setShowcaseMorphAnchor(null);
+    setMarkerDetailSheetVisible(false);
+  }, [clearMarkerShowcaseTimers]);
+
+  const exitMarkerShowcase = useCallback(() => {
+    clearMarkerShowcaseTimers();
+    /** Prefer the pin’s coordinates over `mapRegion` center when resetting the camera */
+    const pinLat = showcaseMarkerMk != null ? Number(showcaseMarkerMk.lat) : NaN;
+    const pinLng = showcaseMarkerMk != null ? Number(showcaseMarkerMk.lng) : NaN;
+    const hasPin = Number.isFinite(pinLat) && Number.isFinite(pinLng);
+    setIsMarkerShowcaseActive(false);
+    setShowcaseMarkerMk(null);
+    setShowcaseMorphAnchor(null);
+    setMarkerDetailSheetVisible(false);
+    const map = mapRef.current;
+    if (!map) return;
+    const r = mapRegion;
+    const centerLat = hasPin ? pinLat : r.latitude;
+    const centerLng = hasPin ? pinLng : r.longitude;
+    markProgrammaticMapMove(900);
+    if (typeof map.animateCamera === 'function') {
+      map.animateCamera(
+        Platform.OS === 'ios'
+          ? {
+              center: { latitude: centerLat, longitude: centerLng },
+              pitch: 0,
+              heading: 0,
+              altitude: 2200,
+            }
+          : {
+              center: { latitude: centerLat, longitude: centerLng },
+              pitch: 0,
+              heading: 0,
+              zoom: 12.5,
+            },
+        { duration: 650 },
+      );
+    } else {
+      map.animateToRegion(
+        clampRegionToBahrain({
+          latitude: centerLat,
+          longitude: centerLng,
+          latitudeDelta: r.latitudeDelta ?? 0.06,
+          longitudeDelta: r.longitudeDelta ?? 0.06,
+        }),
+        650,
+      );
+    }
+  }, [mapRegion, showcaseMarkerMk, markProgrammaticMapMove, clearMarkerShowcaseTimers]);
+
+  const handleMapPress = useCallback(() => {
+    if (!isMarkerShowcaseActive) return;
+    exitMarkerShowcase();
+  }, [isMarkerShowcaseActive, exitMarkerShowcase]);
+
+  /** Single top-down pan to the pin — no pitch/heading orbit */
+  const centerMapOnPlaceMarker = useCallback(
+    (mk) => {
+      const lat = Number(mk?.lat);
+      const lng = Number(mk?.lng);
+      const map = mapRef.current;
+      if (!map || Number.isNaN(lat) || Number.isNaN(lng)) {
+        setIsMarkerShowcaseActive(true);
+        return;
+      }
+      setIsMarkerShowcaseActive(true);
+      markProgrammaticMapMove(900);
+      map.animateToRegion(
+        clampRegionToBahrain({
+          latitude: lat,
+          longitude: lng,
+          latitudeDelta: 0.022,
+          longitudeDelta: 0.022,
+        }),
+        550,
+      );
+    },
+    [markProgrammaticMapMove],
+  );
+
+  /** 3D orbit around a pin (heading sweep) — only used from `handlePlaceMarkerPress` when not generating a plan */
+  const runMarkerShowcaseOrbitForMarker = useCallback(
+    (mk, gen) => {
+      const lat = Number(mk?.lat);
+      const lng = Number(mk?.lng);
+      const map = mapRef.current;
+      if (!map || Number.isNaN(lat) || Number.isNaN(lng)) return;
+
+      const center = { latitude: lat, longitude: lng };
+      const schedule = (fn, delay) => {
+        const id = setTimeout(() => {
+          const box = markerShowcaseRef.current;
+          if (!box || !Array.isArray(box.timeoutIds)) return;
+          box.timeoutIds = box.timeoutIds.filter((x) => x !== id);
+          if (box.generation !== gen) return;
+          fn();
+        }, delay);
+        const boxPush = markerShowcaseRef.current;
+        if (!boxPush) return;
+        if (!Array.isArray(boxPush.timeoutIds)) boxPush.timeoutIds = [];
+        boxPush.timeoutIds.push(id);
+      };
+
+      const runFallbackRegion = (latitudeDelta, duration) => {
+        markProgrammaticMapMove(800);
+        map.animateToRegion(
+          clampRegionToBahrain({
+            latitude: lat,
+            longitude: lng,
+            latitudeDelta,
+            longitudeDelta: latitudeDelta,
+          }),
+          duration,
+        );
+      };
+
+      if (typeof map.animateCamera !== 'function') {
+        setIsMarkerShowcaseActive(true);
+        runFallbackRegion(0.012, 520);
+        return;
+      }
+
+      setIsMarkerShowcaseActive(true);
+
+      markProgrammaticMapMove(520);
+      map.animateCamera(
+        Platform.OS === 'ios'
+          ? { center, pitch: 0, heading: 0, altitude: 2600 }
+          : { center, pitch: 0, heading: 0, zoom: 15.5 },
+        { duration: 520 },
+      );
+
+      schedule(() => {
+        const LEG_MS = 13500;
+        const HEADINGS = [90, 180, 270, 360];
+        markProgrammaticMapMove(HEADINGS.length * LEG_MS + 2200);
+        map.animateCamera(
+          Platform.OS === 'ios'
+            ? { center, pitch: 52, heading: 0, altitude: 880 }
+            : { center, pitch: 48, heading: 0, zoom: 18.5 },
+          { duration: 780 },
+        );
+
+        schedule(() => {
+          let leg = 0;
+          const runLeg = () => {
+            if (markerShowcaseRef.current.generation !== gen) return;
+            if (leg >= HEADINGS.length) return;
+            map.animateCamera(
+              Platform.OS === 'ios'
+                ? { center, pitch: 52, heading: HEADINGS[leg], altitude: 880 }
+                : { center, pitch: 48, heading: HEADINGS[leg], zoom: 18.5 },
+              { duration: LEG_MS },
+            );
+            leg += 1;
+            if (leg < HEADINGS.length) {
+              schedule(runLeg, LEG_MS);
+            }
+          };
+          runLeg();
+        }, 820);
+      }, 560);
+    },
+    [markProgrammaticMapMove],
+  );
+
   const sheetAnim = useRef(new Animated.Value(SNAP_POINTS[INITIAL_SNAP_INDEX])).current;
   const lastSnap = useRef(SNAP_POINTS[INITIAL_SNAP_INDEX]);
   const currentYRef = useRef(SNAP_POINTS[INITIAL_SNAP_INDEX]);
   const prefetchRef = useRef({
     prefsKey: null,
+    foodKey: null,
+    personaKey: null,
     places: null,
     breakfastSpots: null,
     events: null,
+    restaurants: null,
+    inflight: null,
   });
+  const prefetchDebounceRef = useRef(null);
   const lastPrefLabelsRef = useRef([]);
   const lastFoodLabelsRef = useRef([]);
 
@@ -2868,8 +3539,8 @@ export default function AIPlanScreen() {
   const [loadingStatus, setLoadingStatus] = useState('');
   const [error, setError] = useState(null);
   const [dayPlan, setDayPlan] = useState(null);
+  dayPlanRef.current = dayPlan;
   const [pineconeMatches, setPineconeMatches] = useState([]);
-  const [selectedMarker, setSelectedMarker] = useState(null);
   const [visiblePinCount, setVisiblePinCount] = useState(0);
   const [revealingPins, setRevealingPins] = useState(false);
   const [surpriseSpinning, setSurpriseSpinning] = useState(false);
@@ -2877,6 +3548,8 @@ export default function AIPlanScreen() {
   const [surprisePicked, setSurprisePicked] = useState(null);
   const [showPlanModal, setShowPlanModal] = useState(false);
   const [planModalStep, setPlanModalStep] = useState(1);
+  /** 'nearby' | 'balanced' | 'wide' — first plan modal step */
+  const [travelExploreId, setTravelExploreId] = useState('balanced');
   const [doorVisible, setDoorVisible] = useState(false);
   const doorLeft = useRef(new Animated.Value(-SCREEN_WIDTH / 2)).current
   const doorRight = useRef(new Animated.Value(SCREEN_WIDTH / 2)).current
@@ -2885,14 +3558,36 @@ export default function AIPlanScreen() {
   const doorFade = useRef(new Animated.Value(1)).current
   const skipOpenAnim = useRef(false)
   const [planGenerationSuccess, setPlanGenerationSuccess] = useState(false);
-  
+
+  const handlePlaceMarkerPress = useCallback(
+    (mk) => {
+      clearMarkerShowcase();
+      setShowcaseMarkerMk(mk);
+      const blockOrbit = loading || planGenerationSuccess || revealingPins;
+      if (blockOrbit) {
+        centerMapOnPlaceMarker(mk);
+        return;
+      }
+      const gen = markerShowcaseRef.current.generation;
+      runMarkerShowcaseOrbitForMarker(mk, gen);
+    },
+    [
+      clearMarkerShowcase,
+      centerMapOnPlaceMarker,
+      runMarkerShowcaseOrbitForMarker,
+      loading,
+      planGenerationSuccess,
+      revealingPins,
+    ],
+  );
+
   // Initialize with placeholder images immediately, then load real ones
   const [spotPreviews, setSpotPreviews] = useState(() => {
     // Create immediate placeholder data from common Bahrain imagery
     const placeholders = [
-      { id: 'ph-1', name: 'Bahrain', type: 'place', image: 'https://zonhaprelkjyjugpqfdn.supabase.co/storage/v1/object/public/gobahrain-post-images/default-place-1.jpg' },
-      { id: 'ph-2', name: 'Bahrain', type: 'restaurant', image: 'https://zonhaprelkjyjugpqfdn.supabase.co/storage/v1/object/public/gobahrain-post-images/default-food-1.jpg' },
-      { id: 'ph-3', name: 'Bahrain', type: 'place', image: 'https://zonhaprelkjyjugpqfdn.supabase.co/storage/v1/object/public/gobahrain-post-images/default-place-2.jpg' },
+      { id: 'ph-1', name: 'Bahrain', type: 'place', image: ensureImageUrl('default-place-1.jpg') },
+      { id: 'ph-2', name: 'Bahrain', type: 'restaurant', image: ensureImageUrl('default-food-1.jpg') },
+      { id: 'ph-3', name: 'Bahrain', type: 'place', image: ensureImageUrl('default-place-2.jpg') },
     ];
     return placeholders;
   });
@@ -2906,7 +3601,6 @@ export default function AIPlanScreen() {
   const [shareCopyHint, setShareCopyHint] = useState(false);
   const shareCopyHintTimerRef = useRef(null);
   const [allPlaceMarkers, setAllPlaceMarkers] = useState([]);
-  const [mapRegion, setMapRegion] = useState(BAHRAIN_REGION);
   const [showSearchModal, setShowSearchModal] = useState(false);
   const [addingPlanStop, setAddingPlanStop] = useState(false);
   const [searchModalClients, setSearchModalClients] = useState({ restaurants: [], places: [], events: [] });
@@ -2928,6 +3622,10 @@ export default function AIPlanScreen() {
   const [shareModalBusy, setShareModalBusy] = useState(false);
   const [shareModalCode, setShareModalCode] = useState(null);
   const [savePlanBusy, setSavePlanBusy] = useState(false);
+  const [showEditSavedPlanTitleModal, setShowEditSavedPlanTitleModal] = useState(false);
+  const [editSavedPlanTitleId, setEditSavedPlanTitleId] = useState(null);
+  const [editSavedPlanTitleDraft, setEditSavedPlanTitleDraft] = useState('');
+  const [editSavedPlanTitleBusy, setEditSavedPlanTitleBusy] = useState(false);
 
   const planReadOnly = sharedCollaboration != null && sharedCollaboration.role === 'viewer';
   const planCollaboratorEdit = sharedCollaboration != null && sharedCollaboration.role === 'editor';
@@ -3210,7 +3908,16 @@ export default function AIPlanScreen() {
           const spot = (c.business_name || c.name || 'Place').trim();
           const ct = ((c.client_type || '').toLowerCase());
           const type = ct === 'restaurant' ? 'restaurant' : ct === 'event' ? 'event' : 'place';
-          return { idx, spot, type, lat, lng, image, clientId: c.client_a_uuid };
+          return {
+            idx,
+            spot,
+            type,
+            client_type: c.client_type ?? null,
+            lat,
+            lng,
+            image,
+            clientId: c.client_a_uuid,
+          };
         }).filter(Boolean);
         setAllPlaceMarkers(markers);
       } catch (e) {
@@ -3235,7 +3942,84 @@ export default function AIPlanScreen() {
   useFocusEffect(
     useCallback(() => {
       refreshSavedPlans();
+
+      let cancelled = false;
+
+      const centerOnUserIfNoPlan = (lat, lng) => {
+        if (dayPlanRef.current?.length) return;
+        if (!mapRef.current) return;
+        markProgrammaticMapMove(500);
+        mapRef.current.animateToRegion(
+          clampRegionToBahrain({
+            latitude: lat,
+            longitude: lng,
+            latitudeDelta: 0.06,
+            longitudeDelta: 0.06,
+          }),
+          450,
+        );
+      };
+
+      (async () => {
+        try {
+          const { status } = await Location.requestForegroundPermissionsAsync();
+          if (cancelled || status !== 'granted') return;
+
+          const { coords } = await Location.getCurrentPositionAsync({
+            accuracy: Location.Accuracy.Balanced,
+          });
+          if (cancelled) return;
+          userLocationRef.current = { latitude: coords.latitude, longitude: coords.longitude };
+          if (!hasInitialUserCenterRef.current && !dayPlanRef.current?.length) {
+            hasInitialUserCenterRef.current = true;
+            centerOnUserIfNoPlan(coords.latitude, coords.longitude);
+          }
+
+          const watchSub = await Location.watchPositionAsync(
+            {
+              accuracy: Location.Accuracy.Balanced,
+              distanceInterval: 25,
+            },
+            (loc) => {
+              userLocationRef.current = {
+                latitude: loc.coords.latitude,
+                longitude: loc.coords.longitude,
+              };
+            },
+          );
+          if (cancelled) {
+            watchSub.remove();
+            return;
+          }
+          locationWatchRef.current = watchSub;
+        } catch (e) {
+          console.warn('[AIPlan] location watch:', e?.message);
+        }
+      })();
+
+      return () => {
+        cancelled = true;
+        locationWatchRef.current?.remove();
+        locationWatchRef.current = null;
+      };
     }, [refreshSavedPlans]),
+  );
+
+  useEffect(
+    () => () => {
+      const box = markerShowcaseRef.current;
+      if (box) {
+        box.generation += 1;
+        const ids = Array.isArray(box.timeoutIds) ? box.timeoutIds : [];
+        ids.forEach(clearTimeout);
+        box.timeoutIds = [];
+      }
+      if (mapProgrammaticMoveClearTimerRef.current) {
+        clearTimeout(mapProgrammaticMoveClearTimerRef.current);
+        mapProgrammaticMoveClearTimerRef.current = null;
+      }
+    },
+    [],
   );
 
   const formatSavedPlanDate = (iso) => {
@@ -3253,11 +4037,88 @@ export default function AIPlanScreen() {
     }
   };
 
+  const handleOpenEditSavedPlanTitle = useCallback(
+    (planId) => {
+      if (!planId) return;
+      const row = savedPlansList.find((p) => p.id === planId);
+      const initial = typeof row?.title === 'string' && row.title.trim() ? row.title.trim() : 'My plan';
+      setEditSavedPlanTitleId(planId);
+      setEditSavedPlanTitleDraft(initial);
+      setShowEditSavedPlanTitleModal(true);
+    },
+    [savedPlansList],
+  );
+
+  const handleCloseEditSavedPlanTitleModal = useCallback(() => {
+    if (editSavedPlanTitleBusy) return;
+    setShowEditSavedPlanTitleModal(false);
+    setEditSavedPlanTitleId(null);
+    setEditSavedPlanTitleDraft('');
+  }, [editSavedPlanTitleBusy]);
+
+  const handleSubmitEditSavedPlanTitle = useCallback(async () => {
+    if (!editSavedPlanTitleId) return;
+    const trimmed = editSavedPlanTitleDraft.trim() || 'My plan';
+    setEditSavedPlanTitleBusy(true);
+    try {
+      await updateSavedPlan(editSavedPlanTitleId, { title: trimmed });
+      await refreshSavedPlans();
+      setShowEditSavedPlanTitleModal(false);
+      setEditSavedPlanTitleId(null);
+      setEditSavedPlanTitleDraft('');
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
+    } catch (e) {
+      Alert.alert('Could not update title', e?.message ?? 'Try again.');
+    } finally {
+      setEditSavedPlanTitleBusy(false);
+    }
+  }, [editSavedPlanTitleId, editSavedPlanTitleDraft, refreshSavedPlans]);
+
+  const handleRequestDeleteSavedPlan = useCallback(
+    (plan) => {
+      if (!plan?.id) return;
+      const label = typeof plan.title === 'string' && plan.title.trim() ? plan.title.trim() : 'this plan';
+      Alert.alert(
+        'Delete saved plan?',
+        `“${label}” will be removed from your saved plans. This cannot be undone.`,
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Delete',
+            style: 'destructive',
+            onPress: async () => {
+              try {
+                await deleteSavedPlan(plan.id);
+                if (activeSavedPlanId === plan.id) {
+                  setDrawerStep(0);
+                  setDayPlan(null);
+                  setError(null);
+                  setActiveSavedPlanId(null);
+                  setSharedCollaboration(null);
+                }
+                await refreshSavedPlans();
+                Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
+              } catch (e) {
+                Alert.alert('Delete failed', e?.message ?? 'Try again.');
+              }
+            },
+          },
+        ],
+      );
+    },
+    [activeSavedPlanId, refreshSavedPlans],
+  );
+
   const fitMapToPlan = useCallback((plan) => {
     if (!plan?.length) return;
     const markers = buildMapMarkers(plan, allPlaceMarkers).filter((m) => m.lat && m.lng);
     const coords = markers.map((m) => ({ latitude: m.lat, longitude: m.lng }));
+    const u = userLocationRef.current;
+    if (u?.latitude != null && u?.longitude != null) {
+      coords.push({ latitude: u.latitude, longitude: u.longitude });
+    }
     if (coords.length > 0 && mapRef.current) {
+      markProgrammaticMapMove(2200);
       mapRef.current.fitToCoordinates(coords, {
         edgePadding: { top: 80, right: 60, bottom: SCREEN_HEIGHT * 0.35, left: 60 },
         animated: true,
@@ -3491,52 +4352,101 @@ export default function AIPlanScreen() {
   }, [dayPlan, planCollaboratorEdit, sharedCollaboration])
 
   const togglePreference = (id) => {
-    setSelectedPreferences((prev) =>
-      prev.includes(id) ? prev.filter((p) => p !== id) : [...prev, id]
-    );
+    setSelectedPreferences((prev) => {
+      const next = prev.includes(id) ? prev.filter((p) => p !== id) : [...prev, id];
+      schedulePrefetchFromSelections(next, selectedFoodCategories);
+      return next;
+    });
   };
 
   const toggleFoodCategory = (id) => {
-    setSelectedFoodCategories((prev) =>
-      prev.includes(id) ? prev.filter((f) => f !== id) : [...prev, id]
-    );
+    setSelectedFoodCategories((prev) => {
+      const next = prev.includes(id) ? prev.filter((f) => f !== id) : [...prev, id];
+      schedulePrefetchFromSelections(selectedPreferences, next);
+      return next;
+    });
   };
 
-  const startBackgroundPrefetch = (prefLabels) => {
-    const key = (prefLabels || []).join('|');
-    if (!key) return;
+  const resolvePrefLabels = (prefIds) => (prefIds || [])
+    .map((id) => PREFERENCES.find((p) => p.id === id)?.label)
+    .filter(Boolean);
+
+  const resolveFoodLabels = (foodIdsArr) => (foodIdsArr || [])
+    .map((id) => FOOD_CATEGORIES.find((f) => f.id === id)?.label)
+    .filter(Boolean);
+
+  /**
+   * Debounces a full parallel prefetch across all four catalog fetches so that
+   * selecting / deselecting chips during the modal flow leaves the cache warm
+   * by the time the user reaches Generate. Safe to call on every change.
+   */
+  const schedulePrefetchFromSelections = (prefIds, foodIdsArr) => {
+    const prefLabels = resolvePrefLabels(prefIds);
+    const foodLabels = resolveFoodLabels(foodIdsArr);
+    if (prefetchDebounceRef.current) clearTimeout(prefetchDebounceRef.current);
+    prefetchDebounceRef.current = setTimeout(() => {
+      startBackgroundPrefetch(prefLabels, foodLabels);
+    }, 220);
+  };
+
+  const startBackgroundPrefetch = (prefLabels, foodLabels = []) => {
+    const prefsKey = (prefLabels || []).join('|');
+    const foodKey = (foodLabels || []).join('|');
+    const personaKey = retrievalPersonaCacheKey(preferences?.profileSummary)
+    const retrievalOpts = { profileNarrative: preferences?.profileSummary || '' }
     const cached = prefetchRef.current;
-    const hasValidPrefetch =
-      cached.prefsKey === key &&
+    const sameKeys =
+      cached.prefsKey === prefsKey && cached.foodKey === foodKey && cached.personaKey === personaKey;
+    const hasAllFresh =
+      sameKeys &&
       Array.isArray(cached.places) &&
-      cached.places.length > 0 &&
       Array.isArray(cached.events) &&
-      cached.events.length > 0;
-    if (hasValidPrefetch) {
-      return;
-    }
+      Array.isArray(cached.restaurants) &&
+      Array.isArray(cached.breakfastSpots);
+    if (hasAllFresh) return;
+    if (sameKeys && cached.inflight) return;
+
+    const placesP = fetchPlaces(prefLabels, retrievalOpts).catch(() => []);
+    const eventsP = fetchEvents(prefLabels, retrievalOpts).catch(() => []);
+    const restaurantsP = fetchRestaurants(foodLabels, retrievalOpts).catch(() => []);
+    const breakfastP = fetchBreakfastSpots(retrievalOpts).catch(() => []);
+
+    const inflight = Promise.all([placesP, restaurantsP, breakfastP, eventsP])
+      .then(([places, restaurants, breakfastSpots, events]) => {
+        if (
+          prefetchRef.current.prefsKey !== prefsKey ||
+          prefetchRef.current.foodKey !== foodKey ||
+          prefetchRef.current.personaKey !== personaKey
+        ) {
+          return;
+        }
+        prefetchRef.current = {
+          prefsKey,
+          foodKey,
+          personaKey,
+          places,
+          restaurants,
+          breakfastSpots,
+          events,
+          inflight: null,
+        };
+      })
+      .catch(() => {
+        if (prefetchRef.current.inflight === inflight) {
+          prefetchRef.current = { ...prefetchRef.current, inflight: null };
+        }
+      });
+
     prefetchRef.current = {
-      prefsKey: key,
+      prefsKey,
+      foodKey,
+      personaKey,
       places: null,
+      restaurants: null,
       breakfastSpots: null,
       events: null,
+      inflight,
     };
-    (async () => {
-      try {
-        const [places, events] = await Promise.all([
-          fetchPlaces(prefLabels),
-          fetchEvents(prefLabels),
-        ]);
-        prefetchRef.current = {
-          prefsKey: key,
-          places,
-          breakfastSpots: null,
-          events,
-        };
-      } catch {
-        // best-effort prefetch; ignore errors
-      }
-    })();
   };
 
   const handleSurpriseMe = () => {
@@ -3567,10 +4477,9 @@ export default function AIPlanScreen() {
           setSharedCollaboration(null);
           setDayPlan(null);
           setPineconeMatches([]);
-          setSelectedMarker(null);
           setError(null);
           setLoading(true);
-          setLoadingStatus(`Scouting venues & live posts for your ${theme.label.toLowerCase()} day…`);
+          setLoadingStatus('Getting your location…');
           setDrawerStep(3);
           lastPrefLabelsRef.current = prefLabels;
           lastFoodLabelsRef.current = foodLabels;
@@ -3592,16 +4501,20 @@ export default function AIPlanScreen() {
           (async () => {
             let generatedPlan = null;
             try {
+              const { originLat, originLng } = await resolveOriginCoordsForPlanGeneration({ preferFreshFix: true })
+              setLoadingStatus(`Scouting venues & live posts for your ${theme.label.toLowerCase()} day…`)
+
+              const surpriseRetrievalOpts = { profileNarrative: preferences?.profileSummary || '' }
               const [
                 places,
                 restaurants,
                 breakfastSpots,
                 events,
               ] = await Promise.all([
-                fetchPlaces(prefLabels),
-                fetchRestaurants(foodLabels),
-                fetchBreakfastSpots(),
-                fetchEvents(prefLabels),
+                fetchPlaces(prefLabels, surpriseRetrievalOpts),
+                fetchRestaurants(foodLabels, surpriseRetrievalOpts),
+                fetchBreakfastSpots(surpriseRetrievalOpts),
+                fetchEvents(prefLabels, surpriseRetrievalOpts),
               ]);
 
               console.log(`[Surprise ${theme.label}] ${places.length}P ${restaurants.length}R ${breakfastSpots.length}B ${events.length}E`);
@@ -3618,6 +4531,9 @@ export default function AIPlanScreen() {
                 profileFood: savedProfileFoodLabels,
                 profileNarrative: preferences?.profileSummary || '',
                 profileAnswers: preferences?.profileAnswers || {},
+                travelExplore: 'balanced',
+                originLat,
+                originLng,
               });
               generatedPlan = plan;
               const enriched = await enrichPlanWithClientData(plan, allMatches, allPlaceMarkers);
@@ -3626,7 +4542,12 @@ export default function AIPlanScreen() {
 
               const validMarkers = buildMapMarkers(plan, allPlaceMarkers).filter(m => m.lat && m.lng);
               const coords = validMarkers.map(m => ({ latitude: m.lat, longitude: m.lng }));
+              const u = userLocationRef.current;
+              if (u?.latitude != null && u?.longitude != null) {
+                coords.push({ latitude: u.latitude, longitude: u.longitude });
+              }
               if (coords.length > 0 && mapRef.current) {
+                markProgrammaticMapMove(2200);
                 mapRef.current.fitToCoordinates(coords, {
                   edgePadding: { top: 80, right: 60, bottom: SCREEN_HEIGHT * 0.35, left: 60 },
                   animated: true,
@@ -3669,14 +4590,19 @@ export default function AIPlanScreen() {
     sheetOpacity.setValue(1)
     setActiveSavedPlanId(null)
     setSharedCollaboration(null)
-    setSelectedPreferences(Array.isArray(preferences?.activityIds) ? preferences.activityIds : [])
-    setSelectedFoodCategories(Array.isArray(preferences?.foodIds) ? preferences.foodIds : [])
+    const seededPrefs = Array.isArray(preferences?.activityIds) ? preferences.activityIds : []
+    const seededFoods = Array.isArray(preferences?.foodIds) ? preferences.foodIds : []
+    setSelectedPreferences(seededPrefs)
+    setSelectedFoodCategories(seededFoods)
     setDayPlan(null)
     setPineconeMatches([])
-    setSelectedMarker(null)
     setError(null)
     setSpotPreviews([])
     setPlanModalStep(1)
+    setTravelExploreId('balanced')
+    // Kick off a speculative prefetch the moment the modal opens so the
+    // catalog for the user's saved profile is warm by the time Generate fires.
+    schedulePrefetchFromSelections(seededPrefs, seededFoods)
 
     doorLeft.setValue(-SCREEN_WIDTH / 2)
     doorRight.setValue(SCREEN_WIDTH / 2)
@@ -3726,7 +4652,7 @@ export default function AIPlanScreen() {
       await Share.share(
         Platform.OS === 'ios'
           ? { message, title }
-          : { message, title: title || 'Go Bahrain' },
+          : { message, title: title || 'SiyahaBH' },
       );
     } catch (_) {
       /* dismissed */
@@ -3736,10 +4662,6 @@ export default function AIPlanScreen() {
   const renderPlanTimelineOverviewHeader = useCallback(() => {
     if (!dayPlan?.length) return null
     const mealCount = dayPlan.filter((i) => i.type === 'restaurant').length
-    const reel = dayPlan.slice(0, 6).map((stop) => {
-      const thumbUri = pickPlanStopThumbUri(stop, allPlaceMarkers)
-      return { key: stop._planRowKey || `${stop.spot}-${stop.lat}`, uri: thumbUri }
-    })
     const sharedBanner =
       sharedCollaboration?.role === 'viewer'
         ? 'View-only shared plan'
@@ -3752,14 +4674,22 @@ export default function AIPlanScreen() {
       sharedCollaboration?.role === 'viewer' || sharedCollaboration?.role === 'editor'
         ? 'Shared Bahrain day'
         : 'Your Bahrain day'
+    const canEditSavedPlanTitle =
+      !!activeSavedPlanId &&
+      !planReadOnly &&
+      (sharedCollaboration == null || sharedCollaboration.role === 'owner')
+    const rowForTitle = savedPlansList.find((p) => p.id === activeSavedPlanId)
+    const savedTitleRaw = typeof rowForTitle?.title === 'string' ? rowForTitle.title.trim() : ''
+    const primaryTitle = canEditSavedPlanTitle && savedTitleRaw ? savedTitleRaw : titleLabel
+
     return (
       <View style={styles.planLuxuryOverviewCard} accessibilityRole="summary">
-        <View style={styles.planLuxuryOverviewAccentTop} />
         {sharedBanner ? (
           <View style={styles.planShareBanner} accessibilityRole="text">
             <Text style={styles.planShareBannerText}>{sharedBanner}</Text>
           </View>
         ) : null}
+        
         <View style={styles.planLuxuryOverviewHeaderRow}>
           <TouchableOpacity
             style={styles.planLuxuryOverviewBackBtn}
@@ -3774,118 +4704,108 @@ export default function AIPlanScreen() {
             accessibilityRole="button"
             accessibilityLabel="Back to plans"
           >
-            <Ionicons name="chevron-back" size={20} color="#0F172A" />
+            <Ionicons name="chevron-back" size={18} color="#1A120A" />
           </TouchableOpacity>
+
           <View style={styles.planLuxuryOverviewTitleBlock}>
-            <Text style={styles.planLuxuryOverviewTitle} numberOfLines={2}>
-              {titleLabel}
-            </Text>
-            <Text
-              style={styles.planLuxuryOverviewSubtitle}
-              numberOfLines={2}
-              accessibilityLabel={`${dayPlan.length} stops, ${mealCount} meals`}
-            >
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+              <Text style={styles.planLuxuryOverviewTitle} numberOfLines={1}>
+                {primaryTitle}
+              </Text>
+            </View>
+            <Text style={styles.planLuxuryOverviewSubtitle} numberOfLines={1}>
               {mealCount === 0
-                ? `${dayPlan.length} hand-picked stops`
-                : `${dayPlan.length} stops, including ${mealCount} meal${mealCount === 1 ? '' : 's'}`}
+                ? `${dayPlan.length} STOPS`
+                : `${dayPlan.length} STOPS · ${mealCount} MEALS`}
             </Text>
           </View>
+
           <View style={styles.planLuxuryOverviewHeaderActions}>
-            {!planReadOnly ? (
+            {canEditSavedPlanTitle && (
               <TouchableOpacity
-                style={styles.savePlanHeaderBtn}
+                style={styles.planLuxuryOverviewIconBtn}
+                activeOpacity={0.7}
+                onPress={() => handleOpenEditSavedPlanTitle(activeSavedPlanId)}
+                accessibilityRole="button"
+                accessibilityLabel="Edit title"
+              >
+                <Ionicons name="create-outline" size={18} color="#64748B" />
+              </TouchableOpacity>
+            )}
+            {!planReadOnly && (
+              <TouchableOpacity
+                style={styles.planLuxuryOverviewIconBtn}
                 activeOpacity={0.75}
                 onPress={handleSavePlanToCloud}
                 disabled={savePlanBusy}
                 accessibilityRole="button"
-                accessibilityLabel="Save plan to cloud"
+                accessibilityLabel="Save plan"
               >
-                <Text style={styles.savePlanHeaderBtnText}>{savePlanBusy ? '…' : 'Save'}</Text>
+                {savePlanBusy ? (
+                  <ActivityIndicator size="small" color="#1A120A" />
+                ) : (
+                  <Ionicons name="cloud-upload-outline" size={18} color="#1A120A" />
+                )}
               </TouchableOpacity>
-            ) : null}
-            {!planReadOnly ? (
+            )}
+            {!planReadOnly && (
               <TouchableOpacity
                 style={styles.planLuxuryOverviewIconBtn}
                 activeOpacity={0.75}
                 onPress={handleOpenShareModal}
                 disabled={shareModalBusy}
                 accessibilityRole="button"
-                accessibilityLabel="Share link and code"
+                accessibilityLabel="Link and share options"
               >
-                <Ionicons name="link-outline" size={18} color={themeColors.primary} />
+                <Ionicons name="link-outline" size={18} color="#1A120A" />
               </TouchableOpacity>
-            ) : null}
+            )}
             <TouchableOpacity
-              style={styles.planLuxuryOverviewShareBtn}
+              style={styles.planLuxuryOverviewIconBtn}
               activeOpacity={0.75}
               onPress={handleSharePlanWithFriends}
               accessibilityRole="button"
               accessibilityLabel="Share plan as text"
             >
-              <Ionicons name="share-outline" size={18} color={themeColors.primary} />
+              <Ionicons name="share-outline" size={18} color="#1A120A" />
             </TouchableOpacity>
           </View>
         </View>
-        <View style={styles.planLuxuryOverviewMapRow}>
-          <View style={styles.planLuxuryOverviewMapRowSplit}>
+
+        <View style={styles.planLuxuryOverviewControlTray}>
+          <View style={styles.planLuxuryOverviewActionsRow}>
             <TouchableOpacity
               style={[styles.planLuxuryOverviewMapBtn, styles.planLuxuryOverviewMapBtnFlex]}
               onPress={handleOpenInGoogleMaps}
               disabled={openingMaps}
               activeOpacity={0.85}
-              accessibilityRole="button"
-              accessibilityLabel="Open route in Google Maps"
+              accessibilityLabel="Maps"
             >
               {openingMaps ? (
-                <ActivityIndicator size="small" color="#64748B" />
+                <ActivityIndicator size="small" color="#1A120A" />
               ) : (
                 <>
-                  <Ionicons name="navigate-outline" size={18} color="#475569" />
-                  <Text style={styles.planLuxuryOverviewMapBtnText}>Maps</Text>
+                  <Ionicons name="map-outline" size={16} color="#1A120A" />
+                  <Text style={styles.planLuxuryOverviewMapBtnText}>MAPS</Text>
                 </>
               )}
             </TouchableOpacity>
-            <TouchableOpacity
-              style={[
-                styles.planLuxuryOverviewMapBtn,
-                styles.planLuxuryOverviewMapBtnFlex,
-                styles.planLuxuryOverviewAddBtn,
-                planReadOnly && { opacity: 0.45 },
-              ]}
-              onPress={() => {
-                if (planReadOnly) return
-                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {})
-                setShowSearchModal(true)
-              }}
-              disabled={planReadOnly}
-              activeOpacity={0.85}
-              accessibilityRole="button"
-              accessibilityLabel="Add a stop from the catalog"
-            >
-              <Ionicons name="add-circle-outline" size={18} color="#0096FF" />
-              <Text style={styles.planLuxuryOverviewAddBtnText}>Add stop</Text>
-            </TouchableOpacity>
+            {!planReadOnly && (
+              <TouchableOpacity
+                style={[styles.planLuxuryOverviewMapBtn, styles.planLuxuryOverviewMapBtnFlex, styles.planLuxuryOverviewAddBtn]}
+                onPress={() => {
+                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {})
+                  setShowSearchModal(true)
+                }}
+                activeOpacity={0.85}
+                accessibilityLabel="Add stop"
+              >
+                <Ionicons name="add" size={18} color={themeColors.primary} />
+                <Text style={styles.planLuxuryOverviewAddBtnText}>ADD</Text>
+              </TouchableOpacity>
+            )}
           </View>
         </View>
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.planLuxuryReelContent}
-          accessibilityRole="scrollbar"
-          accessibilityLabel="Spot photo previews"
-        >
-          {reel.map(({ key, uri }) => (
-            <View key={String(key)} style={styles.planLuxuryReelThumbWrap}>
-              {uri ? (
-                <PreviewImage uri={uri} style={styles.planLuxuryReelThumbImg} noFade />
-              ) : (
-                <View style={[styles.planLuxuryReelThumbImg, styles.planLuxuryReelThumbEmpty]}>
-                  <Ionicons name="image-outline" size={18} color="#C7C7CC" />
-                </View>
-              )}
-            </View>
-          ))}
-        </ScrollView>
       </View>
     )
   }, [
@@ -3901,6 +4821,9 @@ export default function AIPlanScreen() {
     savePlanBusy,
     handleOpenShareModal,
     shareModalBusy,
+    activeSavedPlanId,
+    savedPlansList,
+    handleOpenEditSavedPlanTitle,
   ])
 
   const handleCopyShareText = useCallback(async () => {
@@ -4010,6 +4933,7 @@ export default function AIPlanScreen() {
       const validMarkers = buildMapMarkers(keyed, allPlaceMarkers).filter((m) => m?.lat && m?.lng)
       const coords = validMarkers.map((m) => ({ latitude: m.lat, longitude: m.lng }))
       if (coords.length > 0 && mapRef.current) {
+        markProgrammaticMapMove(2200);
         mapRef.current.fitToCoordinates(coords, {
           edgePadding: { top: 80, right: 60, bottom: SCREEN_HEIGHT * 0.35, left: 60 },
           animated: true,
@@ -4100,6 +5024,48 @@ export default function AIPlanScreen() {
     ]).start();
   };
 
+  /** Fresh GPS for plan catalog ordering; travel tiers only work fully when this succeeds. */
+  const resolveOriginCoordsForPlanGeneration = useCallback(async (opts = {}) => {
+    const { preferFreshFix = true } = opts
+    if (preferFreshFix) {
+      try {
+        const { status } = await Location.requestForegroundPermissionsAsync()
+        if (status === 'granted') {
+          const { coords } = await Location.getCurrentPositionAsync({
+            accuracy: Location.Accuracy.High,
+          })
+          const lat = coords.latitude
+          const lng = coords.longitude
+          userLocationRef.current = { latitude: lat, longitude: lng }
+          return { originLat: lat, originLng: lng }
+        }
+      } catch {
+        /* fall back */
+      }
+    }
+    let originLat = userLocationRef.current?.latitude
+    let originLng = userLocationRef.current?.longitude
+    if (
+      originLat != null &&
+      originLng != null &&
+      !Number.isNaN(originLat) &&
+      !Number.isNaN(originLng)
+    ) {
+      return { originLat, originLng }
+    }
+    try {
+      const { status } = await Location.requestForegroundPermissionsAsync()
+      if (status !== 'granted') return { originLat: null, originLng: null }
+      const { coords } = await Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.Balanced,
+      })
+      userLocationRef.current = { latitude: coords.latitude, longitude: coords.longitude }
+      return { originLat: coords.latitude, originLng: coords.longitude }
+    } catch {
+      return { originLat: null, originLng: null }
+    }
+  }, [])
+
   const handleGenerate = async (onComplete) => {
     const prefLabels = selectedPreferences
       .map((id) => PREFERENCES.find((p) => p.id === id)?.label)
@@ -4110,13 +5076,12 @@ export default function AIPlanScreen() {
 
     setLoading(true);
     setPlanGenerationSuccess(false);
-    setLoadingStatus('Khalid is scouting live posts for standout venues…');
+    setLoadingStatus('Getting your location for this plan…');
     setError(null);
     setActiveSavedPlanId(null);
     setSharedCollaboration(null);
     setDayPlan(null);
     setPineconeMatches([]);
-    setSelectedMarker(null);
     setDrawerStep(3);
     lastPrefLabelsRef.current = prefLabels;
     lastFoodLabelsRef.current = foodLabels;
@@ -4138,28 +5103,41 @@ export default function AIPlanScreen() {
 
     let generatedPlan = null;
     try {
+      const { originLat, originLng } = await resolveOriginCoordsForPlanGeneration({ preferFreshFix: true })
+      setLoadingStatus('Khalid is scouting live posts for standout venues…')
+
       const prefsKey = prefLabels.join('|');
+      const foodKey = foodLabels.join('|');
+      const personaKey = retrievalPersonaCacheKey(preferences?.profileSummary)
+      const retrievalOpts = { profileNarrative: preferences?.profileSummary || '' }
+
+      // Kick off matching prefetch (idempotent) so if nothing cached yet,
+      // we still begin the work immediately while we await it below.
+      startBackgroundPrefetch(prefLabels, foodLabels);
+      if (prefetchRef.current.inflight) {
+        try { await prefetchRef.current.inflight; } catch (_) {}
+      }
+
       const cached = prefetchRef.current;
+      const cacheHit =
+        cached.prefsKey === prefsKey &&
+        cached.foodKey === foodKey &&
+        cached.personaKey === personaKey &&
+        Array.isArray(cached.places) &&
+        Array.isArray(cached.restaurants) &&
+        Array.isArray(cached.breakfastSpots) &&
+        Array.isArray(cached.events);
 
       let places;
       let breakfastSpots;
       let events;
       let restaurants;
 
-      const hasCached =
-        cached.prefsKey === prefsKey &&
-        Array.isArray(cached.places) &&
-        cached.places.length > 0 &&
-        Array.isArray(cached.events) &&
-        cached.events.length > 0;
-
-      if (hasCached) {
+      if (cacheHit) {
         places = cached.places;
+        restaurants = cached.restaurants;
+        breakfastSpots = cached.breakfastSpots;
         events = cached.events;
-        [restaurants, breakfastSpots] = await Promise.all([
-          fetchRestaurants(foodLabels),
-          fetchBreakfastSpots(),
-        ]);
       } else {
         const [
           placesResult,
@@ -4167,10 +5145,10 @@ export default function AIPlanScreen() {
           breakfastResult,
           eventsResult,
         ] = await Promise.all([
-          fetchPlaces(prefLabels),
-          fetchRestaurants(foodLabels),
-          fetchBreakfastSpots(),
-          fetchEvents(prefLabels),
+          fetchPlaces(prefLabels, retrievalOpts),
+          fetchRestaurants(foodLabels, retrievalOpts),
+          fetchBreakfastSpots(retrievalOpts),
+          fetchEvents(prefLabels, retrievalOpts),
         ]);
         places = placesResult;
         restaurants = restaurantsResult;
@@ -4193,6 +5171,9 @@ export default function AIPlanScreen() {
         profileFood: savedProfileFoodLabels,
         profileNarrative: preferences?.profileSummary || '',
         profileAnswers: preferences?.profileAnswers || {},
+        travelExplore: travelExploreId,
+        originLat,
+        originLng,
       });
       generatedPlan = plan;
       const enriched = await enrichPlanWithClientData(plan, allMatches, allPlaceMarkers);
@@ -4206,7 +5187,12 @@ export default function AIPlanScreen() {
       // Fit map to show all markers
       const validMarkers = buildMapMarkers(plan, allPlaceMarkers).filter(m => m.lat && m.lng);
       const coords = validMarkers.map(m => ({ latitude: m.lat, longitude: m.lng }));
+      const u = userLocationRef.current;
+      if (u?.latitude != null && u?.longitude != null) {
+        coords.push({ latitude: u.latitude, longitude: u.longitude });
+      }
       if (coords.length > 0 && mapRef.current) {
+        markProgrammaticMapMove(2200);
         mapRef.current.fitToCoordinates(coords, {
           edgePadding: { top: 80, right: 60, bottom: SCREEN_HEIGHT * 0.35, left: 60 },
           animated: true,
@@ -4278,6 +5264,7 @@ export default function AIPlanScreen() {
     // Initial pan to first place
     const first = markers[0];
     if (first && mapRef.current) {
+      markProgrammaticMapMove(900);
       mapRef.current.animateToRegion(
         clampRegionToBahrain({
           latitude: first.lat,
@@ -4316,6 +5303,7 @@ export default function AIPlanScreen() {
         // Pan camera to the pin we're about to reveal
         const mk = markers[prev];
         if (mk && mapRef.current) {
+          markProgrammaticMapMove(850);
           mapRef.current.animateToRegion(
             clampRegionToBahrain({
               latitude: mk.lat,
@@ -4347,30 +5335,79 @@ export default function AIPlanScreen() {
 
   const handleRegionChangeComplete = (region) => {
     if (!region || !mapRef.current) return;
+    if (mapProgrammaticMoveRef.current) {
+      if (region?.latitudeDelta != null) setMapRegion(region);
+      return;
+    }
     const clamped = clampRegionToBahrain(region);
     if (Math.abs(clamped.latitude - region.latitude) > 0.0005 || Math.abs(clamped.longitude - region.longitude) > 0.0005) {
+      markProgrammaticMapMove(400);
       mapRef.current.animateToRegion(clamped, 180);
     }
     if (region?.latitudeDelta != null) setMapRegion(region);
   };
 
-  const closeRadialMenu = () => {
-    setSelectedMarker(null);
-  };
+  const showcaseMarkerAccent = useMemo(() => {
+    if (!showcaseMarkerMk) return colors.textSecondary;
+    const cat = mapMarkerFilterCategoryKey(showcaseMarkerMk);
+    const isEat = cat === 'restaurant';
+    const isEvent = cat === 'event';
+    if (dayPlan?.length) {
+      const timeCols = { Morning: colors.morning, Afternoon: colors.afternoon, Evening: colors.evening };
+      return isEat ? colors.dining : isEvent ? colors.event : (timeCols[showcaseMarkerMk.time] || colors.textSecondary);
+    }
+    return isEat ? colors.dining : isEvent ? colors.event : colors.textSecondary;
+  }, [showcaseMarkerMk, dayPlan, colors]);
 
-  const handleRadialAction = (key) => {
-    if (!selectedMarker) return;
-    if (key === 'profile' && selectedMarker.clientId) setProfileClientId(selectedMarker.clientId);
-    if (key === 'directions') openInMaps(selectedMarker.lat, selectedMarker.lng, selectedMarker.spot);
-    if (key === 'ar') navigation.navigate('AR', { navigateTo: { lat: selectedMarker.lat, lng: selectedMarker.lng, name: selectedMarker.spot } });
-  };
-
-  // Google Maps–style zoom scaling: markers shrink when zoomed out to avoid overcrowding
-  const zoomScale = (() => {
+  const zoomScale = useMemo(() => {
     const delta = mapRegion?.latitudeDelta ?? BAHRAIN_REGION.latitudeDelta;
-    const s = Math.max(0.2, Math.min(1, 0.06 / delta));
-    return s;
-  })();
+    return Math.max(0.2, Math.min(1, 0.06 / delta));
+  }, [mapRegion]);
+
+  const refreshShowcaseMorphAnchor = useCallback(() => {
+    const map = mapRef.current;
+    const mk = showcaseMarkerMk;
+    if (!map || !mk || mk.lat == null || mk.lng == null) return;
+    const delta = mapRegion?.latitudeDelta ?? BAHRAIN_REGION.latitudeDelta;
+    const zs = Math.max(0.2, Math.min(1, 0.06 / delta));
+    const sizePx = Math.max(46, Math.min(96, 56 * zs));
+    if (typeof map.pointForCoordinate !== 'function') {
+      setShowcaseMorphAnchor({ x: SCREEN_WIDTH / 2, y: SCREEN_HEIGHT * 0.42, sizePx });
+      return;
+    }
+    map
+      .pointForCoordinate({ latitude: Number(mk.lat), longitude: Number(mk.lng) })
+      .then((pt) => {
+        if (pt && typeof pt.x === 'number' && typeof pt.y === 'number') {
+          setShowcaseMorphAnchor({ x: pt.x, y: pt.y, sizePx });
+        }
+      })
+      .catch(() => {
+        setShowcaseMorphAnchor({ x: SCREEN_WIDTH / 2, y: SCREEN_HEIGHT * 0.42, sizePx });
+      });
+  }, [showcaseMarkerMk, mapRegion]);
+
+  useEffect(() => {
+    if (!isMarkerShowcaseActive || !showcaseMarkerMk) {
+      setShowcaseMorphAnchor(null);
+      return;
+    }
+    refreshShowcaseMorphAnchor();
+    const t1 = setTimeout(refreshShowcaseMorphAnchor, 350);
+    const t2 = setTimeout(refreshShowcaseMorphAnchor, 1100);
+    const t3 = setTimeout(refreshShowcaseMorphAnchor, 2400);
+    return () => {
+      clearTimeout(t1);
+      clearTimeout(t2);
+      clearTimeout(t3);
+    };
+  }, [isMarkerShowcaseActive, showcaseMarkerMk, refreshShowcaseMorphAnchor]);
+
+  useEffect(() => {
+    if (!isMarkerShowcaseActive || !showcaseMarkerMk) return;
+    const t = setTimeout(() => refreshShowcaseMorphAnchor(), 120);
+    return () => clearTimeout(t);
+  }, [mapRegion, isMarkerShowcaseActive, showcaseMarkerMk, refreshShowcaseMorphAnchor]);
 
   const panResponder = useRef(
     PanResponder.create({
@@ -4406,15 +5443,19 @@ export default function AIPlanScreen() {
         style={StyleSheet.absoluteFill}
         initialRegion={BAHRAIN_REGION}
         mapType="standard"
-        showsUserLocation={false}
+        showsUserLocation
         showsMyLocationButton={false}
+        onPress={handleMapPress}
         onRegionChange={handleRegionChange}
         onRegionChangeComplete={handleRegionChangeComplete}
       >
         {/* Pre-plan: all clients with profile images as markers */}
-        {!dayPlan && allPlaceMarkers.map((mk) => {
-          const isEat = mk.type === 'restaurant';
-          const isEvent = mk.type === 'event';
+        {!dayPlan &&
+          allPlaceMarkers
+            .filter((mk) => markerMatchesPlanMapClientFilter(mk, activePlanMapClientFilter))
+            .map((mk) => {
+          const isEat = mapMarkerFilterCategoryKey(mk) === 'restaurant';
+          const isEvent = mapMarkerFilterCategoryKey(mk) === 'event';
           const accent = isEat ? colors.dining : isEvent ? colors.event : colors.textSecondary;
           return (
             <AnimatedPlaceMarker
@@ -4425,7 +5466,7 @@ export default function AIPlanScreen() {
               showBadge={false}
               showCircle={false}
               zoomScale={zoomScale}
-              onPress={() => setSelectedMarker(mk)}
+              onPress={() => handlePlaceMarkerPress(mk)}
             />
           );
         })}
@@ -4433,9 +5474,12 @@ export default function AIPlanScreen() {
         {dayPlan && (() => {
           const markers = buildMapMarkers(dayPlan, allPlaceMarkers);
           const maxVisible = revealingPins ? visiblePinCount : markers.length;
-          return markers.filter((mk) => mk.idx < maxVisible).map((mk) => {
-            const isEat = mk.type === 'restaurant';
-            const isEvent = mk.type === 'event';
+          return markers
+            .filter((mk) => mk.idx < maxVisible)
+            .filter((mk) => markerMatchesPlanMapClientFilter(mk, activePlanMapClientFilter))
+            .map((mk) => {
+            const isEat = mapMarkerFilterCategoryKey(mk) === 'restaurant';
+            const isEvent = mapMarkerFilterCategoryKey(mk) === 'event';
             const timeCols = { Morning: colors.morning, Afternoon: colors.afternoon, Evening: colors.evening };
             const accent = isEat ? colors.dining : isEvent ? colors.event : (timeCols[mk.time] || colors.textSecondary);
             const isCurrent = revealingPins && mk.idx === visiblePinCount - 1;
@@ -4446,16 +5490,131 @@ export default function AIPlanScreen() {
                 accent={accent}
                 isCurrent={isCurrent}
                 zoomScale={zoomScale}
-                onPress={() => setSelectedMarker(mk)}
+                onPress={() => handlePlaceMarkerPress(mk)}
               />
             );
           });
         })()}
       </MapView>
 
+      {isMarkerShowcaseActive ? (
+        <View
+          style={[styles.markerShowcaseExitWrap, { top: insets.top + 56 }]}
+          pointerEvents="box-none"
+        >
+          <TouchableOpacity
+            style={styles.markerShowcaseExitBtn}
+            onPress={exitMarkerShowcase}
+            activeOpacity={0.88}
+            accessibilityRole="button"
+            accessibilityLabel="Done viewing place"
+          >
+            <Text style={styles.markerShowcaseExitBtnText}>Done</Text>
+          </TouchableOpacity>
+        </View>
+      ) : null}
+
+      {isMarkerShowcaseActive && showcaseMarkerMk && !markerDetailSheetVisible ? (
+        <View
+          style={[
+            styles.markerViewDetailsWrapBase,
+            showcaseMorphAnchor
+              ? {
+                  position: 'absolute',
+                  left: Math.max(
+                    8,
+                    Math.min(SCREEN_WIDTH - 8 - 216, showcaseMorphAnchor.x - 108),
+                  ),
+                  top: Math.max(
+                    insets.top + 48,
+                    Math.min(
+                      SCREEN_HEIGHT - insets.bottom - 100,
+                      showcaseMorphAnchor.y + showcaseMorphAnchor.sizePx * 0.52 + 6,
+                    ),
+                  ),
+                  width: 216,
+                }
+              : [styles.markerViewDetailsWrapFallback, { bottom: insets.bottom + 112 }],
+          ]}
+          pointerEvents="box-none"
+        >
+          <Pressable
+            style={({ pressed }) => [
+              styles.markerViewDetailsPill,
+              pressed && { opacity: 0.92, transform: [{ scale: 0.98 }] },
+            ]}
+            onPress={() => {
+              void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+              setMarkerDetailSheetVisible(true);
+            }}
+            accessibilityRole="button"
+            accessibilityLabel="View more details about this place"
+          >
+            <Ionicons name="sparkles-outline" size={17} color={showcaseMarkerAccent} />
+            <Text style={[styles.markerViewDetailsPillText, { color: colors.textPrimary }]}>View details</Text>
+            <Ionicons name="chevron-up" size={18} color={showcaseMarkerAccent} />
+          </Pressable>
+        </View>
+      ) : null}
+
+      <MarkerShowcaseDetailSheet
+        visible={markerDetailSheetVisible}
+        mk={showcaseMarkerMk}
+        morphAnchor={showcaseMorphAnchor}
+        onDismiss={() => setMarkerDetailSheetVisible(false)}
+        insets={insets}
+        accent={showcaseMarkerAccent}
+        onViewProfile={(clientId) => {
+          if (clientId) setProfileClientId(clientId);
+        }}
+      />
+
       <View style={[styles.topBarWrap, { paddingTop: insets.top + 2 }]} pointerEvents="box-none">
         <View style={styles.topBarBalanceSpacer} pointerEvents="none" accessibilityElementsHidden />
-        <View style={{ flex: 1 }} pointerEvents="none" accessibilityElementsHidden />
+        <View style={styles.planMapFilterCenterWrap} pointerEvents="box-none">
+          <View style={styles.planMapFilterOuter}>
+            <View style={styles.planMapFilterTabsWrap}>
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={styles.planMapFilterScroll}
+                accessibilityRole="toolbar"
+                accessibilityLabel="Filter map pins by client type from the client table"
+              >
+                {PLAN_MAP_CLIENT_TYPE_FILTERS.map((t) => {
+                  const on = activePlanMapClientFilter === t.id;
+                  const P = communityPalette;
+                  return (
+                    <TouchableOpacity
+                      key={t.id}
+                      style={[
+                        styles.planMapFilterChipCommunity,
+                        {
+                          backgroundColor: on ? P.red : P.bg,
+                          borderColor: on ? P.red : P.border,
+                          ...(on
+                            ? Platform.select({
+                                ios: { shadowColor: P.red, shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.35, shadowRadius: 4 },
+                                android: { elevation: 4 },
+                              })
+                            : {}),
+                        },
+                      ]}
+                      onPress={() => handlePlanMapClientFilterPress(t.id)}
+                      activeOpacity={0.82}
+                      hitSlop={{ top: 4, bottom: 4, left: 2, right: 2 }}
+                      accessibilityRole="button"
+                      accessibilityLabel={t.label}
+                      accessibilityState={{ selected: on }}
+                    >
+                      <Ionicons name={t.icon} size={22} color={on ? '#FFF' : P.sub} />
+                    </TouchableOpacity>
+                  );
+                })}
+              </ScrollView>
+            </View>
+          </View>
+        </View>
         <TouchableOpacity
           style={[styles.searchButton, planReadOnly && { opacity: 0.4 }]}
           activeOpacity={0.8}
@@ -4521,7 +5680,7 @@ export default function AIPlanScreen() {
                     style={styles.d0CtaGradient}
                   >
                     <View style={styles.d0CtaLogoWrap}>
-                      <Image
+                      <CachedImage
                         source={require('../../assets/ai-button-logo.png')}
                         style={styles.d0CtaLogo}
                         resizeMode="cover"
@@ -4584,25 +5743,49 @@ export default function AIPlanScreen() {
                     const n = Array.isArray(plan.plan_data) ? plan.plan_data.length : 0
                     return (
                       <AiStagger key={plan.id} delay={180 + idx * 50}>
-                        <TouchableOpacity
-                          style={styles.d0PlanCard}
-                          activeOpacity={0.8}
-                          disabled={joinCodeBusy}
-                          onPress={() => handleOpenSavedPlanRow(plan)}
-                          accessibilityRole="button"
-                          accessibilityLabel={`Open saved plan ${plan.title}`}
-                        >
-                          <View style={styles.d0PlanIconWrap}>
-                            <Ionicons name="map" size={20} color={themeColors.primary} />
+                        <View style={styles.d0PlanCard}>
+                          <TouchableOpacity
+                            style={styles.d0PlanCardMainHit}
+                            activeOpacity={0.8}
+                            disabled={joinCodeBusy}
+                            onPress={() => handleOpenSavedPlanRow(plan)}
+                            accessibilityRole="button"
+                            accessibilityLabel={`Open saved plan ${plan.title}`}
+                          >
+                            <View style={styles.d0PlanIconWrap}>
+                              <Ionicons name="map" size={20} color={themeColors.primary} />
+                            </View>
+                            <View style={styles.d0PlanInfo}>
+                              <Text style={styles.d0PlanName}>{plan.title}</Text>
+                              <Text style={styles.d0PlanMeta}>
+                                {n} stops · {formatSavedPlanDate(plan.updated_at)}
+                              </Text>
+                            </View>
+                            <Ionicons name="chevron-forward" size={16} color="#CBD5E1" />
+                          </TouchableOpacity>
+                          <View style={styles.d0PlanRowActions}>
+                            <TouchableOpacity
+                              style={styles.d0PlanRowActionBtn}
+                              activeOpacity={0.75}
+                              disabled={joinCodeBusy}
+                              onPress={() => handleOpenEditSavedPlanTitle(plan.id)}
+                              accessibilityRole="button"
+                              accessibilityLabel={`Rename ${plan.title}`}
+                            >
+                              <Ionicons name="create-outline" size={20} color="#64748B" />
+                            </TouchableOpacity>
+                            <TouchableOpacity
+                              style={styles.d0PlanRowActionBtn}
+                              activeOpacity={0.75}
+                              disabled={joinCodeBusy}
+                              onPress={() => handleRequestDeleteSavedPlan(plan)}
+                              accessibilityRole="button"
+                              accessibilityLabel={`Delete ${plan.title}`}
+                            >
+                              <Ionicons name="trash-outline" size={20} color="#DC2626" />
+                            </TouchableOpacity>
                           </View>
-                          <View style={styles.d0PlanInfo}>
-                            <Text style={styles.d0PlanName}>{plan.title}</Text>
-                            <Text style={styles.d0PlanMeta}>
-                              {n} stops · {formatSavedPlanDate(plan.updated_at)}
-                            </Text>
-                          </View>
-                          <Ionicons name="chevron-forward" size={16} color="#CBD5E1" />
-                        </TouchableOpacity>
+                        </View>
                       </AiStagger>
                     )
                   })}
@@ -4679,27 +5862,12 @@ export default function AIPlanScreen() {
                   <BlurView intensity={Platform.OS === 'ios' ? 52 : 32} tint="light" style={styles.planMastheadBlur} />
                   <View style={styles.planMastheadFrost} pointerEvents="none" />
                   <View style={styles.planSheetLoadingGlassInner}>
-                <View style={styles.loadingBumpCard}>
-                  <Text style={styles.loadingScoutTitle} accessibilityRole="header">
-                    <Text style={styles.loadingScoutTitleAccent}>Khalid</Text>
-                    {' is scouting the perfect places for you'}
-                  </Text>
-                  <KhalidScoutPlanVisual spotPreviews={spotPreviews} variant="sheet" />
-                  <PlanLoadingFactStrip compact />
-                  <View style={styles.loadingProgressBar}>
-                    <LinearGradient
-                      colors={[themeColors.primary, '#E63950']}
-                      start={{ x: 0, y: 0 }}
-                      end={{ x: 1, y: 0 }}
-                      style={[styles.loadingProgressFill, (() => {
-                        const s = (loadingStatus || '').toLowerCase()
-                        if (s.includes('crafting') || s.includes('stitch')) return { width: '100%' }
-                        if (s.includes('shortlisting') || s.includes('restaurant')) return { width: '66%' }
-                        return { width: '33%' }
-                      })()]}
+                    <PlanDrawerLoadingPanel
+                      loading={loading}
+                      loadingStatus={loadingStatus}
+                      spotPreviews={spotPreviews}
+                      themePrimary={themeColors.primary}
                     />
-                  </View>
-                </View>
                   </View>
                 </View>
               </Reanimated.View>
@@ -4745,13 +5913,6 @@ export default function AIPlanScreen() {
                 showsVerticalScrollIndicator={false}
                 keyboardShouldPersistTaps="handled"
                 ListHeaderComponent={renderPlanTimelineOverviewHeader}
-                ListFooterComponent={(
-                  <View style={styles.planListEndFooter}>
-                    <Text style={styles.planListEndFooterText}>
-                      Tap Add stop (above) or the + button on the map to add venues from our catalog · Long-press the grip to reorder · Tap a card for details · Navigate opens maps for that stop
-                    </Text>
-                  </View>
-                )}
                 renderItem={({ item, drag, isActive, getIndex }) => {
                   const planIndex = getIndex() ?? 0
                   const isEat = item.type === 'restaurant'
@@ -4791,7 +5952,7 @@ export default function AIPlanScreen() {
                                     return
                                   }
                                   Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {})
-                                  closeRadialMenu()
+                                  clearMarkerShowcase()
                                   goToStopDetailIndex(planIndex)
                                 }}
                                 accessibilityRole="button"
@@ -4835,7 +5996,7 @@ export default function AIPlanScreen() {
                                 style={styles.planLuxuryConnectorNavBtn}
                                 activeOpacity={0.85}
                                 onPress={() => {
-                                  if (canOpenMaps) openInMaps(item.lat, item.lng, item.spot)
+                                  if (canOpenMaps) openGoogleMapsDirections(item.lat, item.lng)
                                 }}
                                 disabled={!canOpenMaps}
                                 accessibilityRole="button"
@@ -5060,7 +6221,7 @@ export default function AIPlanScreen() {
                               activeOpacity={0.88}
                               onPress={() => {
                                 if (stopDetailPayload.item.lat != null && stopDetailPayload.item.lng != null) {
-                                  openInMaps(stopDetailPayload.item.lat, stopDetailPayload.item.lng, stopDetailPayload.item.spot)
+                                  openGoogleMapsDirections(stopDetailPayload.item.lat, stopDetailPayload.item.lng)
                                   closeStopDetailDialog()
                                 }
                               }}
@@ -5201,16 +6362,17 @@ export default function AIPlanScreen() {
             ) : (
               <View style={styles.planModalPresenceLayer}>
                 <PlanStepBubble step={planModalStep}>
-                      {/* Hero question area */}
+                      {/* Hero question area — step 1 travel, 2 activities, 3 food */}
                       <View style={styles.pmHero}>
                         <PopIn delay={60} trigger={planModalStep}>
                           <View style={styles.pmStepBadge}>
                             <Text style={styles.pmStepBadgeText}>
-                              {planModalStep === 1 ? 'STEP 1 OF 2' : 'STEP 2 OF 2'}
+                              {`STEP ${planModalStep} OF 3`}
                             </Text>
                             <View style={styles.pmStepDots}>
-                              <View style={[styles.pmStepDotSmall, styles.pmStepDotSmallActive]} />
-                              <View style={[styles.pmStepDotSmall, planModalStep === 2 && styles.pmStepDotSmallActive]} />
+                              <View style={[styles.pmStepDotSmall, planModalStep >= 1 && styles.pmStepDotSmallActive]} />
+                              <View style={[styles.pmStepDotSmall, planModalStep >= 2 && styles.pmStepDotSmallActive]} />
+                              <View style={[styles.pmStepDotSmall, planModalStep >= 3 && styles.pmStepDotSmallActive]} />
                             </View>
                           </View>
                         </PopIn>
@@ -5218,63 +6380,121 @@ export default function AIPlanScreen() {
                         <PopIn delay={140} trigger={planModalStep}>
                           <Text style={styles.pmTitle}>
                             {planModalStep === 1
-                              ? 'What excites you?'
-                              : 'What are you craving?'}
+                              ? 'How far are you willing to travel to explore?'
+                              : planModalStep === 2
+                                ? 'What excites you?'
+                                : 'What are you craving?'}
                           </Text>
                         </PopIn>
                         <PopIn delay={200} trigger={planModalStep}>
-                          <Text style={styles.pmSub}>
-                            {planModalStep === 1
-                              ? 'Pick the vibes that match your Bahrain trip'
-                              : 'Choose your food mood for the day'}
-                          </Text>
-                        </PopIn>
-
-                        {(planModalStep === 1 ? selectedPreferences.length : selectedFoodCategories.length) > 0 && (
-                          <PopIn delay={240} trigger={planModalStep}>
-                            <View style={styles.pmSelectedPill}>
-                              <Ionicons name="checkmark-circle" size={14} color={themeColors.primary} />
-                              <Text style={styles.pmSelectedText}>
-                                {planModalStep === 1
-                                  ? `${selectedPreferences.length} picked`
-                                  : `${selectedFoodCategories.length} picked`}
-                              </Text>
+                          {(!((planModalStep === 1 && travelExploreId) ||
+                              (planModalStep === 2 && selectedPreferences.length > 0) ||
+                              (planModalStep === 3 && selectedFoodCategories.length > 0))) ? (
+                            <Text style={[styles.pmSub, planModalStep === 1 && { maxWidth: 320 }]}>
+                              {planModalStep === 1
+                                ? 'This helps us decide how many places and how wide an area to include in your plan.'
+                                : planModalStep === 2
+                                  ? 'Pick the vibes that match your Bahrain trip'
+                                  : 'Choose your food mood for the day'}
+                            </Text>
+                          ) : (
+                            <View style={{ height: 32, alignItems: 'center', justifyContent: 'center' }}>
+                              <View style={styles.pmSelectedPill}>
+                                <Ionicons name="checkmark-circle" size={14} color="#E9C877" />
+                                <Text style={styles.pmSelectedText}>
+                                  {planModalStep === 1
+                                    ? (TRAVEL_EXPLORE_OPTIONS.find((o) => o.id === travelExploreId)?.label || 'Travel')
+                                    : planModalStep === 2
+                                      ? `${selectedPreferences.length} picked`
+                                      : `${selectedFoodCategories.length} picked`}
+                                </Text>
+                              </View>
                             </View>
-                          </PopIn>
-                        )}
+                          )}
+                        </PopIn>
                       </View>
 
-                      {/* Chip options (flex-wrap tag cloud) */}
                       <View style={styles.pmChipsWrap}>
                         <ScrollView
                           style={styles.pmChipsScroll}
                           contentContainerStyle={styles.pmChipsScrollContent}
                           showsVerticalScrollIndicator={false}
+                          scrollEnabled={true}
                         >
-                          <View style={styles.pmChipsPanel}>
-                            <View style={styles.pmChipsGrid}>
-                            {(() => {
-                              const items = planModalStep === 1 ? PREFERENCES : FOOD_CATEGORIES
-                              const isSelectedFn = (item) =>
-                                planModalStep === 1
-                                  ? selectedPreferences.includes(item.id)
-                                  : selectedFoodCategories.includes(item.id)
-                              const handlePressItem = (item) => {
-                                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {})
-                                return planModalStep === 1 ? togglePreference(item.id) : toggleFoodCategory(item.id)
-                              }
-                              return items.map((item, idx) => (
-                                <PopIn key={`${planModalStep}-${item.id}`} delay={280 + idx * 30} trigger={planModalStep}>
-                                  <AnimatedOptionChip
-                                    item={item}
-                                    isSelected={isSelectedFn(item)}
-                                    onPress={() => handlePressItem(item)}
-                                  />
-                                </PopIn>
-                              ))
-                            })()}
+                          {planModalStep === 1 ? (
+                            <View style={styles.pmChipsPanel}>
+                              <View style={styles.pmTravelList}>
+                                {TRAVEL_EXPLORE_OPTIONS.map((opt, idx) => {
+                                  const selected = travelExploreId === opt.id
+                                  return (
+                                    <PopIn key={opt.id} delay={280 + idx * 40} trigger={planModalStep}>
+                                      <TouchableOpacity
+                                        style={[styles.pmTravelCard, selected && styles.pmTravelCardSelected]}
+                                        activeOpacity={0.88}
+                                        onPress={() => {
+                                          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {})
+                                          setTravelExploreId(opt.id)
+                                        }}
+                                        accessibilityRole="button"
+                                        accessibilityState={{ selected }}
+                                        accessibilityLabel={`${opt.label}. ${opt.description}`}
+                                      >
+                                        <View style={[
+                                          styles.pmTravelIconBox,
+                                          selected && { backgroundColor: 'rgba(233,200,119,0.1)' }
+                                        ]}>
+                                          <Ionicons 
+                                            name={opt.icon || 'map-outline'} 
+                                            size={22} 
+                                            color={selected ? '#1A120A' : '#64748B'} 
+                                          />
+                                        </View>
+                                        <View style={styles.pmTravelInfo}>
+                                          <Text style={[
+                                            styles.pmTravelTitle,
+                                            selected && { color: '#1A120A' }
+                                          ]}>
+                                            {opt.label}
+                                          </Text>
+                                          <Text style={styles.pmTravelDesc}>{opt.description}</Text>
+                                        </View>
+                                        {selected && (
+                                          <View style={styles.pmChipCheck}>
+                                            <Ionicons name="checkmark" size={12} color="#FFFFFF" />
+                                          </View>
+                                        )}
+                                      </TouchableOpacity>
+                                    </PopIn>
+                                  )
+                                })}
+                              </View>
                             </View>
-                          </View>
+                          ) : (
+                            <View style={styles.pmChipsPanel}>
+                              <View style={styles.pmChipsGrid}>
+                                {(() => {
+                                  const items = planModalStep === 2 ? PREFERENCES : FOOD_CATEGORIES
+                                  const isSelectedFn = (item) =>
+                                    planModalStep === 2
+                                      ? selectedPreferences.includes(item.id)
+                                      : selectedFoodCategories.includes(item.id)
+                                  const handlePressItem = (item) => {
+                                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {})
+                                    return planModalStep === 2 ? togglePreference(item.id) : toggleFoodCategory(item.id)
+                                  }
+                                  return items.map((item, idx) => (
+                                    <PopIn key={`${planModalStep}-${item.id}`} delay={280 + idx * 30} trigger={planModalStep}>
+                                      <AnimatedOptionChip
+                                        item={item}
+                                        isSelected={isSelectedFn(item)}
+                                        onPress={() => handlePressItem(item)}
+                                      />
+                                    </PopIn>
+                                  ))
+                                })()}
+                              </View>
+                            </View>
+                          )}
                         </ScrollView>
 
                         <PopIn delay={500} trigger={planModalStep}>
@@ -5288,7 +6508,36 @@ export default function AIPlanScreen() {
                                 accessibilityLabel="Close"
                                 accessibilityRole="button"
                               >
-                                <Ionicons name="close" size={20} color="#374151" />
+                                <Ionicons name="close" size={20} color="#FFFFFF" />
+                              </TouchableOpacity>
+                              <TouchableOpacity
+                                style={styles.planModalContinueBtn}
+                                activeOpacity={0.85}
+                                onPress={() => setPlanModalStep(2)}
+                                accessibilityLabel="Continue to activity preferences"
+                                accessibilityRole="button"
+                              >
+                                <LinearGradient
+                                  colors={['#F7DFA0', '#E9C877']}
+                                  start={{ x: 0, y: 0 }}
+                                  end={{ x: 1, y: 1 }}
+                                  style={styles.planModalBtnGradient}
+                                >
+                                  <Text style={styles.planModalContinueBtnText}>Continue</Text>
+                                  <Ionicons name="arrow-forward" size={20} color="#1A120A" />
+                                </LinearGradient>
+                              </TouchableOpacity>
+                            </>
+                          ) : planModalStep === 2 ? (
+                            <>
+                              <TouchableOpacity
+                                style={styles.planModalBackBtn}
+                                activeOpacity={0.7}
+                                onPress={() => setPlanModalStep(1)}
+                                accessibilityLabel="Go back"
+                                accessibilityRole="button"
+                              >
+                                <Ionicons name="chevron-back" size={22} color="#FFFFFF" />
                               </TouchableOpacity>
                               <TouchableOpacity
                                 style={styles.planModalContinueBtn}
@@ -5298,19 +6547,19 @@ export default function AIPlanScreen() {
                                     .map((id) => PREFERENCES.find((p) => p.id === id)?.label)
                                     .filter(Boolean)
                                   startBackgroundPrefetch(prefLabels)
-                                  setPlanModalStep(2)
+                                  setPlanModalStep(3)
                                 }}
                                 accessibilityLabel="Continue to food preferences"
                                 accessibilityRole="button"
                               >
                                 <LinearGradient
-                                  colors={['#FFFFFF', '#F0F0F0']}
+                                  colors={['#F7DFA0', '#E9C877']}
                                   start={{ x: 0, y: 0 }}
-                                  end={{ x: 1, y: 0 }}
+                                  end={{ x: 1, y: 1 }}
                                   style={styles.planModalBtnGradient}
                                 >
-                                  <Text style={[styles.planModalContinueBtnText, { color: '#B80E21' }]}>Continue</Text>
-                                  <Ionicons name="arrow-forward" size={20} color="#B80E21" />
+                                  <Text style={styles.planModalContinueBtnText}>Continue</Text>
+                                  <Ionicons name="arrow-forward" size={20} color="#1A120A" />
                                 </LinearGradient>
                               </TouchableOpacity>
                             </>
@@ -5319,11 +6568,11 @@ export default function AIPlanScreen() {
                               <TouchableOpacity
                                 style={styles.planModalBackBtn}
                                 activeOpacity={0.7}
-                                onPress={() => setPlanModalStep(1)}
+                                onPress={() => setPlanModalStep(2)}
                                 accessibilityLabel="Go back"
                                 accessibilityRole="button"
                               >
-                                <Ionicons name="chevron-back" size={22} color="#374151" />
+                                <Ionicons name="chevron-back" size={22} color="#FFFFFF" />
                               </TouchableOpacity>
                               <TouchableOpacity
                                 style={styles.planModalGenerateBtn}
@@ -5335,13 +6584,13 @@ export default function AIPlanScreen() {
                                 accessibilityRole="button"
                               >
                                 <LinearGradient
-                                  colors={['#FFFFFF', '#F0F0F0']}
+                                  colors={['#F7DFA0', '#E9C877']}
                                   start={{ x: 0, y: 0 }}
-                                  end={{ x: 1, y: 0 }}
+                                  end={{ x: 1, y: 1 }}
                                   style={styles.planModalBtnGradient}
                                 >
-                                  <Ionicons name="sparkles" size={20} color="#B80E21" />
-                                  <Text style={[styles.planModalGenerateBtnText, { color: '#B80E21' }]}>Generate My Plan</Text>
+                                  <Ionicons name="sparkles" size={20} color="#1A120A" />
+                                  <Text style={styles.planModalGenerateBtnText}>Generate My Plan</Text>
                                 </LinearGradient>
                               </TouchableOpacity>
                             </>
@@ -5357,21 +6606,6 @@ export default function AIPlanScreen() {
           </Animated.View>
         </KeyboardAvoidingView>
       </Modal>
-
-      <MarkerDetailsBottomSheet
-        visible={!!selectedMarker}
-        marker={selectedMarker}
-        insets={insets}
-        accentColor={
-          selectedMarker?.type === 'restaurant'
-            ? colors.dining
-            : selectedMarker?.type === 'event'
-              ? colors.event
-              : colors.textSecondary
-        }
-        onAction={handleRadialAction}
-        onClose={closeRadialMenu}
-      />
 
       {/* Clients search modal — all clients by Restaurants, Places, Events */}
       <Modal
@@ -5496,7 +6730,7 @@ export default function AIPlanScreen() {
                             >
                               <View style={[styles.searchModalClientCircle, { borderColor: accent }]}>
                                 {imageUrl ? (
-                                  <Image source={{ uri: imageUrl }} style={styles.searchModalClientImage} />
+                                  <CachedImage source={{ uri: imageUrl }} style={styles.searchModalClientImage} recyclingKey={imageUrl} resizeMode="cover" />
                                 ) : (
                                   <Ionicons
                                     name={key === 'restaurants' ? 'restaurant' : key === 'events' ? 'calendar' : 'location'}
@@ -5545,7 +6779,7 @@ export default function AIPlanScreen() {
           <View style={styles.sharePlanModalCard} pointerEvents="box-none">
             <Text style={styles.sharePlanModalTitle}>Share plan</Text>
             <Text style={styles.sharePlanModalSub}>
-              Friends open this in Go Bahrain using your link or code. Choose view-only, or let them edit the same plan.
+              Friends open this in SiyahaBH using your link or code. Choose view-only, or let them edit the same plan.
             </Text>
             {shareModalCode ? (
               <View style={styles.sharePlanModalCodeBox}>
@@ -5617,6 +6851,65 @@ export default function AIPlanScreen() {
         </View>
       </Modal>
 
+      <Modal
+        visible={showEditSavedPlanTitleModal}
+        transparent
+        animationType="fade"
+        onRequestClose={handleCloseEditSavedPlanTitleModal}
+      >
+        <View style={styles.sharePlanModalRoot}>
+          <TouchableOpacity
+            style={StyleSheet.absoluteFill}
+            activeOpacity={1}
+            onPress={handleCloseEditSavedPlanTitleModal}
+            accessibilityLabel="Dismiss rename dialog"
+            accessibilityRole="button"
+          />
+          <KeyboardAvoidingView
+            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+            style={{ zIndex: 2, maxWidth: 400, width: '100%', alignSelf: 'center' }}
+          >
+            <View style={styles.sharePlanModalCard} pointerEvents="box-none">
+              <Text style={styles.sharePlanModalTitle}>Plan name</Text>
+              <Text style={styles.sharePlanModalSub}>Choose a short name so you can find this plan later.</Text>
+              <TextInput
+                style={styles.editSavedPlanTitleModalInput}
+                value={editSavedPlanTitleDraft}
+                onChangeText={setEditSavedPlanTitleDraft}
+                placeholder="My plan"
+                placeholderTextColor="#94A3B8"
+                maxLength={120}
+                editable={!editSavedPlanTitleBusy}
+                autoFocus
+                accessibilityLabel="Plan title"
+                returnKeyType="done"
+                onSubmitEditing={handleSubmitEditSavedPlanTitle}
+              />
+              <View style={styles.sharePlanModalActions}>
+                <TouchableOpacity
+                  style={[styles.sharePlanModalBtn, styles.sharePlanModalBtnSecondary]}
+                  onPress={handleCloseEditSavedPlanTitleModal}
+                  disabled={editSavedPlanTitleBusy}
+                  accessibilityRole="button"
+                  accessibilityLabel="Cancel rename"
+                >
+                  <Text style={[styles.sharePlanModalBtnText, styles.sharePlanModalBtnTextDark]}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.sharePlanModalBtn}
+                  onPress={handleSubmitEditSavedPlanTitle}
+                  disabled={editSavedPlanTitleBusy}
+                  accessibilityRole="button"
+                  accessibilityLabel="Save plan name"
+                >
+                  <Text style={styles.sharePlanModalBtnText}>{editSavedPlanTitleBusy ? '…' : 'Save'}</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </KeyboardAvoidingView>
+        </View>
+      </Modal>
+
       <ClientProfileModal
         visible={!!profileClientId}
         clientId={profileClientId}
@@ -5658,13 +6951,13 @@ export default function AIPlanScreen() {
             </Animated.View>
             <Animated.View style={[styles.doorIconWrap, { transform: [{ scale: doorIconScale }], opacity: doorIconOpacity }]}>
               <View style={styles.doorLogoShadow}>
-                <Image
+                <CachedImage
                   source={require('../../assets/ai-button-logo.png')}
                   style={styles.doorLogoImage}
                   resizeMode="cover"
                 />
               </View>
-              <Text style={styles.doorFlagLabel}>GoBahrain</Text>
+              <Text style={styles.doorFlagLabel}>SiyahaBH</Text>
             </Animated.View>
           </Animated.View>
         )

@@ -25,12 +25,12 @@ import { useUserPreferences } from '../context/UserPreferencesContext'
 import { useAuth } from '../context/AuthContext'
 import { GENERAL_GROUPS } from '../constants/preferences'
 import { gradients } from '../theme/designTokens'
-import { LUXURY, luxuryElevated, luxurySoftShadow } from '../theme/luxuryPremium'
+import { LUXURY, luxuryCardShadow, luxurySoftShadow } from '../theme/luxuryPremium'
 import { FadeInView, AnimatedPressable, GradientButton } from '../components/AnimatedUI'
 import { fetchMyCommunityPosts, getCommunityUserId } from '../services/community'
 import { buildAndPersistUserPersona } from '../services/personalization'
+import { invalidatePersonalizationCache } from '../services/feedService'
 
-const TAB_BAR_HEIGHT = Platform.OS === 'ios' ? 70 : 60
 const TILE_GAP = 10
 const TILE_COLS = 3
 
@@ -42,9 +42,11 @@ const APPEARANCE_OPTIONS = [
 
 const SettingsSection = ({ title, C, children }) => (
   <View style={settingsStyles.sectionWrap}>
-    <Text style={[settingsStyles.sectionTitle, { color: C.textMuted }]}>{title}</Text>
-    <View style={[settingsStyles.groupCard, { backgroundColor: C.cardBg, borderColor: C.border }]}>
-      {children}
+    <Text style={[settingsStyles.sectionTitle, { color: C.textSecondary }]}>{title}</Text>
+    <View style={settingsStyles.feedCardOuter}>
+      <View style={[settingsStyles.feedCardInner, { backgroundColor: C.cardBg, borderColor: C.borderLight }]}>
+        {children}
+      </View>
     </View>
   </View>
 )
@@ -82,20 +84,25 @@ const SettingsRow = ({ icon, iconColor, label, value, onPress, isLast = false, C
 )
 
 const settingsStyles = StyleSheet.create({
-  sectionWrap: { marginBottom: 22 },
-  sectionTitle: {
-    fontSize: 12,
-    fontWeight: '700',
-    textTransform: 'uppercase',
-    letterSpacing: 0.45,
-    marginBottom: 8,
-    marginLeft: 6,
+  /** Same as HomeScreen feed `cardOuter` / `cardInner` */
+  feedCardOuter: {
+    marginHorizontal: 12,
+    marginBottom: 0,
+    borderRadius: LUXURY.radiusCard,
+    ...luxuryCardShadow,
   },
-  groupCard: {
-    borderRadius: 14,
-    borderWidth: StyleSheet.hairlineWidth,
+  feedCardInner: {
+    borderRadius: LUXURY.radiusCard,
     overflow: 'hidden',
-    ...luxurySoftShadow,
+    borderWidth: 1,
+  },
+  sectionWrap: { marginBottom: 20 },
+  sectionTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    letterSpacing: 0.2,
+    marginBottom: 8,
+    marginLeft: 16,
   },
   row: {
     minHeight: 52,
@@ -145,10 +152,9 @@ const settingsStyles = StyleSheet.create({
 
 export default function ProfileScreen() {
   const insets = useSafeAreaInsets()
-  const { width: winW } = useWindowDimensions()
+  const { width: winW, height: winH } = useWindowDimensions()
   const navigation = useNavigation()
   const { colors, colorScheme, setColorScheme, isDark } = useTheme()
-  const bottomPadding = TAB_BAR_HEIGHT + (Platform.OS === 'android' ? insets.bottom : 0)
   const {
     preferences,
     setPreferences,
@@ -158,6 +164,7 @@ export default function ProfileScreen() {
   } = useUserPreferences()
   const { profile, user: authUser, signOut } = useAuth()
   const [preferencesModalVisible, setPreferencesModalVisible] = useState(false)
+  const [isSavingPreferences, setIsSavingPreferences] = useState(false)
   const [appearanceModalVisible, setAppearanceModalVisible] = useState(false)
   const [editGeneralIds, setEditGeneralIds] = useState([])
   const [editActivityIds, setEditActivityIds] = useState([])
@@ -208,6 +215,7 @@ export default function ProfileScreen() {
     textSecondary: colors.textSecondary,
     textMuted: colors.textMuted,
     border: colors.border,
+    borderLight: colors.borderLight,
     pillBg: colors.borderLight,
     accent2: colors.accent2,
     accent3: colors.accent3,
@@ -228,36 +236,49 @@ export default function ProfileScreen() {
   const toggleFood = (id) => setEditFoodIds((prev) => prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id])
 
   const handleSavePreferences = async () => {
-    const profileAnswers = {
-      idealDay: editIdealDay.trim(),
-      avoidList: editAvoidList.trim(),
+    if (isSavingPreferences) return
+    setIsSavingPreferences(true)
+    try {
+      const profileAnswers = {
+        idealDay: editIdealDay.trim(),
+        avoidList: editAvoidList.trim(),
+      }
+      const profileSummary = await buildAndPersistUserPersona({
+        generalIds: editGeneralIds,
+        activityIds: editActivityIds,
+        foodIds: editFoodIds,
+        profileAnswers,
+      })
+      await setPreferences({
+        generalIds: editGeneralIds,
+        activityIds: editActivityIds,
+        foodIds: editFoodIds,
+        profileAnswers,
+        profileSummary,
+      })
+      invalidatePersonalizationCache()
+      setPreferencesModalVisible(false)
+    } catch (e) {
+      const msg = typeof e?.message === 'string' && e.message.length ? e.message : 'Could not save preferences. Try again.'
+      Alert.alert('Save failed', msg)
+    } finally {
+      setIsSavingPreferences(false)
     }
-    const profileSummary = await buildAndPersistUserPersona({
-      generalIds: editGeneralIds,
-      activityIds: editActivityIds,
-      foodIds: editFoodIds,
-      profileAnswers,
-    })
-    await setPreferences({
-      generalIds: editGeneralIds,
-      activityIds: editActivityIds,
-      foodIds: editFoodIds,
-      profileAnswers,
-      profileSummary,
-    })
-    setPreferencesModalVisible(false)
   }
 
   const userName = profile?.account?.user_name || authUser?.email?.split('@')[0] || 'User'
   const userInitial = (profile?.account?.user_name || authUser?.email || 'U').charAt(0).toUpperCase()
   const userEmail = authUser?.email ?? 'Signed in'
 
-  const prefCount = (preferences?.activityIds?.length || 0) + (preferences?.foodIds?.length || 0)
+  const prefCount =
+    (preferences?.generalIds?.length || 0)
+    + (preferences?.activityIds?.length || 0)
+    + (preferences?.foodIds?.length || 0)
 
-  const scrollPad = 16
-  const innerW = winW - scrollPad * 2
+  /** Home feed cards: marginHorizontal 12 + inner padding 14 each side */
+  const feedCardContentW = Math.max(1, winW - 24 - 28)
   const statGap = 10
-  const statW = Math.max(1, Math.floor((innerW - statGap * 2) / 3))
+  const statW = Math.max(1, Math.floor((feedCardContentW - statGap * 2) / 3))
   const prefChipGap = 10
   const prefChipW = Math.max(96, Math.floor((winW - 40 - prefChipGap * 2) / 3))
 
@@ -296,29 +317,36 @@ export default function ProfileScreen() {
   }, [colorScheme])
 
   return (
-    <ScreenContainer showHeader headerTitle="Profile">
-      <ScrollView
-        style={[s.scroll, { backgroundColor: C.screenBg }]}
-        contentContainerStyle={[s.scrollContent, { paddingBottom: bottomPadding + 28 }]}
-        showsVerticalScrollIndicator={false}
-      >
-        <View style={s.heroBleed}>
+    <ScreenContainer style={{ flex: 1, backgroundColor: C.screenBg }}>
+      <View style={{ flex: 1 }}>
+        <View style={s.screenGradientWrap} pointerEvents="none">
           <LinearGradient
-            colors={gradients.hero(isDark)}
-            start={{ x: 0, y: 0 }}
-            end={{ x: 1, y: 1 }}
-            style={s.heroGradient}
-          >
-            <LinearGradient
-              colors={gradients.cardGlow(isDark)}
-              start={{ x: 0.5, y: 0 }}
-              end={{ x: 0.5, y: 1 }}
-              style={StyleSheet.absoluteFill}
-            />
-            <FadeInView delay={0} from={20} duration={420}>
-              <View style={s.heroInner}>
-                <Animated.View style={{ opacity: avatarFade, transform: [{ scale: avatarScale }] }}>
-                  <View style={s.avatarOuter}>
+            colors={isDark ? gradients.heroDark : gradients.heroLight}
+            locations={[0, 0.42, 1]}
+            style={StyleSheet.absoluteFill}
+          />
+        </View>
+        <ScrollView
+          style={[s.scroll, { flex: 1, backgroundColor: 'transparent' }]}
+          contentContainerStyle={[s.scrollContent, { paddingTop: 0, paddingBottom: 40 }]}
+          showsVerticalScrollIndicator={false}
+        >
+        <FadeInView delay={0} from={20} duration={420} springUp>
+          <View style={[s.homeHeader, { paddingTop: insets.top + 4 }]}>
+            <View style={s.headerSideSpacer} />
+            <View style={s.headerTitleWrap}>
+              <Text style={[s.homeHeaderTitle, { color: C.primary }]}>Profile</Text>
+            </View>
+            <View style={s.headerSideSpacer} />
+          </View>
+        </FadeInView>
+
+        <FadeInView delay={70} from={24} duration={500} springUp style={s.profileIdentityOuter}>
+          <View style={settingsStyles.feedCardOuter}>
+            <View style={[settingsStyles.feedCardInner, { backgroundColor: C.cardBg, borderColor: C.borderLight }]}>
+              <View style={s.profileHeaderRow}>
+                <FadeInView delay={120} from={16} duration={420} springUp>
+                  <Animated.View style={{ opacity: avatarFade, transform: [{ scale: avatarScale }] }}>
                     <LinearGradient
                       colors={gradients.avatarRing}
                       start={{ x: 0, y: 0 }}
@@ -329,28 +357,64 @@ export default function ProfileScreen() {
                         <Text style={[s.avatarInitial, { color: C.primary }]}>{userInitial}</Text>
                       </View>
                     </LinearGradient>
-                  </View>
-                </Animated.View>
-                <Text style={[s.userName, { color: C.textPrimary }]}>{userName}</Text>
-                <Text style={[s.userSub, { color: C.textMuted }]}>{userEmail}</Text>
-
-                <View style={[s.statsRow, { gap: statGap }]}>
+                  </Animated.View>
+                </FadeInView>
+                <FadeInView delay={160} from={16} duration={420} springUp style={s.profileHeaderText}>
+                  <Text style={[s.profileDisplayName, { color: C.textPrimary }]} numberOfLines={1}>
+                    {userName}
+                  </Text>
+                  <Text style={[s.profileEmailLine, { color: C.textSecondary }]} numberOfLines={2}>
+                    {userEmail}
+                  </Text>
                   <LinearGradient
-                    colors={[`${C.primary}18`, `${C.primary}06`]}
-                    style={[s.statCard, { width: statW, borderColor: `${C.primary}35` }]}
+                    colors={isDark ? ['rgba(230,57,80,0.22)', 'rgba(124,58,237,0.16)'] : ['rgba(200,16,46,0.12)', 'rgba(124,58,237,0.08)']}
+                    start={{ x: 0, y: 0 }}
+                    end={{ x: 1, y: 1 }}
+                    style={[s.profileTierPill, { borderColor: `${C.primary}40` }]}
                   >
-                    <Ionicons name="heart" size={18} color={C.primary} />
-                    <Text style={[s.statValue, { color: C.textPrimary }]}>{prefCount}</Text>
-                    <Text style={[s.statLabel, { color: C.textMuted }]}>Preferences</Text>
+                    <Ionicons name="diamond-outline" size={12} color={C.primary} />
+                    <Text style={[s.profileTierText, { color: C.primary }]}>Premium Explorer</Text>
                   </LinearGradient>
-                  <LinearGradient
-                    colors={isDark ? ['rgba(167,139,250,0.2)', 'rgba(167,139,250,0.06)'] : ['rgba(124,58,237,0.12)', 'rgba(124,58,237,0.04)']}
-                    style={[s.statCard, { width: statW, borderColor: isDark ? 'rgba(167,139,250,0.35)' : 'rgba(124,58,237,0.25)' }]}
+                </FadeInView>
+              </View>
+              <View style={[s.statsRow, { gap: statGap, paddingHorizontal: 14, paddingBottom: 16, borderTopColor: C.borderLight }]}>
+                <FadeInView delay={220} from={18} duration={380} springUp>
+                  <TouchableOpacity
+                    style={s.statTouchable}
+                    onPress={() => setPreferencesModalVisible(true)}
+                    activeOpacity={0.88}
+                    accessibilityRole="button"
+                    accessibilityLabel="Edit travel and food preferences"
                   >
-                    <Ionicons name="calendar" size={18} color={isDark ? '#A78BFA' : '#7C3AED'} />
+                    <View
+                      style={[
+                        s.statCard,
+                        { width: statW, backgroundColor: `${C.primary}12`, borderColor: C.borderLight },
+                      ]}
+                    >
+                      <Ionicons name="heart" size={17} color={C.primary} />
+                      <Text style={[s.statValue, { color: C.textPrimary }]}>{prefCount}</Text>
+                      <Text style={[s.statLabel, { color: C.textMuted }]}>Preferences</Text>
+                    </View>
+                  </TouchableOpacity>
+                </FadeInView>
+                <FadeInView delay={260} from={18} duration={380} springUp>
+                  <View
+                    style={[
+                      s.statCard,
+                      {
+                        width: statW,
+                        backgroundColor: isDark ? 'rgba(167,139,250,0.12)' : 'rgba(124,58,237,0.08)',
+                        borderColor: C.borderLight,
+                      },
+                    ]}
+                  >
+                    <Ionicons name="calendar" size={17} color={isDark ? '#A78BFA' : '#7C3AED'} />
                     <Text style={[s.statValue, { color: C.textPrimary }]}>0</Text>
                     <Text style={[s.statLabel, { color: C.textMuted }]}>Plans</Text>
-                  </LinearGradient>
+                  </View>
+                </FadeInView>
+                <FadeInView delay={300} from={18} duration={380} springUp>
                   <TouchableOpacity
                     style={s.statTouchable}
                     onPress={() => navigation.navigate('MyReviews')}
@@ -358,110 +422,137 @@ export default function ProfileScreen() {
                     accessibilityRole="button"
                     accessibilityLabel="Open my reviews"
                   >
-                    <LinearGradient
-                      colors={isDark ? ['rgba(16,185,129,0.22)', 'rgba(16,185,129,0.06)'] : ['rgba(5,150,105,0.14)', 'rgba(5,150,105,0.05)']}
-                      style={[s.statCard, { width: statW, borderColor: isDark ? 'rgba(16,185,129,0.4)' : 'rgba(5,150,105,0.28)' }]}
+                    <View
+                      style={[
+                        s.statCard,
+                        {
+                          width: statW,
+                          backgroundColor: isDark ? 'rgba(16,185,129,0.14)' : colors.successMuted,
+                          borderColor: C.borderLight,
+                        },
+                      ]}
                     >
-                      <Ionicons name="star" size={18} color={isDark ? '#10B981' : '#059669'} />
+                      <Ionicons name="star" size={17} color={isDark ? '#10B981' : colors.success} />
                       <Text style={[s.statValue, { color: C.textPrimary }]}>{myReviewCount}</Text>
                       <Text style={[s.statLabel, { color: C.textMuted }]}>Reviews</Text>
-                    </LinearGradient>
+                    </View>
                   </TouchableOpacity>
-                </View>
+                </FadeInView>
               </View>
-            </FadeInView>
-          </LinearGradient>
-        </View>
+            </View>
+          </View>
+        </FadeInView>
 
         <View style={s.sectionStack}>
-          <FadeInView delay={120} from={16} duration={400}>
+          <FadeInView delay={360} from={18} duration={420} springUp>
             <SettingsSection title="Account" C={C}>
-              <SettingsRow
-                icon="person-outline"
-                iconColor={C.primary}
-                label="Edit profile"
-                value="Coming soon"
-                C={C}
-              />
-              <SettingsRow
-                icon="chatbubbles-outline"
-                iconColor={isDark ? '#10B981' : '#059669'}
-                label="My reviews"
-                value={String(myReviewCount)}
-                onPress={() => navigation.navigate('MyReviews')}
-                C={C}
-              />
-              <SettingsRow
-                icon="heart-outline"
-                iconColor={C.primary}
-                label="Activity & food preferences"
-                value={`${prefCount} selected`}
-                onPress={() => setPreferencesModalVisible(true)}
-                C={C}
-                isLast
-              />
+              <FadeInView delay={390} from={14} duration={320} springUp>
+                <SettingsRow
+                  icon="person-outline"
+                  iconColor={C.primary}
+                  label="Edit profile"
+                  value="Coming soon"
+                  C={C}
+                />
+              </FadeInView>
+              <FadeInView delay={420} from={14} duration={320} springUp>
+                <SettingsRow
+                  icon="chatbubbles-outline"
+                  iconColor={isDark ? '#10B981' : '#059669'}
+                  label="My reviews"
+                  value={String(myReviewCount)}
+                  onPress={() => navigation.navigate('MyReviews')}
+                  C={C}
+                />
+              </FadeInView>
+              <FadeInView delay={450} from={14} duration={320} springUp>
+                <SettingsRow
+                  icon="heart-outline"
+                  iconColor={C.primary}
+                  label="Activity & food preferences"
+                  value={`${prefCount} selected`}
+                  onPress={() => setPreferencesModalVisible(true)}
+                  C={C}
+                  isLast
+                />
+              </FadeInView>
             </SettingsSection>
           </FadeInView>
 
-          <FadeInView delay={200} from={16} duration={400}>
+          <FadeInView delay={500} from={18} duration={420} springUp>
             <SettingsSection title="App" C={C}>
-              <SettingsRow
-                icon="color-palette-outline"
-                iconColor={isDark ? '#A78BFA' : '#7C3AED'}
-                label="Appearance"
-                value={appearanceLabel}
-                onPress={() => setAppearanceModalVisible(true)}
-                C={C}
-              />
-              <SettingsRow
-                icon="language-outline"
-                iconColor={C.accent3}
-                label="Language"
-                value="English"
-                C={C}
-                isLast
-              />
+              <FadeInView delay={530} from={14} duration={320} springUp>
+                <SettingsRow
+                  icon="color-palette-outline"
+                  iconColor={isDark ? '#A78BFA' : '#7C3AED'}
+                  label="Appearance"
+                  value={appearanceLabel}
+                  onPress={() => setAppearanceModalVisible(true)}
+                  C={C}
+                />
+              </FadeInView>
+              <FadeInView delay={560} from={14} duration={320} springUp>
+                <SettingsRow
+                  icon="language-outline"
+                  iconColor={C.accent3}
+                  label="Language"
+                  value="English"
+                  C={C}
+                  isLast
+                />
+              </FadeInView>
             </SettingsSection>
           </FadeInView>
 
-          <FadeInView delay={280} from={16} duration={400}>
+          <FadeInView delay={610} from={18} duration={420} springUp>
             <SettingsSection title="Support" C={C}>
-              <SettingsRow icon="help-circle-outline" iconColor={C.textSecondary} label="Help & FAQ" value="Coming soon" C={C} />
-              <SettingsRow icon="chatbubble-outline" iconColor={C.textSecondary} label="Contact us" value="Coming soon" C={C} />
-              <SettingsRow icon="document-text-outline" iconColor={C.textSecondary} label="About Go Bahrain" value="Version info" C={C} isLast />
+              <FadeInView delay={640} from={14} duration={320} springUp>
+                <SettingsRow icon="help-circle-outline" iconColor={C.textSecondary} label="Help & FAQ" value="Coming soon" C={C} />
+              </FadeInView>
+              <FadeInView delay={670} from={14} duration={320} springUp>
+                <SettingsRow icon="chatbubble-outline" iconColor={C.textSecondary} label="Contact us" value="Coming soon" C={C} />
+              </FadeInView>
+              <FadeInView delay={700} from={14} duration={320} springUp>
+                <SettingsRow icon="document-text-outline" iconColor={C.textSecondary} label="About SiyahaBH" value="Version info" C={C} isLast />
+              </FadeInView>
             </SettingsSection>
           </FadeInView>
 
           {__DEV__ && (
-            <FadeInView delay={340} from={14} duration={380}>
+            <FadeInView delay={750} from={16} duration={380} springUp>
               <SettingsSection title="Developer" C={C}>
-                <SettingsRow
-                  icon="refresh-outline"
-                  iconColor={colors.warning}
-                  label="Reset onboarding"
-                  onPress={handleResetOnboarding}
-                  C={C}
-                  isLast
-                />
+                <FadeInView delay={780} from={14} duration={320} springUp>
+                  <SettingsRow
+                    icon="refresh-outline"
+                    iconColor={colors.warning}
+                    label="Reset onboarding"
+                    onPress={handleResetOnboarding}
+                    C={C}
+                    isLast
+                  />
+                </FadeInView>
               </SettingsSection>
             </FadeInView>
           )}
 
-          <FadeInView delay={400} from={12} duration={360}>
+          <FadeInView delay={820} from={16} duration={380} springUp>
             <SettingsSection title="Session" C={C}>
-              <SettingsRow
-                icon="log-out-outline"
-                iconColor={colors.error}
-                label="Sign out"
-                onPress={() => signOut()}
-                C={C}
-                danger
-                isLast
-              />
+              <FadeInView delay={850} from={14} duration={320} springUp>
+                <SettingsRow
+                  icon="log-out-outline"
+                  iconColor={colors.error}
+                  label="Sign out"
+                  onPress={() => signOut()}
+                  C={C}
+                  danger
+                  isLast
+                />
+              </FadeInView>
             </SettingsSection>
           </FadeInView>
         </View>
-      </ScrollView>
+        </ScrollView>
+      </View>
 
       <Modal
         visible={appearanceModalVisible}
@@ -520,26 +611,54 @@ export default function ProfileScreen() {
       <Modal
         visible={preferencesModalVisible}
         animationType="slide"
-        presentationStyle="pageSheet"
+        presentationStyle={Platform.OS === 'ios' ? 'pageSheet' : undefined}
         onRequestClose={() => setPreferencesModalVisible(false)}
       >
-        <SafeAreaView style={[s.modalSafe, { backgroundColor: C.screenBg }]}>
-          <View style={[s.modalHeader, { borderBottomColor: C.border }]}>
-            <TouchableOpacity
-              onPress={() => setPreferencesModalVisible(false)}
-              style={s.modalCloseBtn}
-              hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+        <SafeAreaView
+          style={[
+            s.modalSafe,
+            { backgroundColor: C.screenBg },
+            Platform.OS === 'web' && winH > 0 ? { minHeight: winH } : null,
+          ]}
+        >
+          <View style={s.modalPrefsColumn}>
+            <View style={[s.modalHeader, { borderBottomColor: C.border }]}>
+              <TouchableOpacity
+                onPress={() => setPreferencesModalVisible(false)}
+                style={s.modalCloseBtn}
+                hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+                accessibilityRole="button"
+                accessibilityLabel="Close without saving"
+              >
+                <Ionicons name="close" size={26} color={C.textPrimary} />
+              </TouchableOpacity>
+              <Text style={[s.modalTitle, { color: C.textPrimary, flex: 1, textAlign: 'center' }]} numberOfLines={1}>
+                Edit preferences
+              </Text>
+              <TouchableOpacity
+                onPress={handleSavePreferences}
+                disabled={isSavingPreferences}
+                style={s.modalCloseBtn}
+                hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+                accessibilityRole="button"
+                accessibilityLabel={isSavingPreferences ? 'Saving preferences' : 'Save preferences'}
+              >
+                <Text
+                  style={[
+                    s.modalHeaderSaveText,
+                    { color: C.primary, opacity: isSavingPreferences ? 0.45 : 1 },
+                  ]}
+                >
+                  {isSavingPreferences ? 'Saving…' : 'Save'}
+                </Text>
+              </TouchableOpacity>
+            </View>
+            <ScrollView
+              style={s.modalScroll}
+              contentContainerStyle={s.modalScrollContent}
+              showsVerticalScrollIndicator={false}
+              keyboardShouldPersistTaps="handled"
             >
-              <Ionicons name="close" size={26} color={C.textPrimary} />
-            </TouchableOpacity>
-            <Text style={[s.modalTitle, { color: C.textPrimary }]}>Edit preferences</Text>
-            <View style={s.modalCloseBtn} />
-          </View>
-          <ScrollView
-            style={s.modalScroll}
-            contentContainerStyle={s.modalScrollContent}
-            showsVerticalScrollIndicator={false}
-          >
             <Text style={[s.modalSectionLabel, { color: C.textPrimary }]}>Travel profile questions</Text>
             <Text style={[s.modalSectionHint, { color: C.textMuted }]}>Answer these so we can understand your preferences and personalize recommendations across the app.</Text>
             {GENERAL_GROUPS.map((grp) => {
@@ -655,11 +774,16 @@ export default function ProfileScreen() {
               Your travel profile personalizes the app experience. Activity and food answers shape itinerary suggestions so each plan fits you better.
             </Text>
           </ScrollView>
-          <View style={[s.modalFooter, { borderTopColor: C.border }]}>
-            <GradientButton onPress={handleSavePreferences} style={{ flex: 1 }}>
-              <Text style={s.modalSaveBtnText}>Save</Text>
-              <Ionicons name="checkmark-circle" size={20} color="#FFF" />
-            </GradientButton>
+            <View style={[s.modalFooter, { borderTopColor: C.border, backgroundColor: C.screenBg }]}>
+              <GradientButton
+                onPress={handleSavePreferences}
+                disabled={isSavingPreferences}
+                style={s.modalSaveButtonWide}
+              >
+                <Text style={s.modalSaveBtnText}>{isSavingPreferences ? 'Saving…' : 'Save changes'}</Text>
+                <Ionicons name="checkmark-circle" size={20} color="#FFF" />
+              </GradientButton>
+            </View>
           </View>
         </SafeAreaView>
       </Modal>
@@ -668,49 +792,90 @@ export default function ProfileScreen() {
 }
 
 const s = StyleSheet.create({
-  scroll: { flex: 1 },
-  scrollContent: { paddingHorizontal: 16, paddingTop: 8 },
-  heroBleed: { marginHorizontal: -16, marginTop: -8, marginBottom: 8 },
-  heroGradient: {
-    borderBottomLeftRadius: LUXURY.radiusHero,
-    borderBottomRightRadius: LUXURY.radiusHero,
-    overflow: 'hidden',
-    paddingBottom: 22,
+  screenGradientWrap: { ...StyleSheet.absoluteFillObject, zIndex: 0 },
+  scroll: { flex: 1, zIndex: 1 },
+  scrollContent: { paddingHorizontal: 0, paddingTop: 0 },
+  /** Home `instagramHeader` + `instagramLogo` */
+  homeHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    minHeight: 44,
+    marginBottom: 10,
   },
-  heroInner: { alignItems: 'center', paddingTop: 20, paddingHorizontal: 16 },
-  avatarOuter: { marginBottom: 12 },
+  headerSideSpacer: { width: 44, height: 44 },
+  headerTitleWrap: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  homeHeaderTitle: {
+    fontSize: 20,
+    fontWeight: '800',
+    letterSpacing: -0.5,
+  },
+  profileHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+    paddingHorizontal: 14,
+    paddingTop: 14,
+    paddingBottom: 12,
+  },
+  profileHeaderText: { flex: 1, minWidth: 0 },
+  profileDisplayName: { fontSize: 18, fontWeight: '700', letterSpacing: -0.3 },
+  profileEmailLine: { fontSize: 13, fontWeight: '500', marginTop: 4, lineHeight: 18 },
+  profileTierPill: {
+    marginTop: 10,
+    alignSelf: 'flex-start',
+    borderRadius: LUXURY.radiusPill,
+    borderWidth: 1,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  profileTierText: {
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 0.35,
+    textTransform: 'uppercase',
+  },
   avatarGradientRing: {
-    width: 96,
-    height: 96,
-    borderRadius: 48,
-    padding: 3,
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    padding: 2,
     alignItems: 'center',
     justifyContent: 'center',
   },
   avatarInner: {
-    width: 90,
-    height: 90,
-    borderRadius: 45,
+    width: 60,
+    height: 60,
+    borderRadius: 30,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  avatarInitial: { fontSize: 34, fontWeight: '800' },
-  userName: { fontSize: 23, fontWeight: '800', marginBottom: 4, letterSpacing: -0.4 },
-  userSub: { fontSize: 14, fontWeight: '500', marginBottom: 18 },
-  statsRow: { flexDirection: 'row', justifyContent: 'center', width: '100%' },
+  avatarInitial: { fontSize: 24, fontWeight: '800' },
+  statsRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    width: '100%',
+    borderTopWidth: StyleSheet.hairlineWidth,
+    paddingTop: 14,
+  },
   statTouchable: { borderRadius: LUXURY.radiusInput },
   statCard: {
     alignItems: 'center',
-    paddingVertical: 14,
-    paddingHorizontal: 6,
+    paddingVertical: 12,
+    paddingHorizontal: 4,
     borderRadius: LUXURY.radiusInput,
     borderWidth: 1,
-    gap: 6,
+    gap: 5,
     ...luxurySoftShadow,
   },
-  statValue: { fontSize: 19, fontWeight: '800' },
-  statLabel: { fontSize: 10, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.4 },
-  sectionStack: { gap: 26, paddingTop: 8 },
+  statValue: { fontSize: 17, fontWeight: '800' },
+  statLabel: { fontSize: 9, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.35 },
+  profileIdentityOuter: { marginBottom: 16 },
+  sectionStack: { gap: 0, paddingTop: 4 },
   ctaSection: { paddingTop: 12, paddingHorizontal: 0 },
   signOutBtn: {
     flexDirection: 'row',
@@ -724,18 +889,22 @@ const s = StyleSheet.create({
   },
   signOutText: { fontSize: 16, fontWeight: '700' },
   modalSafe: { flex: 1 },
+  /** Column so the footer stays above the fold; `minHeight: 0` lets ScrollView shrink on web. */
+  modalPrefsColumn: { flex: 1, minHeight: 0, width: '100%' },
   modalHeader: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 16,
+    paddingHorizontal: 8,
     paddingVertical: 12,
     borderBottomWidth: 1,
+    flexShrink: 0,
   },
-  modalCloseBtn: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center' },
+  modalCloseBtn: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
+  modalHeaderSaveText: { fontSize: 16, fontWeight: '700' },
   modalTitle: { fontSize: 18, fontWeight: '700' },
-  modalScroll: { flex: 1 },
-  modalScrollContent: { padding: 20, paddingBottom: 24 },
+  modalScroll: { flex: 1, minHeight: 0 },
+  modalScrollContent: { padding: 20, paddingBottom: 32 },
   modalSectionLabel: { fontSize: 17, fontWeight: '700', marginBottom: 6 },
   modalSectionHint: { fontSize: 13, marginBottom: 12, lineHeight: 18 },
   modalGroupBlock: { marginBottom: 14 },
@@ -767,7 +936,14 @@ const s = StyleSheet.create({
     fontWeight: '500',
   },
   modalHint: { fontSize: 13, marginTop: 20, lineHeight: 20 },
-  modalFooter: { padding: 16, paddingBottom: Platform.OS === 'ios' ? 34 : 16, borderTopWidth: 1 },
+  modalFooter: {
+    padding: 16,
+    paddingBottom: Platform.OS === 'ios' ? 34 : 16,
+    borderTopWidth: 1,
+    flexShrink: 0,
+    width: '100%',
+  },
+  modalSaveButtonWide: { width: '100%', alignSelf: 'stretch' },
   modalSaveBtnText: { fontSize: 16, fontWeight: '700', color: '#FFF' },
   appearanceOption: {
     flexDirection: 'row',

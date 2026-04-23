@@ -21,15 +21,19 @@ import {
   Alert,
 } from 'react-native';
 import { FlatList as GHFlatList } from 'react-native-gesture-handler';
+
+const AnimatedGHFlatList = Animated.createAnimatedComponent(GHFlatList)
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { BlurView } from 'expo-blur';
 import * as ImagePicker from 'expo-image-picker';
 import ScreenContainer from '../components/ScreenContainer';
+import PageHeadingBar from '../components/PageHeadingBar';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import {
-  fetchCommunityPosts,
+  fetchCommunityPostsPage,
+  COMMUNITY_FEED_PAGE_SIZE,
   createCommunityPost,
   uploadCommunityImages,
   getCommunityUserId,
@@ -40,6 +44,7 @@ import { UpvoteParticles } from '../components/FeedUpvoteInteractions';
 import { useCommunityUpvoteToggle } from '../hooks/useCommunityUpvoteToggle';
 import { colors as themeColors, colorsDark as themeColorsDark } from '../theme/designTokens'
 import { useTheme } from '../context/ThemeContext'
+import { layoutContentWidth } from '../constants/webLayout'
 import {
   getCommunityPalette,
   buildCommunityFeedStyles,
@@ -93,11 +98,12 @@ const TOPIC_FILTER_ICONS = {
 };
 
 /** Smooth shimmer skeleton loader for community feed. */
-function CommunityLoadingShimmer() {
+function CommunityLoadingShimmer({ scrollable = true }) {
   const { isDark } = useTheme()
   const palette = useMemo(() => getCommunityPalette(isDark), [isDark])
-  const { width = 375 } = useWindowDimensions();
-  const cardWidth = width - 64;
+  const { width: winW = 375 } = useWindowDimensions();
+  const layoutW = layoutContentWidth(winW);
+  const cardWidth = layoutW - 64;
   const imgH = Math.round(cardWidth * 0.75);
   const shimmer = useRef(new Animated.Value(0)).current;
 
@@ -123,12 +129,8 @@ function CommunityLoadingShimmer() {
     <Animated.View style={[s.skeletonBox, style, { width: w || '100%', height: h || 14, opacity }]} />
   );
 
-  return (
-    <ScrollView
-      style={s.loaderScroll}
-      contentContainerStyle={s.loaderContent}
-      showsVerticalScrollIndicator={false}
-    >
+  const skeletonCards = (
+    <>
       {[1, 2, 3].map((i) => (
         <View
           key={i}
@@ -185,11 +187,36 @@ function CommunityLoadingShimmer() {
           </View>
         </View>
       ))}
+    </>
+  )
+
+  if (!scrollable) {
+    return (
+      <View style={[s.loaderScroll, s.loaderContent]}>
+        {skeletonCards}
+      </View>
+    )
+  }
+
+  return (
+    <ScrollView
+      style={s.loaderScroll}
+      contentContainerStyle={s.loaderContent}
+      showsVerticalScrollIndicator={false}
+    >
+      {skeletonCards}
     </ScrollView>
   );
 }
 
 const TAB_BAR_HEIGHT = Platform.OS === 'ios' ? 70 : 60;
+
+/** Match HomeScreen feed header behavior */
+const SCROLL_THRESHOLD = 80
+const SCROLL_DIRECTION_THRESHOLD = 5
+const HEADER_ANIM_DURATION = 300
+/** Prefetch next page when user has scrolled this far (same idea as HomeScreen). */
+const COMMUNITY_PREFETCH_SCROLL_PROGRESS = 0.75
 
 const SCAN_BOX_SIZE = 240;
 
@@ -211,7 +238,7 @@ function QRScannerModal({ visible, onClose, onScanned }) {
         onScanned?.(client);
         onClose?.();
       } else {
-        Alert.alert('Unknown code', 'This QR code is not linked to a venue in Go Bahrain.');
+        Alert.alert('Unknown code', 'This QR code is not linked to a venue in SiyahaBH.');
       }
     },
     [onScanned, onClose]
@@ -818,39 +845,179 @@ export default function CommunitiesScreen() {
   const insets = useSafeAreaInsets()
   const [posts, setPosts] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [nextCursor, setNextCursor] = useState(null);
+  const [hasMore, setHasMore] = useState(true);
   const [activeTopic, setActiveTopic] = useState('all');
   const [showCreate, setShowCreate] = useState(false);
   const [showScanner, setShowScanner] = useState(false);
   const [scanInitialPlace, setScanInitialPlace] = useState(null);
   const [scanInitialClientUuid, setScanInitialClientUuid] = useState(null);
   const [fabExpanded, setFabExpanded] = useState(false);
-  const filterSlideAnim = useRef(new Animated.Value(0)).current;
-  const lastFeedScrollYRef = useRef(0);
-  const isFilterHiddenRef = useRef(false);
   const fabBottom = TAB_BAR_HEIGHT + 72 + (Platform.OS === 'android' ? insets.bottom : 0);
 
-  const loadPosts = useCallback(async (opts = {}) => {
-    const { isRefresh = false } = opts;
-    if (isRefresh) {
-      setRefreshing(true);
-    } else {
-      setPosts([]);
-      setLoading(true);
-    }
-    try {
-      const list = await fetchCommunityPosts(activeTopic);
-      setPosts(list);
-    } catch (e) {
-      console.error('[Community] load posts failed:', e);
-      setPosts([]);
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
-    }
-  }, [activeTopic]);
+  const scrollY = useRef(new Animated.Value(0)).current
+  const lastScrollY = useRef(0)
+  const headerTranslateY = useRef(new Animated.Value(0)).current
+  const headerVisibleRef = useRef(true)
+  const appendInFlightRef = useRef(false)
+  const nextCursorRef = useRef(null)
+  const activeTopicRef = useRef(activeTopic)
+  const pagingRef = useRef({
+    hasMore: true,
+    loadingMore: false,
+    loading: true,
+    refreshing: false,
+    loadMore: () => {},
+  })
+  const [headerBarHeight, setHeaderBarHeight] = useState(() => insets.top + 130)
 
-  useEffect(() => { loadPosts(); }, [loadPosts]);
+  useEffect(() => {
+    activeTopicRef.current = activeTopic
+  }, [activeTopic])
+
+  useEffect(() => {
+    nextCursorRef.current = nextCursor
+  }, [nextCursor])
+
+  const handleHeaderBarLayout = useCallback((event) => {
+    const h = event.nativeEvent.layout.height
+    if (h <= 0) return
+    setHeaderBarHeight((prev) => (Math.abs(prev - h) < 2 ? prev : h))
+  }, [])
+
+  const handleScroll = useMemo(
+    () =>
+      Animated.event(
+        [{ nativeEvent: { contentOffset: { y: scrollY } } }],
+        {
+          useNativeDriver: true,
+          listener: (e) => {
+            const y = e.nativeEvent.contentOffset.y
+            const diff = y - lastScrollY.current
+            lastScrollY.current = y
+
+            const { contentSize, layoutMeasurement } = e.nativeEvent
+            const contentH = contentSize?.height ?? 0
+            const viewH = layoutMeasurement?.height ?? 0
+            if (contentH > 1 && viewH > 1) {
+              const maxScrollY = contentH - viewH
+              const s = pagingRef.current
+              const canLoad = s.hasMore && !s.loadingMore && !s.loading && !s.refreshing
+              if (canLoad) {
+                if (maxScrollY <= 8) {
+                  s.loadMore()
+                } else {
+                  const progress = y / maxScrollY
+                  if (progress >= COMMUNITY_PREFETCH_SCROLL_PROGRESS) {
+                    s.loadMore()
+                  }
+                }
+              }
+            }
+
+            if (diff > SCROLL_DIRECTION_THRESHOLD && y > SCROLL_THRESHOLD && headerVisibleRef.current) {
+              headerVisibleRef.current = false
+              Animated.timing(headerTranslateY, {
+                toValue: -headerBarHeight,
+                duration: HEADER_ANIM_DURATION,
+                easing: Easing.out(Easing.cubic),
+                useNativeDriver: true,
+              }).start()
+            } else if (diff < -SCROLL_DIRECTION_THRESHOLD && !headerVisibleRef.current) {
+              headerVisibleRef.current = true
+              Animated.timing(headerTranslateY, {
+                toValue: 0,
+                duration: HEADER_ANIM_DURATION,
+                easing: Easing.out(Easing.cubic),
+                useNativeDriver: true,
+              }).start()
+            }
+          },
+        }
+      ),
+    [scrollY, headerTranslateY, headerBarHeight]
+  )
+
+  const fetchCommunityPage = useCallback(async (opts = {}) => {
+    const { append = false, isRefresh = false } = opts
+    if (append && appendInFlightRef.current) return
+    if (append) appendInFlightRef.current = true
+
+    const topicSnapshot = activeTopic
+    const cursor = append && !isRefresh ? nextCursorRef.current : null
+
+    try {
+      if (isRefresh) {
+        setRefreshing(true)
+      } else if (append) {
+        setLoadingMore(true)
+      } else {
+        setLoading(true)
+        setPosts([])
+      }
+
+      const result = await fetchCommunityPostsPage({
+        topicId: topicSnapshot,
+        limit: COMMUNITY_FEED_PAGE_SIZE,
+        cursor,
+      })
+
+      if (topicSnapshot !== activeTopicRef.current) return
+
+      if (append) {
+        setPosts((prev) => {
+          const seen = new Set(prev.map((p) => p.id))
+          const merged = [...prev]
+          for (const p of result.posts) {
+            if (!seen.has(p.id)) {
+              seen.add(p.id)
+              merged.push(p)
+            }
+          }
+          return merged
+        })
+      } else {
+        setPosts(result.posts)
+      }
+      setNextCursor(result.nextCursor)
+      setHasMore(result.hasMore)
+    } catch (e) {
+      console.error('[Community] load posts failed:', e)
+      if (!append && !isRefresh) {
+        setPosts([])
+        setHasMore(false)
+      }
+    } finally {
+      setLoading(false)
+      setRefreshing(false)
+      setLoadingMore(false)
+      if (append) appendInFlightRef.current = false
+    }
+  }, [activeTopic])
+
+  useEffect(() => {
+    setNextCursor(null)
+    setHasMore(true)
+    nextCursorRef.current = null
+    fetchCommunityPage({ append: false, isRefresh: false })
+  }, [activeTopic, fetchCommunityPage])
+
+  const handleLoadMore = useCallback(() => {
+    if (loadingMore || !hasMore || loading || refreshing || appendInFlightRef.current) return
+    fetchCommunityPage({ append: true })
+  }, [loadingMore, hasMore, loading, refreshing, fetchCommunityPage])
+
+  const handleRefresh = useCallback(() => {
+    fetchCommunityPage({ append: false, isRefresh: true })
+  }, [fetchCommunityPage])
+
+  useEffect(() => {
+    lastScrollY.current = 0
+    headerVisibleRef.current = true
+    headerTranslateY.setValue(0)
+  }, [activeTopic])
 
   const {
     handleUpvoteToggle,
@@ -878,107 +1045,64 @@ export default function CommunitiesScreen() {
     navigation.navigate('CommunityPostDetail', { post, focusComposer: true });
   }, [navigation]);
 
-  const setFilterHidden = useCallback((hidden) => {
-    if (isFilterHiddenRef.current === hidden) return
-    isFilterHiddenRef.current = hidden
-    Animated.timing(filterSlideAnim, {
-      toValue: hidden ? 1 : 0,
-      duration: 180,
-      easing: Easing.out(Easing.cubic),
-      useNativeDriver: false,
-    }).start()
-  }, [filterSlideAnim])
-
-  const handleFeedScroll = useCallback((event) => {
-    const nextY = Math.max(0, event.nativeEvent.contentOffset.y || 0)
-    const delta = nextY - lastFeedScrollYRef.current
-
-    // Always show at top to avoid a hidden filter on pull-to-refresh.
-    if (nextY <= 8) {
-      setFilterHidden(false)
-      lastFeedScrollYRef.current = nextY
-      return
-    }
-
-    if (delta > 6) {
-      setFilterHidden(true)
-    } else if (delta < -6) {
-      setFilterHidden(false)
-    }
-
-    lastFeedScrollYRef.current = nextY
-  }, [setFilterHidden])
-
-  const filterTranslateY = filterSlideAnim.interpolate({
-    inputRange: [0, 1],
-    outputRange: [0, -16],
-  })
-  const filterOpacity = filterSlideAnim.interpolate({
-    inputRange: [0, 1],
-    outputRange: [1, 0],
-  })
-  const filterMaxHeight = filterSlideAnim.interpolate({
-    inputRange: [0, 1],
-    outputRange: [66, 0],
-  })
+  pagingRef.current = {
+    hasMore,
+    loadingMore,
+    loading,
+    refreshing,
+    loadMore: handleLoadMore,
+  }
 
   return (
     <ScreenContainer style={s.screen}>
-      <View style={[s.communityTopWrap, { paddingTop: insets.top + 4 }]}>
-        <View style={s.header}>
-          <Text style={s.headerTitle}>Community</Text>
-          <Text style={s.headerSubtitle}>Discover Bahrain together</Text>
-        </View>
-
+      <View style={s.communityFeedRoot}>
         <Animated.View
+          pointerEvents="box-none"
           style={[
-            s.filterTabsWrap,
-            {
-              transform: [{ translateY: filterTranslateY }],
-              opacity: filterOpacity,
-              maxHeight: filterMaxHeight,
-            },
+            s.communityHeaderBar,
+            { backgroundColor: palette.bg, transform: [{ translateY: headerTranslateY }] },
           ]}
+          onLayout={handleHeaderBarLayout}
         >
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.filterScroll}>
-            {TOPICS.map((t) => {
-              const on = activeTopic === t.id;
-              const iconName = TOPIC_FILTER_ICONS[t.id] || 'ellipse-outline';
-              return (
-                <TouchableOpacity
-                  key={t.id}
-                  style={[s.filterChip, on && s.filterChipOn]}
-                  onPress={() => setActiveTopic(t.id)}
-                  activeOpacity={0.82}
-                  hitSlop={{ top: 4, bottom: 4, left: 2, right: 2 }}
-                  accessibilityRole="button"
-                  accessibilityLabel={t.label}
-                  accessibilityState={{ selected: on }}
-                >
-                  <Ionicons
-                    name={iconName}
-                    size={22}
-                    color={on ? '#FFF' : C.sub}
-                  />
-                </TouchableOpacity>
-              );
-            })}
-          </ScrollView>
+          <PageHeadingBar
+            title="Community"
+            subtitle="Discover Bahrain together"
+            backgroundColor={palette.bg}
+          />
+          <View style={s.communityFilterOuter}>
+            <View style={s.filterTabsWrap}>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.filterScroll}>
+                {TOPICS.map((t) => {
+                  const on = activeTopic === t.id;
+                  const iconName = TOPIC_FILTER_ICONS[t.id] || 'ellipse-outline';
+                  return (
+                    <TouchableOpacity
+                      key={t.id}
+                      style={[s.filterChip, on && s.filterChipOn]}
+                      onPress={() => setActiveTopic(t.id)}
+                      activeOpacity={0.82}
+                      hitSlop={{ top: 4, bottom: 4, left: 2, right: 2 }}
+                      accessibilityRole="button"
+                      accessibilityLabel={t.label}
+                      accessibilityState={{ selected: on }}
+                    >
+                      <Ionicons
+                        name={iconName}
+                        size={22}
+                        color={on ? '#FFF' : palette.sub}
+                      />
+                    </TouchableOpacity>
+                  );
+                })}
+              </ScrollView>
+            </View>
+          </View>
         </Animated.View>
-      </View>
 
-      {/* Ask Khalid — full-screen blurred modal */}
-      {/* Removed Ask Khalid modal */}
-
-      {loading && posts.length === 0 ? (
-        <CommunityLoadingShimmer />
-      ) : (
-        <GHFlatList
-          data={posts}
+        <AnimatedGHFlatList
+          style={s.feedArea}
+          data={loading && posts.length === 0 ? [] : posts}
           keyExtractor={(item) => item.id}
-          ListHeaderComponent={
-            null
-          }
           renderItem={({ item, index }) => (
             <CommunityFeedCardWrapper itemId={item.id} index={index}>
               <CommunityReviewCard
@@ -992,22 +1116,51 @@ export default function CommunitiesScreen() {
               />
             </CommunityFeedCardWrapper>
           )}
-          contentContainerStyle={feedStyles.feed}
+          contentContainerStyle={[
+            feedStyles.feed,
+            { paddingTop: headerBarHeight },
+            posts.length === 0 && { flexGrow: 1 },
+          ]}
           showsVerticalScrollIndicator={false}
-          onScroll={handleFeedScroll}
+          onScroll={handleScroll}
           scrollEventThrottle={16}
-          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => loadPosts({ isRefresh: true })} colors={[C.red]} />}
-          ListEmptyComponent={(
-            <View style={feedStyles.empty}>
-              <View style={feedStyles.emptyIcon}>
-                <Ionicons name="people" size={48} color={C.red} />
+          onEndReached={handleLoadMore}
+          onEndReachedThreshold={0.35}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={handleRefresh}
+              {...(Platform.OS === 'android' ? { progressViewOffset: headerBarHeight } : {})}
+              colors={[C.red]}
+            />
+          }
+          ListFooterComponent={
+            loadingMore && hasMore ? (
+              <View style={{ paddingVertical: 28, alignItems: 'center' }}>
+                <ActivityIndicator size="large" color={palette.accent || C.red} />
+                <Text style={{ marginTop: 10, fontSize: 14, color: palette.sub }}>Loading more…</Text>
               </View>
-              <Text style={feedStyles.emptyTitle}>No reviews yet</Text>
-              <Text style={feedStyles.emptySub}>Be the first to share your experience and help build our community</Text>
-            </View>
-          )}
+            ) : !hasMore && posts.length > 0 ? (
+              <View style={{ paddingVertical: 28, alignItems: 'center' }}>
+                <Text style={{ fontSize: 14, color: palette.sub }}>End of feed</Text>
+              </View>
+            ) : null
+          }
+          ListEmptyComponent={
+            loading && posts.length === 0 ? (
+              <CommunityLoadingShimmer scrollable={false} />
+            ) : (
+              <View style={feedStyles.empty}>
+                <View style={feedStyles.emptyIcon}>
+                  <Ionicons name="people" size={48} color={C.red} />
+                </View>
+                <Text style={feedStyles.emptyTitle}>No reviews yet</Text>
+                <Text style={feedStyles.emptySub}>Be the first to share your experience and help build our community</Text>
+              </View>
+            )
+          }
         />
-      )}
+      </View>
 
       <RevolverFabOverlay expanded={fabExpanded} onClose={() => setFabExpanded(false)} />
       <View style={[s.fabContainer, { bottom: fabBottom }]} pointerEvents="box-none">
@@ -1035,7 +1188,7 @@ export default function CommunitiesScreen() {
       <CreatePostModal
         visible={showCreate}
         onClose={() => { setShowCreate(false); setScanInitialPlace(null); setScanInitialClientUuid(null); }}
-        onPosted={() => loadPosts({ isRefresh: true })}
+        onPosted={handleRefresh}
         initialPlace={scanInitialPlace}
         initialClientUuid={scanInitialClientUuid}
       />
@@ -1050,32 +1203,28 @@ export default function CommunitiesScreen() {
 
 const s = StyleSheet.create({
   screen: { backgroundColor: C.bg },
-  communityTopWrap: {
+  communityFeedRoot: {
+    flex: 1,
+    minHeight: 0,
+  },
+  communityHeaderBar: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    zIndex: 10,
+    ...Platform.select({
+      android: { elevation: 8 },
+      default: {},
+    }),
+  },
+  communityFilterOuter: {
     paddingHorizontal: 10,
     paddingBottom: 6,
   },
-  header: {
-    width: '100%',
-    alignItems: 'center',
-    paddingHorizontal: 20,
-    paddingBottom: 8,
-  },
-  headerTitle: {
-    fontSize: 20,
-    fontWeight: '800',
-    color: C.text,
-    letterSpacing: -0.5,
-    textAlign: 'center',
-    width: '100%',
-  },
-  headerSubtitle: {
-    fontSize: 13,
-    fontWeight: '500',
-    color: C.sub,
-    marginTop: 2,
-    letterSpacing: 0.1,
-    textAlign: 'center',
-    width: '100%',
+  feedArea: {
+    flex: 1,
+    minHeight: 0,
   },
   filterTabsWrap: {
     paddingBottom: 4,

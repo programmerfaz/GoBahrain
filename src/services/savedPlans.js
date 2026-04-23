@@ -57,7 +57,10 @@ export const createSavedPlan = async ({ title, planData }) => {
 
 export const updateSavedPlan = async (id, { title, planData, shareCode, sharePermission }) => {
   const patch = {}
-  if (title != null) patch.title = title
+  if (title != null) {
+    const t = typeof title === 'string' ? title.trim() : ''
+    patch.title = t || 'My plan'
+  }
   if (planData != null) patch.plan_data = planData
   if (shareCode !== undefined) patch.share_code = shareCode
   if (sharePermission != null) patch.share_permission = sharePermission

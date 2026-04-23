@@ -4,6 +4,7 @@
  * Uses EXPO_PUBLIC_SUPABASE_URL so public object URLs match your project (hardcoded fallback for legacy).
  */
 const DEFAULT_SUPABASE_ORIGIN = 'https://zonhaprelkjyjugpqfdn.supabase.co'
+const DEFAULT_IMAGE_QUALITY = 60
 
 export const getSupabaseOrigin = () => {
   const url = process.env.EXPO_PUBLIC_SUPABASE_URL
@@ -13,13 +14,34 @@ export const getSupabaseOrigin = () => {
 
 const getSupabasePublicStorageBase = () => `${getSupabaseOrigin()}/storage/v1/object/public`
 
+const optimizeSupabaseImageUrl = (url) => {
+  if (!url || typeof url !== 'string') return null
+  const trimmed = url.trim()
+  if (!trimmed) return null
+
+  const [withoutHash, hash = ''] = trimmed.split('#')
+  const [pathPart, queryPart = ''] = withoutHash.split('?')
+  const isSupabaseStorageUrl =
+    pathPart.includes('/storage/v1/object/public/') || pathPart.includes('/storage/v1/render/image/public/')
+
+  if (!isSupabaseStorageUrl) return trimmed
+
+  const publicPath = pathPart.replace('/storage/v1/render/image/public/', '/storage/v1/object/public/')
+  const params = new URLSearchParams(queryPart)
+  params.set('quality', String(DEFAULT_IMAGE_QUALITY))
+
+  const query = params.toString()
+  const hashSuffix = hash ? `#${hash}` : ''
+  return `${publicPath}${query ? `?${query}` : ''}${hashSuffix}`
+}
+
 export function ensureImageUrl(url, bucket = 'gobahrain-post-images') {
   if (!url || typeof url !== 'string') return null
   const trimmed = String(url).trim()
   if (!trimmed) return null
-  if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) return trimmed
+  if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) return optimizeSupabaseImageUrl(trimmed)
   const cleanPath = trimmed.startsWith(`${bucket}/`) ? trimmed.replace(`${bucket}/`, '') : trimmed
-  return `${getSupabasePublicStorageBase()}/${bucket}/${cleanPath}`
+  return optimizeSupabaseImageUrl(`${getSupabasePublicStorageBase()}/${bucket}/${cleanPath}`)
 }
 
 /** post_image / client_image: string path, JSON array/object, or full URL */
@@ -49,9 +71,9 @@ export function parseStorageImageUrl(raw) {
   if (!str || typeof str !== 'string') return null
   str = str.trim()
   if (!str) return null
-  if (str.startsWith('http://') || str.startsWith('https://')) return str
+  if (str.startsWith('http://') || str.startsWith('https://')) return optimizeSupabaseImageUrl(str)
   const cleanPath = str.startsWith('gobahrain-post-images/') ? str.replace('gobahrain-post-images/', '') : str
-  return `${getSupabasePublicStorageBase()}/gobahrain-post-images/${cleanPath}`
+  return optimizeSupabaseImageUrl(`${getSupabasePublicStorageBase()}/gobahrain-post-images/${cleanPath}`)
 }
 
 /**
@@ -79,15 +101,15 @@ export function resolvePublicImageUrl(raw) {
   const coerced = coerceImageValueToString(raw)
   if (coerced == null) return null
   const t = coerced
-  if (t.startsWith('http://') || t.startsWith('https://')) return t
+  if (t.startsWith('http://') || t.startsWith('https://')) return optimizeSupabaseImageUrl(t)
   // Path-only storage URL from API or dashboard (no host)
   if (t.includes('/storage/v1/object/public/')) {
     const origin = getSupabaseOrigin()
     const path = t.startsWith('/') ? t.slice(1) : t
-    if (!path.startsWith('http')) return `${origin}/${path}`
+    if (!path.startsWith('http')) return optimizeSupabaseImageUrl(`${origin}/${path}`)
   }
   if (t.startsWith('storage/v1/object/public/')) {
-    return `${getSupabaseOrigin()}/${t}`
+    return optimizeSupabaseImageUrl(`${getSupabaseOrigin()}/${t}`)
   }
   const fromStorage = parseStorageImageUrl(t)
   if (fromStorage) return fromStorage

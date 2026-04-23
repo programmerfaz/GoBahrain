@@ -60,7 +60,7 @@ npx expo start
 ```bash
 # In Android Studio or adb
 adb shell pm clear <your.package.name>
-# Or: Settings > Apps > GoBahrain > Storage > Clear Data
+# Or: Settings > Apps > SiyahaBH > Storage > Clear Data
 ```
 
 ### Method 4: Manual AsyncStorage Clear (React Native Debugger)

@@ -107,14 +107,49 @@ async function queryPineconeSafe(vector, topK, filter) {
   }
 }
 
+/** Max chars of profile summary appended to label-based retrieval (embedding input). */
+const RETRIEVAL_PERSONA_CLIP = 720
+
+/**
+ * Stable fingerprint so UI prefetch invalidates when persona text changes.
+ * @param {unknown} summary
+ * @returns {string}
+ */
+export const retrievalPersonaCacheKey = (summary) => {
+  const t = typeof summary === 'string' ? summary.trim() : ''
+  if (!t) return ''
+  return `${t.length}:${t.slice(0, 96)}`
+}
+
+const clipPersonaForRetrievalQuery = (summary) => {
+  const t = typeof summary === 'string' ? summary.trim() : ''
+  if (!t) return ''
+  if (t.length <= RETRIEVAL_PERSONA_CLIP) return t
+  return `${t.slice(0, RETRIEVAL_PERSONA_CLIP).trim()}…`
+}
+
+/**
+ * @param {string} coreLine
+ * @param {string} [profileNarrative]
+ */
+const buildRetrievalEmbeddingText = (coreLine, profileNarrative) => {
+  const p = clipPersonaForRetrievalQuery(profileNarrative)
+  if (!p) return coreLine
+  return `${coreLine} Traveller context: ${p}`
+}
+
 // ─── Step 1: Places (from preferences) ─────────────────────────────
 
-export async function fetchPlaces(preferenceLabels) {
+export async function fetchPlaces(preferenceLabels, retrievalOptions = {}) {
+  const profileNarrative =
+    typeof retrievalOptions?.profileNarrative === 'string' ? retrievalOptions.profileNarrative : ''
   try {
-    const text =
+    const core =
       preferenceLabels.length > 0
         ? `Places in Bahrain for ${preferenceLabels.join(', ')}`
-        : 'Popular places and things to do in Bahrain';
+        : 'Popular places and things to do in Bahrain'
+
+    const text = buildRetrievalEmbeddingText(core, profileNarrative)
 
     const embedding = await getEmbedding(text);
 
@@ -151,12 +186,16 @@ export async function fetchPlaces(preferenceLabels) {
 
 // ─── Step 2: Restaurants (from food preferences) ────────────────────
 
-export async function fetchRestaurants(foodLabels) {
+export async function fetchRestaurants(foodLabels, retrievalOptions = {}) {
+  const profileNarrative =
+    typeof retrievalOptions?.profileNarrative === 'string' ? retrievalOptions.profileNarrative : ''
   try {
-    const text =
+    const core =
       foodLabels.length > 0
         ? `Restaurants in Bahrain serving ${foodLabels.join(', ')}`
-        : 'Best restaurants and food spots in Bahrain';
+        : 'Best restaurants and food spots in Bahrain'
+
+    const text = buildRetrievalEmbeddingText(core, profileNarrative)
 
     const embedding = await getEmbedding(text);
 
@@ -164,18 +203,40 @@ export async function fetchRestaurants(foodLabels) {
     const cuisineMap = {
       Cuisine: 'Cuisine',
       Local: 'Cuisine',
+      'Arabic/middle eastern': 'Cuisine',
+      'Arabic/Middle Eastern': 'Cuisine',
+      'middle eastern': 'Cuisine',
+      'Middle Eastern': 'Cuisine',
+      arabic: 'Cuisine',
+      Arabic: 'Cuisine',
       Seafood: 'Seafood',
       American: 'American',
+      american: 'American',
       International: 'International',
+      international: 'International',
       Global: 'International',
       Cafe: 'Cafe',
       Café: 'Cafe',
+      cafe: 'Cafe',
       Asian: 'Asian',
+      asian: 'Asian',
       Italian: 'Italian',
+      italian: 'Italian',
       Japanese: 'Japanese',
+      japanese: 'Japanese',
       Chinese: 'Chinese',
+      chinese: 'Chinese',
+      Chinenese: 'Chinese',
+      chinenese: 'Chinese',
       Thai: 'Thai',
       Turkish: 'Turkish',
+      turkish: 'Turkish',
+      Lebanese: 'Lebanese',
+      lebanese: 'Lebanese',
+      Indian: 'SouthAsian',
+      indian: 'SouthAsian',
+      Pakistani: 'SouthAsian',
+      pakistani: 'SouthAsian',
       'South Asian': 'SouthAsian',
       Subcontinent: 'SouthAsian',
       'Fast Food': 'Fastfood',
@@ -197,14 +258,19 @@ export async function fetchRestaurants(foodLabels) {
     };
 
     if (foodLabels.length > 0) {
+      const cuisineQueries = foodLabels.map((label) => fetchByCuisineField(cuisineMap[label] || label));
+      const nearestQuery = queryPineconeSafe(embedding, 12, {
+        client_type: { $eq: 'restaurant' },
+      });
+      const [cuisineResults, nearest] = await Promise.all([
+        Promise.all(cuisineQueries),
+        nearestQuery,
+      ]);
+
       const seen = new Set();
       const exactMatches = [];
-      const similarMatches = [];
-
-      for (const label of foodLabels) {
-        const pineconeValue = cuisineMap[label] || label;
-        const filtered = await fetchByCuisineField(pineconeValue);
-        for (const m of filtered) {
+      for (const list of cuisineResults) {
+        for (const m of list || []) {
           if (!seen.has(m.id)) {
             seen.add(m.id);
             exactMatches.push(m);
@@ -212,10 +278,8 @@ export async function fetchRestaurants(foodLabels) {
         }
       }
 
-      const nearest = await queryPineconeSafe(embedding, 12, {
-        client_type: { $eq: 'restaurant' },
-      });
-      for (const m of nearest) {
+      const similarMatches = [];
+      for (const m of nearest || []) {
         if (!seen.has(m.id)) {
           seen.add(m.id);
           similarMatches.push(m);
@@ -236,9 +300,11 @@ export async function fetchRestaurants(foodLabels) {
 
 // ─── Step 3: Breakfast spots ────────────────────────────────────────
 
-export async function fetchBreakfastSpots() {
+export async function fetchBreakfastSpots(retrievalOptions = {}) {
+  const profileNarrative =
+    typeof retrievalOptions?.profileNarrative === 'string' ? retrievalOptions.profileNarrative : ''
   try {
-    const text = 'Breakfast cafes and bakeries in Bahrain';
+    const text = buildRetrievalEmbeddingText('Breakfast cafes and bakeries in Bahrain', profileNarrative)
     const embedding = await getEmbedding(text);
 
     const spots = await queryPineconeSafe(embedding, 3, {
@@ -332,12 +398,16 @@ const enrichEventMatchesWithEventsTableImages = async (events) => {
   });
 };
 
-export async function fetchEvents(preferenceLabels) {
+export async function fetchEvents(preferenceLabels, retrievalOptions = {}) {
+  const profileNarrative =
+    typeof retrievalOptions?.profileNarrative === 'string' ? retrievalOptions.profileNarrative : ''
   try {
-    const text =
+    const core =
       preferenceLabels.length > 0
         ? `Events in Bahrain related to ${preferenceLabels.join(', ')}`
-        : 'Popular events and activities happening in Bahrain';
+        : 'Popular events and activities happening in Bahrain'
+
+    const text = buildRetrievalEmbeddingText(core, profileNarrative)
 
     const embedding = await getEmbedding(text);
 
@@ -476,7 +546,9 @@ export async function fetchPineconePlacesForChat(userMessage, options = {}) {
   const generalLabels = options.generalLabels || [];
   const activityLabels = options.activityLabels || [];
   const foodLabels = options.foodLabels || [];
+  const personaSummary = typeof options.personaSummary === 'string' ? options.personaSummary.trim() : '';
   const preferenceParts = [];
+  if (personaSummary) preferenceParts.push(`Persona: ${personaSummary.slice(0, 400)}`);
   if (generalLabels.length) preferenceParts.push(`About them: ${generalLabels.join(', ')}`);
   if (activityLabels.length) preferenceParts.push(`Activities they like: ${activityLabels.join(', ')}`);
   if (foodLabels.length) preferenceParts.push(`Food they like: ${foodLabels.join(', ')}`);
@@ -730,7 +802,7 @@ export async function fetchNearbyPOIs(userLat, userLng, mode = 'all', options = 
 
 // ─── Step 4: GPT smart day plan from combined records ───────────
 
-function formatMatchForPrompt(match, idx) {
+function formatMatchForPrompt(match, idx, originLat = null, originLng = null) {
   const m = match.metadata || {};
   const name = m.event_name || m.business_name || m.name || m.place_name || `Place ${idx + 1}`;
   const lat = m.lat || m.latitude || m.Lat || '';
@@ -739,6 +811,14 @@ function formatMatchForPrompt(match, idx) {
   const parts = [`${idx + 1}. ${name}`];
   if (isEvent) parts.push(`[EVENT]`);
   if (lat && lng) parts.push(`Lat: ${lat} | Lng: ${lng}`);
+  if (
+    lat && lng &&
+    typeof originLat === 'number' && !Number.isNaN(originLat) &&
+    typeof originLng === 'number' && !Number.isNaN(originLng)
+  ) {
+    const d = haversineKm(originLat, originLng, parseFloat(lat), parseFloat(lng));
+    if (!Number.isNaN(d)) parts.push(`DistFromUserKm: ${d.toFixed(1)}`);
+  }
   if (m.client_type) parts.push(`Type: ${m.client_type}`);
   if (m.description) parts.push(`Desc: ${m.description}`);
   if (m.cuisine || m.cuisine_type) parts.push(`Cuisine: ${m.cuisine || m.cuisine_type}`);
@@ -758,11 +838,60 @@ function formatMatchForPrompt(match, idx) {
   return parts.join(' | ');
 }
 
-const MAX_MATCHES_FOR_PLAN = 28
-const CAP_EVENTS = 8
-const CAP_BREAKFAST = 4
-const CAP_PLACES = 10
-const CAP_RESTAURANTS = 14
+/** Caps per travel tier — nearby uses a smaller, distance-biased catalog; wide uses a larger island-wide slice. */
+const TRAVEL_TIER_CAPS = {
+  nearby: { MAX_MATCHES: 20, CAP_EVENTS: 5, CAP_BREAKFAST: 3, CAP_PLACES: 7, CAP_RESTAURANTS: 10 },
+  balanced: { MAX_MATCHES: 28, CAP_EVENTS: 8, CAP_BREAKFAST: 4, CAP_PLACES: 10, CAP_RESTAURANTS: 14 },
+  wide: { MAX_MATCHES: 40, CAP_EVENTS: 10, CAP_BREAKFAST: 5, CAP_PLACES: 14, CAP_RESTAURANTS: 18 },
+}
+
+const TRAVEL_TIER_GEO = {
+  nearby: { radiusKm: 8, minPerBucket: 2 },
+  balanced: { radiusKm: 15, minPerBucket: 3 },
+  wide: { radiusKm: 30, minPerBucket: 3 },
+}
+
+function coordsFromMatch(m) {
+  const meta = m?.metadata || {}
+  const la = parseFloat(meta.lat ?? meta.latitude ?? '')
+  const ln = parseFloat(meta.long ?? meta.longitude ?? meta.lng ?? '')
+  if (Number.isNaN(la) || Number.isNaN(ln) || (la === 0 && ln === 0)) return null
+  return { lat: la, lng: ln }
+}
+
+function normalizeTravelTier(t) {
+  if (t === 'nearby' || t === 'wide' || t === 'balanced') return t
+  return 'balanced'
+}
+
+function buildTravelExploreBlock(personalization) {
+  const tier = normalizeTravelTier(personalization?.travelExplore)
+  const hasOrigin =
+    typeof personalization?.originLat === 'number' &&
+    !Number.isNaN(personalization.originLat) &&
+    typeof personalization?.originLng === 'number' &&
+    !Number.isNaN(personalization.originLng)
+
+  const originHint = hasOrigin
+    ? 'Catalog candidates were ranked using distance from the user’s current GPS position (fresh fix at generate time). Match the travel tier: nearby = closest picks; balanced = strong matches biased toward reasonable distance; wide = strong matches biased toward spread across the island.'
+    : 'GPS was unavailable — catalog order is by relevance only; still follow the travel range below and keep geography sensible using catalog Area/location fields.'
+
+  if (tier === 'nearby') {
+    return `═══ TRAVEL RANGE (this session — nearby) ═══
+They want quick, close experiences — cluster the day geographically; avoid unnecessary cross-island hops.
+${originHint}
+Prefer 6–7 stops total (minimum rules still apply). Choose venues that keep driving time reasonable.`
+  }
+  if (tier === 'wide') {
+    return `═══ TRAVEL RANGE (this session — island-wide) ═══
+They’re willing to travel for standout picks — you may span Manama, Muharraq, Riffa, Southern areas, coast, etc. when the catalog supports it.
+${originHint}
+A richer day (up to 9 stops) is encouraged when the catalog has strong matches in different areas.`
+  }
+  return `═══ TRAVEL RANGE (this session — balanced) ═══
+Mix nearby gems with a few slightly farther highlights — a typical Bahrain day.
+${originHint}`
+}
 
 const pineconeScore = (m) => {
   const s = m?.score
@@ -796,13 +925,127 @@ const dedupeSortedByScore = (arr) => {
 }
 
 /**
- * Prefer high-similarity Pinecone hits across buckets so events/breakfast are not drowned out by restaurants.
+ * Compute a cluster anchor from the top-scoring matches when GPS origin is unavailable.
+ * Uses the centroid of the top K geocoded hits across places+restaurants (ignores events to avoid
+ * being dragged by a one-off concert on the other side of the island).
  */
-function selectMatchesForPlan(places, restaurants, breakfastSpots, events) {
-  const eventsU = dedupeSortedByScore(events).slice(0, CAP_EVENTS)
-  const breakfastU = dedupeSortedByScore(breakfastSpots).slice(0, CAP_BREAKFAST)
-  const placesU = dedupeSortedByScore(places).slice(0, CAP_PLACES)
-  const restaurantsU = dedupeSortedByScore(restaurants).slice(0, CAP_RESTAURANTS)
+function computeCatalogCentroid(places, restaurants) {
+  const pool = []
+  const pushTop = (arr, k) => {
+    const list = Array.isArray(arr) ? arr : []
+    const sorted = [...list].sort((a, b) => (b?.score || 0) - (a?.score || 0))
+    for (const m of sorted.slice(0, k)) {
+      const c = coordsFromMatch(m)
+      if (c) pool.push(c)
+    }
+  }
+  pushTop(places, 6)
+  pushTop(restaurants, 6)
+  if (pool.length === 0) return null
+  const lat = pool.reduce((s, c) => s + c.lat, 0) / pool.length
+  const lng = pool.reduce((s, c) => s + c.lng, 0) / pool.length
+  return { lat, lng }
+}
+
+/**
+ * Drop rows outside `radiusKm` of the anchor, but never starve a bucket below `minKeep`.
+ * If the radius-filtered list is too short, expand gradually.
+ */
+function geoFilterToCluster(bucket, anchor, radiusKm, minKeep) {
+  if (!anchor || !Array.isArray(bucket) || bucket.length === 0) return bucket
+  const decorated = bucket.map((m) => {
+    const c = coordsFromMatch(m)
+    const d = c ? haversineKm(anchor.lat, anchor.lng, c.lat, c.lng) : null
+    return { m, d: d == null ? Number.POSITIVE_INFINITY : d }
+  })
+  const levels = [radiusKm, radiusKm * 1.5, radiusKm * 2.25, Number.POSITIVE_INFINITY]
+  for (const r of levels) {
+    const kept = decorated.filter((x) => x.d <= r).map((x) => x.m)
+    if (kept.length >= Math.min(minKeep, bucket.length)) return kept
+  }
+  return bucket
+}
+
+/**
+ * Prefer high-similarity Pinecone hits across buckets so events/breakfast are not drowned out by restaurants.
+ * @param {object} [options]
+ * @param {string} [options.travelExplore] — 'nearby' | 'balanced' | 'wide'
+ * @param {number} [options.originLat]
+ * @param {number} [options.originLng]
+ */
+function selectMatchesForPlan(places, restaurants, breakfastSpots, events, options = {}) {
+  const tier = normalizeTravelTier(options.travelExplore)
+  const caps = TRAVEL_TIER_CAPS[tier] || TRAVEL_TIER_CAPS.balanced
+  const geo = TRAVEL_TIER_GEO[tier] || TRAVEL_TIER_GEO.balanced
+  const originLat = typeof options.originLat === 'number' && !Number.isNaN(options.originLat) ? options.originLat : null
+  const originLng = typeof options.originLng === 'number' && !Number.isNaN(options.originLng) ? options.originLng : null
+  const hasOrigin = originLat != null && originLng != null
+  const anchor = hasOrigin
+    ? { lat: originLat, lng: originLng }
+    : computeCatalogCentroid(places, restaurants)
+
+  const clusterPlaces = geoFilterToCluster(places, anchor, geo.radiusKm, geo.minPerBucket)
+  const clusterRestaurants = geoFilterToCluster(restaurants, anchor, geo.radiusKm, geo.minPerBucket)
+  const clusterBreakfast = geoFilterToCluster(breakfastSpots, anchor, geo.radiusKm, geo.minPerBucket)
+  const clusterEvents = geoFilterToCluster(events, anchor, geo.radiusKm * 1.25, Math.max(1, Math.floor(geo.minPerBucket / 2)))
+  places = clusterPlaces
+  restaurants = clusterRestaurants
+  breakfastSpots = clusterBreakfast
+  events = clusterEvents
+
+  /**
+   * Rank Pinecone bucket by relevance first, then apply travel tier vs user position:
+   * - nearby: closest venues first (full list)
+   * - balanced: top matches by score, then prefer closer among those (local day)
+   * - wide: top matches by score, then prefer farther among those (island-spanning)
+   * Without GPS, fall back to score-only ordering.
+   */
+  const takeBucket = (arr, cap) => {
+    const base = dedupeSortedByScore(arr)
+    if (!hasOrigin) {
+      return base.slice(0, cap)
+    }
+    const distKm = (m) => {
+      const c = coordsFromMatch(m)
+      if (!c) return null
+      return haversineKm(originLat, originLng, c.lat, c.lng)
+    }
+    if (tier === 'nearby') {
+      const scored = base.map((m) => {
+        const d = distKm(m)
+        const dk = d == null ? Number.POSITIVE_INFINITY : d
+        return { m, d: dk }
+      })
+      scored.sort((a, b) => a.d - b.d)
+      return scored.map((x) => x.m).slice(0, cap)
+    }
+    if (tier === 'balanced') {
+      const pool = base.slice(0, Math.min(base.length, cap * 3))
+      const scored = pool.map((m) => {
+        const d = distKm(m)
+        const dk = d == null ? Number.POSITIVE_INFINITY : d
+        return { m, d: dk }
+      })
+      scored.sort((a, b) => a.d - b.d)
+      return scored.map((x) => x.m).slice(0, cap)
+    }
+    if (tier === 'wide') {
+      const pool = base.slice(0, Math.min(base.length, cap * 4))
+      const scored = pool.map((m) => {
+        const d = distKm(m)
+        const dk = d == null ? -1 : d
+        return { m, d: dk }
+      })
+      scored.sort((a, b) => b.d - a.d)
+      return scored.map((x) => x.m).slice(0, cap)
+    }
+    return base.slice(0, cap)
+  }
+
+  const eventsU = takeBucket(events, caps.CAP_EVENTS)
+  const breakfastU = takeBucket(breakfastSpots, caps.CAP_BREAKFAST)
+  const placesU = takeBucket(places, caps.CAP_PLACES)
+  const restaurantsU = takeBucket(restaurants, caps.CAP_RESTAURANTS)
   const merged = [...eventsU, ...breakfastU, ...placesU, ...restaurantsU]
   const seen = new Set()
   const final = []
@@ -812,7 +1055,7 @@ function selectMatchesForPlan(places, restaurants, breakfastSpots, events) {
     seen.add(k)
     final.push(m)
   }
-  return final.slice(0, MAX_MATCHES_FOR_PLAN)
+  return final.slice(0, caps.MAX_MATCHES)
 }
 
 const primaryNameFromMatch = (m) => {
@@ -902,15 +1145,151 @@ const buildProfileSection = (personalization) => {
     return 'No saved onboarding profile is available — rely only on the choices below and the catalog.'
   }
   const lines = []
-  lines.push('═══ USER PROFILE (saved — personalize tone and picks) ═══')
-  if (hasNarrative) lines.push(`Persona summary: ${narrative}`)
-  if (hasG) lines.push(`General vibe / lifestyle: ${g.join(', ')} — reflect this in reasons and pacing (relaxed vs packed, family-friendly vs nightlife, etc.).`)
-  if (hasA) lines.push(`They usually enjoy: ${a.join(', ')} — align extra stops and descriptions with these when compatible with today’s activity picks.`)
-  if (hasF) lines.push(`They often like to eat: ${f.join(', ')} — use as a soft bias for meal personality even when today’s food picker differs.`)
+  lines.push('═══ WHO THIS USER IS (saved persona — treat as ground truth for tone, pacing, and picks) ═══')
+  if (hasNarrative) {
+    lines.push(`Persona summary (use this to shape every reason line and overall day vibe):\n"${narrative}"`)
+    lines.push('Make every stop feel like it was hand-picked for the person described above. The tone of each "reason" should subtly reflect their personality — not generic travel copy.')
+  }
+  if (hasG) lines.push(`Lifestyle / vibe tags: ${g.join(', ')} — reflect this in reasons and pacing (relaxed vs packed, family-friendly vs nightlife, premium vs budget, etc.).`)
+  if (hasA) lines.push(`Activity leanings: ${a.join(', ')} — prefer stops that lean into these themes when compatible with today’s picks.`)
+  if (hasF) lines.push(`Food personality: ${f.join(', ')} — use as a soft bias for meal personality even when today’s food picker differs.`)
   if (answers?.idealDay) lines.push(`Ideal day notes: ${String(answers.idealDay).trim()}`)
   if (answers?.avoidList) lines.push(`Avoid these constraints: ${String(answers.avoidList).trim()}`)
-  lines.push('If today’s explicit picks conflict, today’s picks win — but still keep the day feeling like it was built for this person.')
+  lines.push('If today’s explicit session picks conflict with the persona, today’s picks win — but keep the day feeling custom-built for this person.')
   return lines.join('\n')
+}
+
+const TIME_BUCKET_ORDER = { Morning: 0, Afternoon: 1, Evening: 2 }
+
+const coordsFromPlanRow = (row) => {
+  if (!row) return null
+  const la = parseFloat(row.lat)
+  const ln = parseFloat(row.lng)
+  if (Number.isNaN(la) || Number.isNaN(ln) || (la === 0 && ln === 0)) return null
+  return { lat: la, lng: ln }
+}
+
+const isBreakfastLike = (row) => {
+  if (!row) return false
+  if (row.type !== 'restaurant') return false
+  const meal = String(row.mealType || row.meal_type || '').toLowerCase()
+  if (meal.includes('breakfast')) return true
+  const name = String(row.spot || '').toLowerCase()
+  return name.includes('café') || name.includes('cafe') || name.includes('coffee') || name.includes('bakery')
+}
+
+/**
+ * Reorder stops inside each time bucket using nearest-neighbor from the previous
+ * stop (or user origin for the first stop) so the day flows geographically.
+ *
+ * Hard constraints preserved:
+ * - Time-bucket order (Morning → Afternoon → Evening) never changes.
+ * - The breakfast-style restaurant stays first in Morning.
+ * - The last restaurant in Evening stays last (dinner).
+ *
+ * Nearest-neighbor is O(n²) but with ≤9 stops this is trivial — and it's
+ * deterministic, so the LLM can't accidentally zigzag.
+ */
+export function optimizePlanRoute(plan, originLat = null, originLng = null) {
+  if (!Array.isArray(plan) || plan.length < 2) return plan
+
+  const byBucket = { Morning: [], Afternoon: [], Evening: [] }
+  for (const row of plan) {
+    const bucket = TIME_BUCKET_ORDER[row?.time] != null ? row.time : 'Afternoon'
+    byBucket[bucket].push(row)
+  }
+
+  const hasOrigin =
+    typeof originLat === 'number' && !Number.isNaN(originLat) &&
+    typeof originLng === 'number' && !Number.isNaN(originLng)
+
+  let cursor = hasOrigin ? { lat: originLat, lng: originLng } : null
+
+  const orderedBuckets = ['Morning', 'Afternoon', 'Evening']
+  const reordered = []
+
+  for (const bucket of orderedBuckets) {
+    const rows = byBucket[bucket]
+    if (!rows || rows.length === 0) continue
+
+    // Pin breakfast-style row to first slot in Morning.
+    let pinnedFirst = null
+    if (bucket === 'Morning') {
+      const breakfastIdx = rows.findIndex(isBreakfastLike)
+      if (breakfastIdx >= 0) {
+        pinnedFirst = rows.splice(breakfastIdx, 1)[0]
+      }
+    }
+
+    // Pin the last dinner-style restaurant to the end of Evening.
+    let pinnedLast = null
+    if (bucket === 'Evening') {
+      for (let i = rows.length - 1; i >= 0; i--) {
+        if (rows[i]?.type === 'restaurant') {
+          pinnedLast = rows.splice(i, 1)[0]
+          break
+        }
+      }
+    }
+
+    // Greedy nearest-neighbor over the remaining rows.
+    const remaining = rows.slice()
+    const picked = []
+    let localCursor = cursor
+    if (pinnedFirst) {
+      picked.push(pinnedFirst)
+      const c = coordsFromPlanRow(pinnedFirst)
+      if (c) localCursor = c
+    }
+    while (remaining.length > 0) {
+      let bestIdx = 0
+      let bestDist = Number.POSITIVE_INFINITY
+      for (let i = 0; i < remaining.length; i++) {
+        const c = coordsFromPlanRow(remaining[i])
+        if (!c) {
+          if (bestDist === Number.POSITIVE_INFINITY) bestIdx = i
+          continue
+        }
+        const d = localCursor
+          ? haversineKm(localCursor.lat, localCursor.lng, c.lat, c.lng)
+          : 0
+        if (d < bestDist) {
+          bestDist = d
+          bestIdx = i
+        }
+      }
+      const next = remaining.splice(bestIdx, 1)[0]
+      picked.push(next)
+      const nc = coordsFromPlanRow(next)
+      if (nc) localCursor = nc
+    }
+    if (pinnedLast) {
+      picked.push(pinnedLast)
+      const c = coordsFromPlanRow(pinnedLast)
+      if (c) localCursor = c
+    }
+
+    cursor = localCursor
+    reordered.push(...picked)
+  }
+
+  try {
+    let total = 0
+    let maxHop = 0
+    for (let i = 1; i < reordered.length; i++) {
+      const a = coordsFromPlanRow(reordered[i - 1])
+      const b = coordsFromPlanRow(reordered[i])
+      if (!a || !b) continue
+      const d = haversineKm(a.lat, a.lng, b.lat, b.lng)
+      total += d
+      if (d > maxHop) maxHop = d
+    }
+    if (reordered.length >= 2) {
+      console.log(`[aiPipeline] Plan route: ${reordered.length} stops, total=${total.toFixed(1)}km, maxHop=${maxHop.toFixed(1)}km`)
+    }
+  } catch (_) {}
+
+  return reordered
 }
 
 async function openAiPlanCompletion(messages, opts = {}) {
@@ -943,6 +1322,9 @@ async function openAiPlanCompletion(messages, opts = {}) {
  * @param {string[]} [personalization.profileFood] — onboarding food labels
  * @param {string} [personalization.profileNarrative] — AI-generated deep user summary
  * @param {{idealDay?: string, avoidList?: string}} [personalization.profileAnswers] — typed profile answers
+ * @param {'nearby'|'balanced'|'wide'} [personalization.travelExplore] — how far the user will travel this session
+ * @param {number} [personalization.originLat] — optional, for nearby-tier catalog ordering
+ * @param {number} [personalization.originLng]
  */
 export async function generateDayPlan(
   places,
@@ -953,14 +1335,22 @@ export async function generateDayPlan(
   foodLabels,
   personalization = {},
 ) {
-  const limitedMatches = selectMatchesForPlan(places, restaurants, breakfastSpots, events)
-  const placesText = limitedMatches.map((m, i) => formatMatchForPrompt(m, i)).join('\n')
+  const travelTier = normalizeTravelTier(personalization.travelExplore)
+  const originLat = typeof personalization.originLat === 'number' && !Number.isNaN(personalization.originLat) ? personalization.originLat : null
+  const originLng = typeof personalization.originLng === 'number' && !Number.isNaN(personalization.originLng) ? personalization.originLng : null
+  const limitedMatches = selectMatchesForPlan(places, restaurants, breakfastSpots, events, {
+    travelExplore: travelTier,
+    originLat,
+    originLng,
+  })
+  const placesText = limitedMatches.map((m, i) => formatMatchForPrompt(m, i, originLat, originLng)).join('\n')
   const catalogLower = catalogNameList(limitedMatches).map((n) => normalizeSpot(n))
 
   const hasPref = prefLabels.length > 0
   const hasFood = foodLabels.length > 0
   const hasEvents = events.length > 0
   const profileSection = buildProfileSection(personalization)
+  const travelBlock = buildTravelExploreBlock(personalization)
 
   const systemPrompt = `You are Khalid, a warm and friendly Bahraini local who absolutely loves showing visitors his beautiful island. You speak like a real friend — not a tour guide reading a brochure. Sprinkle in local Bahraini flavor ("habibi", "yalla", "inshallah", "wallah") naturally.
 
@@ -968,17 +1358,19 @@ YOU ARE GIVEN ${limitedMatches.length} real places, restaurants, and events in B
 
 ${profileSection}
 
+${travelBlock}
+
 ═══ MANDATORY MINIMUM (always include) ═══
 1. BREAKFAST spot (Morning) — a cafe, bakery, or breakfast restaurant
 2. LUNCH spot (Afternoon) — a restaurant for a proper meal
 3. DINNER spot (Evening) — a restaurant for dinner
 4. 3 PLACES to visit — sightseeing, cultural, nature, shopping, etc. spread across Morning, Afternoon, and Evening
 
-That is 6 stops minimum (3 meals + 3 places). You may add 7–9 stops if the catalog supports a richer day.
+That is 6 stops minimum (3 meals + 3 places). For a wider travel appetite and a large catalog, you may add up to 9 stops; for nearby-only days, stay closer to 6–7 stops when the catalog allows without breaking minimums.
 
 ═══ TODAY’S PICKS (this session — highest priority) ═══
 ${hasPref ? `🎯 Activity preferences: ${prefLabels.join(', ')}
-The user selected these for THIS plan. You MUST pick places that match them. "Photos" → photogenic/trendy; "Landmarks" → iconic sights; "Culture" / "History" → heritage; match their vibe.` : 'No specific activity preferences for this plan — choose a fun diverse mix (culture, shopping, sightseeing, nature).'}
+The user selected these for THIS plan. You MUST pick places that match them. "instagram" / "scenic" → photogenic spots; "sightseeing" / "historical" / "cultural" → iconic heritage places; "family friendly" / "parks" / "beach" / "nature" / "Adventure" → matching outdoor and activity vibes.` : 'No specific activity preferences for this plan — choose a fun diverse mix (culture, shopping, sightseeing, nature).'}
 
 ${hasFood ? `🍽️ Food preferences: ${foodLabels.join(', ')}
 They want ${foodLabels.join(' and ')} food for this plan.
@@ -997,10 +1389,25 @@ CRITICAL EVENT TIMING:
 - Never schedule an event outside its time window.
 - Use the event’s coordinates from the catalog.` : 'No events in the current catalog slice.'}
 
-═══ SCHEDULING (Bahrain is compact — no route optimization) ═══
-Morning: breakfast first, then a place.
+═══ SCHEDULING + ROUTE EFFICIENCY (CRITICAL — HARD CONSTRAINT) ═══
+${originLat != null && originLng != null
+  ? `The user is starting at ~(${originLat.toFixed(4)}, ${originLng.toFixed(4)}). Catalog rows include "DistFromUserKm" — the straight-line distance from that starting point. The catalog has already been geo-filtered around this origin, so every row is realistically reachable; stay tight within the cluster.`
+  : 'The user\'s GPS was unavailable — use each catalog row\'s Lat/Lng and Area to keep the route geographically sensible. The catalog is already clustered geographically; assume all rows are in the same broad region and do not scatter the day.'}
+
+Morning: breakfast first, then a nearby place.
 Afternoon: lunch, then place(s) — favour indoor/chill mid-day when it fits the user.
 Evening: a place then dinner (or dinner then a stroll-type place if it fits events).
+
+GEOGRAPHIC COHESION RULES (these override "best match" when in conflict):
+1. STRONG GEOGRAPHIC CONSISTENCY: the entire day should feel like one connected route. Do NOT include stops that are far apart unless absolutely necessary (e.g. a truly iconic spot the user explicitly asked for, or a time-locked event).
+2. No backtracking: if you order stops A → B → C, the distance from B to C must not pull the user back past A. Never go A → B → C when C is closer to A than to B.
+3. Adjacent-stop distance target: consecutive stops should typically be within ~${Math.round((TRAVEL_TIER_GEO[travelTier]?.radiusKm || 15) * 0.6)} km of each other. Two stops on opposite ends of the island in the same plan is almost always wrong.
+4. If multiple areas must appear in the plan, visit them in a single forward sweep (e.g. all stops in Area 1, then all in Area 2) — never bounce between areas.
+5. After each stop, the next stop should be one of the closest remaining candidates by Lat/Lng, unless skipping it breaks a minimum (breakfast, lunch, dinner) or an event's time window.
+6. The FIRST stop (breakfast) should be one of the closer options to the starting point — not the farthest catalog row.
+7. Moving between time buckets: the first stop of the next bucket should be near where the previous bucket ended, not on the opposite side of the island.
+8. Prefer two nearby good options over one slightly better option that adds 20+ km of driving.
+9. If you cannot satisfy a food/activity preference without breaking geographic cohesion, pick the closer alternative and briefly note the trade-off in its "reason".
 
 ═══ SMART RULES ═══
 - NEVER recommend a place marked "closed".
@@ -1019,7 +1426,8 @@ Reply ONLY with a valid JSON array — no markdown, no prose outside the array:
   { "spot": "Name", "time": "Morning", "type": "restaurant", "lat": 26.xxx, "lng": 50.xxx, "reason": "..." }
 ]`;
 
-  const userMsg = `${hasPref ? `🎯 Today’s activity preferences: ${prefLabels.join(', ')}` : '🎯 Today: no activity prefs — diverse mix'}
+  const userMsg = `🚗 Travel willingness this session: ${travelTier} (nearby = stay local; balanced = mix; wide = island-wide when worth it).
+${hasPref ? `🎯 Today’s activity preferences: ${prefLabels.join(', ')}` : '🎯 Today: no activity prefs — diverse mix'}
 ${hasFood ? `🍽️ Today’s food types: ${foodLabels.join(', ')}` : '🍽️ Today: open on food'}
 
 Catalog (${limitedMatches.length} rows):
@@ -1032,7 +1440,8 @@ Build Khalid’s perfect personalized day. Minimum 3 meals + 3 places. Include 1
     { role: 'user', content: userMsg },
   ]
 
-  let raw = await openAiPlanCompletion(messages, {})
+  const tokenBudget = travelTier === 'wide' ? 1800 : 1600
+  let raw = await openAiPlanCompletion(messages, { max_tokens: tokenBudget })
   let plan = parsePlanFromRaw(raw)
   let validation = plan ? validatePlan(plan, catalogLower) : { ok: false, reason: 'Parse failed' }
 
@@ -1045,13 +1454,13 @@ Catalog names for reference:
 ${catalogNameList(limitedMatches).slice(0, 40).join('\n')}`
     messages.push({ role: 'assistant', content: raw })
     messages.push({ role: 'user', content: repairUser })
-    raw = await openAiPlanCompletion(messages, {})
+    raw = await openAiPlanCompletion(messages, { max_tokens: tokenBudget })
     plan = parsePlanFromRaw(raw)
     validation = plan ? validatePlan(plan, catalogLower) : { ok: false, reason: 'Parse failed on retry' }
     if (!validation.ok) throw new Error(validation.reason || 'Could not parse day plan')
   }
 
-  return plan
+  return optimizePlanRoute(plan, originLat, originLng)
 }
 
 function pineconeBucketFromMatch(m) {
@@ -1266,18 +1675,21 @@ export async function enhancePlanStopAtIndex(
     ? personalization.profileActivity.filter(Boolean)
     : []
   const profileFood = Array.isArray(personalization.profileFood) ? personalization.profileFood.filter(Boolean) : []
+  const profileNarrative =
+    typeof personalization?.profileNarrative === 'string' ? personalization.profileNarrative : ''
+  const retrievalOpts = { profileNarrative }
 
   let fetched = []
   try {
     if (slot.type === 'place') {
       const labels = [...new Set([...sessionActivity, ...profileActivity])]
-      fetched = await fetchPlaces(labels)
+      fetched = await fetchPlaces(labels, retrievalOpts)
     } else if (slot.type === 'restaurant') {
       const labels = [...new Set([...sessionFood, ...profileFood])]
-      fetched = await fetchRestaurants(labels)
+      fetched = await fetchRestaurants(labels, retrievalOpts)
     } else if (slot.type === 'event') {
       const labels = [...new Set([...sessionActivity, ...profileActivity])]
-      fetched = await fetchEvents(labels)
+      fetched = await fetchEvents(labels, retrievalOpts)
     }
   } catch (e) {
     console.warn('[enhancePlanStopAtIndex] catalog fetch failed:', e?.message)
@@ -1304,7 +1716,7 @@ export async function enhancePlanStopAtIndex(
 
   if (candidates.length === 0 && slot.type === 'place') {
     try {
-      const broad = await fetchPlaces([])
+      const broad = await fetchPlaces([], retrievalOpts)
       fetched = mergeCatalogForEnrich(broad, fetched)
       candidates = buildCandidatesFromPool(broad)
     } catch (_) {
@@ -1314,7 +1726,7 @@ export async function enhancePlanStopAtIndex(
 
   if (candidates.length === 0 && slot.type === 'restaurant') {
     try {
-      const broad = await fetchRestaurants([])
+      const broad = await fetchRestaurants([], retrievalOpts)
       fetched = mergeCatalogForEnrich(broad, fetched)
       candidates = buildCandidatesFromPool(broad)
     } catch (_) {
@@ -1324,7 +1736,7 @@ export async function enhancePlanStopAtIndex(
 
   if (candidates.length === 0 && slot.type === 'event') {
     try {
-      const broad = await fetchEvents([])
+      const broad = await fetchEvents([], retrievalOpts)
       fetched = mergeCatalogForEnrich(broad, fetched)
       candidates = buildCandidatesFromPool(broad)
     } catch (_) {

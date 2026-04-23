@@ -1,0 +1,672 @@
+
+  const applyShareCodeFromString = useCallback(async (rawCode) => {
+    const code = normalizeShareCode(rawCode);
+    if (code.length < 6) {
+      Alert.alert('Invalid code', 'Enter the full share code.');
+      return;
+    }
+    setJoinCodeBusy(true);
+    try {
+      const payload = await fetchSharedPlanByCode(code);
+      if (!payload?.plan_data) {
+        Alert.alert('Not found', 'Check the code and try again.');
+        return;
+      }
+      const planArr = Array.isArray(payload.plan_data) ? payload.plan_data : [];
+      const enriched = await enrichPlanWithClientData(planArr, [], allPlaceMarkers);
+      setDayPlan(attachPlanRowKeys(enriched));
+      setPineconeMatches([]);
+      setError(null);
+      setDrawerStep(3);
+      setActiveSavedPlanId(payload.id);
+      const ownerId = payload.owner_id;
+      const perm = payload.share_permission === 'edit' ? 'edit' : 'view';
+      const uid = user?.id;
+      if (uid && ownerId && uid === ownerId) {
+        setSharedCollaboration({ code, role: 'owner', planId: payload.id, ownerId });
+      } else if (perm === 'edit') {
+        setSharedCollaboration({ code, role: 'editor', planId: payload.id, ownerId });
+      } else {
+        setSharedCollaboration({ code, role: 'viewer', planId: payload.id, ownerId });
+      }
+      setJoinCodeInput('');
+      setRevealingPins(true);
+      setVisiblePinCount(0);
+      sheetOpacity.setValue(0);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
+      requestAnimationFrame(() => {
+        fitMapToPlan(enriched);
+      });
+    } catch (e) {
+      Alert.alert('Could not open plan', e?.message ?? 'Try again.');
+    } finally {
+      setJoinCodeBusy(false);
+    }
+  }, [allPlaceMarkers, user?.id, fitMapToPlan, sheetOpacity]);
+
+  const handleOpenSavedPlanRow = useCallback(async (row) => {
+    if (!row?.plan_data) return;
+    const planArr = Array.isArray(row.plan_data) ? row.plan_data : [];
+    setJoinCodeBusy(true);
+    try {
+      const enriched = await enrichPlanWithClientData(planArr, [], allPlaceMarkers);
+      setDayPlan(attachPlanRowKeys(enriched));
+      setPineconeMatches([]);
+      setError(null);
+      setDrawerStep(3);
+      setActiveSavedPlanId(row.id);
+      setSharedCollaboration(null);
+      setRevealingPins(true);
+      setVisiblePinCount(0);
+      sheetOpacity.setValue(0);
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
+      requestAnimationFrame(() => {
+        fitMapToPlan(enriched);
+      });
+    } catch (e) {
+      Alert.alert('Could not load plan', e?.message ?? 'Try again.');
+    } finally {
+      setJoinCodeBusy(false);
+    }
+  }, [allPlaceMarkers, fitMapToPlan, sheetOpacity]);
+
+  const handleSavePlanToCloud = useCallback(async () => {
+    if (!dayPlan?.length) {
+      Alert.alert('Nothing to save', 'Generate or open a plan first.');
+      return;
+    }
+    if (planReadOnly) {
+      Alert.alert('View only', 'This plan is shared for viewing only.');
+      return;
+    }
+    setSavePlanBusy(true);
+    try {
+      const payload = serializePlanForStorage(dayPlan);
+      if (sharedCollaboration?.role === 'editor' && sharedCollaboration.code) {
+        await pushSharedPlanUpdate(sharedCollaboration.code, payload);
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
+        Alert.alert('Saved', 'Your edits are synced to the shared plan.');
+        return;
+      }
+      if (activeSavedPlanId) {
+        await updateSavedPlan(activeSavedPlanId, { planData: payload });
+        await refreshSavedPlans();
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
+        Alert.alert('Saved', 'Your plan is updated.');
+      } else {
+        const defaultTitle = `My plan · ${new Date().toLocaleDateString()}`;
+        const id = await createSavedPlan({ title: defaultTitle, planData: payload });
+        if (id) setActiveSavedPlanId(id);
+        await refreshSavedPlans();
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
+        Alert.alert('Saved', 'Your plan is stored in Saved plans.');
+      }
+    } catch (e) {
+      Alert.alert('Save failed', e?.message ?? 'Try again.');
+    } finally {
+      setSavePlanBusy(false);
+    }
+  }, [dayPlan, activeSavedPlanId, refreshSavedPlans, planReadOnly, sharedCollaboration]);
+
+  const handleOpenShareModal = useCallback(async () => {
+    if (!dayPlan?.length) {
+      Alert.alert('Nothing to share', 'Create a plan first.');
+      return;
+    }
+    if (planReadOnly) {
+      Alert.alert('View only', 'You cannot change sharing on a view-only plan.');
+      return;
+    }
+    setShareModalBusy(true);
+    try {
+      let planId = activeSavedPlanId;
+      if (!planId) {
+        const payload = serializePlanForStorage(dayPlan);
+        planId = await createSavedPlan({
+          title: `Plan · ${new Date().toLocaleDateString()}`,
+          planData: payload,
+        });
+        if (planId) setActiveSavedPlanId(planId);
+        await refreshSavedPlans();
+      }
+      if (!planId) {
+        Alert.alert('Save first', 'Could not save plan for sharing.');
+        return;
+      }
+      const rows = await listSavedPlans();
+      const row = rows.find((r) => r.id === planId);
+      setSharePermissionDraft(row?.share_permission === 'edit' ? 'edit' : 'view');
+      setShareModalCode(row?.share_code || null);
+      setShowSharePlanModal(true);
+    } catch (e) {
+      Alert.alert('Could not open sharing', e?.message ?? 'Try again.');
+    } finally {
+      setShareModalBusy(false);
+    }
+  }, [dayPlan, activeSavedPlanId, refreshSavedPlans, planReadOnly]);
+
+  const handleConfirmShareSettings = useCallback(async () => {
+    if (!activeSavedPlanId) return;
+    setShareModalBusy(true);
+    try {
+      const code = await enableSharingForPlan(activeSavedPlanId, sharePermissionDraft);
+      setShareModalCode(code);
+      await refreshSavedPlans();
+      const link = ExpoLinking.createURL(`plan/${code}`);
+      await Clipboard.setStringAsync(`${link}\nCode: ${code}`);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
+      Alert.alert('Copied', 'Link and code are on your clipboard.');
+    } catch (e) {
+      Alert.alert('Sharing failed', e?.message ?? 'Try again.');
+    } finally {
+      setShareModalBusy(false);
+    }
+  }, [activeSavedPlanId, sharePermissionDraft, refreshSavedPlans]);
+
+  const handleCopyShareLinkOnly = useCallback(async () => {
+    if (!shareModalCode) return;
+    try {
+      const link = ExpoLinking.createURL(`plan/${shareModalCode}`);
+      await Clipboard.setStringAsync(`${link}\nCode: ${shareModalCode}`);
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+      Alert.alert('Copied', 'Link and code copied.');
+    } catch (_) {
+      /* ignore */
+    }
+  }, [shareModalCode]);
+
+  const handleDisableSharing = useCallback(async () => {
+    if (!activeSavedPlanId) return;
+    setShareModalBusy(true);
+    try {
+      await disableSharingForPlan(activeSavedPlanId);
+      setShareModalCode(null);
+      await refreshSavedPlans();
+    } catch (e) {
+      Alert.alert('Could not turn off sharing', e?.message ?? 'Try again.');
+    } finally {
+      setShareModalBusy(false);
+    }
+  }, [activeSavedPlanId, refreshSavedPlans]);
+
+  const appliedLinkCodeRef = useRef(null)
+  useEffect(() => {
+    const raw = route.params?.shareCode || route.params?.code
+    if (!raw) return
+    const n = normalizeShareCode(String(raw))
+    if (n.length < 6) return
+    if (appliedLinkCodeRef.current === n) return
+    appliedLinkCodeRef.current = n
+    applyShareCodeFromString(n)
+  }, [route.params?.shareCode, route.params?.code, applyShareCodeFromString])
+
+  useEffect(() => {
+    const onUrl = ({ url }) => {
+      const c = parseShareCodeFromUrl(url)
+      if (c) applyShareCodeFromString(c)
+    }
+    const sub = ExpoLinking.addEventListener('url', onUrl)
+    ExpoLinking.getInitialURL().then((url) => {
+      const c = parseShareCodeFromUrl(url || '')
+      if (c) applyShareCodeFromString(c)
+    })
+    return () => sub.remove()
+  }, [applyShareCodeFromString])
+
+  useEffect(() => {
+    if (!planCollaboratorEdit || !sharedCollaboration?.code) return
+    if (!dayPlan?.length) return
+    const t = setTimeout(() => {
+      pushSharedPlanUpdate(sharedCollaboration.code, serializePlanForStorage(dayPlan)).catch((e) =>
+        console.warn('[AI Plan] shared save', e?.message),
+      )
+    }, 2500)
+    return () => clearTimeout(t)
+  }, [dayPlan, planCollaboratorEdit, sharedCollaboration])
+
+  const togglePreference = (id) => {
+    setSelectedPreferences((prev) =>
+      prev.includes(id) ? prev.filter((p) => p !== id) : [...prev, id]
+    );
+  };
+
+  const toggleFoodCategory = (id) => {
+    setSelectedFoodCategories((prev) =>
+      prev.includes(id) ? prev.filter((f) => f !== id) : [...prev, id]
+    );
+  };
+
+  const startBackgroundPrefetch = (prefLabels) => {
+    const key = (prefLabels || []).join('|');
+    if (!key) return;
+    const cached = prefetchRef.current;
+    const hasValidPrefetch =
+      cached.prefsKey === key &&
+      Array.isArray(cached.places) &&
+      cached.places.length > 0 &&
+      Array.isArray(cached.events) &&
+      cached.events.length > 0;
+    if (hasValidPrefetch) {
+      return;
+    }
+    prefetchRef.current = {
+      prefsKey: key,
+      places: null,
+      breakfastSpots: null,
+      events: null,
+    };
+    (async () => {
+      try {
+        const [places, events] = await Promise.all([
+          fetchPlaces(prefLabels),
+          fetchEvents(prefLabels),
+        ]);
+        prefetchRef.current = {
+          prefsKey: key,
+          places,
+          breakfastSpots: null,
+          events,
+        };
+      } catch {
+        // best-effort prefetch; ignore errors
+      }
+    })();
+  };
+
+  const handleSurpriseMe = () => {
+    if (surpriseSpinning) return;
+    setSurpriseSpinning(true);
+    setSurprisePicked(null);
+
+    let tick = 0;
+    const totalTicks = 20;
+    const finalIdx = Math.floor(Math.random() * SURPRISE_THEMES.length);
+
+    const interval = setInterval(() => {
+      tick += 1;
+      setSurpriseIndex(tick % SURPRISE_THEMES.length);
+      if (tick >= totalTicks) {
+        clearInterval(interval);
+        setSurpriseIndex(finalIdx);
+        setSurprisePicked(SURPRISE_THEMES[finalIdx]);
+        setSurpriseSpinning(false);
+
+        // Auto-generate after a short reveal pause
+        setTimeout(() => {
+          const theme = SURPRISE_THEMES[finalIdx];
+          const prefLabels = theme.prefs;
+          const foodLabels = theme.food;
+
+          setActiveSavedPlanId(null);
+          setSharedCollaboration(null);
+          setDayPlan(null);
+          setPineconeMatches([]);
+          setError(null);
+          setLoading(true);
+          setLoadingStatus('Getting your location…');
+          setDrawerStep(3);
+          lastPrefLabelsRef.current = prefLabels;
+          lastFoodLabelsRef.current = foodLabels;
+
+          getCachedFeedImages()
+            .then((cached) => {
+              const c = Array.isArray(cached) ? cached : [];
+              if (c.length > 0) setSpotPreviews(c);
+              return c;
+            })
+            .then((c) =>
+              fetchSpotPreviewsFromSupabase().then((fresh) => {
+                const f = Array.isArray(fresh) ? fresh : [];
+                if (f.length > c.length) setSpotPreviews(f);
+              }),
+            )
+            .catch(() => {});
+
+          (async () => {
+            let generatedPlan = null;
+            try {
+              const { originLat, originLng } = await resolveOriginCoordsForPlanGeneration({ preferFreshFix: true })
+              setLoadingStatus(`Scouting venues & live posts for your ${theme.label.toLowerCase()} day…`)
+
+              const [
+                places,
+                restaurants,
+                breakfastSpots,
+                events,
+              ] = await Promise.all([
+                fetchPlaces(prefLabels),
+                fetchRestaurants(foodLabels),
+                fetchBreakfastSpots(),
+                fetchEvents(prefLabels),
+              ]);
+
+              console.log(`[Surprise ${theme.label}] ${places.length}P ${restaurants.length}R ${breakfastSpots.length}B ${events.length}E`);
+
+              const allMatches = [...places, ...restaurants, ...breakfastSpots, ...events];
+              setPineconeMatches(allMatches);
+
+              setLoadingStatus('Shortlisting restaurants & cafés that fit your vibe…');
+              await new Promise((res) => setTimeout(res, 380));
+              setLoadingStatus(`Khalid is crafting your ${theme.label.toLowerCase()} day…`);
+              const plan = await generateDayPlan(places, restaurants, breakfastSpots, events, prefLabels, foodLabels, {
+                profileGeneral: generalLabels,
+                profileActivity: activityLabels,
+                profileFood: savedProfileFoodLabels,
+                profileNarrative: preferences?.profileSummary || '',
+                profileAnswers: preferences?.profileAnswers || {},
+                travelExplore: 'balanced',
+                originLat,
+                originLng,
+              });
+              generatedPlan = plan;
+              const enriched = await enrichPlanWithClientData(plan, allMatches, allPlaceMarkers);
+              setDayPlan(attachPlanRowKeys(enriched));
+              setError(null);
+
+              const validMarkers = buildMapMarkers(plan, allPlaceMarkers).filter(m => m.lat && m.lng);
+              const coords = validMarkers.map(m => ({ latitude: m.lat, longitude: m.lng }));
+              const u = userLocationRef.current;
+              if (u?.latitude != null && u?.longitude != null) {
+                coords.push({ latitude: u.latitude, longitude: u.longitude });
+              }
+              if (coords.length > 0 && mapRef.current) {
+                markProgrammaticMapMove(2200);
+                mapRef.current.fitToCoordinates(coords, {
+                  edgePadding: { top: 80, right: 60, bottom: SCREEN_HEIGHT * 0.35, left: 60 },
+                  animated: true,
+                });
+              }
+    } catch (err) {
+      console.warn('[AI Plan] API error:', err?.message);
+      generatedPlan = null;
+      setDayPlan(null);
+      setError(err?.message || 'Could not generate your plan. Try again.');
+    } finally {
+      setLoading(false);
+      setLoadingStatus('');
+      if (generatedPlan && generatedPlan.length > 0) {
+                setRevealingPins(true);
+                setVisiblePinCount(0);
+                sheetOpacity.setValue(0);
+              } else {
+                sheetOpacity.setValue(1);
+                lastSnap.current = SNAP_POINTS[0];
+                Animated.spring(sheetAnim, {
+                  toValue: SNAP_POINTS[0],
+                  useNativeDriver: true,
+                  tension: 80,
+                  friction: 12,
+                }).start();
+              }
+            }
+          })();
+        }, 1200);
+      }
+    }, 80 + tick * 8);
+  };
+
+  const startSetup = () => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {})
+    setPlanGenerationSuccess(false)
+    setRevealingPins(false)
+    setVisiblePinCount(0)
+    sheetOpacity.setValue(1)
+    setActiveSavedPlanId(null)
+    setSharedCollaboration(null)
+    setSelectedPreferences(Array.isArray(preferences?.activityIds) ? preferences.activityIds : [])
+    setSelectedFoodCategories(Array.isArray(preferences?.foodIds) ? preferences.foodIds : [])
+    setDayPlan(null)
+    setPineconeMatches([])
+    setError(null)
+    setSpotPreviews([])
+    setPlanModalStep(1)
+    setTravelExploreId('balanced')
+
+    doorLeft.setValue(-SCREEN_WIDTH / 2)
+    doorRight.setValue(SCREEN_WIDTH / 2)
+    doorIconScale.setValue(0)
+    doorIconOpacity.setValue(0)
+    doorFade.setValue(1)
+    setDoorVisible(true)
+
+    planModalBackdrop.setValue(1)
+    planModalScale.setValue(1)
+    planModalOpacity.setValue(1)
+
+    Animated.sequence([
+      Animated.parallel([
+        Animated.spring(doorIconScale, { toValue: 1, tension: 120, friction: 8, useNativeDriver: true }),
+        Animated.timing(doorIconOpacity, { toValue: 1, duration: 200, useNativeDriver: true }),
+      ]),
+      Animated.delay(100),
+      Animated.parallel([
+        Animated.timing(doorLeft, { toValue: 0, duration: 380, easing: Easing.bezier(0.4, 0, 0.2, 1), useNativeDriver: true }),
+        Animated.timing(doorRight, { toValue: 0, duration: 380, easing: Easing.bezier(0.4, 0, 0.2, 1), useNativeDriver: true }),
+      ]),
+    ]).start(() => {
+      skipOpenAnim.current = true
+      setShowPlanModal(true)
+
+      requestAnimationFrame(() => {
+        Animated.parallel([
+          Animated.timing(doorIconOpacity, { toValue: 0, duration: 150, useNativeDriver: true }),
+          Animated.timing(doorIconScale, { toValue: 0.6, duration: 150, useNativeDriver: true }),
+        ]).start(() => {
+          Animated.parallel([
+            Animated.timing(doorLeft, { toValue: -SCREEN_WIDTH / 2, duration: 400, easing: Easing.bezier(0.4, 0, 0.2, 1), useNativeDriver: true }),
+            Animated.timing(doorRight, { toValue: SCREEN_WIDTH / 2, duration: 400, easing: Easing.bezier(0.4, 0, 0.2, 1), useNativeDriver: true }),
+          ]).start(() => {
+            setDoorVisible(false)
+          })
+        })
+      })
+    })
+  };
+
+  const handleSharePlanWithFriends = useCallback(async () => {
+    const { message, title } = formatPlanShareMessage(dayPlan);
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+    try {
+      await Share.share(
+        Platform.OS === 'ios'
+          ? { message, title }
+          : { message, title: title || 'SiyahaBH' },
+      );
+    } catch (_) {
+      /* dismissed */
+    }
+  }, [dayPlan]);
+
+  const renderPlanTimelineOverviewHeader = useCallback(() => {
+    if (!dayPlan?.length) return null
+    const mealCount = dayPlan.filter((i) => i.type === 'restaurant').length
+    const reel = dayPlan.slice(0, 6).map((stop) => {
+      const thumbUri = pickPlanStopThumbUri(stop, allPlaceMarkers)
+      return { key: stop._planRowKey || `${stop.spot}-${stop.lat}`, uri: thumbUri }
+    })
+    const sharedBanner =
+      sharedCollaboration?.role === 'viewer'
+        ? 'View-only shared plan'
+        : sharedCollaboration?.role === 'editor'
+          ? 'Shared plan — your edits sync to the owner'
+          : sharedCollaboration?.role === 'owner'
+            ? 'Your saved plan (you can edit and re-share)'
+            : null
+    const titleLabel =
+      sharedCollaboration?.role === 'viewer' || sharedCollaboration?.role === 'editor'
+        ? 'Shared Bahrain day'
+        : 'Your Bahrain day'
+    const canEditSavedPlanTitle =
+      !!activeSavedPlanId &&
+      !planReadOnly &&
+      (sharedCollaboration == null || sharedCollaboration.role === 'owner')
+    const rowForTitle = savedPlansList.find((p) => p.id === activeSavedPlanId)
+    const savedTitleRaw = typeof rowForTitle?.title === 'string' ? rowForTitle.title.trim() : ''
+    const primaryTitle = canEditSavedPlanTitle && savedTitleRaw ? savedTitleRaw : titleLabel
+    return (
+      <View style={styles.planLuxuryOverviewCard} accessibilityRole="summary">
+        <View style={styles.planLuxuryOverviewAccentTop} />
+        {sharedBanner ? (
+          <View style={styles.planShareBanner} accessibilityRole="text">
+            <Text style={styles.planShareBannerText}>{sharedBanner}</Text>
+          </View>
+        ) : null}
+        <View style={styles.planLuxuryOverviewHeaderRow}>
+          <TouchableOpacity
+            style={styles.planLuxuryOverviewBackBtn}
+            activeOpacity={0.8}
+            onPress={() => {
+              setDrawerStep(0)
+              setDayPlan(null)
+              setError(null)
+              setActiveSavedPlanId(null)
+              setSharedCollaboration(null)
+            }}
+            accessibilityRole="button"
+            accessibilityLabel="Back to plans"
+          >
+            <Ionicons name="chevron-back" size={20} color="#0F172A" />
+          </TouchableOpacity>
+          <View style={styles.planLuxuryOverviewTitleBlock}>
+            <View style={styles.planLuxuryOverviewTitleRow}>
+              <Text style={[styles.planLuxuryOverviewTitle, { flex: 1, minWidth: 0 }]} numberOfLines={2}>
+                {primaryTitle}
+              </Text>
+              {canEditSavedPlanTitle ? (
+                <TouchableOpacity
+                  style={styles.planLuxuryOverviewTitleEditBtn}
+                  activeOpacity={0.75}
+                  onPress={() => handleOpenEditSavedPlanTitle(activeSavedPlanId)}
+                  accessibilityRole="button"
+                  accessibilityLabel="Edit plan title"
+                >
+                  <Ionicons name="create-outline" size={20} color="#64748B" />
+                </TouchableOpacity>
+              ) : null}
+            </View>
+            <Text
+              style={styles.planLuxuryOverviewSubtitle}
+              numberOfLines={2}
+              accessibilityLabel={`${dayPlan.length} stops, ${mealCount} meals`}
+            >
+              {mealCount === 0
+                ? `${dayPlan.length} hand-picked stops`
+                : `${dayPlan.length} stops, including ${mealCount} meal${mealCount === 1 ? '' : 's'}`}
+            </Text>
+          </View>
+          <View style={styles.planLuxuryOverviewHeaderActions}>
+            {!planReadOnly ? (
+              <TouchableOpacity
+                style={styles.savePlanHeaderBtn}
+                activeOpacity={0.75}
+                onPress={handleSavePlanToCloud}
+                disabled={savePlanBusy}
+                accessibilityRole="button"
+                accessibilityLabel="Save plan to cloud"
+              >
+                <Text style={styles.savePlanHeaderBtnText}>{savePlanBusy ? '…' : 'Save'}</Text>
+              </TouchableOpacity>
+            ) : null}
+            {!planReadOnly ? (
+              <TouchableOpacity
+                style={styles.planLuxuryOverviewIconBtn}
+                activeOpacity={0.75}
+                onPress={handleOpenShareModal}
+                disabled={shareModalBusy}
+                accessibilityRole="button"
+                accessibilityLabel="Share link and code"
+              >
+                <Ionicons name="link-outline" size={18} color={themeColors.primary} />
+              </TouchableOpacity>
+            ) : null}
+            <TouchableOpacity
+              style={styles.planLuxuryOverviewShareBtn}
+              activeOpacity={0.75}
+              onPress={handleSharePlanWithFriends}
+              accessibilityRole="button"
+              accessibilityLabel="Share plan as text"
+            >
+              <Ionicons name="share-outline" size={18} color={themeColors.primary} />
+            </TouchableOpacity>
+          </View>
+        </View>
+        <View style={styles.planLuxuryOverviewMapRow}>
+          <View style={styles.planLuxuryOverviewMapRowSplit}>
+            <TouchableOpacity
+              style={[styles.planLuxuryOverviewMapBtn, styles.planLuxuryOverviewMapBtnFlex]}
+              onPress={handleOpenInGoogleMaps}
+              disabled={openingMaps}
+              activeOpacity={0.85}
+              accessibilityRole="button"
+              accessibilityLabel="Open route in Google Maps"
+            >
+              {openingMaps ? (
+                <ActivityIndicator size="small" color="#64748B" />
+              ) : (
+                <>
+                  <Ionicons name="navigate-outline" size={18} color="#475569" />
+                  <Text style={styles.planLuxuryOverviewMapBtnText}>Maps</Text>
+                </>
+              )}
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[
+                styles.planLuxuryOverviewMapBtn,
+                styles.planLuxuryOverviewMapBtnFlex,
+                styles.planLuxuryOverviewAddBtn,
+                planReadOnly && { opacity: 0.45 },
+              ]}
+              onPress={() => {
+                if (planReadOnly) return
+                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {})
+                setShowSearchModal(true)
+              }}
+              disabled={planReadOnly}
+              activeOpacity={0.85}
+              accessibilityRole="button"
+              accessibilityLabel="Add a stop from the catalog"
+            >
+              <Ionicons name="add-circle-outline" size={18} color="#0096FF" />
+              <Text style={styles.planLuxuryOverviewAddBtnText}>Add stop</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.planLuxuryReelContent}
+          accessibilityRole="scrollbar"
+          accessibilityLabel="Spot photo previews"
+        >
+          {reel.map(({ key, uri }) => (
+            <View key={String(key)} style={styles.planLuxuryReelThumbWrap}>
+              {uri ? (
+                <PreviewImage uri={uri} style={styles.planLuxuryReelThumbImg} noFade />
+              ) : (
+                <View style={[styles.planLuxuryReelThumbImg, styles.planLuxuryReelThumbEmpty]}>
+                  <Ionicons name="image-outline" size={18} color="#C7C7CC" />
+                </View>
+              )}
+            </View>
+          ))}
+        </ScrollView>
+      </View>
+    )
+  }, [
+    dayPlan,
+    allPlaceMarkers,
+    openingMaps,
+    handleOpenInGoogleMaps,
+    handleSharePlanWithFriends,
+    setShowSearchModal,
+    sharedCollaboration,
+    planReadOnly,
+    handleSavePlanToCloud,
+    savePlanBusy,
+    handleOpenShareModal,
+    shareModalBusy,
+    activeSavedPlanId,
+    savedPlansList,
+    handleOpenEditSavedPlanTitle,
+  ])
+

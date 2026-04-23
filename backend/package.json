@@ -1,7 +1,7 @@
 {
   "name": "gobahrain-backend",
   "version": "1.0.0",
-  "description": "GoBahrain AI Plan API",
+  "description": "SiyahaBH AI Plan API",
   "main": "src/index.js",
   "type": "module",
   "scripts": {

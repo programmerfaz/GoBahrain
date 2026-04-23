@@ -7,6 +7,8 @@ import {
   getLabelsFromIds,
   getGeneralLabelsFromIds,
 } from '../constants/preferences';
+import { fetchUserPersonalization } from '../services/personalization';
+import { supabase } from '../config/supabase';
 
 const ONBOARDING_KEY = '@gobahrain_onboarding_complete';
 const PREFERENCES_KEY = '@gobahrain_user_preferences';
@@ -58,6 +60,40 @@ export function UserPreferencesProvider({ children }) {
   useEffect(() => {
     loadStored();
   }, [loadStored]);
+
+  const hydrateFromSupabase = useCallback(async () => {
+    try {
+      const remote = await fetchUserPersonalization();
+      if (!remote) return;
+      setPreferencesState((prev) => {
+        const merged = {
+          generalIds: remote.generalIds.length ? remote.generalIds : (prev?.generalIds ?? []),
+          activityIds: remote.activityIds.length ? remote.activityIds : (prev?.activityIds ?? []),
+          foodIds: remote.foodIds.length ? remote.foodIds : (prev?.foodIds ?? []),
+          profileAnswers: Object.keys(remote.profileAnswers || {}).length
+            ? remote.profileAnswers
+            : (prev?.profileAnswers ?? {}),
+          profileSummary: remote.personaSummary || prev?.profileSummary || '',
+        };
+        AsyncStorage.setItem(PREFERENCES_KEY, JSON.stringify(merged)).catch(() => {});
+        return merged;
+      });
+    } catch (_) {
+      // Keep local state; remote hydration is best-effort.
+    }
+  }, []);
+
+  useEffect(() => {
+    hydrateFromSupabase();
+    const { data: sub } = supabase.auth.onAuthStateChange((event) => {
+      if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED' || event === 'INITIAL_SESSION') {
+        hydrateFromSupabase();
+      }
+    });
+    return () => {
+      try { sub?.subscription?.unsubscribe?.(); } catch (_) {}
+    };
+  }, [hydrateFromSupabase]);
 
   const setPreferences = useCallback(async (next) => {
     let merged = null;

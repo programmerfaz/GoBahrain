@@ -22,10 +22,8 @@ const M = {
 /** General "about you" options — who they are, how they travel, what they value. Not the same as plan activities/food. */
 export const GENERAL_PREFERENCES = [
   { id: 'solo', label: 'Solo', icon: 'person-outline', color: M.muted, group: 'companion' },
-  { id: 'couples', label: 'Couples', icon: 'heart-outline', color: M.event, group: 'companion' },
   { id: 'family', label: 'Family', icon: 'people-outline', color: M.success, group: 'companion' },
   { id: 'friends', label: 'Friends', icon: 'people-circle-outline', color: M.afternoon, group: 'companion' },
-  { id: 'business', label: 'Business', icon: 'briefcase-outline', color: M.indigo, group: 'companion' },
   { id: 'pace-relaxed', label: 'Relaxed', icon: 'leaf-outline', color: M.success, group: 'pace' },
   { id: 'pace-balanced', label: 'Balanced', icon: 'scale-outline', color: M.morning, group: 'pace' },
   { id: 'pace-packed', label: 'Packed', icon: 'flash-outline', color: M.dining, group: 'pace' },
@@ -35,9 +33,7 @@ export const GENERAL_PREFERENCES = [
   { id: 'culture-history', label: 'Culture', icon: 'library-outline', color: M.indigo, group: 'interests' },
   { id: 'nature-outdoors', label: 'Nature', icon: 'earth-outline', color: M.success, group: 'interests' },
   { id: 'foodie', label: 'Foodie', icon: 'restaurant-outline', color: M.dining, group: 'interests' },
-  { id: 'nightlife', label: 'Nightlife', icon: 'wine-outline', color: M.evening, group: 'interests' },
   { id: 'shopping', label: 'Shopping', icon: 'storefront-outline', color: M.event, group: 'interests' },
-  { id: 'relaxation-wellness', label: 'Wellness', icon: 'fitness-outline', color: M.afternoon, group: 'interests' },
   { id: 'adventure', label: 'Adventure', icon: 'bicycle-outline', color: M.dining, group: 'interests' },
   { id: 'instagram-spots', label: 'Instagram', icon: 'images-outline', color: M.event, group: 'interests' },
   { id: 'local-authentic', label: 'Local', icon: 'compass-outline', color: M.morning, group: 'interests' },
@@ -46,7 +42,6 @@ export const GENERAL_PREFERENCES = [
   { id: 'beaches-sun', label: 'Beaches', icon: 'umbrella-outline', color: M.morning, group: 'interests' },
   { id: 'quiet-peaceful', label: 'Quiet', icon: 'volume-mute-outline', color: M.muted, group: 'interests' },
   { id: 'social-lively', label: 'Social', icon: 'chatbubbles-outline', color: M.afternoon, group: 'interests' },
-  { id: 'hidden-gems', label: 'Gems', icon: 'star-outline', color: M.indigo, group: 'interests' },
   { id: 'plan-structured', label: 'Structured', icon: 'list-outline', color: M.morning, group: 'planning' },
   { id: 'plan-flexible', label: 'Flexible', icon: 'shuffle-outline', color: M.success, group: 'planning' },
   { id: 'plan-mix', label: 'Mixed', icon: 'git-compare-outline', color: M.afternoon, group: 'planning' },
@@ -57,30 +52,56 @@ export const GENERAL_PREFERENCES = [
 
 /** Activity types — for plan generation only (what to do). */
 export const PREFERENCES = [
-  { id: 'sightseeing', label: 'Landmarks', icon: 'business-outline', color: M.afternoon },
-  { id: 'instagram', label: 'Photos', icon: 'camera-outline', color: M.event },
+  { id: 'sightseeing', label: 'sightseeing', icon: 'business-outline', color: M.afternoon },
+  { id: 'instagram', label: 'instagram', icon: 'camera-outline', color: M.event },
   { id: 'leisure', label: 'Leisure', icon: 'bed-outline', color: M.success },
-  { id: 'nature', label: 'Nature', icon: 'footsteps-outline', color: M.success },
-  { id: 'historical', label: 'History', icon: 'time-outline', color: M.indigo },
-  { id: 'cultural', label: 'Culture', icon: 'color-palette-outline', color: M.indigo },
+  { id: 'nature', label: 'nature', icon: 'footsteps-outline', color: M.success },
+  { id: 'historical', label: 'historical', icon: 'time-outline', color: M.indigo },
+  { id: 'cultural', label: 'cultural', icon: 'color-palette-outline', color: M.indigo },
   { id: 'adventure', label: 'Adventure', icon: 'rocket-outline', color: M.dining },
+  { id: 'family-friendly', label: 'family friendly', icon: 'people-outline', color: M.success },
+  { id: 'beach', label: 'beach', icon: 'umbrella-outline', color: M.morning },
+  { id: 'parks', label: 'parks', icon: 'leaf-outline', color: M.success },
+  { id: 'scenic', label: 'scenic', icon: 'image-outline', color: M.event },
+];
+
+/** How far the user will travel for the AI day plan — drives catalog size, ordering, and prompts. */
+export const TRAVEL_EXPLORE_OPTIONS = [
+  {
+    id: 'nearby',
+    label: 'Not much',
+    description: 'Nearby spots only (quick, close experiences)',
+    icon: 'walk-outline',
+  },
+  {
+    id: 'balanced',
+    label: 'Normal',
+    description: 'A balanced mix of nearby and slightly farther places',
+    icon: 'trail-sign-outline',
+  },
+  {
+    id: 'wide',
+    label: 'Anything',
+    description: 'No limits — include the best options across wider areas',
+    icon: 'globe-outline',
+  },
 ];
 
 /** Food types — for plan generation only (what to eat). */
 export const FOOD_CATEGORIES = [
-  { id: 'cuisine', label: 'Local', icon: 'home-outline', color: M.dining },
-  { id: 'seafood', label: 'Seafood', icon: 'boat-outline', color: M.afternoon },
-  { id: 'american', label: 'American', icon: 'fast-food-outline', color: M.morning },
-  { id: 'international', label: 'Global', icon: 'globe-outline', color: M.indigo },
-  { id: 'cafe', label: 'Café', icon: 'cafe-outline', color: M.morning },
-  { id: 'asian', label: 'Asian', icon: 'layers-outline', color: M.dining },
+  { id: 'local', label: 'local', icon: 'home-outline', color: M.dining },
+  { id: 'arabic-middle-eastern', label: 'Arabic/middle eastern', icon: 'home-outline', color: M.dining },
+  { id: 'indian', label: 'indian', icon: 'flame-outline', color: M.morning },
+  { id: 'american', label: 'american', icon: 'fast-food-outline', color: M.morning },
+  { id: 'italian', label: 'italian', icon: 'pizza-outline', color: M.success },
+  { id: 'chinenese', label: 'Chinenese', icon: 'grid-outline', color: M.dining },
   { id: 'japanese', label: 'Japanese', icon: 'fish-outline', color: M.dining },
-  { id: 'chinese', label: 'Chinese', icon: 'grid-outline', color: M.dining },
-  { id: 'thai', label: 'Thai', icon: 'bonfire-outline', color: M.dining },
   { id: 'turkish', label: 'Turkish', icon: 'beer-outline', color: M.dining },
-  { id: 'italian', label: 'Italian', icon: 'pizza-outline', color: M.success },
-  { id: 'south-asian', label: 'Subcontinent', icon: 'flame-outline', color: M.morning },
-  { id: 'fast-food', label: 'Quick', icon: 'timer-outline', color: M.dining },
+  { id: 'lebanese', label: 'lebanese', icon: 'restaurant-outline', color: M.dining },
+  { id: 'international', label: 'international', icon: 'globe-outline', color: M.indigo },
+  { id: 'cafe', label: 'cafe', icon: 'cafe-outline', color: M.morning },
+  { id: 'pakistani', label: 'pakistani', icon: 'nutrition-outline', color: M.afternoon },
+  { id: 'asian', label: 'asian', icon: 'layers-outline', color: M.dining },
 ];
 
 export const GENERAL_GROUPS = [

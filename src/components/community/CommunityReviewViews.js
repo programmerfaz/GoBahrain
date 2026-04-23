@@ -22,6 +22,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { Ionicons } from '@expo/vector-icons'
 import { colors as themeColors, colorsDark as themeColorsDark } from '../../theme/designTokens'
 import { useTheme } from '../../context/ThemeContext'
+import { layoutContentWidth } from '../../constants/webLayout'
 import { PinchZoomPostImage } from '../FeedUpvoteInteractions'
 
 export function getCommunityPalette(isDark) {
@@ -82,19 +83,19 @@ export function buildCommunityFeedStyles(C, isDark = false) {
     },
     cardGlassOuter: {
       marginHorizontal: 16,
-      marginBottom: 14,
-      borderRadius: 22,
+      marginBottom: 16,
+      borderRadius: 24,
       overflow: 'hidden',
       borderWidth: StyleSheet.hairlineWidth,
-      borderColor: isDark ? 'rgba(148,148,158,0.28)' : 'rgba(142,142,147,0.22)',
+      borderColor: isDark ? 'rgba(148,148,158,0.32)' : 'rgba(142,142,147,0.26)',
       ...Platform.select({
         ios: {
           shadowColor: '#000000',
-          shadowOffset: { width: 0, height: 12 },
-          shadowOpacity: 0.08,
-          shadowRadius: 22,
+          shadowOffset: { width: 0, height: 10 },
+          shadowOpacity: isDark ? 0.35 : 0.1,
+          shadowRadius: 20,
         },
-        android: { elevation: 4 },
+        android: { elevation: 5 },
       }),
     },
     cardGlassFrost: {
@@ -107,14 +108,14 @@ export function buildCommunityFeedStyles(C, isDark = false) {
     cardGlassContent: {
       position: 'relative',
       zIndex: 2,
-      paddingVertical: 12,
+      paddingVertical: 14,
       paddingHorizontal: 16,
     },
     cardInner: { flex: 1 },
     cardClientRow: { 
       flexDirection: 'row', 
-      alignItems: 'flex-start',
-      marginBottom: 8,
+      alignItems: 'center',
+      marginBottom: 10,
     },
     clientAv: { 
       width: 40, 
@@ -159,9 +160,14 @@ export function buildCommunityFeedStyles(C, isDark = false) {
       color: C.blue,
     },
     cardAuthorSub: { 
-      fontSize: 15, 
-      color: C.sub, 
+      fontSize: 14, 
+      color: C.text, 
+      fontWeight: '600',
+    },
+    cardTimeSuffix: {
+      fontSize: 14,
       fontWeight: '400',
+      color: C.sub,
     },
     cardRatingPill: {
       flexDirection: 'row',
@@ -177,9 +183,9 @@ export function buildCommunityFeedStyles(C, isDark = false) {
     },
     bodyText: { 
       fontSize: 15, 
-      lineHeight: 20, 
+      lineHeight: 22, 
       color: C.text,
-      marginBottom: 12,
+      marginBottom: 14,
       fontWeight: '400',
     },
     cardTopicRow: { 
@@ -205,12 +211,12 @@ export function buildCommunityFeedStyles(C, isDark = false) {
     },
     cardImgWrap: { 
       overflow: 'hidden', 
-      backgroundColor: C.chip, 
+      backgroundColor: isDark ? '#0D0D0D' : '#F0F2F4', 
       position: 'relative',
       width: '100%',
-      borderRadius: 16,
-      borderWidth: 1,
-      borderColor: C.border,
+      borderRadius: 18,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: isDark ? 'rgba(255,255,255,0.08)' : C.border,
     },
     cardImg: { width: '100%', height: '100%' },
     cardImgPills: {
@@ -258,13 +264,13 @@ export function buildCommunityFeedStyles(C, isDark = false) {
     },
     actionPill: {
       flex: 1,
-      minHeight: 48,
+      minHeight: 46,
       flexDirection: 'row',
       alignItems: 'center',
       justifyContent: 'center',
       gap: 6,
       paddingHorizontal: 8,
-      borderRadius: 16,
+      borderRadius: 14,
       backgroundColor: C.chip,
       borderWidth: 1.5,
       borderColor: C.border + '55',
@@ -346,6 +352,7 @@ export function buildCommunityFeedStyles(C, isDark = false) {
     popHeaderAvPlaceholder: { alignItems: 'center', justifyContent: 'center', backgroundColor: C.redSoft },
     popHeaderName: { fontSize: 16, fontWeight: '800', color: C.text, letterSpacing: -0.3 },
     popHeaderSub: { fontSize: 12, color: C.sub, fontWeight: '500', marginTop: 2 },
+    popHeaderSubAccent: { fontWeight: '400', color: C.muted },
     popPlaceRatingRow: {
       flexDirection: 'row',
       alignItems: 'center',
@@ -355,7 +362,13 @@ export function buildCommunityFeedStyles(C, isDark = false) {
       marginBottom: 12,
     },
     popPlaceWrap: { flexDirection: 'row', alignItems: 'center', gap: 4, flex: 1, minWidth: 0 },
-    popImgWrap: { position: 'relative', overflow: 'hidden', backgroundColor: C.chip },
+    popImgWrap: {
+      position: 'relative',
+      overflow: 'hidden',
+      backgroundColor: C.chip,
+      alignSelf: 'center',
+      borderRadius: 14,
+    },
     popImgPills: {
       position: 'absolute',
       bottom: 10,
@@ -465,9 +478,10 @@ export function CommunityReviewCard({
   useGlass = true,
 }) {
   const { isDark } = useTheme()
-  const { width = 375 } = useWindowDimensions()
-  const cardWidth = useGlass ? width - 64 : width - 32
-  const imgH = Math.round(cardWidth * 0.75)
+  const { width: winW = 375 } = useWindowDimensions()
+  const layoutW = layoutContentWidth(winW)
+  const cardWidth = useGlass ? layoutW - 64 : layoutW - 32
+  const imgSize = Math.round(cardWidth)
   const [imageIndex, setImageIndex] = useState(0)
   const hasUpvoted = item.upvoted ?? false
   const count = item.upvotes ?? 0
@@ -580,7 +594,10 @@ export function CommunityReviewCard({
                 </View>
               )}
             </View>
-            <Text style={st.cardAuthorSub} numberOfLines={1}>by {item.author}</Text>
+            <Text style={st.cardAuthorSub} numberOfLines={1}>
+              by {item.author}
+              {item.time ? <Text style={st.cardTimeSuffix}>{' · '}{item.time}</Text> : null}
+            </Text>
             {item.rating != null && item.rating > 0 && (
               <View style={st.cardRatingPill}>
                 <CommunityReviewRatingStars rating={item.rating} size={12} color="#F59E0B" mutedColor={C.muted} />
@@ -595,13 +612,14 @@ export function CommunityReviewCard({
 
         {/* Images - prominent and full width */}
         {images.length > 0 && (
-          <View style={[st.cardImgWrap, { height: imgH }]}>
+          <View style={{ width: '100%', alignItems: 'center' }}>
+            <View style={[st.cardImgWrap, { width: imgSize, height: imgSize }]}>
             {images.length === 1 ? (
-              <View style={{ flex: 1, width: '100%', height: imgH }} collapsable={false}>
+              <View style={{ width: imgSize, height: imgSize }} collapsable={false}>
                 <PinchZoomPostImage
                   uri={images[0]}
-                  style={[st.cardImg, { width: '100%', height: imgH }]}
-                  resizeMode="contain"
+                  style={[st.cardImg, { width: imgSize, height: imgSize }]}
+                  resizeMode="cover"
                   pinchEnabled
                   onImageDoubleTap={handleImageDoubleTap}
                 />
@@ -630,22 +648,22 @@ export function CommunityReviewCard({
                   pagingEnabled
                   showsHorizontalScrollIndicator={false}
                   onMomentumScrollEnd={(e) => {
-                    const i = Math.round(e.nativeEvent.contentOffset.x / cardWidth)
+                    const i = Math.round(e.nativeEvent.contentOffset.x / imgSize)
                     setImageIndex(i)
                   }}
                   onScrollEndDrag={(e) => {
-                    const i = Math.round(e.nativeEvent.contentOffset.x / cardWidth)
+                    const i = Math.round(e.nativeEvent.contentOffset.x / imgSize)
                     setImageIndex(i)
                   }}
-                  style={{ width: cardWidth, height: imgH }}
-                  contentContainerStyle={{ width: cardWidth * images.length }}
+                  style={{ width: imgSize, height: imgSize }}
+                  contentContainerStyle={{ width: imgSize * images.length }}
                 >
                   {images.map((uri, i) => (
-                    <View key={i} style={{ width: cardWidth, height: imgH }}>
+                    <View key={i} style={{ width: imgSize, height: imgSize }}>
                       <PinchZoomPostImage
                         uri={uri}
-                        style={{ width: cardWidth, height: imgH }}
-                        resizeMode="contain"
+                        style={{ width: imgSize, height: imgSize }}
+                        resizeMode="cover"
                         pinchEnabled={false}
                         onImageDoubleTap={handleImageDoubleTap}
                       />
@@ -684,6 +702,7 @@ export function CommunityReviewCard({
                 )}
               </>
             )}
+            </View>
           </View>
         )}
 
@@ -798,11 +817,12 @@ export function CommunityReviewDetailModal({
   onClearFocusReply,
 }) {
   const insets = useSafeAreaInsets()
-  const { width = 375, height = 667 } = useWindowDimensions()
+  const { width: winW = 375, height = 667 } = useWindowDimensions()
+  const layoutW = layoutContentWidth(winW)
   const cardMargin = 24
-  const cardW = width - cardMargin * 2
+  const cardW = layoutW - cardMargin * 2
   const imgW = cardW
-  const imgH = Math.round(imgW * 0.6)
+  const imgH = imgW
   const popupMaxHeight = height * 0.88
   const popupCardHeaderH = 54
   const [imageIndex, setImageIndex] = useState(0)
@@ -913,7 +933,10 @@ export function CommunityReviewDetailModal({
                 )}
                 <View style={{ flex: 1, minWidth: 0 }}>
                   <Text style={st.popHeaderName} numberOfLines={1}>{post.place || 'A place in Bahrain'}</Text>
-                  <Text style={st.popHeaderSub} numberOfLines={1}>by {post.author}</Text>
+                  <Text style={st.popHeaderSub} numberOfLines={1}>
+                    by {post.author}
+                    {post.time ? <Text style={st.popHeaderSubAccent}>{' · '}{post.time}</Text> : null}
+                  </Text>
                 </View>
               </View>
               <TouchableOpacity onPress={onClose} hitSlop={14} activeOpacity={0.7}>
@@ -938,7 +961,7 @@ export function CommunityReviewDetailModal({
                       <PinchZoomPostImage
                         uri={images[0]}
                         style={{ width: imgW, height: imgH }}
-                        resizeMode="contain"
+                        resizeMode="cover"
                         pinchEnabled
                         onImageDoubleTap={handleImageDoubleTap}
                       />
@@ -978,7 +1001,7 @@ export function CommunityReviewDetailModal({
                             <PinchZoomPostImage
                               uri={uri}
                               style={{ width: imgW, height: imgH }}
-                              resizeMode="contain"
+                              resizeMode="cover"
                               pinchEnabled={false}
                               onImageDoubleTap={handleImageDoubleTap}
                             />

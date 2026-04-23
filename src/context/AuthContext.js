@@ -31,11 +31,32 @@ export function AuthProvider({ children }) {
   }, []);
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session: s } }) => {
-      setSession(s);
-      if (s?.user?.id) fetchProfile();
-      setAuthLoading(false);
-    });
+    let timeoutId = null
+    const SESSION_GATE_MS = 12000
+
+    timeoutId = setTimeout(() => {
+      console.warn(
+        '[Auth] getSession still pending after',
+        SESSION_GATE_MS,
+        'ms — check internet connectivity and EXPO_PUBLIC_SUPABASE_URL / EXPO_PUBLIC_SUPABASE_ANON_KEY'
+      )
+      setAuthLoading(false)
+    }, SESSION_GATE_MS)
+
+    supabase.auth
+      .getSession()
+      .then(({ data: { session: s } }) => {
+        setSession(s)
+        if (s?.user?.id) fetchProfile()
+      })
+      .catch((e) => {
+        console.warn('[Auth] getSession failed', e?.message)
+        setSession(null)
+      })
+      .finally(() => {
+        if (timeoutId) clearTimeout(timeoutId)
+        setAuthLoading(false)
+      })
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       async (event, s) => {
@@ -73,7 +94,10 @@ export function AuthProvider({ children }) {
       }
     );
 
-    return () => subscription.unsubscribe();
+    return () => {
+      if (timeoutId) clearTimeout(timeoutId)
+      subscription.unsubscribe()
+    }
   }, [fetchProfile]);
 
   const signIn = useCallback(async (email, password) => {

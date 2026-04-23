@@ -6,7 +6,6 @@ import {
   ScrollView,
   FlatList,
   useWindowDimensions,
-  Dimensions,
   RefreshControl,
   Image,
   Animated,
@@ -22,16 +21,18 @@ import { LinearGradient } from 'expo-linear-gradient'
 import { useTheme } from '../context/ThemeContext'
 import { fetchBrowseClientsGrouped, fetchExploreEventsFromSupabase } from '../services/aiPipeline'
 import ClientProfileModal from '../components/ClientProfileModal'
+import EventDetailModal from '../components/EventDetailModal'
 import { coerceImageValueToString, resolvePublicImageUrl } from '../utils/imageUrl'
 import { FadeInView, ShimmerPlaceholder, AnimatedPressable, PulseView } from '../components/AnimatedUI'
 import { LUXURY, luxuryCardShadow } from '../theme/luxuryPremium'
+import { layoutContentWidth } from '../constants/webLayout'
 
 const TAB_BAR_HEIGHT = Platform.OS === 'ios' ? 70 : 60
 
 const AnimatedScrollView = Animated.createAnimatedComponent(ScrollView)
-const { width: SCREEN_W, height: SCREEN_H } = Dimensions.get('window')
 
-const CARD_GAP = 16
+const CARD_GAP = 12
+const AUTO_ADVANCE_MS = 4000
 
 /** Vertical scan line over the icon only — same pattern as CommunitiesScreen `FabOptionIconScanning`. */
 const ArScanIcon = ({ name, size = 24, color = '#FFF' }) => {
@@ -178,6 +179,17 @@ const ambientStyles = StyleSheet.create({
 })
 
 function CinematicEventCard({ item, index, cardWidth, cardHeight, scrollX, onPress }) {
+  const cardRef = useRef(null)
+  const handleCardPress = useCallback(() => {
+    const node = cardRef.current
+    if (!node || typeof node.measureInWindow !== 'function') {
+      onPress?.(item, null)
+      return
+    }
+    node.measureInWindow((x, y, width, height) => {
+      onPress?.(item, { x, y, width, height })
+    })
+  }, [item, onPress])
   const { isDark, colors } = useTheme()
   const m = item?.metadata || {}
   const name = m.event_name || 'Event'
@@ -259,10 +271,11 @@ function CinematicEventCard({ item, index, cardWidth, cardHeight, scrollX, onPre
   const rimLight = isDark ? 'rgba(255,255,255,0.14)' : 'rgba(255,255,255,0.22)'
 
   return (
+    <View ref={cardRef} collapsable={false} style={{ width: cardWidth }}>
     <AnimatedPressable
       scaleDown={0.982}
       activeOpacity={1}
-      onPress={() => onPress?.(item)}
+      onPress={handleCardPress}
       style={{ width: cardWidth }}
       accessibilityRole="button"
       accessibilityLabel={`${name}${whenLine ? `, ${whenLine}` : ''}${venue ? `, ${venue}` : ''}`}
@@ -398,6 +411,7 @@ function CinematicEventCard({ item, index, cardWidth, cardHeight, scrollX, onPre
         </View>
       </Animated.View>
     </AnimatedPressable>
+    </View>
   )
 }
 
@@ -582,24 +596,33 @@ function LoadingSkeleton({ width: w, height: h }) {
 export default function ExploreScreen({ navigation }) {
   const { colors, isDark } = useTheme()
   const insets = useSafeAreaInsets()
-  const { width = 375, height = 667 } = useWindowDimensions()
+  const { width: winW = 375, height = 667 } = useWindowDimensions()
+  const layoutW = layoutContentWidth(winW)
   const bottomPadding = TAB_BAR_HEIGHT + (Platform.OS === 'android' ? insets.bottom : 0)
 
-  const cardWidth = Math.round(width * 0.85)
+  const cardWidth = Math.round(layoutW * 0.82)
   const cardHeight = Math.round(height * 0.52)
-  const peekPadding = (width - cardWidth) / 2
+  const peekPadding = (layoutW - cardWidth) / 2
+  const itemStride = cardWidth + CARD_GAP
 
   const [events, setEvents] = useState([])
   const [loadError, setLoadError] = useState(null)
   const [browseClients, setBrowseClients] = useState({ restaurants: [], places: [], events: [] })
   const [browseLoadError, setBrowseLoadError] = useState(null)
   const [profileClientId, setProfileClientId] = useState(null)
+  const [detailEvent, setDetailEvent] = useState(null)
+  const [detailSourceRect, setDetailSourceRect] = useState(null)
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [activeIndex, setActiveIndex] = useState(0)
   const [progressTrackW, setProgressTrackW] = useState(0)
   const scrollX = useRef(new Animated.Value(0)).current
   const scrollY = useRef(new Animated.Value(0)).current
+  const flatListRef = useRef(null)
+  const virtualIndexRef = useRef(0)
+  const isUserInteractingRef = useRef(false)
+  const didInitialScrollRef = useRef(false)
+  const autoAdvanceTimerRef = useRef(null)
   const headerOpacity = useRef(new Animated.Value(0)).current
   const headerTranslateY = useRef(new Animated.Value(20)).current
   const titlePop = useRef(new Animated.Value(0.88)).current
@@ -707,20 +730,101 @@ export default function ExploreScreen({ navigation }) {
     setActiveIndex((idx) => (idx >= events.length ? events.length - 1 : idx))
   }, [events.length])
 
+  const loopedEvents = useMemo(() => {
+    if (events.length < 2) return events
+    return [...events, ...events, ...events]
+  }, [events])
+
+  useEffect(() => {
+    didInitialScrollRef.current = false
+  }, [events])
+
+  const handleCarouselContentSizeChange = useCallback(() => {
+    if (didInitialScrollRef.current) return
+    if (events.length < 2) return
+    flatListRef.current?.scrollToOffset({
+      offset: events.length * itemStride,
+      animated: false,
+    })
+    virtualIndexRef.current = events.length
+    didInitialScrollRef.current = true
+  }, [events.length, itemStride])
+
+  const scheduleAutoAdvance = useCallback(() => {
+    if (autoAdvanceTimerRef.current) clearTimeout(autoAdvanceTimerRef.current)
+    if (events.length < 2) return
+    autoAdvanceTimerRef.current = setTimeout(() => {
+      if (isUserInteractingRef.current) {
+        scheduleAutoAdvance()
+        return
+      }
+      if (!flatListRef.current) return
+      const nextVirtual = virtualIndexRef.current + 1
+      flatListRef.current.scrollToOffset({
+        offset: nextVirtual * itemStride,
+        animated: true,
+      })
+    }, AUTO_ADVANCE_MS)
+  }, [events.length, itemStride])
+
+  useEffect(() => {
+    scheduleAutoAdvance()
+    return () => {
+      if (autoAdvanceTimerRef.current) clearTimeout(autoAdvanceTimerRef.current)
+    }
+  }, [scheduleAutoAdvance])
+
   const onRefresh = useCallback(() => {
     setRefreshing(true)
     loadExplore()
   }, [loadExplore])
 
-  const handleCardPress = useCallback(() => {
+  const handleCardPress = useCallback((item, rect) => {
     if (Platform.OS !== 'web') Vibration.vibrate(20)
+    if (!item) return
+    setDetailSourceRect(rect || null)
+    setDetailEvent(item)
+  }, [])
+
+  const handleCloseEventDetail = useCallback(() => {
+    setDetailEvent(null)
   }, [])
 
   const onScroll = useCallback((e) => {
     const offset = e.nativeEvent.contentOffset.x
-    const index = Math.round(offset / (cardWidth + CARD_GAP))
-    setActiveIndex(Math.max(0, Math.min(index, events.length - 1)))
-  }, [cardWidth, events.length])
+    const index = Math.round(offset / itemStride)
+    virtualIndexRef.current = index
+    if (events.length > 0) {
+      const display = ((index % events.length) + events.length) % events.length
+      setActiveIndex(display)
+    }
+  }, [itemStride, events.length])
+
+  const handleMomentumScrollEnd = useCallback((e) => {
+    if (events.length < 2) return
+    const offset = e.nativeEvent.contentOffset.x
+    const index = Math.round(offset / itemStride)
+    if (index < events.length) {
+      const newIdx = index + events.length
+      flatListRef.current?.scrollToOffset({ offset: newIdx * itemStride, animated: false })
+      virtualIndexRef.current = newIdx
+    } else if (index >= events.length * 2) {
+      const newIdx = index - events.length
+      flatListRef.current?.scrollToOffset({ offset: newIdx * itemStride, animated: false })
+      virtualIndexRef.current = newIdx
+    }
+    scheduleAutoAdvance()
+  }, [events.length, itemStride, scheduleAutoAdvance])
+
+  const handleScrollBeginDrag = useCallback(() => {
+    isUserInteractingRef.current = true
+    if (autoAdvanceTimerRef.current) clearTimeout(autoAdvanceTimerRef.current)
+  }, [])
+
+  const handleScrollEndDrag = useCallback(() => {
+    isUserInteractingRef.current = false
+    scheduleAutoAdvance()
+  }, [scheduleAutoAdvance])
 
   const renderCard = useCallback(
     ({ item, index }) => (
@@ -738,14 +842,14 @@ export default function ExploreScreen({ navigation }) {
 
   const keyExtractor = useCallback((item, index) => {
     const id = item?.id
-    if (id != null && String(id) !== '') return String(id)
     const name = item?.metadata?.event_name || item?.metadata?.business_name || 'event'
+    if (id != null && String(id) !== '') return `explore-${String(id)}-${index}`
     return `explore-${String(name)}-${index}`
   }, [])
 
   const [doorVisible, setDoorVisible] = useState(false)
-  const doorLeft = useRef(new Animated.Value(-SCREEN_W / 2)).current
-  const doorRight = useRef(new Animated.Value(SCREEN_W / 2)).current
+  const doorLeft = useRef(new Animated.Value(0)).current
+  const doorRight = useRef(new Animated.Value(0)).current
   const doorIconScale = useRef(new Animated.Value(0)).current
   const doorIconOpacity = useRef(new Animated.Value(0)).current
   const doorFade = useRef(new Animated.Value(1)).current
@@ -757,8 +861,8 @@ export default function ExploreScreen({ navigation }) {
   const openAR = () => {
     if (Platform.OS !== 'web') Vibration.vibrate(40)
 
-    doorLeft.setValue(-SCREEN_W / 2)
-    doorRight.setValue(SCREEN_W / 2)
+    doorLeft.setValue(-layoutW / 2)
+    doorRight.setValue(layoutW / 2)
     doorIconScale.setValue(0)
     doorIconOpacity.setValue(0)
     doorFade.setValue(1)
@@ -902,22 +1006,28 @@ export default function ExploreScreen({ navigation }) {
           <FadeInView delay={280} from={22} duration={520} style={s.eventsSectionTopSpacer}>
             {eventsCarouselSectionHeader}
             <FlatList
-              data={events}
+              ref={flatListRef}
+              data={loopedEvents}
               renderItem={renderCard}
               keyExtractor={keyExtractor}
               horizontal
               pagingEnabled={false}
               showsHorizontalScrollIndicator={false}
-              snapToInterval={cardWidth + CARD_GAP}
+              snapToInterval={itemStride}
               snapToAlignment="center"
               decelerationRate="fast"
               onScroll={Animated.event(
                 [{ nativeEvent: { contentOffset: { x: scrollX } } }],
                 { useNativeDriver: false, listener: onScroll }
               )}
+              onScrollBeginDrag={handleScrollBeginDrag}
+              onScrollEndDrag={handleScrollEndDrag}
+              onMomentumScrollEnd={handleMomentumScrollEnd}
+              onContentSizeChange={handleCarouselContentSizeChange}
               scrollEventThrottle={16}
               contentContainerStyle={{ paddingHorizontal: peekPadding }}
               ItemSeparatorComponent={() => <View style={{ width: CARD_GAP }} />}
+              removeClippedSubviews={false}
             />
 
             {/* Progress Bar */}
@@ -1075,19 +1185,30 @@ export default function ExploreScreen({ navigation }) {
         }}
       />
 
+      <EventDetailModal
+        visible={!!detailEvent}
+        event={detailEvent}
+        sourceRect={detailSourceRect}
+        onClose={handleCloseEventDetail}
+        onOpenOrganizer={(clientUuid) => {
+          handleCloseEventDetail()
+          setTimeout(() => setProfileClientId(clientUuid), 360)
+        }}
+      />
+
       {doorVisible && (() => {
         const TOOTH_COUNT = 5
-        const toothH = SCREEN_H / TOOTH_COUNT
-        const toothW = SCREEN_W * 0.12
+        const toothH = height / TOOTH_COUNT
+        const toothW = layoutW * 0.12
         return (
           <Animated.View style={[s.doorOverlay, { opacity: doorFade }]} pointerEvents="box-none">
-            <Animated.View style={[s.doorHalf, s.doorL, { transform: [{ translateX: doorLeft }] }]}>
+            <Animated.View style={[s.doorHalf, s.doorL, { width: layoutW / 2, transform: [{ translateX: doorLeft }] }]}>
               <View style={[StyleSheet.absoluteFill, { backgroundColor: '#FFFFFF' }]} />
             </Animated.View>
-            <Animated.View style={[s.doorHalf, s.doorR, { transform: [{ translateX: doorRight }] }]}>
+            <Animated.View style={[s.doorHalf, s.doorR, { width: layoutW / 2, transform: [{ translateX: doorRight }] }]}>
               <View style={[StyleSheet.absoluteFill, { backgroundColor: '#CE1126' }]} />
             </Animated.View>
-            <Animated.View style={[s.doorZigzag, { transform: [{ translateX: doorLeft }] }]}>
+            <Animated.View style={[s.doorZigzag, { left: layoutW / 2, transform: [{ translateX: doorLeft }] }]}>
               {Array.from({ length: TOOTH_COUNT }, (_, i) => (
                 <View key={i} style={{
                   width: 0, height: 0,
@@ -1240,10 +1361,10 @@ const s = StyleSheet.create({
   emptyCtaText: { fontSize: 17, fontWeight: '800', color: '#FFF', letterSpacing: 0.2 },
 
   doorOverlay: { ...StyleSheet.absoluteFillObject, zIndex: 9999, elevation: 9999 },
-  doorHalf: { position: 'absolute', top: 0, bottom: 0, width: SCREEN_W / 2, overflow: 'hidden' },
+  doorHalf: { position: 'absolute', top: 0, bottom: 0, overflow: 'hidden' },
   doorL: { left: 0 },
   doorR: { right: 0 },
-  doorZigzag: { position: 'absolute', top: 0, left: SCREEN_W / 2, bottom: 0, zIndex: 2 },
+  doorZigzag: { position: 'absolute', top: 0, bottom: 0, zIndex: 2 },
   doorCenter: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, alignItems: 'center', justifyContent: 'center', zIndex: 10000 },
   doorIconRing: {
     width: 110, height: 110, borderRadius: 55, borderWidth: 4, borderColor: '#FFF', overflow: 'hidden',

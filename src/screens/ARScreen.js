@@ -30,6 +30,7 @@ import { useSavedPlaces } from '../context/SavedPlacesContext'
 import { colors as themeColors } from '../theme/designTokens'
 import { LUXURY, luxuryElevated } from '../theme/luxuryPremium'
 import { useTheme } from '../context/ThemeContext'
+import { openGoogleMapsDirections } from '../utils/googleMapsDirections'
 
 const C = {
   accent: themeColors.primary,
@@ -398,7 +399,7 @@ function POIDetailModal({ visible, poi, onClose, onRequestClose, insets, openDir
   const date = m.start_date || m.end_date || ''
 
   const handleShare = () => {
-    Share.share({ title: poi.name, message: `${poi.name} — ${distText}. Explore with Go Bahrain!`, url: `https://www.google.com/maps/search/?api=1&query=${poi.lat},${poi.lng}` }).catch(() => {})
+    Share.share({ title: poi.name, message: `${poi.name} — ${distText}. Explore with SiyahaBH!`, url: `https://www.google.com/maps/search/?api=1&query=${poi.lat},${poi.lng}` }).catch(() => {})
   }
   const handleCall = () => {
     const tel = phone.replace(/\D/g, '')
@@ -691,12 +692,7 @@ export default function ARScreen({ navigation }) {
   }, [fromExplore, loading])
 
   const openDirections = useCallback((poi) => {
-    const url = Platform.select({
-      ios: `maps://app?daddr=${poi.lat},${poi.lng}`,
-      android: `geo:0,0?q=${poi.lat},${poi.lng}(${encodeURIComponent(poi.name)})`,
-      default: `https://www.google.com/maps/dir/?api=1&destination=${poi.lat},${poi.lng}`,
-    })
-    Linking.openURL(url).catch(() => Linking.openURL(`https://www.google.com/maps/dir/?api=1&destination=${poi.lat},${poi.lng}`))
+    openGoogleMapsDirections(poi.lat, poi.lng)
   }, [])
 
   const modalJustOpenedRef = useRef(false)

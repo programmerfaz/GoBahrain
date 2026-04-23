@@ -5,20 +5,34 @@
 let linkedAnim = null
 const subscribers = new Set()
 
+const getSafeSubscribers = () => {
+  if (!subscribers || typeof subscribers.forEach !== 'function') return []
+  const out = []
+  subscribers.forEach((fn) => out.push(fn))
+  return out
+}
+
+const notifySubscribers = () => {
+  const safeSubscribers = getSafeSubscribers()
+  safeSubscribers.forEach((fn) => {
+    if (typeof fn === 'function') fn(linkedAnim)
+  })
+}
+
 export const aiPlanSheetLink = {
   attach(anim) {
     linkedAnim = anim
-    subscribers.forEach((fn) => fn(linkedAnim))
+    notifySubscribers()
   },
   detach(anim) {
     if (linkedAnim === anim) linkedAnim = null
-    subscribers.forEach((fn) => fn(linkedAnim))
+    notifySubscribers()
   },
   subscribe(fn) {
-    subscribers.add(fn)
+    if (subscribers && typeof subscribers.add === 'function') subscribers.add(fn)
     fn(linkedAnim)
     return () => {
-      subscribers.delete(fn)
+      if (subscribers && typeof subscribers.delete === 'function') subscribers.delete(fn)
     }
   },
 }
