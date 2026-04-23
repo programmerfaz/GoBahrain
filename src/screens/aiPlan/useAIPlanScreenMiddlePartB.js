@@ -127,6 +127,9 @@ import { MapScanningOverlay, mapMarkerFilterCategoryKey, markerMatchesPlanMapCli
 
 
 export function useAIPlanScreenMiddlePartB(midA) {
+  const planHeaderReelScrollRef = useRef(null)
+  const planHeaderReelOffsetRef = useRef(0)
+  const REEL_ITEM_STEP = 74
 
   const handleSurpriseMe = () => {
     if (midA.surpriseSpinning) return;
@@ -332,13 +335,41 @@ export function useAIPlanScreenMiddlePartB(midA) {
     }
   }, [midA.dayPlan]);
 
-  const renderPlanTimelineOverviewHeader = useCallback(() => {
-    if (!midA.dayPlan?.length) return null
-    const mealCount = midA.dayPlan.filter((i) => i.type === 'restaurant').length
-    const reel = midA.dayPlan.slice(0, 6).map((stop) => {
+  const planHeaderReel = useMemo(() => {
+    if (!midA.dayPlan?.length) return []
+    return midA.dayPlan.slice(0, 6).map((stop) => {
       const thumbUri = pickPlanStopThumbUri(stop, midA.allPlaceMarkers)
       return { key: stop._planRowKey || `${stop.spot}-${stop.lat}`, uri: thumbUri }
     })
+  }, [midA.dayPlan, midA.allPlaceMarkers])
+
+  const planHeaderReelLoop = useMemo(
+    () => (planHeaderReel.length > 1 ? [...planHeaderReel, ...planHeaderReel] : planHeaderReel),
+    [planHeaderReel]
+  )
+
+  useEffect(() => {
+    if (planHeaderReel.length <= 1) {
+      planHeaderReelOffsetRef.current = 0
+      return
+    }
+    const timer = setInterval(() => {
+      const boundary = planHeaderReel.length * REEL_ITEM_STEP
+      let next = planHeaderReelOffsetRef.current + REEL_ITEM_STEP
+      if (next >= boundary) {
+        planHeaderReelOffsetRef.current = 0
+        planHeaderReelScrollRef.current?.scrollTo({ x: 0, animated: false })
+        next = REEL_ITEM_STEP
+      }
+      planHeaderReelOffsetRef.current = next
+      planHeaderReelScrollRef.current?.scrollTo({ x: next, animated: true })
+    }, 2200)
+    return () => clearInterval(timer)
+  }, [planHeaderReel])
+
+  const renderPlanTimelineOverviewHeader = useCallback(() => {
+    if (!midA.dayPlan?.length) return null
+    const mealCount = midA.dayPlan.filter((i) => i.type === 'restaurant').length
     const sharedBanner =
       midA.sharedCollaboration?.role === 'viewer'
         ? 'View-only shared plan'
@@ -495,30 +526,34 @@ export function useAIPlanScreenMiddlePartB(midA) {
             </View>
           </View>
         </View>
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.planLuxuryReelContent}
-          accessibilityRole="scrollbar"
-          accessibilityLabel="Spot photo previews"
-        >
-          {reel.map(({ key, uri }) => (
-            <View key={String(key)} style={styles.planLuxuryReelThumbWrap}>
-              {uri ? (
-                <PreviewImage uri={uri} style={styles.planLuxuryReelThumbImg} noFade />
-              ) : (
-                <View style={[styles.planLuxuryReelThumbImg, styles.planLuxuryReelThumbEmpty]}>
-                  <Ionicons name="image-outline" size={18} color="#C7C7CC" />
-                </View>
-              )}
-            </View>
-          ))}
-        </ScrollView>
+        <View style={styles.planLuxuryReelSection}>
+          <Text style={styles.planLuxuryReelLabel}>Plan preview</Text>
+          <ScrollView
+            ref={planHeaderReelScrollRef}
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.planLuxuryReelContent}
+            accessibilityRole="scrollbar"
+            accessibilityLabel="Spot photo previews"
+            scrollEnabled={planHeaderReel.length <= 1}
+          >
+            {planHeaderReelLoop.map(({ key, uri }, idx) => (
+              <View key={`${String(key)}-${idx}`} style={styles.planLuxuryReelThumbWrap}>
+                {uri ? (
+                  <PreviewImage uri={uri} style={styles.planLuxuryReelThumbImg} noFade />
+                ) : (
+                  <View style={[styles.planLuxuryReelThumbImg, styles.planLuxuryReelThumbEmpty]}>
+                    <Ionicons name="image-outline" size={18} color="#C7C7CC" />
+                  </View>
+                )}
+              </View>
+            ))}
+          </ScrollView>
+        </View>
       </View>
     )
   }, [
     midA.dayPlan,
-    midA.allPlaceMarkers,
     midA.openingMaps,
     midA.handleOpenInGoogleMaps,
     handleSharePlanWithFriends,
@@ -532,6 +567,8 @@ export function useAIPlanScreenMiddlePartB(midA) {
     midA.activeSavedPlanId,
     midA.savedPlansList,
     midA.handleOpenEditSavedPlanTitle,
+    planHeaderReel,
+    planHeaderReelLoop,
   ])
 
 

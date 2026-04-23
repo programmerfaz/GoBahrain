@@ -868,7 +868,7 @@ export function AIPlanScreenViewMap({ screen }) {
                   const thumbUri = galleryUris[0] || null
                   const hasImages = !!thumbUri
                   const hasProfile = !!(item.clientId)
-                  const isExpanded = screen.stopDetailIndex === planIndex
+                  const isExpanded = false
                   const isVisible = planIndex < screen.visibleStopCount
                   const category = getLuxuryCategoryStyle(item)
                   const canOpenMaps = item.lat != null && item.lng != null
@@ -899,13 +899,9 @@ export function AIPlanScreenViewMap({ screen }) {
                               <Pressable
                                 style={styles.planLuxuryStopMainPress}
                                 onPress={() => {
-                                  if (screen.stopDetailIndex === planIndex) {
-                                    screen.setStopDetailIndex(null)
-                                    return
-                                  }
+                                  if (!hasProfile) return
                                   Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {})
-                                  screen.clearMarkerShowcase()
-                                  screen.goToStopDetailIndex(planIndex)
+                                  screen.setProfileClientId(item.clientId)
                                 }}
                                 accessibilityRole="button"
                                 accessibilityState={{ expanded: isExpanded }}

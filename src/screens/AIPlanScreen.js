@@ -5922,7 +5922,7 @@ export default function AIPlanScreen() {
                   const thumbUri = galleryUris[0] || null
                   const hasImages = !!thumbUri
                   const hasProfile = !!(item.clientId)
-                  const isExpanded = stopDetailIndex === planIndex
+                  const isExpanded = false
                   const isVisible = planIndex < visibleStopCount
                   const category = getLuxuryCategoryStyle(item)
                   const canOpenMaps = item.lat != null && item.lng != null
@@ -5947,13 +5947,9 @@ export default function AIPlanScreen() {
                               <Pressable
                                 style={styles.planLuxuryStopMainPress}
                                 onPress={() => {
-                                  if (stopDetailIndex === planIndex) {
-                                    setStopDetailIndex(null)
-                                    return
-                                  }
+                                  if (!hasProfile) return
                                   Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {})
-                                  clearMarkerShowcase()
-                                  goToStopDetailIndex(planIndex)
+                                  setProfileClientId(item.clientId)
                                 }}
                                 accessibilityRole="button"
                                 accessibilityState={{ expanded: isExpanded }}
@@ -6034,289 +6030,6 @@ export default function AIPlanScreen() {
           </View>
         )}
       </Animated.View>
-
-      {/* Stop detail — centered dialog over map / sheet */}
-      <Modal
-        visible={!!stopDetailPayload}
-        transparent
-        animationType="fade"
-        onRequestClose={closeStopDetailDialog}
-      >
-        {stopDetailPayload ? (
-          <KeyboardAvoidingView
-            style={styles.stopDialogKb}
-            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-          >
-            <View style={styles.stopDialogRoot}>
-              <TouchableOpacity
-                style={styles.stopDialogDim}
-                activeOpacity={1}
-                onPress={closeStopDetailDialog}
-                accessibilityLabel="Dismiss"
-                accessibilityRole="button"
-              />
-              <View style={styles.stopDialogTinderWrap} accessibilityViewIsModal pointerEvents="box-none">
-                <View style={styles.stopDialogTinderRow}>
-                  <TouchableOpacity
-                    style={[
-                      styles.stopDialogArrowFab,
-                      styles.stopDialogArrowFabLeft,
-                      (stopDetailIndex || 0) <= 0 && styles.stopDialogArrowFabDisabled,
-                    ]}
-                    activeOpacity={0.88}
-                    onPress={() => {
-                      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {})
-                      goToStopDetailIndex((stopDetailIndex || 0) - 1)
-                    }}
-                    disabled={(stopDetailIndex || 0) <= 0}
-                    accessibilityRole="button"
-                    accessibilityLabel="View previous itinerary stop"
-                  >
-                    <Ionicons name="chevron-back" size={20} color="#0F172A" />
-                  </TouchableOpacity>
-                  <View style={[styles.stopDialogCardShell, { width: STOP_DIALOG_SLIDE_WIDTH }]}>
-                    {stopDetailStackPeekNext ? (
-                      <Reanimated.View
-                        style={[styles.stopDialogStackBack, stopDetailPeekAnimatedStyle]}
-                        pointerEvents="none"
-                      >
-                        <LinearGradient
-                          colors={[`${stopDetailStackPeekNext.accent}66`, '#0f172a']}
-                          start={{ x: 0, y: 0 }}
-                          end={{ x: 1, y: 1 }}
-                          style={StyleSheet.absoluteFill}
-                        />
-                        <View style={styles.stopDialogStackBackInner}>
-                          <Ionicons
-                            name={stopDetailStackPeekNext.isEat ? 'restaurant' : stopDetailStackPeekNext.isEvent ? 'calendar' : 'location'}
-                            size={15}
-                            color="#FFFFFF"
-                          />
-                          <Text style={styles.stopDialogStackBackTitle} numberOfLines={2}>
-                            {stopDetailStackPeekNext.item.spot}
-                          </Text>
-                        </View>
-                      </Reanimated.View>
-                    ) : null}
-                    <GestureDetector gesture={stopDetailPanGesture}>
-                      <Reanimated.View
-                        style={[
-                          styles.stopDialogCard,
-                          { width: STOP_DIALOG_SLIDE_WIDTH, maxWidth: '100%' },
-                          stopDetailCardAnimatedStyle,
-                        ]}
-                      >
-                        <View style={styles.stopDialogExploreHero}>
-                          <View style={[styles.stopDialogExploreImageFrame, { height: STOP_DIALOG_IMAGE_H }]}>
-                            <StopDetailGallery
-                              images={Array.isArray(stopDetailPayload.images) ? stopDetailPayload.images : []}
-                              singleUri={
-                                stopDetailPayload.hasImages
-                                  ? (stopDetailPayload.images[0] || stopDetailPayload.item.image)
-                                  : (stopDetailPayload.item.image || null)
-                              }
-                              accent={stopDetailPayload.accent}
-                              isEat={stopDetailPayload.isEat}
-                              isEvent={stopDetailPayload.isEvent}
-                              slideWidth={STOP_DIALOG_IMAGE_W}
-                              imageHeight={STOP_DIALOG_IMAGE_H}
-                              bottomRadius={0}
-                              hideBottomDotsRow
-                            />
-                            <LinearGradient
-                              colors={['transparent', 'rgba(0,0,0,0.08)', 'rgba(0,0,0,0.5)', 'rgba(0,0,0,0.92)']}
-                              locations={[0, 0.3, 0.6, 1]}
-                              style={styles.stopDialogExploreGrad}
-                              pointerEvents="none"
-                            />
-                            <TouchableOpacity
-                              style={styles.stopDialogExploreClose}
-                              onPress={closeStopDetailDialog}
-                              accessibilityRole="button"
-                              accessibilityLabel="Close"
-                              activeOpacity={0.88}
-                            >
-                              <Ionicons name="close" size={20} color="#FFFFFF" />
-                            </TouchableOpacity>
-                            {stopDetailPayload.category ? (
-                              <View style={styles.stopDialogExploreBadgeWrap}>
-                                <BlurView intensity={Platform.OS === 'ios' ? 60 : 0} tint="dark" style={styles.stopDialogExploreBadge}>
-                                  <View style={styles.stopDialogExploreBadgeDot} />
-                                  <Text style={styles.stopDialogExploreBadgeText} numberOfLines={1}>
-                                    {stopDetailPayload.category.label}
-                                  </Text>
-                                </BlurView>
-                              </View>
-                            ) : null}
-                            <View style={styles.stopDialogExploreNumberWrap} pointerEvents="none">
-                              <Text style={styles.stopDialogExploreNumber}>
-                                {String((stopDetailIndex ?? 0) + 1).padStart(2, '0')}
-                              </Text>
-                            </View>
-                            <View style={styles.stopDialogExploreBottom}>
-                              <Text style={styles.stopDialogExploreTitle} numberOfLines={2}>
-                                {stopDetailPayload.item.spot}
-                              </Text>
-                              {stopDetailPayload.item.rating != null ? (
-                                <View style={styles.stopDialogExploreInfoRow}>
-                                  <View style={styles.stopDialogExploreInfoPill}>
-                                    <Ionicons name="star" size={12} color="#FF9F00" />
-                                    <Text style={styles.stopDialogExploreInfoText} numberOfLines={1}>
-                                      {Number(stopDetailPayload.item.rating).toFixed(1)}
-                                    </Text>
-                                  </View>
-                                </View>
-                              ) : null}
-                            </View>
-                          </View>
-                        </View>
-                        <View style={styles.stopDialogBodyStatic}>
-                          <View style={styles.stopDialogScrollContent}>
-                          <View style={styles.stopDialogLuxurySectionCard}>
-                            <View style={styles.stopDialogLuxurySectionTitleRow}>
-                              <View style={styles.stopDialogLuxurySectionAccentBar} accessibilityElementsHidden />
-                              <Text style={styles.stopDialogLuxurySectionTitle}>
-                                {stopDetailPayload.isEvent ? 'About this event' : 'About this place'}
-                              </Text>
-                            </View>
-                            <Text style={styles.stopDialogLuxuryBody}>
-                              {getStopAboutPrimaryText(stopDetailPayload.item, stopDetailPayload.isEvent)}
-                            </Text>
-                          </View>
-
-                          {stopDetailPayload.isEvent ? (
-                            <View style={[styles.stopDialogLuxurySectionCard, styles.stopDialogLuxurySectionCardEvent]}>
-                              <View style={styles.stopDialogLuxurySectionTitleRow}>
-                                <View style={styles.stopDialogLuxurySectionAccentBar} accessibilityElementsHidden />
-                                <Text style={styles.stopDialogLuxurySectionTitle}>Event details</Text>
-                              </View>
-                              <Text style={styles.stopDialogLuxuryBody}>
-                                {formatStopEventDetailsText(stopDetailPayload.item)}
-                              </Text>
-                            </View>
-                          ) : (
-                            <View style={[styles.stopDialogLuxurySectionCard, styles.stopDialogLuxurySectionCardNotes]}>
-                              <View style={styles.stopDialogLuxuryNotesHeading}>
-                                <View style={styles.stopDialogLuxuryNotesTag}>
-                                  <Text style={styles.stopDialogLuxuryNotesTagText}>Notes</Text>
-                                </View>
-                                <Text style={styles.stopDialogLuxuryNotesAccent}>from the Community</Text>
-                              </View>
-                              <Text style={styles.stopDialogLuxuryBody}>
-                                {(() => {
-                                  const r = String(stopDetailPayload.item.reason || '').trim()
-                                  if (!r) return 'Community tips will appear here when available.'
-                                  const parts = r.split(/(?<=[.!?])\s+/).filter(Boolean)
-                                  const rest = parts.slice(1).join(' ').trim()
-                                  if (rest) return rest
-                                  return 'Share your take after you visit — short notes help the next traveler plan with confidence.'
-                                })()}
-                              </Text>
-                            </View>
-                          )}
-
-                          <View style={styles.stopDialogUnifiedActionsStrip}>
-                            <TouchableOpacity
-                              style={styles.stopDialogUnifiedActionBtn}
-                              activeOpacity={0.88}
-                              onPress={() => {
-                                if (stopDetailPayload.item.lat != null && stopDetailPayload.item.lng != null) {
-                                  openGoogleMapsDirections(stopDetailPayload.item.lat, stopDetailPayload.item.lng)
-                                  closeStopDetailDialog()
-                                }
-                              }}
-                              disabled={stopDetailPayload.item.lat == null || stopDetailPayload.item.lng == null}
-                              accessibilityRole="button"
-                              accessibilityLabel="Get directions"
-                            >
-                              <Ionicons name="navigate-outline" size={16} color={themeColors.primary} />
-                              <Text style={styles.stopDialogUnifiedActionBtnText} numberOfLines={2}>
-                                Directions
-                              </Text>
-                            </TouchableOpacity>
-                            <TouchableOpacity
-                              style={styles.stopDialogUnifiedActionBtn}
-                              activeOpacity={0.88}
-                              onPress={() => {
-                                if (stopDetailPayload.item.lat != null && stopDetailPayload.item.lng != null) {
-                                  navigation.navigate('AR', {
-                                    navigateTo: {
-                                      lat: stopDetailPayload.item.lat,
-                                      lng: stopDetailPayload.item.lng,
-                                      name: stopDetailPayload.item.spot,
-                                    },
-                                  })
-                                  closeStopDetailDialog()
-                                }
-                              }}
-                              disabled={stopDetailPayload.item.lat == null || stopDetailPayload.item.lng == null}
-                              accessibilityRole="button"
-                              accessibilityLabel="Open in AR"
-                            >
-                              <Ionicons name="cube-outline" size={16} color={themeColors.primary} />
-                              <Text style={styles.stopDialogUnifiedActionBtnText} numberOfLines={2}>
-                                AR
-                              </Text>
-                            </TouchableOpacity>
-                            {stopDetailPayload.hasProfile ? (
-                              <TouchableOpacity
-                                style={styles.stopDialogUnifiedActionBtn}
-                                activeOpacity={0.88}
-                                onPress={() => {
-                                  setProfileClientId(stopDetailPayload.item.clientId)
-                                  closeStopDetailDialog()
-                                }}
-                                accessibilityRole="button"
-                                accessibilityLabel="Open host profile"
-                              >
-                                <Ionicons name="person-circle-outline" size={16} color={themeColors.primary} />
-                                <Text style={styles.stopDialogUnifiedActionBtnText} numberOfLines={2}>
-                                  Profile
-                                </Text>
-                              </TouchableOpacity>
-                            ) : (
-                              <View style={styles.stopDialogUnifiedActionPlaceholder} pointerEvents="none" />
-                            )}
-                          </View>
-                          </View>
-                        </View>
-                      </Reanimated.View>
-                    </GestureDetector>
-                    <View style={styles.stopDialogTinderDots} pointerEvents="none">
-                      {stopDetailSlides.map((_, dotIdx) => (
-                        <View
-                          key={`stop-dot-${dotIdx}`}
-                          style={[
-                            styles.stopDialogTinderDot,
-                            dotIdx === stopDetailIndex && styles.stopDialogTinderDotActive,
-                          ]}
-                        />
-                      ))}
-                    </View>
-                  </View>
-                  <TouchableOpacity
-                    style={[
-                      styles.stopDialogArrowFab,
-                      styles.stopDialogArrowFabRight,
-                      (stopDetailIndex || 0) >= stopDetailSlides.length - 1 && styles.stopDialogArrowFabDisabled,
-                    ]}
-                    activeOpacity={0.88}
-                    onPress={() => {
-                      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {})
-                      goToStopDetailIndex((stopDetailIndex || 0) + 1)
-                    }}
-                    disabled={(stopDetailIndex || 0) >= stopDetailSlides.length - 1}
-                    accessibilityRole="button"
-                    accessibilityLabel="View next itinerary stop"
-                  >
-                    <Ionicons name="chevron-forward" size={20} color="#0F172A" />
-                  </TouchableOpacity>
-                </View>
-              </View>
-            </View>
-          </KeyboardAvoidingView>
-        ) : null}
-      </Modal>
 
       {/* Plan modal — Home AI design (blur overlay, question block, glass options) */}
       <Modal visible={showPlanModal} transparent animationType="none">
@@ -6913,6 +6626,8 @@ export default function AIPlanScreen() {
       <ClientProfileModal
         visible={!!profileClientId}
         clientId={profileClientId}
+        animationFrom="bottom"
+        presentation="sheet"
         onClose={() => setProfileClientId(null)}
         insets={insets}
         onOpenARNavigate={(dest) => {

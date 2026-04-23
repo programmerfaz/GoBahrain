@@ -1037,6 +1037,7 @@ export default function HomeScreen() {
   const [upvoteParticlesVisible, setUpvoteParticlesVisible] = useState(false);
   const [upvoteParticlePosition, setUpvoteParticlePosition] = useState({ x: 0, y: 0 });
   const [selectedClientId, setSelectedClientId] = useState(null);
+  const [selectedClientSeed, setSelectedClientSeed] = useState(null);
   const [showMapAnimation, setShowMapAnimation] = useState(false);
   const mapAnimOpacity = useRef(new Animated.Value(0)).current;
   const mapAnimScale = useRef(new Animated.Value(0)).current;
@@ -1580,6 +1581,16 @@ export default function HomeScreen() {
             onClientPress={(post) => {
               if (post?.clientId) {
                 trackInteraction('PROFILE_VIEW', { clientId: post.clientId });
+                setSelectedClientSeed({
+                  client_a_uuid: post.clientId,
+                  business_name: post.businessName || null,
+                  name: post.businessName || null,
+                  client_image: post.clientImage || null,
+                  location: post.location || null,
+                  rating: post.rating ?? null,
+                  price_range: post.priceRange || null,
+                  timings: post.timings || null,
+                });
                 setSelectedClientId(post.clientId);
               }
             }}
@@ -1633,9 +1644,24 @@ export default function HomeScreen() {
   useEffect(() => {
     const openClientId = route.params?.openClientId;
     if (!openClientId) return;
+    const seedFromPost = posts.find((p) => p.clientId === openClientId);
+    if (seedFromPost) {
+      setSelectedClientSeed({
+        client_a_uuid: seedFromPost.clientId,
+        business_name: seedFromPost.businessName || null,
+        name: seedFromPost.businessName || null,
+        client_image: seedFromPost.clientImage || null,
+        location: seedFromPost.location || null,
+        rating: seedFromPost.rating ?? null,
+        price_range: seedFromPost.priceRange || null,
+        timings: seedFromPost.timings || null,
+      });
+    } else {
+      setSelectedClientSeed(null);
+    }
     setSelectedClientId(openClientId);
     navigation.setParams({ openClientId: undefined });
-  }, [route.params?.openClientId, navigation]);
+  }, [route.params?.openClientId, navigation, posts]);
 
   // Scroll to top when home button is pressed while on Home screen
   useEffect(() => {
@@ -2353,10 +2379,15 @@ export default function HomeScreen() {
       <ClientProfileModal
         visible={!!selectedClientId}
         clientId={selectedClientId}
-        onClose={() => setSelectedClientId(null)}
+        initialClientData={selectedClientSeed}
+        onClose={() => {
+          setSelectedClientId(null)
+          setSelectedClientSeed(null)
+        }}
         insets={insets}
         onOpenARNavigate={(dest) => {
           setSelectedClientId(null);
+          setSelectedClientSeed(null);
           navigation.navigate('AR', { navigateTo: dest });
         }}
       />

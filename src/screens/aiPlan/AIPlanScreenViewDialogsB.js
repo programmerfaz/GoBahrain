@@ -481,6 +481,8 @@ export function AIPlanScreenViewDialogsB({ screen }) {
       <ClientProfileModal
         visible={!!screen.profileClientId}
         clientId={screen.profileClientId}
+        animationFrom="bottom"
+        presentation="sheet"
         onClose={() => screen.setProfileClientId(null)}
         insets={screen.insets}
         onOpenARNavigate={(dest) => {

@@ -9,6 +9,7 @@ import {
   ScrollView,
   Animated,
   ActivityIndicator,
+  PanResponder,
   Platform,
   useWindowDimensions,
   Easing,
@@ -252,6 +253,8 @@ function PostFullViewModal({ visible, posts, index, onClose, COLORS, isDark, ins
   const scrollRef = useRef(null);
   const [activeIndex, setActiveIndex] = useState(index || 0);
   const fadeAnim = useRef(new Animated.Value(0)).current;
+  const cardWidth = Math.min(screenWidth - 28, 460);
+  const imageHeight = Math.round(cardWidth);
 
   useEffect(() => {
     if (visible) {
@@ -275,26 +278,16 @@ function PostFullViewModal({ visible, posts, index, onClose, COLORS, isDark, ins
   };
 
   if (!visible || !posts?.length) return null;
-  const current = posts[activeIndex] || posts[0];
   const total = posts.length;
-  const dateLabel = formatPostDate(current?.createdAt);
+  const currentPostNumber = Math.min(total, Math.max(1, activeIndex + 1));
+  const counterLabel = `Post ${currentPostNumber} of ${total}`;
 
   return (
     <Modal visible={visible} animationType="fade" transparent onRequestClose={onClose} statusBarTranslucent>
       <StatusBar barStyle="light-content" backgroundColor="#000" />
       <Animated.View style={[pvStyles.backdrop, { opacity: fadeAnim }]}>
-        <View style={StyleSheet.absoluteFill}>
-          {current?.imageUri ? (
-            <CachedImage
-              source={{ uri: current.imageUri }}
-              style={StyleSheet.absoluteFill}
-              resizeMode="cover"
-              recyclingKey={`blur-${current.imageUri}`}
-            />
-          ) : null}
-          <BlurView intensity={Platform.OS === 'ios' ? 95 : 80} tint="dark" style={StyleSheet.absoluteFill} />
-          <View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(0,0,0,0.55)' }]} />
-        </View>
+        <BlurView intensity={Platform.OS === 'ios' ? 92 : 78} tint="dark" style={StyleSheet.absoluteFill} />
+        <View style={pvStyles.backdropScrim} />
 
         <View style={[pvStyles.header, { paddingTop: (insets?.top ?? 0) + 10 }]}>
           <TouchableOpacity
@@ -312,7 +305,10 @@ function PostFullViewModal({ visible, posts, index, onClose, COLORS, isDark, ins
               <Text style={pvStyles.headerBusiness} numberOfLines={1}>{businessName}</Text>
             ) : null}
             {total > 1 ? (
-              <Text style={pvStyles.headerCount}>{activeIndex + 1} of {total}</Text>
+              <View style={pvStyles.headerCountPill}>
+                <Ionicons name="albums-outline" size={12} color="rgba(255,255,255,0.9)" />
+                <Text style={pvStyles.headerCount}>{counterLabel}</Text>
+              </View>
             ) : null}
           </View>
           <View style={{ width: 44 }} />
@@ -322,55 +318,73 @@ function PostFullViewModal({ visible, posts, index, onClose, COLORS, isDark, ins
           ref={scrollRef}
           horizontal
           pagingEnabled
+          decelerationRate="fast"
+          snapToInterval={screenWidth}
+          snapToAlignment="center"
           showsHorizontalScrollIndicator={false}
           onMomentumScrollEnd={handleScroll}
           style={pvStyles.scroll}
-          contentContainerStyle={{ alignItems: 'center' }}
+          contentContainerStyle={pvStyles.cardPagerContent}
         >
           {posts.map((p, i) => (
-            <View key={p.id || `pv-${i}`} style={{ width: screenWidth, height: '100%', justifyContent: 'center', alignItems: 'center' }}>
-              {p.imageUri ? (
-                <CachedImage
-                  source={{ uri: p.imageUri }}
-                  style={{ width: screenWidth, aspectRatio: 1 }}
-                  resizeMode="contain"
-                  recyclingKey={`full-${p.imageUri}`}
-                />
-              ) : (
-                <View style={pvStyles.noImage}>
-                  <Ionicons name="image-outline" size={44} color="rgba(255,255,255,0.5)" />
+            <View key={p.id || `pv-${i}`} style={[pvStyles.cardPage, { width: screenWidth }]}>
+              <View style={[pvStyles.postCard, { width: cardWidth }]}>
+                <View style={pvStyles.cardHeader}>
+                  <View style={pvStyles.cardAvatar}>
+                    <Ionicons name="storefront-outline" size={16} color={COLORS.primary} />
+                  </View>
+                  <View style={pvStyles.cardHeaderInfo}>
+                    <Text style={pvStyles.cardHeaderUsername} numberOfLines={1}>
+                      {businessName || 'Client'}
+                    </Text>
+                    {p.createdAt ? (
+                      <Text style={pvStyles.cardHeaderLocation} numberOfLines={1}>
+                        {formatPostDate(p.createdAt)}
+                      </Text>
+                    ) : (
+                      <Text style={pvStyles.cardHeaderLocation} numberOfLines={1}>
+                        Bahrain
+                      </Text>
+                    )}
+                  </View>
                 </View>
-              )}
+                {p.imageUri ? (
+                  <CachedImage
+                    source={{ uri: p.imageUri }}
+                    style={[pvStyles.postImage, { height: imageHeight }]}
+                    resizeMode="cover"
+                    recyclingKey={`full-${p.imageUri}`}
+                  />
+                ) : (
+                  <View style={[pvStyles.noImage, { height: imageHeight }]}>
+                    <Ionicons name="image-outline" size={44} color="rgba(255,255,255,0.45)" />
+                  </View>
+                )}
+                <ScrollView
+                  style={pvStyles.postContent}
+                  contentContainerStyle={pvStyles.postContentInner}
+                  showsVerticalScrollIndicator={false}
+                  nestedScrollEnabled
+                >
+                  {p.description ? (
+                    <Text style={pvStyles.description}>
+                      <Text style={pvStyles.descriptionName}>{businessName || 'Client'} </Text>
+                      {p.description}
+                    </Text>
+                  ) : (
+                    <Text style={pvStyles.emptyDescription}>No description for this post</Text>
+                  )}
+                </ScrollView>
+              </View>
             </View>
           ))}
         </ScrollView>
 
         {total > 1 ? (
-          <View style={pvStyles.dotsRow} pointerEvents="none">
+          <View style={[pvStyles.dotsRow, { paddingBottom: (insets?.bottom ?? 0) + 8 }]} pointerEvents="none">
             {posts.map((_, i) => (
               <View key={i} style={[pvStyles.dot, i === activeIndex && pvStyles.dotActive]} />
             ))}
-          </View>
-        ) : null}
-
-        {(current?.description || dateLabel) ? (
-          <View style={[pvStyles.infoPanel, { paddingBottom: (insets?.bottom ?? 0) + 18 }]}>
-            <LinearGradient
-              colors={['transparent', 'rgba(0,0,0,0.55)', 'rgba(0,0,0,0.85)']}
-              locations={[0, 0.4, 1]}
-              style={StyleSheet.absoluteFill}
-            />
-            {dateLabel ? (
-              <View style={pvStyles.dateRow}>
-                <Ionicons name="calendar-outline" size={13} color={GOLD_LIGHT} />
-                <Text style={pvStyles.dateText}>{dateLabel}</Text>
-              </View>
-            ) : null}
-            {current?.description ? (
-              <Text style={pvStyles.description} numberOfLines={6}>
-                {current.description}
-              </Text>
-            ) : null}
           </View>
         ) : null}
       </Animated.View>
@@ -381,7 +395,11 @@ function PostFullViewModal({ visible, posts, index, onClose, COLORS, isDark, ins
 const pvStyles = StyleSheet.create({
   backdrop: {
     flex: 1,
-    backgroundColor: '#000',
+    backgroundColor: '#05070A',
+  },
+  backdropScrim: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0,0,0,0.48)',
   },
   header: {
     position: 'absolute',
@@ -421,25 +439,103 @@ const pvStyles = StyleSheet.create({
     letterSpacing: 0.2,
   },
   headerCount: {
-    fontSize: 11,
-    fontWeight: '600',
-    color: 'rgba(255,255,255,0.72)',
-    marginTop: 2,
-    letterSpacing: 0.8,
-    textTransform: 'uppercase',
+    fontSize: 12.5,
+    fontWeight: '800',
+    color: '#FFFFFF',
+    letterSpacing: 0.35,
+  },
+  headerCountPill: {
+    marginTop: 6,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 7,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 999,
+    backgroundColor: 'rgba(15,23,42,0.78)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.32)',
+    ...Platform.select({
+      ios: {
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.2,
+        shadowRadius: 8,
+      },
+      android: { elevation: 3 },
+    }),
   },
   scroll: { flex: 1 },
-  noImage: {
-    width: '100%',
-    aspectRatio: 1,
+  cardPagerContent: { alignItems: 'center' },
+  cardPage: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 14,
+  },
+  postCard: {
+    maxHeight: '84%',
+    borderRadius: 18,
+    overflow: 'hidden',
+    backgroundColor: '#FFFFFF',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(15,23,42,0.14)',
+    ...Platform.select({
+      ios: {
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 10 },
+        shadowOpacity: 0.35,
+        shadowRadius: 22,
+      },
+      android: { elevation: 9 },
+    }),
+  },
+  cardHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 10,
+    paddingVertical: 10,
+    backgroundColor: '#FFFFFF',
+  },
+  cardAvatar: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: '#F3F4F6',
     alignItems: 'center',
     justifyContent: 'center',
+    marginRight: 10,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(15,23,42,0.1)',
   },
+  cardHeaderInfo: { flex: 1, minWidth: 0 },
+  cardHeaderUsername: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#0F172A',
+  },
+  cardHeaderLocation: {
+    fontSize: 11,
+    color: '#64748B',
+    marginTop: 1,
+  },
+  postImage: {
+    width: '100%',
+    backgroundColor: '#E2E8F0',
+  },
+  noImage: {
+    width: '100%',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#E2E8F0',
+  },
+  postContent: { maxHeight: 165 },
+  postContentInner: { paddingHorizontal: 12, paddingTop: 10, paddingBottom: 12 },
   dotsRow: {
     position: 'absolute',
     left: 0,
     right: 0,
-    bottom: 160,
+    bottom: 0,
     flexDirection: 'row',
     justifyContent: 'center',
     gap: 6,
@@ -454,34 +550,30 @@ const pvStyles = StyleSheet.create({
     backgroundColor: GOLD,
     width: 18,
   },
-  infoPanel: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    bottom: 0,
-    paddingHorizontal: 22,
-    paddingTop: 28,
-    overflow: 'hidden',
-  },
   dateRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
-    marginBottom: 8,
+    gap: 5,
   },
   dateText: {
     fontSize: 11,
     fontWeight: '700',
     color: GOLD_LIGHT,
-    letterSpacing: 1.2,
-    textTransform: 'uppercase',
+    letterSpacing: 0.5,
   },
   description: {
-    fontSize: 15,
-    lineHeight: 22,
-    color: '#FFFFFF',
-    fontWeight: '500',
-    letterSpacing: -0.15,
+    fontSize: 13,
+    lineHeight: 18,
+    color: '#0F172A',
+  },
+  descriptionName: {
+    fontWeight: '700',
+  },
+  emptyDescription: {
+    fontSize: 13,
+    lineHeight: 18,
+    color: '#64748B',
+    fontStyle: 'italic',
   },
 });
 
@@ -525,6 +617,93 @@ function parseJsonField(val) {
   return [val];
 }
 
+function formatTimeToAmPm(value) {
+  if (value == null) return ''
+  const raw = String(value).trim()
+  if (!raw) return ''
+
+  if (/\b(am|pm)\b/i.test(raw)) {
+    return raw
+      .replace(/\bam\b/i, 'AM')
+      .replace(/\bpm\b/i, 'PM')
+  }
+
+  const match = raw.match(/^(\d{1,2})(?::(\d{2}))?$/)
+  if (!match) return raw
+
+  const hours24 = Number(match[1])
+  const minutes = match[2] ?? '00'
+  if (Number.isNaN(hours24) || hours24 < 0 || hours24 > 23) return raw
+
+  const suffix = hours24 >= 12 ? 'PM' : 'AM'
+  const hours12 = (hours24 % 12) || 12
+  return `${hours12}:${minutes} ${suffix}`
+}
+
+function formatTimeRangeToAmPm(value) {
+  const raw = String(value || '').trim()
+  if (!raw) return ''
+
+  const parts = raw.split(/\s*-\s*/)
+  if (parts.length === 2) {
+    const start = formatTimeToAmPm(parts[0])
+    const end = formatTimeToAmPm(parts[1])
+    return `${start} - ${end}`
+  }
+  return formatTimeToAmPm(raw)
+}
+
+function formatClientTimings(value) {
+  if (!value) return ''
+
+  if (typeof value === 'string') {
+    const trimmed = value.trim()
+    if (!trimmed) return ''
+    try {
+      const parsed = JSON.parse(trimmed)
+      return formatClientTimings(parsed)
+    } catch {
+      return formatTimeRangeToAmPm(trimmed)
+    }
+  }
+
+  if (Array.isArray(value)) {
+    return value
+      .map((entry) => formatClientTimings(entry))
+      .filter(Boolean)
+      .join(' | ')
+  }
+
+  if (typeof value === 'object') {
+    const directOpen = value.open || value.opening || value.opening_time
+    const directClose = value.close || value.closing || value.closing_time
+    if (directOpen || directClose) {
+      if (directOpen && directClose) return `${formatTimeToAmPm(directOpen)} - ${formatTimeToAmPm(directClose)}`
+      return formatTimeToAmPm(directOpen || directClose)
+    }
+
+    const parts = Object.entries(value)
+      .map(([day, span]) => {
+        const spanLabel = formatClientTimings(span)
+        if (!spanLabel) return ''
+        return `${day}: ${spanLabel}`
+      })
+      .filter(Boolean)
+    return parts.join(' | ')
+  }
+
+  return String(value)
+}
+
+function formatClientCategoryLabel(value) {
+  const raw = String(value || '').trim()
+  if (!raw) return ''
+  const normalized = raw.toLowerCase().replace(/[_-]+/g, ' ')
+  if (normalized.includes('event organizer') || normalized.includes('eventorganizer')) return 'Event'
+  if (normalized === 'events' || normalized === 'event') return 'Event'
+  return raw
+}
+
 function getModalStyles(C, isDark) {
   const surface = C.surface ?? themeColors.surface;
   const border = C.border ?? themeColors.border;
@@ -532,6 +711,53 @@ function getModalStyles(C, isDark) {
   const hairline = isDark ? 'rgba(255,255,255,0.08)' : 'rgba(15,23,42,0.08)';
   return {
     clientProfilePage: { flex: 1, backgroundColor: C.screenBg },
+    sheetBackdrop: {
+      ...StyleSheet.absoluteFillObject,
+      backgroundColor: 'rgba(0,0,0,0.26)',
+    },
+    sheetContainer: {
+      position: 'absolute',
+      left: 0,
+      right: 0,
+      bottom: 0,
+      top: '7%',
+      borderTopLeftRadius: 22,
+      borderTopRightRadius: 22,
+      overflow: 'hidden',
+      borderTopWidth: StyleSheet.hairlineWidth,
+      borderLeftWidth: StyleSheet.hairlineWidth,
+      borderRightWidth: StyleSheet.hairlineWidth,
+      borderColor: hairline,
+      ...Platform.select({
+        ios: {
+          shadowColor: '#000',
+          shadowOffset: { width: 0, height: -6 },
+          shadowOpacity: 0.2,
+          shadowRadius: 14,
+        },
+        android: { elevation: 10 },
+      }),
+    },
+    sheetHandleArea: {
+      alignItems: 'center',
+      justifyContent: 'center',
+      paddingTop: 10,
+      paddingBottom: 8,
+      backgroundColor: isDark ? 'rgba(15,23,42,0.98)' : 'rgba(255,255,255,0.98)',
+    },
+    sheetHandleBar: {
+      width: 46,
+      height: 5,
+      borderRadius: 999,
+      backgroundColor: isDark ? 'rgba(255,255,255,0.32)' : 'rgba(15,23,42,0.2)',
+    },
+    sheetHandleHint: {
+      marginTop: 5,
+      fontSize: 11,
+      fontWeight: '600',
+      color: C.textSecondary,
+      letterSpacing: 0.2,
+    },
     headerBlur: {
       position: 'absolute',
       top: 0,
@@ -620,7 +846,7 @@ function getModalStyles(C, isDark) {
     heroContent: {
       alignItems: 'center',
       paddingHorizontal: 22,
-      paddingTop: 120,
+      paddingTop: 75,
     },
     avatarOuterRing: {
       width: 118,
@@ -792,19 +1018,131 @@ function getModalStyles(C, isDark) {
 
     /* ===================  DESCRIPTION  =================== */
     bioWrap: {
-      marginTop: 20,
+      marginTop: 18,
       marginHorizontal: 22,
-      paddingLeft: 14,
-      borderLeftWidth: 2,
-      borderLeftColor: GOLD,
+      borderRadius: 16,
+      paddingHorizontal: 14,
+      paddingVertical: 12,
+      backgroundColor: isDark ? 'rgba(15,23,42,0.62)' : 'rgba(255,255,255,0.9)',
+      borderWidth: 1,
+      borderColor: isDark ? 'rgba(255,255,255,0.12)' : 'rgba(15,23,42,0.08)',
+      ...Platform.select({
+        ios: {
+          shadowColor: '#000',
+          shadowOffset: { width: 0, height: 6 },
+          shadowOpacity: 0.1,
+          shadowRadius: 12,
+        },
+        android: { elevation: 3 },
+      }),
+    },
+    bioHeaderRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 6,
+      marginBottom: 8,
+    },
+    bioLabel: {
+      fontSize: 11,
+      fontWeight: '800',
+      letterSpacing: 1.1,
+      textTransform: 'uppercase',
+      color: isDark ? GOLD_LIGHT : '#8A6A14',
     },
     bio: {
-      fontSize: 14,
-      color: C.textSecondary,
-      lineHeight: 22,
-      fontWeight: '500',
-      fontStyle: 'italic',
-      letterSpacing: 0.1,
+      fontSize: 14.5,
+      color: C.textPrimary,
+      lineHeight: 23,
+      fontWeight: '600',
+      letterSpacing: 0,
+    },
+    bioToggleBtn: {
+      marginTop: 8,
+      alignSelf: 'flex-start',
+      paddingVertical: 4,
+      paddingHorizontal: 2,
+    },
+    bioToggleText: {
+      fontSize: 12.5,
+      fontWeight: '800',
+      color: C.primary,
+      letterSpacing: 0.2,
+    },
+    bioSkeletonWrap: {
+      marginTop: 18,
+      marginHorizontal: 22,
+      borderRadius: 16,
+      paddingHorizontal: 14,
+      paddingVertical: 12,
+      backgroundColor: isDark ? 'rgba(15,23,42,0.62)' : 'rgba(255,255,255,0.9)',
+      borderWidth: 1,
+      borderColor: isDark ? 'rgba(255,255,255,0.12)' : 'rgba(15,23,42,0.08)',
+    },
+    bioSkeletonLine: {
+      height: 10,
+      borderRadius: 6,
+      backgroundColor: C.pillBg,
+      marginTop: 8,
+    },
+    timingsTopWrap: {
+      marginTop: 12,
+      alignSelf: 'center',
+      width: '100%',
+      maxWidth: 320,
+      borderRadius: 14,
+      paddingHorizontal: 12,
+      paddingVertical: 10,
+      backgroundColor: isDark ? 'rgba(15,23,42,0.78)' : 'rgba(255,255,255,0.92)',
+      borderWidth: 1,
+      borderColor: isDark ? 'rgba(255,255,255,0.18)' : 'rgba(15,23,42,0.12)',
+      ...Platform.select({
+        ios: {
+          shadowColor: '#000',
+          shadowOffset: { width: 0, height: 4 },
+          shadowOpacity: 0.14,
+          shadowRadius: 10,
+        },
+        android: { elevation: 4 },
+      }),
+    },
+    timingsTopLabelRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: 6,
+      marginBottom: 4,
+    },
+    timingsTopLabel: {
+      fontSize: 11,
+      fontWeight: '800',
+      letterSpacing: 1.1,
+      textTransform: 'uppercase',
+      color: isDark ? GOLD_LIGHT : '#8A6A14',
+    },
+    timingsTopValue: {
+      textAlign: 'center',
+      fontSize: 15,
+      fontWeight: '800',
+      lineHeight: 20,
+      color: C.textPrimary,
+    },
+    timingsTopSkeletonWrap: {
+      marginTop: 12,
+      alignSelf: 'center',
+      width: '100%',
+      maxWidth: 320,
+      borderRadius: 14,
+      paddingHorizontal: 12,
+      paddingVertical: 10,
+      backgroundColor: isDark ? 'rgba(15,23,42,0.62)' : 'rgba(255,255,255,0.86)',
+      borderWidth: 1,
+      borderColor: isDark ? 'rgba(255,255,255,0.14)' : 'rgba(15,23,42,0.08)',
+    },
+    timingsTopSkeletonLine: {
+      height: 10,
+      borderRadius: 6,
+      backgroundColor: C.pillBg,
+      alignSelf: 'center',
     },
 
     /* ===================  CTA  =================== */
@@ -987,11 +1325,20 @@ function getModalStyles(C, isDark) {
   };
 }
 
-export default function ClientProfileModal({ visible, clientId, onClose, insets, onOpenARNavigate }) {
+export default function ClientProfileModal({
+  visible,
+  clientId,
+  initialClientData = null,
+  onClose,
+  insets,
+  onOpenARNavigate,
+  animationFrom = 'right',
+  presentation = 'page',
+}) {
   const { colors, isDark } = useTheme();
   const COLORS = React.useMemo(() => getModalColors(colors), [colors]);
   const styles = React.useMemo(() => StyleSheet.create(getModalStyles(COLORS, isDark)), [COLORS, isDark]);
-  const { width: screenWidth = 375 } = useWindowDimensions();
+  const { width: screenWidth = 375, height: screenHeight = 812 } = useWindowDimensions();
   const [client, setClient] = useState(null);
   const [restaurant, setRestaurant] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -1000,6 +1347,7 @@ export default function ClientProfileModal({ visible, clientId, onClose, insets,
   const [clientReviews, setClientReviews] = useState([]);
   const [postsLoading, setPostsLoading] = useState(false);
   const [reviewsLoading, setReviewsLoading] = useState(false);
+  const [showFullDescription, setShowFullDescription] = useState(false);
   const [activeTab, setActiveTab] = useState(PROFILE_TAB_POSTS);
   const [viewerOpen, setViewerOpen] = useState(false);
   const [viewerIndex, setViewerIndex] = useState(0);
@@ -1012,9 +1360,18 @@ export default function ClientProfileModal({ visible, clientId, onClose, insets,
   const avatarEntrance = useRef(new Animated.Value(0)).current;
   const nameEntrance = useRef(new Animated.Value(0)).current;
   const skeletonPulse = useRef(new Animated.Value(0.55)).current;
+  const clientCacheRef = useRef(new Map());
+  const restaurantCacheRef = useRef(new Map());
+  const postsCacheRef = useRef(new Map());
+  const reviewsCacheRef = useRef(new Map());
+  const closeInFlightRef = useRef(false);
+  const sheetDragY = useRef(new Animated.Value(0)).current;
+  const sheetDragOffsetRef = useRef(0);
 
   useEffect(() => {
     if (visible) {
+      closeInFlightRef.current = false;
+      sheetDragY.setValue(0);
       slideAnim.setValue(1);
       fadeAnim.setValue(0);
       Animated.parallel([
@@ -1032,6 +1389,7 @@ export default function ClientProfileModal({ visible, clientId, onClose, insets,
         }),
       ]).start();
     } else {
+      closeInFlightRef.current = false;
       slideAnim.setValue(1);
       fadeAnim.setValue(0);
     }
@@ -1046,8 +1404,37 @@ export default function ClientProfileModal({ visible, clientId, onClose, insets,
       setClientReviews([]);
       setPostsLoading(false);
       setReviewsLoading(false);
+      setShowFullDescription(false);
       setViewerOpen(false);
       return;
+    }
+    if (initialClientData && initialClientData.client_a_uuid === clientId) {
+      setClient((prev) => prev || initialClientData);
+      const seededClientBasics = {
+        client_a_uuid: initialClientData.client_a_uuid,
+        business_name: initialClientData.business_name ?? null,
+        name: initialClientData.name ?? null,
+        client_image: initialClientData.client_image ?? null,
+        location: initialClientData.location ?? null,
+        rating: initialClientData.rating ?? null,
+        price_range: initialClientData.price_range ?? null,
+        timings: initialClientData.timings ?? null,
+        __cachePartial: true,
+      };
+      clientCacheRef.current.set(clientId, {
+        ...(clientCacheRef.current.get(clientId) || {}),
+        ...seededClientBasics,
+      });
+    }
+    const cachedClient = clientCacheRef.current.get(clientId);
+    if (cachedClient) {
+      setClient(cachedClient);
+      setRestaurant(restaurantCacheRef.current.get(cachedClient.client_a_uuid || clientId) || null);
+      setError(null);
+      if (!cachedClient.__cachePartial) {
+        setLoading(false);
+        return;
+      }
     }
     let cancelled = false;
     setLoading(true);
@@ -1073,6 +1460,10 @@ export default function ClientProfileModal({ visible, clientId, onClose, insets,
         }
         if (finalClient) {
           setClient(finalClient);
+          clientCacheRef.current.set(clientId, {
+            ...finalClient,
+            __cachePartial: false,
+          });
           const uuidForRest = finalClient.client_a_uuid;
           if (uuidForRest) {
             try {
@@ -1081,7 +1472,10 @@ export default function ClientProfileModal({ visible, clientId, onClose, insets,
                 .select('cuisine, meal_type, food_type, speciality, isfoodtruck')
                 .eq('a_uuid', uuidForRest)
                 .maybeSingle();
-              if (!cancelled && restData) setRestaurant(restData);
+              if (!cancelled && restData) {
+                setRestaurant(restData);
+                restaurantCacheRef.current.set(uuidForRest, restData);
+              }
             } catch (_) {
               // restaurant_client table may not exist yet
             }
@@ -1129,10 +1523,23 @@ export default function ClientProfileModal({ visible, clientId, onClose, insets,
     if (!visible || !client || !client.client_a_uuid) return;
     let cancelled = false;
     const uuid = client.client_a_uuid;
-    setClientPosts([]);
-    setClientReviews([]);
-    setPostsLoading(true);
-    setReviewsLoading(true);
+    const cachedPosts = postsCacheRef.current.get(uuid);
+    const cachedReviews = reviewsCacheRef.current.get(uuid);
+    if (cachedPosts) {
+      setClientPosts(cachedPosts);
+      setPostsLoading(false);
+    } else {
+      setClientPosts([]);
+      setPostsLoading(true);
+    }
+    if (cachedReviews) {
+      setClientReviews(cachedReviews);
+      setReviewsLoading(false);
+    } else {
+      setClientReviews([]);
+      setReviewsLoading(true);
+    }
+    if (cachedPosts && cachedReviews) return;
     (async () => {
       try {
         const postsRes = await supabase
@@ -1142,12 +1549,14 @@ export default function ClientProfileModal({ visible, clientId, onClose, insets,
           .order('created_at', { ascending: false })
           .limit(30);
         if (!cancelled) {
-          setClientPosts((postsRes.data || []).map((r) => ({
+          const mappedPosts = (postsRes.data || []).map((r) => ({
             id: r.post_uuid,
             imageUri: resolvePublicImageUrl(r.post_image),
             description: r.description || '',
             createdAt: r.created_at || null,
-          })));
+          }));
+          setClientPosts(mappedPosts);
+          postsCacheRef.current.set(uuid, mappedPosts);
         }
       } finally {
         if (!cancelled) setPostsLoading(false);
@@ -1193,13 +1602,20 @@ export default function ClientProfileModal({ visible, clientId, onClose, insets,
             }));
           }
         }
-        if (!cancelled) setClientReviews(reviews);
+        if (!cancelled) {
+          setClientReviews(reviews);
+          reviewsCacheRef.current.set(uuid, reviews);
+        }
       } finally {
         if (!cancelled) setReviewsLoading(false);
       }
     })();
     return () => { cancelled = true; };
   }, [visible, client]);
+
+  useEffect(() => {
+    setShowFullDescription(false);
+  }, [client?.client_a_uuid]);
 
   useEffect(() => {
     if (tabSegment <= 0) return;
@@ -1227,17 +1643,85 @@ export default function ClientProfileModal({ visible, clientId, onClose, insets,
     setViewerOpen(false);
   }, []);
 
+  const handleRequestClose = useCallback(() => {
+    if (closeInFlightRef.current) return
+    closeInFlightRef.current = true
+    setViewerOpen(false)
+    Animated.parallel([
+      Animated.timing(slideAnim, {
+        toValue: 1,
+        duration: 260,
+        easing: Easing.in(Easing.cubic),
+        useNativeDriver: true,
+      }),
+      Animated.timing(fadeAnim, {
+        toValue: 0,
+        duration: 220,
+        easing: Easing.in(Easing.cubic),
+        useNativeDriver: true,
+      }),
+    ]).start(() => {
+      closeInFlightRef.current = false
+      onClose?.()
+    })
+  }, [fadeAnim, onClose, slideAnim]);
+
+  const sheetPanResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => presentation === 'sheet',
+      onMoveShouldSetPanResponder: (_evt, g) =>
+        presentation === 'sheet' && Math.abs(g.dy) > 4 && Math.abs(g.dy) > Math.abs(g.dx) * 0.72,
+      onPanResponderGrant: () => {
+        sheetDragOffsetRef.current = 0
+      },
+      onPanResponderMove: (_evt, g) => {
+        const rawY = sheetDragOffsetRef.current + g.dy
+        const dampedY = rawY > 0 ? rawY : rawY * 0.18
+        sheetDragY.setValue(Math.max(0, Math.min(280, dampedY)))
+      },
+      onPanResponderRelease: (_evt, g) => {
+        const shouldClose = g.dy > 88 || g.vy > 0.4
+        if (shouldClose) {
+          handleRequestClose()
+          return
+        }
+        Animated.spring(sheetDragY, {
+          toValue: 0,
+          useNativeDriver: true,
+          tension: 80,
+          friction: 12,
+        }).start(() => {
+          sheetDragOffsetRef.current = 0
+        })
+      },
+      onPanResponderTerminate: () => {
+        Animated.spring(sheetDragY, {
+          toValue: 0,
+          useNativeDriver: true,
+          tension: 80,
+          friction: 12,
+        }).start(() => {
+          sheetDragOffsetRef.current = 0
+        })
+      },
+    })
+  ).current;
+
   if (!visible) return null;
 
   const name = client?.business_name || client?.name || client?.business_name_ar || 'Business';
   const description = client?.description || '';
+  const hasLongDescription = description.trim().length > 170;
+  const showDescriptionSkeleton = loading && !description;
   const location = client?.location || client?.address || '';
   const rating = client?.rating != null && client?.rating !== '' ? Number(client.rating) : null;
   const priceRange = client?.price_range != null && client?.price_range !== '' ? String(client.price_range) : null;
-  const category = client?.category || client?.client_type || '';
+  const category = formatClientCategoryLabel(client?.category || client?.client_type || '');
   const cuisine = client?.cuisine || client?.cuisine_type || restaurant?.cuisine || '';
   const profileAvatarUri = client?.client_image ? resolvePublicImageUrl(String(client.client_image).trim()) : null;
   const isVerified = Boolean(client?.verified || client?.is_verified || client?.status === 'verified');
+  const timingsLabel = formatClientTimings(client?.timings);
+  const showTimingsSkeleton = loading && !timingsLabel;
 
   const mealTypes = parseJsonField(restaurant?.meal_type);
   const foodTypes = parseJsonField(restaurant?.food_type);
@@ -1253,10 +1737,22 @@ export default function ClientProfileModal({ visible, clientId, onClose, insets,
     Math.floor((galleryWidth - gridGap * (GRID_COLS - 1)) / GRID_COLS),
   );
 
+  const slideTranslateX = slideAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0, animationFrom === 'right' ? screenWidth : 0],
+  });
   const slideTranslateY = slideAnim.interpolate({
     inputRange: [0, 1],
-    outputRange: [0, 24],
+    outputRange: [0, animationFrom === 'bottom' ? screenHeight : 0],
   });
+  const slideTransform =
+    animationFrom === 'bottom'
+      ? [{ translateY: slideTranslateY }]
+      : [{ translateX: slideTranslateX }]
+  const finalTransform =
+    presentation === 'sheet'
+      ? [...slideTransform, { translateY: sheetDragY }]
+      : slideTransform
 
   const avatarScale = avatarEntrance.interpolate({ inputRange: [0, 1], outputRange: [0.7, 1] });
   const avatarOpacityAnim = avatarEntrance.interpolate({ inputRange: [0, 1], outputRange: [0, 1] });
@@ -1265,11 +1761,34 @@ export default function ClientProfileModal({ visible, clientId, onClose, insets,
 
   const showHeaderSolid = scrollY > 40;
 
+  const headerTopPadding = presentation === 'sheet' ? 4 : (insets?.top ?? 0) + 8
+  const heroTopPadding = presentation === 'sheet' ? 68 : 96
+
   return (
-    <Modal visible={visible} animationType="none" onRequestClose={onClose} statusBarTranslucent>
-      <Animated.View style={[styles.clientProfilePage, { opacity: fadeAnim, transform: [{ translateY: slideTranslateY }] }]}>
-        <View style={[styles.headerBlur, showHeaderSolid && styles.headerBlurSolid, { paddingTop: (insets?.top ?? 0) + 8 }]}>
-          <TouchableOpacity style={styles.clientProfileBackBtn} onPress={onClose} activeOpacity={0.85}>
+    <Modal visible={visible} animationType="none" transparent onRequestClose={handleRequestClose} statusBarTranslucent>
+      {presentation === 'sheet' ? (
+        <View style={styles.sheetBackdrop}>
+          <TouchableOpacity style={StyleSheet.absoluteFill} activeOpacity={1} onPress={handleRequestClose} />
+        </View>
+      ) : null}
+      <Animated.View
+        style={[
+          styles.clientProfilePage,
+          presentation === 'sheet' && styles.sheetContainer,
+          { opacity: fadeAnim, transform: finalTransform },
+        ]}
+      >
+        {presentation === 'sheet' ? (
+          <View style={styles.sheetHandleArea} {...sheetPanResponder.panHandlers}>
+            <View style={styles.sheetHandleBar} />
+            <Text style={styles.sheetHandleHint}>Swipe down</Text>
+          </View>
+        ) : null}
+        <View
+          style={[styles.headerBlur, showHeaderSolid && styles.headerBlurSolid, { paddingTop: headerTopPadding }]}
+          {...(presentation === 'sheet' ? sheetPanResponder.panHandlers : {})}
+        >
+          <TouchableOpacity style={styles.clientProfileBackBtn} onPress={handleRequestClose} activeOpacity={0.85}>
             <Ionicons name="chevron-back" size={22} color={COLORS.textPrimary} />
           </TouchableOpacity>
           {showHeaderSolid ? (
@@ -1282,7 +1801,7 @@ export default function ClientProfileModal({ visible, clientId, onClose, insets,
           <View style={styles.clientProfileHeaderPlaceholder} />
         </View>
 
-        {loading ? (
+        {loading && !client ? (
           <ScrollView style={{ flex: 1 }} showsVerticalScrollIndicator={false}>
             <Animated.View style={{ opacity: skeletonPulse }}>
               <View style={styles.skeletonCard}>
@@ -1296,16 +1815,12 @@ export default function ClientProfileModal({ visible, clientId, onClose, insets,
                 </View>
               </View>
             </Animated.View>
-            <View style={{ justifyContent: 'center', alignItems: 'center', paddingVertical: 40 }}>
-              <ActivityIndicator size="small" color={COLORS.primary} />
-              <Text style={[styles.clientProfileLoadingText, { marginTop: 12 }]}>Loading profile…</Text>
-            </View>
           </ScrollView>
         ) : error ? (
           <View style={styles.clientProfileError}>
             <Ionicons name="alert-circle-outline" size={48} color={COLORS.textMuted} />
             <Text style={styles.clientProfileErrorText}>{error}</Text>
-            <TouchableOpacity style={styles.clientProfileRetryBtn} onPress={onClose} activeOpacity={0.85}>
+            <TouchableOpacity style={styles.clientProfileRetryBtn} onPress={handleRequestClose} activeOpacity={0.85}>
               <LinearGradient
                 colors={[COLORS.primary, COLORS.primaryLight]}
                 start={{ x: 0, y: 0 }}
@@ -1345,7 +1860,7 @@ export default function ClientProfileModal({ visible, clientId, onClose, insets,
                 />
                 <View style={styles.heroOrbGold} />
 
-                <View style={styles.heroContent}>
+                <View style={[styles.heroContent, { paddingTop: heroTopPadding }]}>
                   <Animated.View style={{ transform: [{ scale: avatarScale }], opacity: avatarOpacityAnim }}>
                     <LinearGradient
                       colors={[GOLD, '#E9C770', GOLD, '#B8962E']}
@@ -1405,6 +1920,20 @@ export default function ClientProfileModal({ visible, clientId, onClose, insets,
                         <Text style={styles.ratingHeroText}>{Number(rating).toFixed(1)} · Rated</Text>
                       </View>
                     ) : null}
+                    {timingsLabel ? (
+                      <View style={styles.timingsTopWrap}>
+                        <View style={styles.timingsTopLabelRow}>
+                          <Ionicons name="time-outline" size={13} color={isDark ? GOLD_LIGHT : '#8A6A14'} />
+                          <Text style={styles.timingsTopLabel}>Opening Hours</Text>
+                        </View>
+                        <Text style={styles.timingsTopValue}>{timingsLabel}</Text>
+                      </View>
+                    ) : showTimingsSkeleton ? (
+                      <Animated.View style={[styles.timingsTopSkeletonWrap, { opacity: skeletonPulse }]}>
+                        <View style={[styles.timingsTopSkeletonLine, { width: 108, marginBottom: 8 }]} />
+                        <View style={[styles.timingsTopSkeletonLine, { width: 210 }]} />
+                      </Animated.View>
+                    ) : null}
                   </Animated.View>
                 </View>
               </View>
@@ -1412,10 +1941,30 @@ export default function ClientProfileModal({ visible, clientId, onClose, insets,
               {/* DESCRIPTION */}
               {description ? (
                 <View style={styles.bioWrap}>
-                  <Text style={styles.bio} numberOfLines={5}>{description}</Text>
+                  <View style={styles.bioHeaderRow}>
+                    <Ionicons name="information-circle-outline" size={14} color={isDark ? GOLD_LIGHT : '#8A6A14'} />
+                    <Text style={styles.bioLabel}>Description</Text>
+                  </View>
+                  <Text style={styles.bio} numberOfLines={showFullDescription ? undefined : 3}>{description}</Text>
+                  {hasLongDescription ? (
+                    <Pressable
+                      style={({ pressed }) => [styles.bioToggleBtn, pressed && { opacity: 0.7 }]}
+                      onPress={() => setShowFullDescription((prev) => !prev)}
+                      accessibilityRole="button"
+                      accessibilityLabel={showFullDescription ? 'Collapse description' : 'Expand description'}
+                    >
+                      <Text style={styles.bioToggleText}>{showFullDescription ? 'Read less' : 'Read more'}</Text>
+                    </Pressable>
+                  ) : null}
                 </View>
+              ) : showDescriptionSkeleton ? (
+                <Animated.View style={[styles.bioSkeletonWrap, { opacity: skeletonPulse }]}>
+                  <View style={[styles.bioSkeletonLine, { width: 110, marginTop: 0, alignSelf: 'flex-start' }]} />
+                  <View style={[styles.bioSkeletonLine, { width: '100%' }]} />
+                  <View style={[styles.bioSkeletonLine, { width: '92%' }]} />
+                  <View style={[styles.bioSkeletonLine, { width: '74%' }]} />
+                </Animated.View>
               ) : null}
-
               {/* CTA BUTTONS */}
               {(client?.lat != null && client?.long != null) ? (
                 <View style={styles.ctaRow}>
