@@ -71,6 +71,45 @@ import {
   pickPlanStopThumbUri,
 } from './planMatching'
 
+const stringifyTagValue = (value) => {
+  if (!value) return ''
+  if (Array.isArray(value)) return value.map((item) => stringifyTagValue(item)).filter(Boolean).join(' ')
+  if (typeof value === 'object') return Object.values(value).map((item) => stringifyTagValue(item)).filter(Boolean).join(' ')
+  return String(value)
+}
+
+const getClientSearchableTags = (client) => {
+  const tagsRaw = client?.tags
+  if (!tagsRaw) return ''
+
+  if (Array.isArray(tagsRaw) || typeof tagsRaw === 'object') {
+    return stringifyTagValue(tagsRaw)
+  }
+
+  if (typeof tagsRaw === 'string') {
+    const trimmed = tagsRaw.trim()
+    if (!trimmed) return ''
+    if ((trimmed.startsWith('[') && trimmed.endsWith(']')) || (trimmed.startsWith('{') && trimmed.endsWith('}'))) {
+      try {
+        return stringifyTagValue(JSON.parse(trimmed))
+      } catch {
+        return trimmed
+      }
+    }
+    return trimmed
+  }
+
+  return String(tagsRaw)
+}
+
+const matchesSearchQuery = (client, query) => {
+  if (!query) return true
+  const nameText = (client.name || client.business_name || '').toLowerCase()
+  const arabicNameText = (client.business_name_ar || '').toLowerCase()
+  const tagsText = getClientSearchableTags(client).toLowerCase()
+  return nameText.includes(query) || arabicNameText.includes(query) || tagsText.includes(query)
+}
+
 
 export function AIPlanScreenViewDialogsB({ screen }) {
   const blurTint = screen.isDark ? 'dark' : 'light'
@@ -117,7 +156,7 @@ export function AIPlanScreenViewDialogsB({ screen }) {
               style={styles.buildModeLuxuryHead}
               pointerEvents="none"
             >
-              <Text style={styles.buildModeLuxuryEyebrow}>SIYAHABH PLAN STUDIO</Text>
+              <Text style={styles.buildModeLuxuryEyebrow}>SIYAHABH PLAN BUILDER</Text>
             </Reanimated.View>
             <Reanimated.View entering={ZoomInEasyDown.duration(340)} style={styles.buildModeStandaloneWrap}>
                 <Text style={styles.buildModeStandaloneTitle}>Build your day</Text>
@@ -208,7 +247,7 @@ export function AIPlanScreenViewDialogsB({ screen }) {
                   <Ionicons name="search" size={20} color={themeColors.primary} style={styles.searchModalSearchIcon} />
                   <TextInput
                     style={styles.searchModalSearchInput}
-                    placeholder="Search restaurants, places, events…"
+                    placeholder="Search restaurants, places, events, tags…"
                     placeholderTextColor={placeholderColor}
                     value={screen.searchModalQuery}
                     onChangeText={screen.setSearchModalQuery}
@@ -249,11 +288,7 @@ export function AIPlanScreenViewDialogsB({ screen }) {
                   const rawItems = screen.searchModalClients[key] || [];
                   const q = (screen.searchModalQuery || '').trim().toLowerCase();
                   const items = q
-                    ? rawItems.filter(
-                        (c) =>
-                          (c.name || c.business_name || '').toLowerCase().includes(q) ||
-                          (c.business_name_ar || '').toLowerCase().includes(q)
-                      )
+                    ? rawItems.filter((c) => matchesSearchQuery(c, q))
                     : rawItems;
                 const accent = key === 'restaurants' ? screen.colors.dining : key === 'events' ? screen.colors.event : screen.colors.textSecondary;
                 if (q && items.length === 0) return null;
@@ -292,8 +327,7 @@ export function AIPlanScreenViewDialogsB({ screen }) {
                                   screen.handleAddClientToPlan(client)
                                   return
                                 }
-                                screen.setShowSearchModal(false);
-                                screen.setProfileClientId(client.client_a_uuid || client.clientId);
+                                screen.handleFocusClientFromSearch(client)
                               }}
                             >
                               <View style={[styles.searchModalClientCircle, { borderColor: accent }]}>

@@ -668,15 +668,120 @@ export async function fetchClientsWithLocation() {
     return [];
   }
   if (!rows || !rows.length) return [];
-  const withCoords = rows
-    .map((row) => {
-      const lat = parseFloat(row.lat ?? row.latitude ?? '');
-      const long = parseFloat(row.long ?? row.longitude ?? row.lng ?? '');
-      if (isNaN(lat) || isNaN(long)) return null;
-      return { ...row, lat, lng: long, long };
-    })
-    .filter(Boolean);
-  return withCoords;
+
+  const restaurantIds = rows
+    .filter((row) => String(row.client_type || row.clientType || '').toLowerCase().trim() === 'restaurant')
+    .map((row) => row.client_a_uuid)
+    .filter(Boolean)
+
+  let restaurantBranchByUuid = {}
+  if (restaurantIds.length > 0) {
+    try {
+      const { data: restRows, error: restErr } = await supabase
+        .from('restaurant_client')
+        .select('a_uuid, branch')
+        .in('a_uuid', restaurantIds)
+      if (restErr) {
+        const { data: restRowsFallback, error: restErrFallback } = await supabase
+          .from('restaurant_client')
+          .select('*')
+          .in('a_uuid', restaurantIds)
+        if (!restErrFallback && Array.isArray(restRowsFallback)) {
+          restaurantBranchByUuid = restRowsFallback.reduce((acc, row) => {
+            const uuid = row?.a_uuid || row?.client_a_uuid || null
+            if (uuid) acc[uuid] = row.branch ?? row.branches ?? null
+            return acc
+          }, {})
+        }
+      } else if (Array.isArray(restRows)) {
+        restaurantBranchByUuid = restRows.reduce((acc, row) => {
+          if (row?.a_uuid) acc[row.a_uuid] = row.branch ?? row.branches ?? null
+          return acc
+        }, {})
+      }
+    } catch (_) {
+      restaurantBranchByUuid = {}
+    }
+  }
+
+  const toCoord = (latRaw, lngRaw) => {
+    const fixed = unswapLatLngPipeline(latRaw, lngRaw)
+    if (!fixed) return null
+    return { lat: fixed.lat, lng: fixed.lng, long: fixed.lng }
+  }
+
+  const getBranchCoords = (branches) => {
+    if (!branches) return []
+    let normalizedBranches = branches
+    if (typeof normalizedBranches === 'string') {
+      try {
+        normalizedBranches = JSON.parse(normalizedBranches)
+      } catch (_) {
+        normalizedBranches = []
+      }
+    }
+    const entries = Array.isArray(normalizedBranches)
+      ? normalizedBranches
+      : typeof normalizedBranches === 'object'
+        ? Object.values(normalizedBranches)
+        : []
+    const out = []
+    for (const entry of entries) {
+      if (!entry || typeof entry !== 'object') continue
+      const fromDirect = toCoord(
+        entry.lat ?? entry.latitude ?? entry.branch_lat ?? entry.geo_lat,
+        entry.lng ?? entry.long ?? entry.longitude ?? entry.branch_lng ?? entry.geo_lng
+      )
+      if (fromDirect) {
+        out.push({
+          coords: fromDirect,
+          label: String(entry.area_name || entry.branch_name || entry.name || entry.title || '').trim(),
+        })
+        continue
+      }
+      const fromNested = entry.LatLng && typeof entry.LatLng === 'object'
+        ? toCoord(entry.LatLng.lat, entry.LatLng.lng)
+        : null
+      if (fromNested) {
+        out.push({
+          coords: fromNested,
+          label: String(entry.area_name || entry.branch_name || entry.name || entry.title || '').trim(),
+        })
+      }
+    }
+    return out
+  }
+
+  const expanded = []
+  for (const row of rows) {
+    const seen = new Set()
+    const pushCandidate = (coords, branchLabel = '') => {
+      if (!coords) return
+      const key = `${coords.lat.toFixed(6)},${coords.lng.toFixed(6)}`
+      if (seen.has(key)) return
+      seen.add(key)
+      expanded.push({
+        ...row,
+        lat: coords.lat,
+        lng: coords.lng,
+        long: coords.long,
+        branch_name: branchLabel || null,
+      })
+    }
+
+    pushCandidate(toCoord(row.lat ?? row.latitude, row.long ?? row.longitude ?? row.lng))
+
+    const clientType = String(row.client_type || row.clientType || '').toLowerCase().trim()
+    if (clientType === 'restaurant') {
+      const branchPayload = row.branches ?? row.branch ?? restaurantBranchByUuid[row.client_a_uuid] ?? null
+      const branchCoords = getBranchCoords(branchPayload)
+      for (const branch of branchCoords) {
+        pushCandidate(branch.coords, branch.label)
+      }
+    }
+  }
+
+  return expanded;
 }
 
 function haversineKm(lat1, lon1, lat2, lon2) {

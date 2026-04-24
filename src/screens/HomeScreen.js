@@ -42,12 +42,10 @@ import { ensureImageUrl } from '../utils/imageUrl';
 import {
   fetchFeedPage,
   buildRefreshExcludePostIds,
-  trackInteraction,
   getVoterId,
   clearFeedCache,
   markPostsSeen,
   flushSeenPostIds,
-  prefetchPersonalization,
 } from '../services/feedService';
 import { LUXURY, luxuryCardShadow, luxurySoftShadow } from '../theme/luxuryPremium';
 import { PinchZoomPostImage, UpvoteParticles } from '../components/FeedUpvoteInteractions';
@@ -336,6 +334,86 @@ function getHomeStyles(colors) {
     cardBody: {
       padding: 12,
     },
+    touristInsightContainer: {
+      marginHorizontal: 12,
+      marginBottom: 18,
+      borderRadius: 18,
+      overflow: 'hidden',
+      borderWidth: 1,
+      borderColor: C.primary + '33',
+      backgroundColor: C.cardBg,
+      ...Platform.select({
+        ios: {
+          shadowColor: C.primary,
+          shadowOffset: { width: 0, height: 7 },
+          shadowOpacity: 0.16,
+          shadowRadius: 14,
+        },
+        android: { elevation: 5 },
+      }),
+    },
+    touristInsightImageWrap: {
+      width: '100%',
+      height: 150,
+      position: 'relative',
+      overflow: 'hidden',
+      backgroundColor: C.pillBg,
+    },
+    touristInsightImage: {
+      width: '100%',
+      height: '100%',
+    },
+    touristInsightBadge: {
+      position: 'absolute',
+      top: 12,
+      left: 12,
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 6,
+      backgroundColor: 'rgba(200,16,46,0.92)',
+      paddingHorizontal: 10,
+      paddingVertical: 6,
+      borderRadius: 999,
+    },
+    touristInsightBadgeText: {
+      color: '#FFFFFF',
+      fontSize: 12,
+      fontWeight: '700',
+    },
+    touristInsightBody: {
+      paddingHorizontal: 14,
+      paddingVertical: 12,
+      borderTopWidth: 1,
+      borderTopColor: C.borderLight,
+      backgroundColor: C.cardBg,
+    },
+    touristInsightHeaderRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      gap: 10,
+      marginBottom: 6,
+    },
+    touristInsightTitle: {
+      flex: 1,
+      color: C.textPrimary,
+      fontSize: 16,
+      fontWeight: '800',
+    },
+    touristInsightPill: {
+      backgroundColor: C.primary + '14',
+      borderWidth: 1,
+      borderColor: C.primary + '30',
+      borderRadius: 999,
+      paddingHorizontal: 9,
+      paddingVertical: 4,
+    },
+    touristInsightPillText: {
+      color: C.primary,
+      fontSize: 11,
+      fontWeight: '700',
+      letterSpacing: 0.4,
+    },
     actionRow: {
       flexDirection: 'row',
       alignItems: 'center',
@@ -532,6 +610,123 @@ const CARD_MARGIN_H = 16;
 const CARD_PADDING = 14;
 
 const DESC_COLLAPSED_LENGTH = 100; // ~2 lines
+const TOURIST_INSERT_MIN_GAP = 3;
+const TOURIST_INSERT_MAX_GAP = 5;
+const TOURIST_MAX_CARDS_PER_FEED = 4;
+
+const TOURIST_INFO_ITEMS = [
+  {
+    id: 'culture-majlis',
+    kind: 'Culture Insight',
+    title: 'Respect the Majlis vibe',
+    text: 'In Bahrain, social gatherings are warm and welcoming. A polite greeting and modest attire go a long way when visiting local areas.',
+    imageUri: 'https://images.unsplash.com/photo-1469474968028-56623f02e42e?auto=format&fit=crop&w=1200&q=80',
+  },
+  {
+    id: 'spot-bab-al-bahrain',
+    kind: 'Iconic Spot',
+    title: 'Bab Al Bahrain & Manama Souq',
+    text: 'A classic first stop for visitors. Wander the souq lanes for spices, perfumes, fabrics, and a true local street atmosphere.',
+    imageUri: 'https://images.unsplash.com/photo-1516483638261-f4dbaf036963?auto=format&fit=crop&w=1200&q=80',
+  },
+  {
+    id: 'tip-weather',
+    kind: 'Traveler Tip',
+    title: 'Plan around Bahrain heat',
+    text: 'Outdoor visits are best in the morning or after sunset. Keep water with you and use light clothing for comfort.',
+    imageUri: 'https://images.unsplash.com/photo-1502082553048-f009c37129b9?auto=format&fit=crop&w=1200&q=80',
+  },
+  {
+    id: 'spot-fort',
+    kind: 'Iconic Spot',
+    title: 'Bahrain Fort (Qal at al-Bahrain)',
+    text: 'One of Bahrain’s key heritage sites and a UNESCO landmark. Sunset views here are especially popular.',
+    imageUri: 'https://images.unsplash.com/photo-1578922746465-3a80a228f223?auto=format&fit=crop&w=1200&q=80',
+  },
+  {
+    id: 'culture-ramadan',
+    kind: 'Culture Insight',
+    title: 'Mind local customs in Ramadan',
+    text: 'During daylight hours in Ramadan, be mindful of eating and drinking in public spaces. Evenings are lively and welcoming.',
+    imageUri: 'https://images.unsplash.com/photo-1564760055775-d63b17a55c44?auto=format&fit=crop&w=1200&q=80',
+  },
+  {
+    id: 'spot-tree-of-life',
+    kind: 'Iconic Spot',
+    title: 'Tree of Life',
+    text: 'A famous lone tree in the desert and a signature Bahrain stop for first-time visitors and sunset photos.',
+    imageUri: 'https://images.unsplash.com/photo-1500530855697-b586d89ba3ee?auto=format&fit=crop&w=1200&q=80',
+  },
+];
+
+function mulberry32(seed) {
+  let a = seed >>> 0;
+  return () => {
+    let t = (a += 0x6d2b79f5);
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function shuffleInPlace(arr, rng) {
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(rng() * (i + 1));
+    const t = arr[i];
+    arr[i] = arr[j];
+    arr[j] = t;
+  }
+}
+
+function createSeedFromPosts(posts = []) {
+  const source = posts.slice(0, 12).map((p) => p?.id || '').join('|');
+  let hash = 0;
+  for (let i = 0; i < source.length; i++) {
+    hash = (hash << 5) - hash + source.charCodeAt(i);
+    hash |= 0;
+  }
+  return (Math.abs(hash) || 1234567) >>> 0;
+}
+
+function interleaveTouristInfoCards(posts = []) {
+  if (!Array.isArray(posts) || posts.length < 3) return posts;
+  const rng = mulberry32(createSeedFromPosts(posts));
+  const shuffledTouristCards = [...TOURIST_INFO_ITEMS];
+  shuffleInPlace(shuffledTouristCards, rng);
+
+  const maxCards = Math.min(
+    TOURIST_MAX_CARDS_PER_FEED,
+    shuffledTouristCards.length,
+    Math.max(1, Math.floor(posts.length / 4))
+  );
+  if (maxCards <= 0) return posts;
+
+  const out = [];
+  let nextInsertAfter = TOURIST_INSERT_MIN_GAP + Math.floor(rng() * (TOURIST_INSERT_MAX_GAP - TOURIST_INSERT_MIN_GAP + 1));
+  let cardsInserted = 0;
+
+  for (let i = 0; i < posts.length; i++) {
+    out.push(posts[i]);
+    if (cardsInserted >= maxCards) continue;
+    if (i + 1 < nextInsertAfter) continue;
+    if (i >= posts.length - 2) continue;
+
+    const card = shuffledTouristCards[cardsInserted];
+    out.push({
+      id: `tourist-info-${card.id}-${cardsInserted}`,
+      feedType: 'tourist_info',
+      ...card,
+    });
+    cardsInserted += 1;
+    nextInsertAfter =
+      i +
+      1 +
+      TOURIST_INSERT_MIN_GAP +
+      Math.floor(rng() * (TOURIST_INSERT_MAX_GAP - TOURIST_INSERT_MIN_GAP + 1));
+  }
+
+  return out;
+}
 
 function PostCard({ item, isHighlighted = false, onHighlightDone, onUpvoteToggle, onClientPress, upvoteScaleAnim, styles, COLORS, ACTION_BUTTONS_LEFT, UPVOTE_COLOR }) {
   const [descExpanded, setDescExpanded] = useState(false);
@@ -798,6 +993,73 @@ function PostCard({ item, isHighlighted = false, onHighlightDone, onUpvoteToggle
   );
 }
 
+function TouristInfoCard({ item, styles, COLORS }) {
+  const enterOpacity = useRef(new Animated.Value(0)).current;
+  const enterTranslateY = useRef(new Animated.Value(14)).current;
+  const enterScale = useRef(new Animated.Value(0.97)).current;
+
+  useEffect(() => {
+    enterOpacity.setValue(0);
+    enterTranslateY.setValue(14);
+    enterScale.setValue(0.97);
+    Animated.parallel([
+      Animated.timing(enterOpacity, {
+        toValue: 1,
+        duration: 260,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: true,
+      }),
+      Animated.timing(enterTranslateY, {
+        toValue: 0,
+        duration: 300,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: true,
+      }),
+      Animated.spring(enterScale, {
+        toValue: 1,
+        tension: 180,
+        friction: 15,
+        useNativeDriver: true,
+      }),
+    ]).start();
+  }, [item.id, enterOpacity, enterTranslateY, enterScale]);
+
+  return (
+    <Animated.View
+      style={[
+        styles.touristInsightContainer,
+        {
+          opacity: enterOpacity,
+          transform: [{ translateY: enterTranslateY }, { scale: enterScale }],
+        },
+      ]}
+    >
+      <View>
+        <View style={styles.touristInsightImageWrap}>
+          <Image source={{ uri: item.imageUri }} style={styles.touristInsightImage} resizeMode="cover" />
+          <LinearGradient
+            colors={['transparent', 'rgba(0,0,0,0.45)']}
+            style={StyleSheet.absoluteFill}
+          />
+          <View style={styles.touristInsightBadge}>
+            <Ionicons name="compass" size={14} color="#FFFFFF" />
+            <Text style={styles.touristInsightBadgeText}>{item.kind}</Text>
+          </View>
+        </View>
+        <View style={styles.touristInsightBody}>
+          <View style={styles.touristInsightHeaderRow}>
+            <Text style={styles.touristInsightTitle}>{item.title}</Text>
+            <View style={styles.touristInsightPill}>
+              <Text style={styles.touristInsightPillText}>BAHRAIN</Text>
+            </View>
+          </View>
+          <Text style={[styles.description, { marginTop: 8 }]}>{item.text}</Text>
+        </View>
+      </View>
+    </Animated.View>
+  );
+}
+
 /** Location / GPS filter chip — same visual language as category chips; toggles distance-sorted feed. */
 function LocationFilterChip({ selected, busy, onPress, colors }) {
   const styles = StyleSheet.create(getHomeStyles(colors));
@@ -1059,7 +1321,6 @@ export default function HomeScreen() {
     refreshing: false,
     loadMore: () => {},
   });
-  const lastViewTrackedPostIdRef = useRef(null);
   const lastScrollY = useRef(0);
   const headerTranslateY = useRef(new Animated.Value(0)).current;
   const headerVisibleRef = useRef(true);
@@ -1268,6 +1529,11 @@ export default function HomeScreen() {
     [filteredPosts]
   );
   const refreshSpinGuardRef = useRef([]);
+  const isTouristUser = (profile?.user?.u_type || '').toLowerCase() === 'tourist';
+  const displayFeedItems = useMemo(() => {
+    if (!isTouristUser) return filteredPosts;
+    return interleaveTouristInfoCards(filteredPosts);
+  }, [filteredPosts, isTouristUser]);
 
   const fetchPosts = useCallback(async (opts = {}) => {
     const { skipGlobalLoading = false, onDone, append = false } = opts;
@@ -1333,8 +1599,6 @@ export default function HomeScreen() {
   }, [nextCursor, userPosition?.latitude, userPosition?.longitude, searchQuery, preferences?.profileSummary]);
 
   useEffect(() => {
-    // Warm the persona cache in parallel so the first page is personalized + fast.
-    prefetchPersonalization(preferences?.profileSummary || '');
     fetchPosts();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -1437,20 +1701,13 @@ export default function HomeScreen() {
   }, [loadingMore, hasMore, loading, refreshing, fetchPosts]);
 
   const handleViewableItemsChanged = useCallback(({ viewableItems }) => {
-    const seenIds = viewableItems.map((v) => v.item?.id).filter(Boolean);
+    const seenIds = viewableItems
+      .map((v) => v.item)
+      .filter((item) => item && item.feedType !== 'tourist_info')
+      .map((item) => item.id)
+      .filter(Boolean);
     if (seenIds.length > 0) {
       markPostsSeen(seenIds);
-    }
-    const viewable = viewableItems[0]?.item;
-    if (viewable?.id) {
-      if (lastViewTrackedPostIdRef.current !== viewable.id) {
-        lastViewTrackedPostIdRef.current = viewable.id;
-        trackInteraction('VIEW', {
-          postId: viewable.id,
-          clientId: viewable.clientId,
-          tags: viewable.tags,
-        });
-      }
     }
   }, []);
   
@@ -1496,12 +1753,6 @@ export default function HomeScreen() {
           useNativeDriver: true,
         }),
       ]).start();
-
-      trackInteraction('LIKE', {
-        postId: post.id,
-        clientId: post.clientId,
-        tags: post.tags,
-      });
     } else {
       Animated.sequence([
         Animated.timing(scaleAnim, {
@@ -1570,6 +1821,13 @@ export default function HomeScreen() {
 
   const renderFeedItem = useCallback(
     ({ item, index }) => {
+      if (item.feedType === 'tourist_info') {
+        return (
+          <StaggeredFeedItem index={index}>
+            <TouristInfoCard item={item} styles={styles} COLORS={COLORS} />
+          </StaggeredFeedItem>
+        );
+      }
       if (!upvoteAnimations[item.id]) upvoteAnimations[item.id] = { scale: new Animated.Value(1) };
       return (
         <StaggeredFeedItem index={index}>
@@ -1580,7 +1838,6 @@ export default function HomeScreen() {
             onUpvoteToggle={handleUpvoteToggle}
             onClientPress={(post) => {
               if (post?.clientId) {
-                trackInteraction('PROFILE_VIEW', { clientId: post.clientId });
                 setSelectedClientSeed({
                   client_a_uuid: post.clientId,
                   business_name: post.businessName || null,
@@ -2324,7 +2581,7 @@ export default function HomeScreen() {
       ) : (
         <Animated.FlatList
           ref={flatListRef}
-          data={filteredPosts}
+          data={displayFeedItems}
           keyExtractor={(item) => item.id}
           renderItem={renderFeedItem}
           ListHeaderComponent={feedListHeader}

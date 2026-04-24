@@ -159,11 +159,184 @@ export function useAIPlanScreenInner() {
   const [showcaseOrbitPostUris, setShowcaseOrbitPostUris] = useState([]);
   /** Map pins: one active chip like Community (`all` | `restaurant` | `place` | `event`), keyed off `client.client_type`. */
   const [activePlanMapClientFilter, setActivePlanMapClientFilter] = useState('all');
+  /** Search-focused client id: limits map pins to this client (plus branch markers under same clientId). */
+  const [focusedMapClientId, setFocusedMapClientId] = useState(null);
 
   const handlePlanMapClientFilterPress = useCallback((id) => {
     void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     setActivePlanMapClientFilter(id);
+    if (id === 'all') setFocusedMapClientId(null)
   }, []);
+
+  const markerMatchesFocusedClient = useCallback((mk) => {
+    if (!focusedMapClientId) return true
+    return !!mk && mk.clientId === focusedMapClientId
+  }, [focusedMapClientId])
+
+  const parseBranchPayload = useCallback((raw) => {
+    const BOUNDS = { minLat: 25.55, maxLat: 26.4, minLng: 50.3, maxLng: 50.95 }
+    const inBahrain = (lat, lng) =>
+      lat >= BOUNDS.minLat &&
+      lat <= BOUNDS.maxLat &&
+      lng >= BOUNDS.minLng &&
+      lng <= BOUNDS.maxLng
+    const normalize = (latRaw, lngRaw) => {
+      const la = parseFloat(latRaw)
+      const ln = parseFloat(lngRaw)
+      if (Number.isNaN(la) || Number.isNaN(ln) || (la === 0 && ln === 0)) return null
+      if (inBahrain(la, ln)) return { lat: la, lng: ln }
+      if (inBahrain(ln, la)) return { lat: ln, lng: la }
+      return null
+    }
+    if (!raw) return []
+    let parsed = raw
+    if (typeof parsed === 'string') {
+      try {
+        parsed = JSON.parse(parsed)
+      } catch {
+        return []
+      }
+    }
+    const rows = Array.isArray(parsed)
+      ? parsed
+      : parsed && typeof parsed === 'object'
+        ? Object.values(parsed)
+        : []
+    return rows
+      .map((entry) => {
+        if (!entry || typeof entry !== 'object') return null
+        const coords = normalize(
+          entry.lat ?? entry.latitude ?? '',
+          entry.long ?? entry.lng ?? entry.longitude ?? ''
+        )
+        if (!coords) return null
+        return {
+          lat: coords.lat,
+          lng: coords.lng,
+          areaName: String(entry.area_name || entry.branch_name || entry.name || '').trim(),
+        }
+      })
+      .filter(Boolean)
+  }, [])
+
+  const handleFocusClientFromSearch = useCallback(async (client) => {
+    const selectedClientId = client?.client_a_uuid || client?.clientId || null
+    setFocusedMapClientId(selectedClientId)
+    setActivePlanMapClientFilter('all')
+    setShowSearchModal(false)
+    if (!selectedClientId) return
+
+    const isRestaurant = String(client?.client_type || '').toLowerCase().trim() === 'restaurant'
+    if (!isRestaurant) return
+
+    try {
+      let restRow = null
+      const { data, error } = await supabase
+        .from('restaurant_client')
+        .select('branch, branches')
+        .eq('a_uuid', selectedClientId)
+        .maybeSingle()
+      if (error) {
+        const { data: fallback, error: fallbackErr } = await supabase
+          .from('restaurant_client')
+          .select('*')
+          .eq('a_uuid', selectedClientId)
+          .maybeSingle()
+        if (fallbackErr) {
+          console.warn('[AIPlan] restaurant_client branch fetch failed:', fallbackErr?.message)
+          Alert.alert(
+            'Branch markers error',
+            fallbackErr?.message || 'Could not read restaurant branches from restaurant_client table.'
+          )
+          return
+        }
+        restRow = fallback || null
+      } else {
+        restRow = data || null
+      }
+      const branchPayload = restRow?.branches ?? restRow?.branch ?? null
+      const branchCoords = parseBranchPayload(branchPayload)
+      if (!branchCoords.length) {
+        Alert.alert(
+          'No branch markers found',
+          'This restaurant has no readable branch coordinates in restaurant_client.branch(es).'
+        )
+        return
+      }
+
+      setAllPlaceMarkers((prev) => {
+        const next = Array.isArray(prev) ? [...prev] : []
+        const seen = new Set(
+          next
+            .filter((mk) => mk && mk.clientId === selectedClientId)
+            .map((mk) => `${Number(mk.lat).toFixed(6)},${Number(mk.lng).toFixed(6)}`)
+        )
+        let idxSeed = next.length
+        for (const branch of branchCoords) {
+          const key = `${Number(branch.lat).toFixed(6)},${Number(branch.lng).toFixed(6)}`
+          if (seen.has(key)) continue
+          seen.add(key)
+          idxSeed += 1
+          next.push({
+            idx: idxSeed,
+            spot: branch.areaName
+              ? `${String(client?.business_name || client?.name || 'Place').trim()} - ${branch.areaName}`
+              : String(client?.business_name || client?.name || 'Place').trim(),
+            type: 'restaurant',
+            client_type: client?.client_type ?? 'restaurant',
+            lat: branch.lat,
+            lng: branch.lng,
+            image: resolvePublicImageUrl(client?.client_image),
+            clientId: selectedClientId,
+            branch_name: branch.areaName || null,
+          })
+        }
+        return next
+      })
+    } catch (e) {
+      console.warn('[AIPlan] focused restaurant branch fetch failed:', e?.message)
+      Alert.alert(
+        'Branch markers error',
+        e?.message || 'Could not load branch markers for this restaurant.'
+      )
+    }
+  }, [parseBranchPayload])
+
+  useEffect(() => {
+    if (!focusedMapClientId) return
+    const map = mapRef.current
+    if (!map) return
+    const focusedMarkers = (allPlaceMarkers || []).filter((mk) => {
+      if (!mk || mk.clientId !== focusedMapClientId) return false
+      const lat = Number(mk.lat)
+      const lng = Number(mk.lng)
+      return Number.isFinite(lat) && Number.isFinite(lng)
+    })
+    if (!focusedMarkers.length) return
+
+    const lats = focusedMarkers.map((mk) => Number(mk.lat))
+    const lngs = focusedMarkers.map((mk) => Number(mk.lng))
+    const minLat = Math.min(...lats)
+    const maxLat = Math.max(...lats)
+    const minLng = Math.min(...lngs)
+    const maxLng = Math.max(...lngs)
+
+    const centerLat = (minLat + maxLat) / 2
+    const centerLng = (minLng + maxLng) / 2
+    const latSpread = Math.max(0.018, (maxLat - minLat) * 1.8)
+    const lngSpread = Math.max(0.018, (maxLng - minLng) * 1.8)
+
+    markProgrammaticMapMove(1000)
+    map.animateToRegion(
+      clampRegionToBahrain({
+        latitude: centerLat,
+        longitude: centerLng,
+        latitudeDelta: latSpread,
+        longitudeDelta: lngSpread,
+      }),
+      700,
+    )
+  }, [focusedMapClientId, allPlaceMarkers, markProgrammaticMapMove])
 
   useEffect(() => {
     if (!isMarkerShowcaseActive || !showcaseMarkerMk?.clientId) {
@@ -805,7 +978,9 @@ export function useAIPlanScreenInner() {
           const lng = parseFloat(c.lng ?? c.long ?? c.longitude ?? '');
           if (isNaN(lat) || isNaN(lng) || lat === 0 || lng === 0) return null;
           const image = resolvePublicImageUrl(c.client_image);
-          const spot = (c.business_name || c.name || 'Place').trim();
+          const baseSpot = (c.business_name || c.name || 'Place').trim();
+          const branchSuffix = String(c.branch_name || '').trim();
+          const spot = branchSuffix ? `${baseSpot} - ${branchSuffix}` : baseSpot;
           const ct = ((c.client_type || '').toLowerCase());
           const type = ct === 'restaurant' ? 'restaurant' : ct === 'event' ? 'event' : 'place';
           const reasonRaw = (c.description || c.bio || c.about || '').trim();
@@ -951,5 +1126,5 @@ export function useAIPlanScreenInner() {
     }
   }, [])
 
-  return { colors, isDark, preferences, generalLabels, activityLabels, savedProfileFoodLabels, user, insets, route, navigation, mapRegion, setMapRegion, isMarkerShowcaseActive, setIsMarkerShowcaseActive, showcaseMarkerMk, setShowcaseMarkerMk, showcaseMorphAnchor, setShowcaseMorphAnchor, showcaseOrbitPostUris, activePlanMapClientFilter, setActivePlanMapClientFilter, drawerStep, setDrawerStep, selectedPreferences, setSelectedPreferences, selectedFoodCategories, setSelectedFoodCategories, customPreferenceInput, setCustomPreferenceInput, customFoodInput, setCustomFoodInput, loading, setLoading, loadingStatus, setLoadingStatus, error, setError, dayPlan, setDayPlan, pineconeMatches, setPineconeMatches, visiblePinCount, setVisiblePinCount, revealingPins, setRevealingPins, surpriseSpinning, setSurpriseSpinning, surpriseIndex, setSurpriseIndex, surprisePicked, setSurprisePicked, showPlanModal, setShowPlanModal, planModalStep, setPlanModalStep, buildDayModalPhase, setBuildDayModalPhase, quickFindKind, setQuickFindKind, customPlanDraftActive, setCustomPlanDraftActive, quickFindMapOnly, setQuickFindMapOnly, showBuildModePickerModal, setShowBuildModePickerModal, travelExploreId, setTravelExploreId, doorVisible, setDoorVisible, planGenerationSuccess, setPlanGenerationSuccess, spotPreviews, setSpotPreviews, profileClientId, setProfileClientId, stopDetailIndex, setStopDetailIndex, openingMaps, setOpeningMaps, shareCopyHint, setShareCopyHint, allPlaceMarkers, setAllPlaceMarkers, showSearchModal, setShowSearchModal, addingPlanStop, setAddingPlanStop, searchModalClients, setSearchModalClients, searchModalLoading, setSearchModalLoading, searchModalQuery, setSearchModalQuery, enhancingIndex, setEnhancingIndex, visibleStopCount, setVisibleStopCount, savedPlansList, setSavedPlansList, savedPlansLoading, setSavedPlansLoading, activeSavedPlanId, setActiveSavedPlanId, sharedCollaboration, setSharedCollaboration, joinCodeInput, setJoinCodeInput, joinCodeBusy, setJoinCodeBusy, showSharePlanModal, setShowSharePlanModal, sharePermissionDraft, setSharePermissionDraft, shareModalBusy, setShareModalBusy, shareModalCode, setShareModalCode, savePlanBusy, setSavePlanBusy, showEditSavedPlanTitleModal, setShowEditSavedPlanTitleModal, editSavedPlanTitleId, setEditSavedPlanTitleId, editSavedPlanTitleDraft, setEditSavedPlanTitleDraft, editSavedPlanTitleBusy, setEditSavedPlanTitleBusy, mapRef, userLocationRef, dayPlanRef, locationWatchRef, mapProgrammaticMoveRef, mapProgrammaticMoveClearTimerRef, hasInitialUserCenterRef, markerShowcaseRef, orbitSheetExtraTranslateY, sheetAnim, lastSnap, currentYRef, prefetchRef, lastPrefLabelsRef, lastFoodLabelsRef, doorLeft, doorRight, doorIconScale, doorIconOpacity, doorFade, skipOpenAnim, shareCopyHintTimerRef, stopRevealTimers, planModalBackdrop, planModalScale, planModalOpacity, sheetOpacity, stopDetailSwipeX, stopDetailSwipeRotate, stopDetailIndexSV, stopDetailSlidesLenSV, communityPalette, stopDetailSlides, stopDetailPayload, stopDetailStackPeekNext, stopDetailPanGesture, handlePlanMapClientFilterPress, markProgrammaticMapMove, clearMarkerShowcaseTimers, clearMarkerShowcase, exitMarkerShowcase, handleMapPress, centerMapOnPlaceMarker, runMarkerShowcaseOrbitForMarker, handlePlaceMarkerPress, clearStopRevealTimers, scheduleStaggeredStopReveal, handleOpenInGoogleMaps, closeStopDetailDialog, goToStopDetailIndex, handleStopDetailSwipeNext, handleStopDetailSwipePrev, refreshSavedPlans, resolveOriginCoordsForPlanGeneration, planReadOnly, planCollaboratorEdit, STOP_REVEAL_STAGGER_MS, stopDetailCardAnimatedStyle, stopDetailPeekAnimatedStyle }
+  return { colors, isDark, preferences, generalLabels, activityLabels, savedProfileFoodLabels, user, insets, route, navigation, mapRegion, setMapRegion, isMarkerShowcaseActive, setIsMarkerShowcaseActive, showcaseMarkerMk, setShowcaseMarkerMk, showcaseMorphAnchor, setShowcaseMorphAnchor, showcaseOrbitPostUris, activePlanMapClientFilter, setActivePlanMapClientFilter, focusedMapClientId, setFocusedMapClientId, markerMatchesFocusedClient, handleFocusClientFromSearch, drawerStep, setDrawerStep, selectedPreferences, setSelectedPreferences, selectedFoodCategories, setSelectedFoodCategories, customPreferenceInput, setCustomPreferenceInput, customFoodInput, setCustomFoodInput, loading, setLoading, loadingStatus, setLoadingStatus, error, setError, dayPlan, setDayPlan, pineconeMatches, setPineconeMatches, visiblePinCount, setVisiblePinCount, revealingPins, setRevealingPins, surpriseSpinning, setSurpriseSpinning, surpriseIndex, setSurpriseIndex, surprisePicked, setSurprisePicked, showPlanModal, setShowPlanModal, planModalStep, setPlanModalStep, buildDayModalPhase, setBuildDayModalPhase, quickFindKind, setQuickFindKind, customPlanDraftActive, setCustomPlanDraftActive, quickFindMapOnly, setQuickFindMapOnly, showBuildModePickerModal, setShowBuildModePickerModal, travelExploreId, setTravelExploreId, doorVisible, setDoorVisible, planGenerationSuccess, setPlanGenerationSuccess, spotPreviews, setSpotPreviews, profileClientId, setProfileClientId, stopDetailIndex, setStopDetailIndex, openingMaps, setOpeningMaps, shareCopyHint, setShareCopyHint, allPlaceMarkers, setAllPlaceMarkers, showSearchModal, setShowSearchModal, addingPlanStop, setAddingPlanStop, searchModalClients, setSearchModalClients, searchModalLoading, setSearchModalLoading, searchModalQuery, setSearchModalQuery, enhancingIndex, setEnhancingIndex, visibleStopCount, setVisibleStopCount, savedPlansList, setSavedPlansList, savedPlansLoading, setSavedPlansLoading, activeSavedPlanId, setActiveSavedPlanId, sharedCollaboration, setSharedCollaboration, joinCodeInput, setJoinCodeInput, joinCodeBusy, setJoinCodeBusy, showSharePlanModal, setShowSharePlanModal, sharePermissionDraft, setSharePermissionDraft, shareModalBusy, setShareModalBusy, shareModalCode, setShareModalCode, savePlanBusy, setSavePlanBusy, showEditSavedPlanTitleModal, setShowEditSavedPlanTitleModal, editSavedPlanTitleId, setEditSavedPlanTitleId, editSavedPlanTitleDraft, setEditSavedPlanTitleDraft, editSavedPlanTitleBusy, setEditSavedPlanTitleBusy, mapRef, userLocationRef, dayPlanRef, locationWatchRef, mapProgrammaticMoveRef, mapProgrammaticMoveClearTimerRef, hasInitialUserCenterRef, markerShowcaseRef, orbitSheetExtraTranslateY, sheetAnim, lastSnap, currentYRef, prefetchRef, lastPrefLabelsRef, lastFoodLabelsRef, doorLeft, doorRight, doorIconScale, doorIconOpacity, doorFade, skipOpenAnim, shareCopyHintTimerRef, stopRevealTimers, planModalBackdrop, planModalScale, planModalOpacity, sheetOpacity, stopDetailSwipeX, stopDetailSwipeRotate, stopDetailIndexSV, stopDetailSlidesLenSV, communityPalette, stopDetailSlides, stopDetailPayload, stopDetailStackPeekNext, stopDetailPanGesture, handlePlanMapClientFilterPress, markProgrammaticMapMove, clearMarkerShowcaseTimers, clearMarkerShowcase, exitMarkerShowcase, handleMapPress, centerMapOnPlaceMarker, runMarkerShowcaseOrbitForMarker, handlePlaceMarkerPress, clearStopRevealTimers, scheduleStaggeredStopReveal, handleOpenInGoogleMaps, closeStopDetailDialog, goToStopDetailIndex, handleStopDetailSwipeNext, handleStopDetailSwipePrev, refreshSavedPlans, resolveOriginCoordsForPlanGeneration, planReadOnly, planCollaboratorEdit, STOP_REVEAL_STAGGER_MS, stopDetailCardAnimatedStyle, stopDetailPeekAnimatedStyle }
 }

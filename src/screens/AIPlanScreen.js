@@ -93,6 +93,45 @@ const PLAN_MAP_CLIENT_TYPE_FILTERS = [
   { id: 'event', label: 'Events', icon: 'calendar-outline' },
 ];
 
+const stringifyTagValue = (value) => {
+  if (!value) return '';
+  if (Array.isArray(value)) return value.map((item) => stringifyTagValue(item)).filter(Boolean).join(' ');
+  if (typeof value === 'object') return Object.values(value).map((item) => stringifyTagValue(item)).filter(Boolean).join(' ');
+  return String(value);
+};
+
+const getClientSearchableTags = (client) => {
+  const tagsRaw = client?.tags;
+  if (!tagsRaw) return '';
+
+  if (Array.isArray(tagsRaw) || typeof tagsRaw === 'object') {
+    return stringifyTagValue(tagsRaw);
+  }
+
+  if (typeof tagsRaw === 'string') {
+    const trimmed = tagsRaw.trim();
+    if (!trimmed) return '';
+    if ((trimmed.startsWith('[') && trimmed.endsWith(']')) || (trimmed.startsWith('{') && trimmed.endsWith('}'))) {
+      try {
+        return stringifyTagValue(JSON.parse(trimmed));
+      } catch {
+        return trimmed;
+      }
+    }
+    return trimmed;
+  }
+
+  return String(tagsRaw);
+};
+
+const matchesClientSearchQuery = (client, query) => {
+  if (!query) return true;
+  const nameText = (client.name || client.business_name || '').toLowerCase();
+  const arabicNameText = (client.business_name_ar || '').toLowerCase();
+  const tagsText = getClientSearchableTags(client).toLowerCase();
+  return nameText.includes(query) || arabicNameText.includes(query) || tagsText.includes(query);
+};
+
 const { height: SCREEN_HEIGHT, width: SCREEN_WIDTH } = Dimensions.get('window');
 
 /** Animated wrapper for stop rows - pops in when isVisible becomes true */
@@ -996,6 +1035,95 @@ function resolveCoordsFromLoadedCache(item, loadedClientMarkers) {
 }
 
 async function enrichPlanWithClientData(plan, pineconeMatches, loadedClientMarkers = []) {
+  const haversineKm = (a, b) => {
+    if (!a || !b) return 0;
+    const R = 6371;
+    const dLat = ((b.lat - a.lat) * Math.PI) / 180;
+    const dLng = ((b.lng - a.lng) * Math.PI) / 180;
+    const aa =
+      Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos((a.lat * Math.PI) / 180) *
+        Math.cos((b.lat * Math.PI) / 180) *
+        Math.sin(dLng / 2) * Math.sin(dLng / 2);
+    return R * (2 * Math.atan2(Math.sqrt(aa), Math.sqrt(1 - aa)));
+  };
+
+  const dedupePlanStops = (items) => {
+    const picked = new Map();
+    for (const item of items || []) {
+      const typeKey = String(item?.type || '').toLowerCase().trim() || 'place';
+      const clientIdKey = String(item?.clientId || '').trim();
+      const spotKey = normName(item?.spot || '');
+      const key = clientIdKey ? `${typeKey}::cid::${clientIdKey}` : `${typeKey}::spot::${spotKey}`;
+      if (!key || key.endsWith('::spot::')) continue;
+      const coords = parsePlanItemCoords(item);
+      const hasImage = !!resolvePublicImageUrl(item?.image);
+      const score = (coords ? 3 : 0) + (hasImage ? 2 : 0) + (item?.clientId ? 1 : 0);
+      const prev = picked.get(key);
+      if (!prev || score > prev.score) {
+        picked.set(key, { item, score });
+      }
+    }
+    return Array.from(picked.values()).map((x) => x.item);
+  };
+
+  const parseBranchCoords = (raw) => {
+    if (!raw) return [];
+    let parsed = raw;
+    if (typeof parsed === 'string') {
+      try {
+        parsed = JSON.parse(parsed);
+      } catch {
+        return [];
+      }
+    }
+    const entries = Array.isArray(parsed)
+      ? parsed
+      : parsed && typeof parsed === 'object'
+        ? Object.values(parsed)
+        : [];
+    const out = [];
+    for (const entry of entries) {
+      if (!entry || typeof entry !== 'object') continue;
+      const fixed = unswapLatLng(
+        entry.lat ?? entry.latitude ?? '',
+        entry.long ?? entry.lng ?? entry.longitude ?? ''
+      );
+      if (!fixed) continue;
+      out.push({ lat: fixed.lat, lng: fixed.lng });
+    }
+    return out;
+  };
+
+  const pickBestBranchForIndex = (items, idx, options) => {
+    if (!Array.isArray(options) || options.length === 0) return null;
+    const prev = (() => {
+      for (let i = idx - 1; i >= 0; i -= 1) {
+        const c = parsePlanItemCoords(items[i]);
+        if (c) return c;
+      }
+      return null;
+    })();
+    const next = (() => {
+      for (let i = idx + 1; i < items.length; i += 1) {
+        const c = parsePlanItemCoords(items[i]);
+        if (c) return c;
+      }
+      return null;
+    })();
+    if (!prev && !next) return options[0];
+    let best = options[0];
+    let bestCost = Number.POSITIVE_INFINITY;
+    for (const opt of options) {
+      const cost = (prev ? haversineKm(prev, opt) : 0) + (next ? haversineKm(opt, next) : 0);
+      if (cost < bestCost) {
+        bestCost = cost;
+        best = opt;
+      }
+    }
+    return best;
+  };
+
   // Step 1: Match from Pinecone for identity/image hints only (NOT coordinates).
   // Coordinates for map pins must come strictly from Supabase.
   let enriched = plan.map((item) => {
@@ -1076,6 +1204,7 @@ async function enrichPlanWithClientData(plan, pineconeMatches, loadedClientMarke
       ...(dbCoords ? { lat: dbCoords.lat, lng: dbCoords.lng } : {}),
     };
   });
+  enriched = dedupePlanStops(enriched);
   const newIds = [...new Set(enriched.map((i) => i.clientId).filter(Boolean))];
   for (const cid of newIds) {
     if (clientImageMap[cid]) continue;
@@ -1114,7 +1243,47 @@ async function enrichPlanWithClientData(plan, pineconeMatches, loadedClientMarke
     });
   }
 
-  // Step 4: Strict source-of-truth guard for map coordinates.
+  // Step 4: For restaurant stops, prefer branch coordinates that minimize route distance.
+  const restaurantIds = [...new Set(
+    enriched
+      .filter((item) => String(item?.client_type || item?.type || '').toLowerCase().trim() === 'restaurant')
+      .map((item) => item.clientId)
+      .filter(Boolean)
+  )];
+  if (restaurantIds.length > 0) {
+    let restRows = [];
+    const { data: directRows, error: directErr } = await supabase
+      .from('restaurant_client')
+      .select('a_uuid, branch')
+      .in('a_uuid', restaurantIds);
+    if (!directErr && Array.isArray(directRows)) {
+      restRows = directRows;
+    } else {
+      const { data: fallbackRows } = await supabase
+        .from('restaurant_client')
+        .select('*')
+        .in('a_uuid', restaurantIds);
+      restRows = Array.isArray(fallbackRows) ? fallbackRows : [];
+    }
+    const branchesById = {};
+    for (const row of restRows) {
+      const id = row?.a_uuid || row?.client_a_uuid;
+      if (!id) continue;
+      const parsed = parseBranchCoords(row?.branch ?? row?.branches ?? null);
+      if (parsed.length > 0) branchesById[id] = parsed;
+    }
+    enriched = enriched.map((item, idx, arr) => {
+      const isRestaurant = String(item?.client_type || item?.type || '').toLowerCase().trim() === 'restaurant';
+      if (!isRestaurant || !item?.clientId) return item;
+      const options = branchesById[item.clientId];
+      if (!options || options.length === 0) return item;
+      const best = pickBestBranchForIndex(arr, idx, options);
+      if (!best) return item;
+      return { ...item, lat: best.lat, lng: best.lng };
+    });
+  }
+
+  // Step 5: Strict source-of-truth guard for map coordinates.
   // If a stop has no Supabase-backed coords, keep it off the map by leaving lat/lng null.
   enriched = enriched.map((item) => {
     const fixed = parsePlanItemCoords(item);
@@ -1122,7 +1291,7 @@ async function enrichPlanWithClientData(plan, pineconeMatches, loadedClientMarke
     return item;
   });
 
-  // Step 5: Fallback — fetch first post image when client_image is null
+  // Step 6: Fallback — fetch first post image when client_image is null
   const stillNoImage = enriched.filter((i) => !resolvePublicImageUrl(i.image) && i.clientId);
   if (stillNoImage.length > 0) {
     const postIds = [...new Set(stillNoImage.map((i) => i.clientId))];
@@ -1150,7 +1319,7 @@ async function enrichPlanWithClientData(plan, pineconeMatches, loadedClientMarke
     }
   }
 
-  // Step 5: Build images array (client_image + post images) for detail area diversity
+  // Step 7: Build images array (client_image + post images) for detail area diversity
   const postImagesByClient = {};
   const idsWithClient = [...new Set(enriched.map((i) => i.clientId).filter(Boolean))];
   if (idsWithClient.length > 0) {
@@ -3318,11 +3487,146 @@ export default function AIPlanScreen() {
   const [markerDetailSheetVisible, setMarkerDetailSheetVisible] = useState(false);
   /** Map pins: one active chip like Community (`all` | `restaurant` | `place` | `event`), keyed off `client.client_type`. */
   const [activePlanMapClientFilter, setActivePlanMapClientFilter] = useState('all');
+  /** Search-selected client focus: when set, map shows only this client (and its branch markers). */
+  const [focusedMapClientId, setFocusedMapClientId] = useState(null);
 
   const handlePlanMapClientFilterPress = useCallback((id) => {
     void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     setActivePlanMapClientFilter(id);
+    if (id === 'all') setFocusedMapClientId(null);
   }, []);
+
+  const markerMatchesFocusedClient = useCallback((mk) => {
+    if (!focusedMapClientId) return true
+    return !!mk && mk.clientId === focusedMapClientId
+  }, [focusedMapClientId]);
+
+  const parseBranchPayload = useCallback((raw) => {
+    const BOUNDS = { minLat: 25.55, maxLat: 26.4, minLng: 50.3, maxLng: 50.95 }
+    const inBahrain = (lat, lng) =>
+      lat >= BOUNDS.minLat &&
+      lat <= BOUNDS.maxLat &&
+      lng >= BOUNDS.minLng &&
+      lng <= BOUNDS.maxLng
+    const normalize = (latRaw, lngRaw) => {
+      const la = parseFloat(latRaw)
+      const ln = parseFloat(lngRaw)
+      if (Number.isNaN(la) || Number.isNaN(ln) || (la === 0 && ln === 0)) return null
+      if (inBahrain(la, ln)) return { lat: la, lng: ln }
+      if (inBahrain(ln, la)) return { lat: ln, lng: la }
+      return null
+    }
+    if (!raw) return []
+    let parsed = raw
+    if (typeof parsed === 'string') {
+      try {
+        parsed = JSON.parse(parsed)
+      } catch {
+        return []
+      }
+    }
+    const rows = Array.isArray(parsed)
+      ? parsed
+      : parsed && typeof parsed === 'object'
+        ? Object.values(parsed)
+        : []
+    return rows
+      .map((entry) => {
+        if (!entry || typeof entry !== 'object') return null
+        const coords = normalize(
+          entry.lat ?? entry.latitude ?? '',
+          entry.long ?? entry.lng ?? entry.longitude ?? ''
+        )
+        if (!coords) return null
+        return {
+          lat: coords.lat,
+          lng: coords.lng,
+          areaName: String(entry.area_name || entry.branch_name || entry.name || '').trim(),
+        }
+      })
+      .filter(Boolean)
+  }, [])
+
+  const handleFocusClientFromSearch = useCallback(async (client) => {
+    const selectedClientId = client?.client_a_uuid || client?.clientId || null
+    setFocusedMapClientId(selectedClientId)
+    setActivePlanMapClientFilter('all')
+    setShowSearchModal(false)
+    if (!selectedClientId) return
+
+    const isRestaurant = String(client?.client_type || '').toLowerCase().trim() === 'restaurant'
+    if (!isRestaurant) return
+    try {
+      let restRow = null
+      const { data, error } = await supabase
+        .from('restaurant_client')
+        .select('branch, branches')
+        .eq('a_uuid', selectedClientId)
+        .maybeSingle()
+      if (error) {
+        const { data: fallback, error: fallbackErr } = await supabase
+          .from('restaurant_client')
+          .select('*')
+          .eq('a_uuid', selectedClientId)
+          .maybeSingle()
+        if (fallbackErr) {
+          console.warn('[AIPlan] restaurant_client branch fetch failed:', fallbackErr?.message)
+          Alert.alert(
+            'Branch markers error',
+            fallbackErr?.message || 'Could not read restaurant branches from restaurant_client table.'
+          )
+          return
+        }
+        restRow = fallback || null
+      } else {
+        restRow = data || null
+      }
+      const branchPayload = restRow?.branches ?? restRow?.branch ?? null
+      const branchCoords = parseBranchPayload(branchPayload)
+      if (!branchCoords.length) {
+        Alert.alert(
+          'No branch markers found',
+          'This restaurant has no readable branch coordinates in restaurant_client.branch(es).'
+        )
+        return
+      }
+      setAllPlaceMarkers((prev) => {
+        const next = Array.isArray(prev) ? [...prev] : []
+        const seen = new Set(
+          next
+            .filter((mk) => mk && mk.clientId === selectedClientId)
+            .map((mk) => `${Number(mk.lat).toFixed(6)},${Number(mk.lng).toFixed(6)}`)
+        )
+        let idxSeed = next.length
+        for (const branch of branchCoords) {
+          const key = `${Number(branch.lat).toFixed(6)},${Number(branch.lng).toFixed(6)}`
+          if (seen.has(key)) continue
+          seen.add(key)
+          idxSeed += 1
+          next.push({
+            idx: idxSeed,
+            spot: branch.areaName
+              ? `${String(client?.business_name || client?.name || 'Place').trim()} - ${branch.areaName}`
+              : String(client?.business_name || client?.name || 'Place').trim(),
+            type: 'restaurant',
+            client_type: client?.client_type ?? 'restaurant',
+            lat: branch.lat,
+            lng: branch.lng,
+            image: resolvePublicImageUrl(client?.client_image),
+            clientId: selectedClientId,
+            branch_name: branch.areaName || null,
+          })
+        }
+        return next
+      })
+    } catch (e) {
+      console.warn('[AIPlan] focused restaurant branch fetch failed:', e?.message)
+      Alert.alert(
+        'Branch markers error',
+        e?.message || 'Could not load branch markers for this restaurant.'
+      )
+    }
+  }, [parseBranchPayload])
 
   const markProgrammaticMapMove = useCallback((durationMs = 1200) => {
     mapProgrammaticMoveRef.current = true;
@@ -3905,7 +4209,9 @@ export default function AIPlanScreen() {
           const lng = parseFloat(c.lng ?? c.long ?? c.longitude ?? '');
           if (isNaN(lat) || isNaN(lng) || lat === 0 || lng === 0) return null;
           const image = resolvePublicImageUrl(c.client_image);
-          const spot = (c.business_name || c.name || 'Place').trim();
+          const baseSpot = (c.business_name || c.name || 'Place').trim();
+          const branchSuffix = String(c.branch_name || '').trim();
+          const spot = branchSuffix ? `${baseSpot} - ${branchSuffix}` : baseSpot;
           const ct = ((c.client_type || '').toLowerCase());
           const type = ct === 'restaurant' ? 'restaurant' : ct === 'event' ? 'event' : 'place';
           return {
@@ -5449,8 +5755,30 @@ export default function AIPlanScreen() {
         onRegionChange={handleRegionChange}
         onRegionChangeComplete={handleRegionChangeComplete}
       >
+        {/* Focused client mode: always render from all client markers so restaurant branches are visible. */}
+        {!!focusedMapClientId &&
+          allPlaceMarkers
+            .filter((mk) => markerMatchesPlanMapClientFilter(mk, activePlanMapClientFilter))
+            .filter((mk) => markerMatchesFocusedClient(mk))
+            .map((mk) => {
+          const isEat = mapMarkerFilterCategoryKey(mk) === 'restaurant';
+          const isEvent = mapMarkerFilterCategoryKey(mk) === 'event';
+          const accent = isEat ? colors.dining : isEvent ? colors.event : colors.textSecondary;
+          return (
+            <AnimatedPlaceMarker
+              key={`pre-${mk.clientId || 'client'}-${mk.idx}-${mk.lat}-${mk.lng}`}
+              mk={mk}
+              accent={accent}
+              isCurrent={false}
+              showBadge={false}
+              showCircle={false}
+              zoomScale={zoomScale}
+              onPress={() => handlePlaceMarkerPress(mk)}
+            />
+          );
+        })}
         {/* Pre-plan: all clients with profile images as markers */}
-        {!dayPlan &&
+        {!focusedMapClientId && !dayPlan &&
           allPlaceMarkers
             .filter((mk) => markerMatchesPlanMapClientFilter(mk, activePlanMapClientFilter))
             .map((mk) => {
@@ -5459,7 +5787,7 @@ export default function AIPlanScreen() {
           const accent = isEat ? colors.dining : isEvent ? colors.event : colors.textSecondary;
           return (
             <AnimatedPlaceMarker
-              key={mk.clientId || `pre-${mk.idx}-${mk.lat}-${mk.lng}`}
+              key={`pre-${mk.clientId || 'client'}-${mk.idx}-${mk.lat}-${mk.lng}`}
               mk={mk}
               accent={accent}
               isCurrent={false}
@@ -5471,12 +5799,13 @@ export default function AIPlanScreen() {
           );
         })}
         {/* Plan markers — reveal one by one with profile images and entrance animation */}
-        {dayPlan && (() => {
+        {!focusedMapClientId && dayPlan && (() => {
           const markers = buildMapMarkers(dayPlan, allPlaceMarkers);
           const maxVisible = revealingPins ? visiblePinCount : markers.length;
           return markers
             .filter((mk) => mk.idx < maxVisible)
             .filter((mk) => markerMatchesPlanMapClientFilter(mk, activePlanMapClientFilter))
+            .filter((mk) => markerMatchesFocusedClient(mk))
             .map((mk) => {
             const isEat = mapMarkerFilterCategoryKey(mk) === 'restaurant';
             const isEvent = mapMarkerFilterCategoryKey(mk) === 'event';
@@ -6353,7 +6682,7 @@ export default function AIPlanScreen() {
                   <Ionicons name="search" size={20} color={themeColors.primary} style={styles.searchModalSearchIcon} />
                   <TextInput
                     style={styles.searchModalSearchInput}
-                    placeholder="Search restaurants, places, events…"
+                    placeholder="Search restaurants, places, events, tags…"
                     placeholderTextColor="#94A3B8"
                     value={searchModalQuery}
                     onChangeText={setSearchModalQuery}
@@ -6394,11 +6723,7 @@ export default function AIPlanScreen() {
                   const rawItems = searchModalClients[key] || [];
                   const q = (searchModalQuery || '').trim().toLowerCase();
                   const items = q
-                    ? rawItems.filter(
-                        (c) =>
-                          (c.name || c.business_name || '').toLowerCase().includes(q) ||
-                          (c.business_name_ar || '').toLowerCase().includes(q)
-                      )
+                    ? rawItems.filter((c) => matchesClientSearchQuery(c, q))
                     : rawItems;
                 const accent = key === 'restaurants' ? colors.dining : key === 'events' ? colors.event : colors.textSecondary;
                 if (q && items.length === 0) return null;
@@ -6437,8 +6762,7 @@ export default function AIPlanScreen() {
                                   handleAddClientToPlan(client)
                                   return
                                 }
-                                setShowSearchModal(false);
-                                setProfileClientId(client.client_a_uuid || client.clientId);
+                                handleFocusClientFromSearch(client)
                               }}
                             >
                               <View style={[styles.searchModalClientCircle, { borderColor: accent }]}>

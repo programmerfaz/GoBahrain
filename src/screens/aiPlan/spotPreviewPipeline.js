@@ -2,7 +2,7 @@ import { supabase } from '../../config/supabase'
 import { CachedImage, prefetchImageUrls } from '../../components/CachedImage'
 import { ensureImageUrl, parseStorageImageUrl, resolvePublicImageUrl } from '../../utils/imageUrl'
 import { parseCoordsFromClientRow, unswapLatLng, parsePlanItemCoords } from './planGeoAndShare'
-import { matchPlanToPinecone, matchPlanToClient, resolveCoordsFromLoadedCache } from './planMatching'
+import { matchPlanToPinecone, matchPlanToClient, resolveCoordsFromLoadedCache, normName } from './planMatching'
 
 
 export function buildSpotPreviews(places, restaurants, events) {
@@ -283,6 +283,95 @@ export function buildSpotPreviewsFromPlan(plan) {
   }));
 }
 export async function enrichPlanWithClientData(plan, pineconeMatches, loadedClientMarkers = []) {
+  const haversineKm = (a, b) => {
+    if (!a || !b) return 0
+    const R = 6371
+    const dLat = ((b.lat - a.lat) * Math.PI) / 180
+    const dLng = ((b.lng - a.lng) * Math.PI) / 180
+    const aa =
+      Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos((a.lat * Math.PI) / 180) *
+        Math.cos((b.lat * Math.PI) / 180) *
+        Math.sin(dLng / 2) * Math.sin(dLng / 2)
+    return R * (2 * Math.atan2(Math.sqrt(aa), Math.sqrt(1 - aa)))
+  }
+
+  const dedupePlanStops = (items) => {
+    const picked = new Map()
+    for (const item of items || []) {
+      const typeKey = String(item?.type || '').toLowerCase().trim() || 'place'
+      const clientIdKey = String(item?.clientId || '').trim()
+      const spotKey = normName(item?.spot || '')
+      const key = clientIdKey ? `${typeKey}::cid::${clientIdKey}` : `${typeKey}::spot::${spotKey}`
+      if (!key || key.endsWith('::spot::')) continue
+      const coords = parsePlanItemCoords(item)
+      const hasImage = !!resolvePublicImageUrl(item?.image)
+      const score = (coords ? 3 : 0) + (hasImage ? 2 : 0) + (item?.clientId ? 1 : 0)
+      const prev = picked.get(key)
+      if (!prev || score > prev.score) {
+        picked.set(key, { item, score })
+      }
+    }
+    return Array.from(picked.values()).map((x) => x.item)
+  }
+
+  const parseBranchCoords = (raw) => {
+    if (!raw) return []
+    let parsed = raw
+    if (typeof parsed === 'string') {
+      try {
+        parsed = JSON.parse(parsed)
+      } catch {
+        return []
+      }
+    }
+    const entries = Array.isArray(parsed)
+      ? parsed
+      : parsed && typeof parsed === 'object'
+        ? Object.values(parsed)
+        : []
+    const out = []
+    for (const entry of entries) {
+      if (!entry || typeof entry !== 'object') continue
+      const fixed = unswapLatLng(
+        entry.lat ?? entry.latitude ?? '',
+        entry.long ?? entry.lng ?? entry.longitude ?? ''
+      )
+      if (!fixed) continue
+      out.push({ lat: fixed.lat, lng: fixed.lng })
+    }
+    return out
+  }
+
+  const pickBestBranchForIndex = (items, idx, options) => {
+    if (!Array.isArray(options) || options.length === 0) return null
+    const prev = (() => {
+      for (let i = idx - 1; i >= 0; i -= 1) {
+        const c = parsePlanItemCoords(items[i])
+        if (c) return c
+      }
+      return null
+    })()
+    const next = (() => {
+      for (let i = idx + 1; i < items.length; i += 1) {
+        const c = parsePlanItemCoords(items[i])
+        if (c) return c
+      }
+      return null
+    })()
+    if (!prev && !next) return options[0]
+    let best = options[0]
+    let bestCost = Number.POSITIVE_INFINITY
+    for (const opt of options) {
+      const cost = (prev ? haversineKm(prev, opt) : 0) + (next ? haversineKm(opt, next) : 0)
+      if (cost < bestCost) {
+        bestCost = cost
+        best = opt
+      }
+    }
+    return best
+  }
+
   // Step 1: Match from Pinecone for identity/image hints only (NOT coordinates).
   // Coordinates for map pins must come strictly from Supabase.
   let enriched = plan.map((item) => {
@@ -363,6 +452,7 @@ export async function enrichPlanWithClientData(plan, pineconeMatches, loadedClie
       ...(dbCoords ? { lat: dbCoords.lat, lng: dbCoords.lng } : {}),
     };
   });
+  enriched = dedupePlanStops(enriched)
   const newIds = [...new Set(enriched.map((i) => i.clientId).filter(Boolean))];
   for (const cid of newIds) {
     if (clientImageMap[cid]) continue;
@@ -401,7 +491,47 @@ export async function enrichPlanWithClientData(plan, pineconeMatches, loadedClie
     });
   }
 
-  // Step 4: Strict source-of-truth guard for map coordinates.
+  // Step 4: For restaurant stops, prefer branch coordinates that minimize route distance.
+  const restaurantIds = [...new Set(
+    enriched
+      .filter((item) => String(item?.client_type || item?.type || '').toLowerCase().trim() === 'restaurant')
+      .map((item) => item.clientId)
+      .filter(Boolean)
+  )]
+  if (restaurantIds.length > 0) {
+    let restRows = []
+    const { data: directRows, error: directErr } = await supabase
+      .from('restaurant_client')
+      .select('a_uuid, branch')
+      .in('a_uuid', restaurantIds)
+    if (!directErr && Array.isArray(directRows)) {
+      restRows = directRows
+    } else {
+      const { data: fallbackRows } = await supabase
+        .from('restaurant_client')
+        .select('*')
+        .in('a_uuid', restaurantIds)
+      restRows = Array.isArray(fallbackRows) ? fallbackRows : []
+    }
+    const branchesById = {}
+    for (const row of restRows) {
+      const id = row?.a_uuid || row?.client_a_uuid
+      if (!id) continue
+      const parsed = parseBranchCoords(row?.branch ?? row?.branches ?? null)
+      if (parsed.length > 0) branchesById[id] = parsed
+    }
+    enriched = enriched.map((item, idx, arr) => {
+      const isRestaurant = String(item?.client_type || item?.type || '').toLowerCase().trim() === 'restaurant'
+      if (!isRestaurant || !item?.clientId) return item
+      const options = branchesById[item.clientId]
+      if (!options || options.length === 0) return item
+      const best = pickBestBranchForIndex(arr, idx, options)
+      if (!best) return item
+      return { ...item, lat: best.lat, lng: best.lng }
+    })
+  }
+
+  // Step 5: Strict source-of-truth guard for map coordinates.
   // If a stop has no Supabase-backed coords, keep it off the map by leaving lat/lng null.
   enriched = enriched.map((item) => {
     const fixed = parsePlanItemCoords(item);
@@ -409,7 +539,7 @@ export async function enrichPlanWithClientData(plan, pineconeMatches, loadedClie
     return item;
   });
 
-  // Step 5: Fallback — fetch first post image when client_image is null
+  // Step 6: Fallback — fetch first post image when client_image is null
   const stillNoImage = enriched.filter((i) => !resolvePublicImageUrl(i.image) && i.clientId);
   if (stillNoImage.length > 0) {
     const postIds = [...new Set(stillNoImage.map((i) => i.clientId))];
@@ -437,7 +567,7 @@ export async function enrichPlanWithClientData(plan, pineconeMatches, loadedClie
     }
   }
 
-  // Step 5: Build images array (client_image + post images) for detail area diversity
+  // Step 7: Build images array (client_image + post images) for detail area diversity
   const postImagesByClient = {};
   const idsWithClient = [...new Set(enriched.map((i) => i.clientId).filter(Boolean))];
   if (idsWithClient.length > 0) {

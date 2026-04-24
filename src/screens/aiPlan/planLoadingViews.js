@@ -280,12 +280,12 @@ function MorphingTitle({ step, showSuccess, compact }) {
     : STATUS_LINES[Math.min(mounted.step, STATUS_LINES.length - 1)]
 
   return (
-    <Animated.View style={{ opacity: fade, transform: [{ translateY: ty }], alignItems: 'flex-start', gap: 4 }}>
-      <Text style={[cn.title, compact && cn.titleCompact]} numberOfLines={compact ? 1 : 2}>
+    <Animated.View style={{ opacity: fade, transform: [{ translateY: ty }], alignItems: 'center', gap: 4 }}>
+      <Text style={[cn.title, compact && cn.titleCompact, { textAlign: 'center' }]} numberOfLines={compact ? 1 : 2}>
         {active.title}
       </Text>
       {!compact && (
-        <Text style={cn.subtitle} numberOfLines={1}>
+        <Text style={[cn.subtitle, { textAlign: 'center' }]} numberOfLines={1}>
           {active.sub}
         </Text>
       )}
@@ -520,7 +520,7 @@ function StepChip({ step, index, isDone, isActive, compact }) {
       <Animated.View style={{ transform: [{ scale: isDone ? iconScale : 1 }] }}>
         <Ionicons
           name={isDone ? 'checkmark-sharp' : step.icon}
-          size={compact ? 11 : 13}
+          size={compact ? 12 : 15}
           color={isDone ? '#FFFFFF' : isActive ? GOLD_SOFT : 'rgba(255,255,255,0.55)'}
         />
       </Animated.View>
@@ -877,6 +877,7 @@ function CinematicBadge({ ready, label, compact }) {
 export function PlanModalLoadingView({ loadingStatus, showSuccess, spotPreviews }) {
   const completed = useDerivedStepProgress({ loadingStatus, showSuccess })
   const enter = useRef(new Animated.Value(0)).current
+  const cardPulse = useRef(new Animated.Value(0)).current
   const ready = showSuccess && completed >= 3
   const activeIdx = Math.min(completed, 2)
 
@@ -884,7 +885,20 @@ export function PlanModalLoadingView({ loadingStatus, showSuccess, spotPreviews 
     Animated.timing(enter, { toValue: 1, duration: 520, easing: Easing.out(Easing.cubic), useNativeDriver: true }).start()
   }, [enter])
 
+  useEffect(() => {
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(cardPulse, { toValue: 1, duration: 1500, easing: Easing.inOut(Easing.sin), useNativeDriver: true }),
+        Animated.timing(cardPulse, { toValue: 0, duration: 1500, easing: Easing.inOut(Easing.sin), useNativeDriver: true }),
+      ])
+    )
+    loop.start()
+    return () => loop.stop()
+  }, [cardPulse])
+
   const progress = ready ? 1 : Math.max(0.06, completed / 3)
+  const cardScale = cardPulse.interpolate({ inputRange: [0, 1], outputRange: [1, 1.02] })
+  const cardFloat = cardPulse.interpolate({ inputRange: [0, 1], outputRange: [0, -6] })
 
   return (
     <View style={cn.stageOuter}>
@@ -896,36 +910,39 @@ export function PlanModalLoadingView({ loadingStatus, showSuccess, spotPreviews 
           <LiveBadge ready={ready} />
         </View>
 
-        <Animated.View
-          pointerEvents="none"
-          style={[
-            cn.bottomBlock,
-            {
-              opacity: enter,
-              transform: [
-                {
-                  translateY: enter.interpolate({ inputRange: [0, 1], outputRange: [22, 0] }),
-                },
-              ],
-            },
-          ]}
-        >
-          {!ready && (
-            <LiveThumbStrip photos={spotPreviews} ready={ready} />
-          )}
+        <View style={cn.centerLayer} pointerEvents="none">
+          <Animated.View
+            style={[
+              cn.bottomBlock,
+              {
+                opacity: enter,
+                transform: [
+                  {
+                    translateY: enter.interpolate({ inputRange: [0, 1], outputRange: [26, 0] }),
+                  },
+                  { translateY: cardFloat },
+                  { scale: cardScale },
+                ],
+              },
+            ]}
+          >
+            {!ready && (
+              <LiveThumbStrip photos={spotPreviews} ready={ready} />
+            )}
 
-          <View style={cn.bottomCopy}>
-            <View style={{ flex: 1, minWidth: 0 }}>
-              <MorphingTitle step={activeIdx} showSuccess={ready} />
+            <View style={cn.bottomCopy}>
+              <View style={{ flex: 1, minWidth: 0 }}>
+                <MorphingTitle step={activeIdx} showSuccess={ready} />
+              </View>
+              {ready && <ReadyMedallion visible={ready} />}
             </View>
-            {ready && <ReadyMedallion visible={ready} />}
-          </View>
 
-          <ProgressBar progress={progress} ready={ready} />
-          <StepRow completed={completed} activeIndex={activeIdx} ready={ready} />
+            <ProgressBar progress={progress} ready={ready} />
+            <StepRow completed={completed} activeIndex={activeIdx} ready={ready} />
 
-          <PlanLoadingFactStrip compact />
-        </Animated.View>
+            <PlanLoadingFactStrip compact />
+          </Animated.View>
+        </View>
       </View>
     </View>
   )
@@ -993,18 +1010,31 @@ const cn = StyleSheet.create({
     alignItems: 'center',
   },
   bottomBlock: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    bottom: 0,
+    width: '100%',
+    maxWidth: 520,
+    borderRadius: 20,
     paddingHorizontal: 22,
-    paddingBottom: 24,
-    paddingTop: 20,
-    gap: 14,
+    paddingVertical: 20,
+    gap: 16,
+    backgroundColor: 'rgba(7,6,10,0.56)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.16)',
+    ...Platform.select({
+      ios: { shadowColor: '#000', shadowOpacity: 0.45, shadowRadius: 20, shadowOffset: { width: 0, height: 8 } },
+      android: { elevation: 10 },
+    }),
+  },
+  centerLayer: {
+    ...StyleSheet.absoluteFillObject,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingTop: 44,
+    paddingBottom: 16,
   },
   bottomCopy: {
     flexDirection: 'row',
-    alignItems: 'flex-end',
+    alignItems: 'center',
     gap: 12,
   },
   title: {
@@ -1075,6 +1105,7 @@ const cn = StyleSheet.create({
   thumbStrip: {
     flexDirection: 'row',
     gap: 8,
+    justifyContent: 'center',
   },
   thumbStripCompact: {
     gap: 6,
@@ -1140,13 +1171,14 @@ const cn = StyleSheet.create({
     flexDirection: 'row',
     gap: 8,
     flexWrap: 'wrap',
+    justifyContent: 'center',
   },
   stepChip: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
-    paddingVertical: 6,
-    paddingHorizontal: 10,
+    gap: 8,
+    paddingVertical: 8,
+    paddingHorizontal: 14,
     borderRadius: 999,
     backgroundColor: 'rgba(255,255,255,0.07)',
     borderWidth: StyleSheet.hairlineWidth,
@@ -1183,7 +1215,7 @@ const cn = StyleSheet.create({
     backgroundColor: 'rgba(255,255,255,0.28)',
   },
   stepLabel: {
-    fontSize: 11,
+    fontSize: 13,
     fontWeight: '700',
     letterSpacing: 0.6,
     color: 'rgba(255,255,255,0.7)',

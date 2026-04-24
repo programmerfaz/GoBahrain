@@ -24,7 +24,8 @@
         "backgroundColor": "#F8FAFC"
       },
       "edgeToEdgeEnabled": true,
-      "usesCleartextTraffic": true
+      "usesCleartextTraffic": true,
+      "package": "com.esmailooo576.gobahrain"
     },
     "plugins": [
       "expo-asset"

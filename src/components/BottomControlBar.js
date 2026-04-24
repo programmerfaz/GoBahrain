@@ -121,6 +121,54 @@ function parseReviewImages(imageColumn) {
   }
 }
 
+function stringifyTagValue(value) {
+  if (!value) return ''
+  if (Array.isArray(value)) return value.map((item) => stringifyTagValue(item)).filter(Boolean).join(' ')
+  if (typeof value === 'object') return Object.values(value).map((item) => stringifyTagValue(item)).filter(Boolean).join(' ')
+  return String(value)
+}
+
+function getClientTagsSearchText(client) {
+  const tagsRaw = client?.tags
+  if (!tagsRaw) return ''
+
+  if (Array.isArray(tagsRaw) || typeof tagsRaw === 'object') {
+    return stringifyTagValue(tagsRaw)
+  }
+
+  if (typeof tagsRaw === 'string') {
+    const trimmed = tagsRaw.trim()
+    if (!trimmed) return ''
+    if ((trimmed.startsWith('[') && trimmed.endsWith(']')) || (trimmed.startsWith('{') && trimmed.endsWith('}'))) {
+      try {
+        return stringifyTagValue(JSON.parse(trimmed))
+      } catch (_) {
+        return trimmed
+      }
+    }
+    return trimmed
+  }
+
+  return String(tagsRaw)
+}
+
+function doesClientMatchSearchQuery(client, query) {
+  const lowerQuery = (query || '').trim().toLowerCase()
+  if (!lowerQuery) return true
+  const searchText = [
+    client.business_name,
+    client.description,
+    client.ai_summary,
+    getClientTagsSearchText(client),
+    client.price_range,
+    client.client_type,
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase()
+  return searchText.includes(lowerQuery)
+}
+
 async function fetchReviewsByPlace(place) {
   if (!place || !place.trim()) return { place: place || '', reviews: [] };
   const p = place.trim();
@@ -181,7 +229,8 @@ async function fetchClientsByQuery(query, clientType = '') {
       }
       
       if (data && data.length > 0) {
-        rows = data;
+        const tagAwareMatches = q ? data.filter((r) => doesClientMatchSearchQuery(r, q)) : data
+        rows = tagAwareMatches.length > 0 ? tagAwareMatches : data;
         console.log('[Khalid] Found', rows.length, 'clients with specific query');
       }
     }
@@ -204,19 +253,7 @@ async function fetchClientsByQuery(query, clientType = '') {
       }
       
       if (data && data.length > 0) {
-        rows = data.filter((r) => {
-          const tagsText = (() => {
-            try {
-              if (!r.tags) return ''
-              if (typeof r.tags === 'string') return r.tags
-              return JSON.stringify(r.tags)
-            } catch (_) { return '' }
-          })()
-          const searchText = [
-            r.business_name, r.description, r.ai_summary, tagsText, r.price_range, r.client_type
-          ].filter(Boolean).join(' ').toLowerCase();
-          return searchText.includes(q);
-        });
+        rows = data.filter((r) => doesClientMatchSearchQuery(r, q));
         
         if (rows.length === 0) {
           rows = data;

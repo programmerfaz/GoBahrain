@@ -6,11 +6,11 @@ import { ensureImageUrl } from '../utils/imageUrl'
  * Feed service — fast, quality, personalized home feed.
  *
  * Design:
- *  - Parallel DB round-trips (posts + clients + upvotes + interactions + persona)
+ *  - Parallel DB round-trips (posts + clients + upvotes + persona)
  *  - Page-sized DB fetch + rerank (correct cursor / hasMore for infinite scroll)
  *  - Normalized multi-signal scorer (0..1 per component) blended with weights
  *  - Persona-aware (persona_summary, general_ids, activity_ids, food_ids)
- *  - Time-decayed interaction affinity (recent interactions matter more)
+ *  - Session tag bias from local AsyncStorage (optional; no user_interactions table)
  *  - Diversity constraint (no two consecutive posts by same author)
  *  - Module-level persona cache to keep pagination snappy
  *  - Seen-post exclusion with AsyncStorage (debounced persist)
@@ -70,49 +70,6 @@ export const buildRefreshExcludePostIds = (
   return out
 }
 
-/** VIEW spam control — FlatList fires onViewableItemsChanged very often while scrolling. */
-const VIEW_PER_POST_COOLDOWN_MS = 6 * 60 * 60 * 1000 // one logged VIEW per post per 6h (same device / voter)
-const VIEW_GLOBAL_WINDOW_MS = 60 * 1000
-const VIEW_MAX_PER_GLOBAL_WINDOW = 6 // hard cap: ~6 VIEW rows / minute even across many posts
-const lastViewAtByPostId = new Map()
-const viewInsertTimestamps = []
-
-const pruneViewInsertWindow = () => {
-  const cutoff = Date.now() - VIEW_GLOBAL_WINDOW_MS
-  while (viewInsertTimestamps.length > 0 && viewInsertTimestamps[0] < cutoff) {
-    viewInsertTimestamps.shift()
-  }
-}
-
-const shouldSkipViewTracking = (postId) => {
-  if (!postId) return true
-  const now = Date.now()
-  pruneViewInsertWindow()
-  if (viewInsertTimestamps.length >= VIEW_MAX_PER_GLOBAL_WINDOW) return true
-  const last = lastViewAtByPostId.get(postId)
-  if (last != null && now - last < VIEW_PER_POST_COOLDOWN_MS) return true
-  return false
-}
-
-const rememberViewTracked = (postId) => {
-  const now = Date.now()
-  lastViewAtByPostId.set(postId, now)
-  viewInsertTimestamps.push(now)
-  if (lastViewAtByPostId.size > 500) {
-    for (const [id, t] of lastViewAtByPostId) {
-      if (now - t > VIEW_PER_POST_COOLDOWN_MS) lastViewAtByPostId.delete(id)
-    }
-  }
-}
-
-const INTERACTION_WEIGHTS = {
-  LIKE: 4,
-  SHARE: 3,
-  PROFILE_VIEW: 2,
-  VIEW: 1,
-}
-
-const INTERACTION_HALFLIFE_HOURS = 72
 /** Slightly flatter than before so “newest” does not dominate every close tie. */
 const RECENCY_HALFLIFE_HOURS = 64
 
@@ -254,44 +211,17 @@ export const getVoterId = async () => {
   }
 }
 
-/** ---------- Interaction tracking ---------- */
-
+/**
+ * Optional client-only session bias (recent tags in AsyncStorage).
+ * No Supabase `user_interactions` — table removed from project DB.
+ */
 export const trackInteraction = async (type, data) => {
   try {
-    if (type === 'VIEW' && shouldSkipViewTracking(data.postId)) return
-
-    const voterId = await getVoterId()
-    const interaction = {
-      voter_id: voterId,
-      interaction_type: type,
-      post_uuid: data.postId || null,
-      client_uuid: data.clientId || null,
-      tags: data.tags || null,
-      created_at: new Date().toISOString(),
-    }
-    const { error } = await supabase.from('user_interactions').insert(interaction)
-    if (error) return
-    if (type === 'VIEW' && data.postId) rememberViewTracked(data.postId)
-    if (Array.isArray(data.tags) && (type === 'LIKE' || type === 'PROFILE_VIEW' || type === 'SHARE')) {
+    if (Array.isArray(data?.tags) && (type === 'LIKE' || type === 'PROFILE_VIEW' || type === 'SHARE')) {
       pushRecentTags(data.tags)
     }
   } catch {
-    /* tracking is optional */
-  }
-}
-
-const getUserInteractions = async (voterId, limit = 150) => {
-  try {
-    const { data, error } = await supabase
-      .from('user_interactions')
-      .select('interaction_type, post_uuid, client_uuid, tags, created_at')
-      .eq('voter_id', voterId)
-      .order('created_at', { ascending: false })
-      .limit(limit)
-    if (error) return []
-    return data || []
-  } catch {
-    return []
+    /* optional */
   }
 }
 
@@ -452,32 +382,6 @@ const scorePersona = (post, personaFeatures) => {
   return Math.min(1, Math.sqrt(raw) * 1.8)
 }
 
-const scoreAffinity = (post, interactions) => {
-  if (!interactions || interactions.length === 0) return 0
-  const now = Date.now()
-  let sum = 0
-  let max = 0
-  const postTags = new Set((post.tags || []).map((t) => String(t).toLowerCase()))
-  for (const it of interactions) {
-    const w = INTERACTION_WEIGHTS[it.interaction_type] || 1
-    const ageH = Math.max(0, (now - new Date(it.created_at || 0).getTime()) / 3600000)
-    const decay = Math.exp(-ageH / INTERACTION_HALFLIFE_HOURS)
-    const weighted = w * decay
-    max += w
-    let matched = false
-    if (it.post_uuid && it.post_uuid === post.id) matched = true
-    else if (it.client_uuid && it.client_uuid === post.clientId) matched = true
-    else if (Array.isArray(it.tags) && postTags.size > 0) {
-      for (const t of it.tags) {
-        if (postTags.has(String(t).toLowerCase())) { matched = true; break }
-      }
-    }
-    if (matched) sum += weighted
-  }
-  if (max === 0) return 0
-  return Math.min(1, sum / Math.max(1, max * 0.35)) // easier to saturate
-}
-
 const scoreRecentTags = (post, recentTags) => {
   if (!recentTags || recentTags.length === 0) return 0
   const tagSet = new Set((post.tags || []).map((t) => String(t).toLowerCase()))
@@ -500,12 +404,10 @@ const avoidPenalty = (post, avoidTokens) => {
 const scorePost = (post, ctx) => {
   const {
     personaFeatures,
-    interactions,
     userLat,
     userLng,
     recentTags,
     hasPersona,
-    hasInteractions,
     hasLocation,
     isRefresh,
   } = ctx
@@ -515,7 +417,6 @@ const scorePost = (post, ctx) => {
   const engage = scoreEngagement(post)
   const proximity = hasLocation ? scoreProximity(post, userLat, userLng) : 0
   const persona = hasPersona ? scorePersona(post, personaFeatures) : 0
-  const affinity = hasInteractions ? scoreAffinity(post, interactions) : 0
   const sessionBias = scoreRecentTags(post, recentTags)
   const penalty = hasPersona ? avoidPenalty(post, personaFeatures.avoidTokens) : 0
 
@@ -525,14 +426,13 @@ const scorePost = (post, ctx) => {
   let W_ENGAGE = 0.09
   let W_PROXIMITY = hasLocation ? 0.13 : 0
   let W_PERSONA = hasPersona ? 0.26 : 0
-  let W_AFFINITY = hasInteractions ? 0.16 : 0
   let W_SESSION = 0.07
 
   if (!hasLocation) {
     W_RECENCY += 0.06
   }
 
-  if (!hasPersona && !hasInteractions) {
+  if (!hasPersona) {
     W_RECENCY = hasLocation ? 0.28 : 0.34
     W_POPULAR = 0.25
     W_ENGAGE = 0.14
@@ -546,7 +446,6 @@ const scorePost = (post, ctx) => {
     W_ENGAGE * engage +
     W_PROXIMITY * proximity +
     W_PERSONA * persona +
-    W_AFFINITY * affinity +
     W_SESSION * sessionBias
 
   // Tie-break jitter: keep refresh smaller so persona/recency stay meaningful.
@@ -806,7 +705,7 @@ export const fetchFeedPage = async ({
     const postIds = postRows.map((r) => r.post_uuid)
 
     /** Parallel fanout for everything downstream. */
-    const [clientsRes, upvotesRes, interactions] = await Promise.all([
+    const [clientsRes, upvotesRes] = await Promise.all([
       clientIds.length
         ? supabase
             .from('client')
@@ -819,7 +718,6 @@ export const fetchFeedPage = async ({
             .select('post_uuid, voter_id')
             .in('post_uuid', postIds)
         : Promise.resolve({ data: [], error: null }),
-      getUserInteractions(voterId),
     ])
 
     const clientMap = {}
@@ -883,17 +781,14 @@ export const fetchFeedPage = async ({
       (persona?.generalIds?.length || 0) > 0 ||
       (persona?.activityIds?.length || 0) > 0 ||
       (persona?.foodIds?.length || 0) > 0
-    const hasInteractions = interactions && interactions.length > 0
     const hasLocation = userLat != null && userLng != null
 
     const ctx = {
       personaFeatures,
-      interactions,
       userLat,
       userLng,
       recentTags,
       hasPersona,
-      hasInteractions,
       hasLocation,
       isRefresh,
     }
@@ -949,7 +844,7 @@ export const fetchFeedPage = async ({
 
     if (isRefresh) {
       console.log(
-        `[FeedService] refresh: ${visible.length}/${postRows.length} posts · persona=${hasPersona} · interactions=${interactions.length} · location=${hasLocation}`
+        `[FeedService] refresh: ${visible.length}/${postRows.length} posts · persona=${hasPersona} · location=${hasLocation}`
       )
     }
 

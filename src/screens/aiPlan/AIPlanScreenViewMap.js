@@ -160,8 +160,33 @@ export function AIPlanScreenViewMap({ screen }) {
         onRegionChange={screen.handleRegionChange}
         onRegionChangeComplete={screen.handleRegionChangeComplete}
       >
+        {/* Focused client mode: always render from all client markers so restaurant branches are visible. */}
+        {!!screen.focusedMapClientId &&
+          screen.allPlaceMarkers
+            .filter((mk) => markerMatchesPlanMapClientFilter(mk, screen.activePlanMapClientFilter))
+            .filter((mk) => screen.markerMatchesFocusedClient(mk))
+            .map((mk) => {
+          const isEat = mapMarkerFilterCategoryKey(mk) === 'restaurant';
+          const isEvent = mapMarkerFilterCategoryKey(mk) === 'event';
+          const accent = isEat ? screen.colors.dining : isEvent ? screen.colors.event : screen.colors.textSecondary;
+          const isSelectedInOrbit = screen.isMarkerShowcaseActive && markerMatchesShowcase(mk, screen.showcaseMarkerMk)
+          return (
+            <AnimatedPlaceMarker
+              key={`pre-${mk.clientId || 'client'}-${mk.idx}-${mk.lat}-${mk.lng}`}
+              mk={mk}
+              accent={accent}
+              isCurrent={false}
+              showBadge={false}
+              showCircle={false}
+              zoomScale={screen.zoomScale}
+              hideLabel={screen.isMarkerShowcaseActive}
+              selectedGlow={isSelectedInOrbit}
+              onPress={() => screen.handlePlaceMarkerPress(mk)}
+            />
+          );
+        })}
         {/* Pre-plan: all clients with profile images as markers */}
-        {!screen.dayPlan &&
+        {!screen.focusedMapClientId && !screen.dayPlan &&
           screen.allPlaceMarkers
             .filter((mk) => markerMatchesPlanMapClientFilter(mk, screen.activePlanMapClientFilter))
             .map((mk) => {
@@ -171,7 +196,7 @@ export function AIPlanScreenViewMap({ screen }) {
           const isSelectedInOrbit = screen.isMarkerShowcaseActive && markerMatchesShowcase(mk, screen.showcaseMarkerMk)
           return (
             <AnimatedPlaceMarker
-              key={mk.clientId || `pre-${mk.idx}-${mk.lat}-${mk.lng}`}
+              key={`pre-${mk.clientId || 'client'}-${mk.idx}-${mk.lat}-${mk.lng}`}
               mk={mk}
               accent={accent}
               isCurrent={false}
@@ -185,13 +210,14 @@ export function AIPlanScreenViewMap({ screen }) {
           );
         })}
         {/* Plan markers — reveal one by one with profile images and entrance animation */}
-        {screen.dayPlan && (() => {
+        {!screen.focusedMapClientId && screen.dayPlan && (() => {
           const markers = buildMapMarkers(screen.dayPlan, screen.allPlaceMarkers);
           const maxVisible = screen.revealingPins ? screen.visiblePinCount : markers.length;
           const revealPopStep = screen.revealingPins ? screen.visiblePinCount : null
           return markers
             .filter((mk) => mk.idx < maxVisible)
             .filter((mk) => markerMatchesPlanMapClientFilter(mk, screen.activePlanMapClientFilter))
+            .filter((mk) => screen.markerMatchesFocusedClient(mk))
             .map((mk) => {
             const isEat = mapMarkerFilterCategoryKey(mk) === 'restaurant';
             const isEvent = mapMarkerFilterCategoryKey(mk) === 'event';
