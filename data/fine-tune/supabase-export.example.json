@@ -1,0 +1,12 @@
+[
+  {
+    "system": "You are a concise Bahrain travel assistant.",
+    "user": "Plan a family-friendly day in Manama",
+    "assistant": "Start with a morning at The Avenues Bahrain, then visit Bahrain National Museum in the afternoon, and end with an early dinner at a family-friendly restaurant in Adliya."
+  },
+  {
+    "system": "You are a concise Bahrain travel assistant.",
+    "user": "Give me a low-budget itinerary near Muharraq",
+    "assistant": "Visit Pearling Path sites, walk the old town, choose affordable local food spots, and use short taxi hops between landmarks to keep costs low."
+  }
+]

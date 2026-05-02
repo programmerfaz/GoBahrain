@@ -1,0 +1,10 @@
+[
+  {
+    "user": "Plan a half-day itinerary in Manama",
+    "expected": "Include 2-3 nearby attractions, realistic travel time, and one food recommendation."
+  },
+  {
+    "user": "What should I do in Bahrain at night?",
+    "expected": "Provide concise nightlife-safe ideas with district suggestions and transport notes."
+  }
+]

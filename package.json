@@ -6,7 +6,12 @@
     "start": "expo start",
     "android": "expo run:android",
     "ios": "expo run:ios",
-    "web": "expo start --web"
+    "web": "expo start --web",
+    "ft:seed": "node scripts/fine-tune/generate-seed-dataset.mjs",
+    "ft:from-db": "node scripts/fine-tune/export-from-supabase.mjs",
+    "ft:build": "node scripts/fine-tune/build-training-jsonl.mjs",
+    "ft:create": "node scripts/fine-tune/create-job.mjs",
+    "ft:eval": "node scripts/fine-tune/evaluate-model.mjs"
   },
   "dependencies": {
     "@gsap/react": "^2.1.2",

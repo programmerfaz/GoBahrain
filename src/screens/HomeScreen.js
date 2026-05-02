@@ -43,6 +43,7 @@ import {
   fetchFeedPage,
   buildRefreshExcludePostIds,
   getVoterId,
+  trackInteraction,
   clearFeedCache,
   markPostsSeen,
   flushSeenPostIds,
@@ -498,6 +499,49 @@ function getHomeStyles(colors) {
       justifyContent: 'center',
       paddingTop: 80,
       backgroundColor: C.screenBg,
+    },
+    skeletonFeedWrap: {
+      flex: 1,
+      backgroundColor: C.screenBg,
+      paddingTop: 8,
+      paddingBottom: 28,
+    },
+    skeletonAvatar: {
+      width: 32,
+      height: 32,
+      borderRadius: 16,
+      marginRight: 10,
+      backgroundColor: C.borderLight,
+    },
+    skeletonImage: {
+      width: '100%',
+      aspectRatio: 1,
+      backgroundColor: C.borderLight,
+    },
+    skeletonLineWide: {
+      height: 12,
+      width: '72%',
+      borderRadius: 6,
+      marginBottom: 8,
+      backgroundColor: C.borderLight,
+    },
+    skeletonLineMedium: {
+      height: 12,
+      width: '54%',
+      borderRadius: 6,
+      backgroundColor: C.borderLight,
+    },
+    skeletonLineShort: {
+      height: 10,
+      width: '36%',
+      borderRadius: 5,
+      backgroundColor: C.borderLight,
+    },
+    skeletonActionCircle: {
+      width: 34,
+      height: 34,
+      borderRadius: 17,
+      backgroundColor: C.borderLight,
     },
     emptyText: { marginTop: 12, fontSize: 16, color: C.textMuted, fontWeight: '500' },
     retryBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 16, paddingVertical: 10, paddingHorizontal: 20, backgroundColor: C.primary, borderRadius: 10 },
@@ -1060,6 +1104,58 @@ function TouristInfoCard({ item, styles, COLORS }) {
   );
 }
 
+function FeedSkeletonCard({ index, styles }) {
+  const pulse = useRef(new Animated.Value(0.45)).current;
+
+  useEffect(() => {
+    const delay = Math.min(index * 90, 260);
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulse, {
+          toValue: 0.95,
+          duration: 700,
+          delay,
+          easing: Easing.inOut(Easing.quad),
+          useNativeDriver: true,
+        }),
+        Animated.timing(pulse, {
+          toValue: 0.45,
+          duration: 700,
+          easing: Easing.inOut(Easing.quad),
+          useNativeDriver: true,
+        }),
+      ])
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [index, pulse]);
+
+  return (
+    <View style={styles.cardOuter}>
+      <View style={styles.cardInner}>
+        <View style={styles.cardHeader}>
+          <Animated.View style={[styles.skeletonAvatar, { opacity: pulse }]} />
+          <View style={{ flex: 1 }}>
+            <Animated.View style={[styles.skeletonLineWide, { opacity: pulse }]} />
+            <Animated.View style={[styles.skeletonLineShort, { opacity: pulse }]} />
+          </View>
+        </View>
+        <Animated.View style={[styles.skeletonImage, { opacity: pulse }]} />
+        <View style={styles.cardBody}>
+          <View style={styles.actionRow}>
+            <View style={styles.actionRowLeft}>
+              <Animated.View style={[styles.skeletonActionCircle, { opacity: pulse }]} />
+              <Animated.View style={[styles.skeletonActionCircle, { opacity: pulse }]} />
+            </View>
+          </View>
+          <Animated.View style={[styles.skeletonLineWide, { opacity: pulse }]} />
+          <Animated.View style={[styles.skeletonLineMedium, { opacity: pulse }]} />
+        </View>
+      </View>
+    </View>
+  );
+}
+
 /** Location / GPS filter chip — same visual language as category chips; toggles distance-sorted feed. */
 function LocationFilterChip({ selected, busy, onPress, colors }) {
   const styles = StyleSheet.create(getHomeStyles(colors));
@@ -1187,7 +1283,7 @@ const SCROLL_TO_TOP_HIDE_AT = 120;
 /** Home feed: one network page size (matches feedService BATCH_SIZE). */
 const FEED_PAGE_SIZE = 15;
 /** When the user has scrolled this far through the list, prefetch the next page (Instagram-style). */
-const FEED_PREFETCH_SCROLL_PROGRESS = 0.75;
+const FEED_PREFETCH_SCROLL_PROGRESS = 0.7;
 
 function easeInOutCubic(t) {
   return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
@@ -1313,6 +1409,7 @@ export default function HomeScreen() {
   const upvoteInFlightRef = useRef(new Set());
   const refreshingRef = useRef(false);
   const appendInFlightRef = useRef(false);
+  const feedRequestGenerationRef = useRef(0);
   const pagingRef = useRef({
     filteredLen: 0,
     hasMore: true,
@@ -1523,6 +1620,13 @@ export default function HomeScreen() {
   ]);
 
   const filteredTopPostId = filteredPosts[0]?.id ?? null;
+  const postIndexById = useMemo(() => {
+    const map = new Map();
+    posts.forEach((post, index) => {
+      if (post?.id) map.set(post.id, index);
+    });
+    return map;
+  }, [posts]);
   /** First 3 visible cells — exclude on refresh so the same few posts cannot cycle as #1–#3. */
   const filteredLeaderPostIds = useMemo(
     () => filteredPosts.slice(0, 3).map((p) => p.id).filter(Boolean),
@@ -1537,6 +1641,7 @@ export default function HomeScreen() {
 
   const fetchPosts = useCallback(async (opts = {}) => {
     const { skipGlobalLoading = false, onDone, append = false } = opts;
+    const generationAtStart = feedRequestGenerationRef.current;
     if (append && appendInFlightRef.current) {
       onDone?.();
       return;
@@ -1565,6 +1670,11 @@ export default function HomeScreen() {
         hasMore: result.hasMore,
         nextCursor: result.nextCursor,
       });
+
+      // Ignore stale pagination results that started before a refresh/reset.
+      if (generationAtStart !== feedRequestGenerationRef.current) {
+        return;
+      }
 
       if (append) {
         setPosts((prev) => {
@@ -1622,20 +1732,9 @@ export default function HomeScreen() {
     setRefreshing(true);
     
     console.log('[Home] 🔄 REFRESH STARTED - Clearing cache...');
+    feedRequestGenerationRef.current += 1;
     await clearFeedCache();
     await flushSeenPostIds();
-    // Also exclude every post currently in the list — a quick pull-to-refresh
-    // shouldn't leave the same items on top just because viewability hadn't
-    // registered them as "seen" yet.
-    const priorTopId = filteredLeaderPostIds[0] ?? filteredTopPostId ?? posts[0]?.id ?? null;
-    const spinGuard = refreshSpinGuardRef.current.filter(Boolean);
-    const mustExcludeLeaders = [...new Set([...filteredLeaderPostIds, ...spinGuard])];
-    const excludePostIds = buildRefreshExcludePostIds(
-      [],
-      [],
-      undefined,
-      mustExcludeLeaders
-    );
     setNextCursor(null);
     setHasMore(true);
     
@@ -1655,9 +1754,8 @@ export default function HomeScreen() {
         searchQuery: searchQuery.trim() || null,
         useCache: false, // Always fetch fresh on refresh
         isRefresh: true,
+        useWideRefreshWindow: false,
         userPersonaSummary: preferences?.profileSummary || '',
-        excludePostIds,
-        neverFirstPostId: priorTopId || undefined,
       });
       
       console.log('[Home] ✅ Refresh complete:', { 
@@ -1669,11 +1767,10 @@ export default function HomeScreen() {
       
       setPosts(result.posts);
       setNextCursor(result.nextCursor);
-      setHasMore(result.hasMore);
-      const newLeaders = result.posts.slice(0, 3).map((p) => p.id).filter(Boolean);
-      refreshSpinGuardRef.current = [
-        ...new Set([...newLeaders, ...filteredLeaderPostIds, ...refreshSpinGuardRef.current].filter(Boolean)),
-      ].slice(0, 40);
+      setHasMore(
+        result.hasMore ||
+        (result.posts.length === FEED_PAGE_SIZE && Boolean(result.nextCursor))
+      );
     } catch (err) {
       console.error('[Home] Failed to refresh:', err);
       const errMsg = String(err?.message ?? err ?? '');
@@ -1688,9 +1785,6 @@ export default function HomeScreen() {
     userPosition?.longitude,
     searchQuery,
     preferences?.profileSummary,
-    posts,
-    filteredTopPostId,
-    filteredLeaderPostIds,
   ]);
   
   const handleLoadMore = useCallback(() => {
@@ -1709,7 +1803,23 @@ export default function HomeScreen() {
     if (seenIds.length > 0) {
       markPostsSeen(seenIds);
     }
-  }, []);
+    if (posts.length === 0 || !hasMore || loadingMore || loading || refreshing) return;
+    let maxVisiblePostIndex = -1;
+    for (const id of seenIds) {
+      const idx = postIndexById.get(id);
+      if (typeof idx === 'number' && idx > maxVisiblePostIndex) {
+        maxVisiblePostIndex = idx;
+      }
+    }
+    if (maxVisiblePostIndex < 0) return;
+    const prefetchIndex = Math.max(
+      0,
+      Math.ceil(posts.length * FEED_PREFETCH_SCROLL_PROGRESS) - 1
+    );
+    if (maxVisiblePostIndex >= prefetchIndex) {
+      handleLoadMore();
+    }
+  }, [postIndexById, posts.length, hasMore, loadingMore, loading, refreshing, handleLoadMore]);
   
   const viewabilityConfig = useRef({
     itemVisiblePercentThreshold: 40,
@@ -1777,6 +1887,7 @@ export default function HomeScreen() {
             .from('post_upvote')
             .insert({ post_uuid: post.id, voter_id: voterId });
           if (error) throw error;
+          trackInteraction('LIKE', { tags: post.tags || [] });
         } else {
           const { error } = await supabase
             .from('post_upvote')
@@ -2507,8 +2618,10 @@ export default function HomeScreen() {
       </Animated.View>
 
       {loading ? (
-        <View style={styles.loadingWrap}>
-          <ActivityIndicator size="large" color={COLORS.primary} />
+        <View style={styles.skeletonFeedWrap}>
+          {[0, 1, 2].map((idx) => (
+            <FeedSkeletonCard key={`home-skeleton-${idx}`} index={idx} styles={styles} />
+          ))}
         </View>
       ) : (
       <Animated.View

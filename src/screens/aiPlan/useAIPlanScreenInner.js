@@ -141,6 +141,7 @@ export function useAIPlanScreenInner() {
   const mapRef = useRef(null);
   /** Latest GPS fix for map fitting and native user dot (`showsUserLocation`) */
   const userLocationRef = useRef(null);
+  const [userLocation, setUserLocation] = useState(null)
   const dayPlanRef = useRef(null);
   const locationWatchRef = useRef(null);
   /** True while the map is moving programmatically — avoids clamp / region logic fighting the camera */
@@ -301,42 +302,6 @@ export function useAIPlanScreenInner() {
       )
     }
   }, [parseBranchPayload])
-
-  useEffect(() => {
-    if (!focusedMapClientId) return
-    const map = mapRef.current
-    if (!map) return
-    const focusedMarkers = (allPlaceMarkers || []).filter((mk) => {
-      if (!mk || mk.clientId !== focusedMapClientId) return false
-      const lat = Number(mk.lat)
-      const lng = Number(mk.lng)
-      return Number.isFinite(lat) && Number.isFinite(lng)
-    })
-    if (!focusedMarkers.length) return
-
-    const lats = focusedMarkers.map((mk) => Number(mk.lat))
-    const lngs = focusedMarkers.map((mk) => Number(mk.lng))
-    const minLat = Math.min(...lats)
-    const maxLat = Math.max(...lats)
-    const minLng = Math.min(...lngs)
-    const maxLng = Math.max(...lngs)
-
-    const centerLat = (minLat + maxLat) / 2
-    const centerLng = (minLng + maxLng) / 2
-    const latSpread = Math.max(0.018, (maxLat - minLat) * 1.8)
-    const lngSpread = Math.max(0.018, (maxLng - minLng) * 1.8)
-
-    markProgrammaticMapMove(1000)
-    map.animateToRegion(
-      clampRegionToBahrain({
-        latitude: centerLat,
-        longitude: centerLng,
-        latitudeDelta: latSpread,
-        longitudeDelta: lngSpread,
-      }),
-      700,
-    )
-  }, [focusedMapClientId, allPlaceMarkers, markProgrammaticMapMove])
 
   useEffect(() => {
     if (!isMarkerShowcaseActive || !showcaseMarkerMk?.clientId) {
@@ -586,6 +551,9 @@ export function useAIPlanScreenInner() {
 
   // 0 = past plans, 1 = preferences, 2 = food, 3 = results
   const [drawerStep, setDrawerStep] = useState(0);
+  /** Incremented when returning from plan results (step 3 → 0) so the Build CTA can pulse */
+  const [buildDayCtaAttentionKey, setBuildDayCtaAttentionKey] = useState(0);
+  const prevDrawerStepForCtaRef = useRef(drawerStep);
   const [selectedPreferences, setSelectedPreferences] = useState([]);
   const [selectedFoodCategories, setSelectedFoodCategories] = useState([]);
   const [customPreferenceInput, setCustomPreferenceInput] = useState('');
@@ -630,6 +598,13 @@ export function useAIPlanScreenInner() {
     setQuickFindKind(null)
   }, [drawerStep])
 
+  useEffect(() => {
+    if (prevDrawerStepForCtaRef.current === 3 && drawerStep === 0) {
+      setBuildDayCtaAttentionKey((n) => n + 1)
+    }
+    prevDrawerStepForCtaRef.current = drawerStep
+  }, [drawerStep])
+
   const handlePlaceMarkerPress = useCallback(
     (mk) => {
       clearMarkerShowcase();
@@ -672,6 +647,7 @@ export function useAIPlanScreenInner() {
   const [shareCopyHint, setShareCopyHint] = useState(false);
   const shareCopyHintTimerRef = useRef(null);
   const [allPlaceMarkers, setAllPlaceMarkers] = useState([]);
+  const [allPlaceMarkersLoading, setAllPlaceMarkersLoading] = useState(false)
   const [showSearchModal, setShowSearchModal] = useState(false);
   const [addingPlanStop, setAddingPlanStop] = useState(false);
   const [searchModalClients, setSearchModalClients] = useState({ restaurants: [], places: [], events: [] });
@@ -680,6 +656,42 @@ export function useAIPlanScreenInner() {
   const [enhancingIndex, setEnhancingIndex] = useState(null);
   const [visibleStopCount, setVisibleStopCount] = useState(0);
   const stopRevealTimers = useRef([]);
+
+  useEffect(() => {
+    if (!focusedMapClientId) return
+    const map = mapRef.current
+    if (!map) return
+    const focusedMarkers = (allPlaceMarkers || []).filter((mk) => {
+      if (!mk || mk.clientId !== focusedMapClientId) return false
+      const lat = Number(mk.lat)
+      const lng = Number(mk.lng)
+      return Number.isFinite(lat) && Number.isFinite(lng)
+    })
+    if (!focusedMarkers.length) return
+
+    const lats = focusedMarkers.map((mk) => Number(mk.lat))
+    const lngs = focusedMarkers.map((mk) => Number(mk.lng))
+    const minLat = Math.min(...lats)
+    const maxLat = Math.max(...lats)
+    const minLng = Math.min(...lngs)
+    const maxLng = Math.max(...lngs)
+
+    const centerLat = (minLat + maxLat) / 2
+    const centerLng = (minLng + maxLng) / 2
+    const latSpread = Math.max(0.018, (maxLat - minLat) * 1.8)
+    const lngSpread = Math.max(0.018, (maxLng - minLng) * 1.8)
+
+    markProgrammaticMapMove(1000)
+    map.animateToRegion(
+      clampRegionToBahrain({
+        latitude: centerLat,
+        longitude: centerLng,
+        latitudeDelta: latSpread,
+        longitudeDelta: lngSpread,
+      }),
+      700,
+    )
+  }, [focusedMapClientId, allPlaceMarkers, markProgrammaticMapMove])
 
   const [savedPlansList, setSavedPlansList] = useState([]);
   const [savedPlansLoading, setSavedPlansLoading] = useState(false);
@@ -970,6 +982,7 @@ export function useAIPlanScreenInner() {
   useEffect(() => {
     let cancelled = false;
     (async () => {
+      setAllPlaceMarkersLoading(true)
       try {
         const clients = await fetchClientsWithLocation();
         if (cancelled) return;
@@ -1001,6 +1014,8 @@ export function useAIPlanScreenInner() {
         setAllPlaceMarkers(markers);
       } catch (e) {
         if (!cancelled) console.warn('[AIPlan] fetch clients for map:', e?.message);
+      } finally {
+        if (!cancelled) setAllPlaceMarkersLoading(false)
       }
     })();
     return () => { cancelled = true; };
@@ -1049,6 +1064,7 @@ export function useAIPlanScreenInner() {
           });
           if (cancelled) return;
           userLocationRef.current = { latitude: coords.latitude, longitude: coords.longitude };
+          setUserLocation({ latitude: coords.latitude, longitude: coords.longitude })
           if (!hasInitialUserCenterRef.current && !dayPlanRef.current?.length) {
             hasInitialUserCenterRef.current = true;
             centerOnUserIfNoPlan(coords.latitude, coords.longitude);
@@ -1064,6 +1080,10 @@ export function useAIPlanScreenInner() {
                 latitude: loc.coords.latitude,
                 longitude: loc.coords.longitude,
               };
+              setUserLocation({
+                latitude: loc.coords.latitude,
+                longitude: loc.coords.longitude,
+              })
             },
           );
           if (cancelled) {
@@ -1097,6 +1117,7 @@ export function useAIPlanScreenInner() {
           const lat = coords.latitude
           const lng = coords.longitude
           userLocationRef.current = { latitude: lat, longitude: lng }
+          setUserLocation({ latitude: lat, longitude: lng })
           return { originLat: lat, originLng: lng }
         }
       } catch {
@@ -1120,11 +1141,12 @@ export function useAIPlanScreenInner() {
         accuracy: Location.Accuracy.Balanced,
       })
       userLocationRef.current = { latitude: coords.latitude, longitude: coords.longitude }
+      setUserLocation({ latitude: coords.latitude, longitude: coords.longitude })
       return { originLat: coords.latitude, originLng: coords.longitude }
     } catch {
       return { originLat: null, originLng: null }
     }
   }, [])
 
-  return { colors, isDark, preferences, generalLabels, activityLabels, savedProfileFoodLabels, user, insets, route, navigation, mapRegion, setMapRegion, isMarkerShowcaseActive, setIsMarkerShowcaseActive, showcaseMarkerMk, setShowcaseMarkerMk, showcaseMorphAnchor, setShowcaseMorphAnchor, showcaseOrbitPostUris, activePlanMapClientFilter, setActivePlanMapClientFilter, focusedMapClientId, setFocusedMapClientId, markerMatchesFocusedClient, handleFocusClientFromSearch, drawerStep, setDrawerStep, selectedPreferences, setSelectedPreferences, selectedFoodCategories, setSelectedFoodCategories, customPreferenceInput, setCustomPreferenceInput, customFoodInput, setCustomFoodInput, loading, setLoading, loadingStatus, setLoadingStatus, error, setError, dayPlan, setDayPlan, pineconeMatches, setPineconeMatches, visiblePinCount, setVisiblePinCount, revealingPins, setRevealingPins, surpriseSpinning, setSurpriseSpinning, surpriseIndex, setSurpriseIndex, surprisePicked, setSurprisePicked, showPlanModal, setShowPlanModal, planModalStep, setPlanModalStep, buildDayModalPhase, setBuildDayModalPhase, quickFindKind, setQuickFindKind, customPlanDraftActive, setCustomPlanDraftActive, quickFindMapOnly, setQuickFindMapOnly, showBuildModePickerModal, setShowBuildModePickerModal, travelExploreId, setTravelExploreId, doorVisible, setDoorVisible, planGenerationSuccess, setPlanGenerationSuccess, spotPreviews, setSpotPreviews, profileClientId, setProfileClientId, stopDetailIndex, setStopDetailIndex, openingMaps, setOpeningMaps, shareCopyHint, setShareCopyHint, allPlaceMarkers, setAllPlaceMarkers, showSearchModal, setShowSearchModal, addingPlanStop, setAddingPlanStop, searchModalClients, setSearchModalClients, searchModalLoading, setSearchModalLoading, searchModalQuery, setSearchModalQuery, enhancingIndex, setEnhancingIndex, visibleStopCount, setVisibleStopCount, savedPlansList, setSavedPlansList, savedPlansLoading, setSavedPlansLoading, activeSavedPlanId, setActiveSavedPlanId, sharedCollaboration, setSharedCollaboration, joinCodeInput, setJoinCodeInput, joinCodeBusy, setJoinCodeBusy, showSharePlanModal, setShowSharePlanModal, sharePermissionDraft, setSharePermissionDraft, shareModalBusy, setShareModalBusy, shareModalCode, setShareModalCode, savePlanBusy, setSavePlanBusy, showEditSavedPlanTitleModal, setShowEditSavedPlanTitleModal, editSavedPlanTitleId, setEditSavedPlanTitleId, editSavedPlanTitleDraft, setEditSavedPlanTitleDraft, editSavedPlanTitleBusy, setEditSavedPlanTitleBusy, mapRef, userLocationRef, dayPlanRef, locationWatchRef, mapProgrammaticMoveRef, mapProgrammaticMoveClearTimerRef, hasInitialUserCenterRef, markerShowcaseRef, orbitSheetExtraTranslateY, sheetAnim, lastSnap, currentYRef, prefetchRef, lastPrefLabelsRef, lastFoodLabelsRef, doorLeft, doorRight, doorIconScale, doorIconOpacity, doorFade, skipOpenAnim, shareCopyHintTimerRef, stopRevealTimers, planModalBackdrop, planModalScale, planModalOpacity, sheetOpacity, stopDetailSwipeX, stopDetailSwipeRotate, stopDetailIndexSV, stopDetailSlidesLenSV, communityPalette, stopDetailSlides, stopDetailPayload, stopDetailStackPeekNext, stopDetailPanGesture, handlePlanMapClientFilterPress, markProgrammaticMapMove, clearMarkerShowcaseTimers, clearMarkerShowcase, exitMarkerShowcase, handleMapPress, centerMapOnPlaceMarker, runMarkerShowcaseOrbitForMarker, handlePlaceMarkerPress, clearStopRevealTimers, scheduleStaggeredStopReveal, handleOpenInGoogleMaps, closeStopDetailDialog, goToStopDetailIndex, handleStopDetailSwipeNext, handleStopDetailSwipePrev, refreshSavedPlans, resolveOriginCoordsForPlanGeneration, planReadOnly, planCollaboratorEdit, STOP_REVEAL_STAGGER_MS, stopDetailCardAnimatedStyle, stopDetailPeekAnimatedStyle }
+  return { colors, isDark, preferences, generalLabels, activityLabels, savedProfileFoodLabels, user, insets, route, navigation, mapRegion, setMapRegion, isMarkerShowcaseActive, setIsMarkerShowcaseActive, showcaseMarkerMk, setShowcaseMarkerMk, showcaseMorphAnchor, setShowcaseMorphAnchor, showcaseOrbitPostUris, activePlanMapClientFilter, setActivePlanMapClientFilter, focusedMapClientId, setFocusedMapClientId, markerMatchesFocusedClient, handleFocusClientFromSearch, drawerStep, setDrawerStep, buildDayCtaAttentionKey, selectedPreferences, setSelectedPreferences, selectedFoodCategories, setSelectedFoodCategories, customPreferenceInput, setCustomPreferenceInput, customFoodInput, setCustomFoodInput, loading, setLoading, loadingStatus, setLoadingStatus, error, setError, dayPlan, setDayPlan, pineconeMatches, setPineconeMatches, visiblePinCount, setVisiblePinCount, revealingPins, setRevealingPins, surpriseSpinning, setSurpriseSpinning, surpriseIndex, setSurpriseIndex, surprisePicked, setSurprisePicked, showPlanModal, setShowPlanModal, planModalStep, setPlanModalStep, buildDayModalPhase, setBuildDayModalPhase, quickFindKind, setQuickFindKind, customPlanDraftActive, setCustomPlanDraftActive, quickFindMapOnly, setQuickFindMapOnly, showBuildModePickerModal, setShowBuildModePickerModal, travelExploreId, setTravelExploreId, doorVisible, setDoorVisible, planGenerationSuccess, setPlanGenerationSuccess, spotPreviews, setSpotPreviews, profileClientId, setProfileClientId, stopDetailIndex, setStopDetailIndex, openingMaps, setOpeningMaps, shareCopyHint, setShareCopyHint, allPlaceMarkers, setAllPlaceMarkers, allPlaceMarkersLoading, showSearchModal, setShowSearchModal, addingPlanStop, setAddingPlanStop, searchModalClients, setSearchModalClients, searchModalLoading, setSearchModalLoading, searchModalQuery, setSearchModalQuery, enhancingIndex, setEnhancingIndex, visibleStopCount, setVisibleStopCount, savedPlansList, setSavedPlansList, savedPlansLoading, setSavedPlansLoading, activeSavedPlanId, setActiveSavedPlanId, sharedCollaboration, setSharedCollaboration, joinCodeInput, setJoinCodeInput, joinCodeBusy, setJoinCodeBusy, showSharePlanModal, setShowSharePlanModal, sharePermissionDraft, setSharePermissionDraft, shareModalBusy, setShareModalBusy, shareModalCode, setShareModalCode, savePlanBusy, setSavePlanBusy, showEditSavedPlanTitleModal, setShowEditSavedPlanTitleModal, editSavedPlanTitleId, setEditSavedPlanTitleId, editSavedPlanTitleDraft, setEditSavedPlanTitleDraft, editSavedPlanTitleBusy, setEditSavedPlanTitleBusy, mapRef, userLocation, userLocationRef, dayPlanRef, locationWatchRef, mapProgrammaticMoveRef, mapProgrammaticMoveClearTimerRef, hasInitialUserCenterRef, markerShowcaseRef, orbitSheetExtraTranslateY, sheetAnim, lastSnap, currentYRef, prefetchRef, lastPrefLabelsRef, lastFoodLabelsRef, doorLeft, doorRight, doorIconScale, doorIconOpacity, doorFade, skipOpenAnim, shareCopyHintTimerRef, stopRevealTimers, planModalBackdrop, planModalScale, planModalOpacity, sheetOpacity, stopDetailSwipeX, stopDetailSwipeRotate, stopDetailIndexSV, stopDetailSlidesLenSV, communityPalette, stopDetailSlides, stopDetailPayload, stopDetailStackPeekNext, stopDetailPanGesture, handlePlanMapClientFilterPress, markProgrammaticMapMove, clearMarkerShowcaseTimers, clearMarkerShowcase, exitMarkerShowcase, handleMapPress, centerMapOnPlaceMarker, runMarkerShowcaseOrbitForMarker, handlePlaceMarkerPress, clearStopRevealTimers, scheduleStaggeredStopReveal, handleOpenInGoogleMaps, closeStopDetailDialog, goToStopDetailIndex, handleStopDetailSwipeNext, handleStopDetailSwipePrev, refreshSavedPlans, resolveOriginCoordsForPlanGeneration, planReadOnly, planCollaboratorEdit, STOP_REVEAL_STAGGER_MS, stopDetailCardAnimatedStyle, stopDetailPeekAnimatedStyle }
 }

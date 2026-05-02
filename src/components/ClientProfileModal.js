@@ -248,6 +248,38 @@ function ReviewCardAnimated({ rev, idx, styles, COLORS }) {
   );
 }
 
+function NearbyCardAnimated({ idx, children }) {
+  const opacity = useRef(new Animated.Value(0)).current
+  const translateY = useRef(new Animated.Value(14)).current
+
+  useEffect(() => {
+    const delay = Math.min(idx, 12) * 45
+    const timer = setTimeout(() => {
+      Animated.parallel([
+        Animated.timing(opacity, {
+          toValue: 1,
+          duration: 320,
+          easing: Easing.out(Easing.cubic),
+          useNativeDriver: true,
+        }),
+        Animated.spring(translateY, {
+          toValue: 0,
+          friction: 9,
+          tension: 78,
+          useNativeDriver: true,
+        }),
+      ]).start()
+    }, delay)
+    return () => clearTimeout(timer)
+  }, [idx, opacity, translateY])
+
+  return (
+    <Animated.View style={{ opacity, transform: [{ translateY }] }}>
+      {children}
+    </Animated.View>
+  )
+}
+
 function PostFullViewModal({ visible, posts, index, onClose, COLORS, isDark, insets, businessName }) {
   const { width: screenWidth } = useWindowDimensions();
   const scrollRef = useRef(null);
@@ -702,6 +734,37 @@ function formatClientCategoryLabel(value) {
   if (normalized.includes('event organizer') || normalized.includes('eventorganizer')) return 'Event'
   if (normalized === 'events' || normalized === 'event') return 'Event'
   return raw
+}
+
+function toFiniteNumber(value) {
+  if (value == null) return null
+  if (typeof value === 'string' && value.trim() === '') return null
+  const n = Number(value)
+  return Number.isFinite(n) ? n : null
+}
+
+function haversineKm(lat1, lon1, lat2, lon2) {
+  const R = 6371
+  const dLat = ((lat2 - lat1) * Math.PI) / 180
+  const dLon = ((lon2 - lon1) * Math.PI) / 180
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos((lat1 * Math.PI) / 180) * Math.cos((lat2 * Math.PI) / 180) *
+      Math.sin(dLon / 2) * Math.sin(dLon / 2)
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
+  return R * c
+}
+
+function formatDistanceLabel(distanceKm) {
+  if (!Number.isFinite(distanceKm) || distanceKm < 0) return ''
+  if (distanceKm < 1) return `${Math.max(1, Math.round(distanceKm * 1000))} m away`
+  return `${distanceKm.toFixed(1)} km away`
+}
+
+function isRestaurantCategory(value) {
+  const normalized = String(value || '').toLowerCase().replace(/[_-]+/g, ' ')
+  if (!normalized) return false
+  return ['restaurant', 'cafe', 'food', 'dining', 'coffee'].some((token) => normalized.includes(token))
 }
 
 function getModalStyles(C, isDark) {
@@ -1322,6 +1385,168 @@ function getModalStyles(C, isDark) {
     reviewQuoteIcon: { marginTop: 3 },
     reviewBodyFeatured: { flex: 1, fontSize: 17, fontWeight: '600', color: C.textPrimary, lineHeight: 26, letterSpacing: -0.35 },
     reviewNoTextHint: { fontSize: 14, color: C.textMuted, fontStyle: 'italic', lineHeight: 20 },
+
+    /* ===================  NEARBY  =================== */
+    nearbySection: {
+      marginTop: 18,
+      paddingTop: 14,
+    },
+    nearbyDividerWrap: {
+      marginHorizontal: 18,
+      marginBottom: 14,
+      alignItems: 'center',
+      justifyContent: 'center',
+      position: 'relative',
+      height: 26,
+    },
+    nearbyDividerLine: {
+      width: '100%',
+      height: 2,
+      borderRadius: 999,
+      overflow: 'hidden',
+    },
+    nearbyDividerCenter: {
+      position: 'absolute',
+      width: 32,
+      height: 32,
+      borderRadius: 16,
+      alignItems: 'center',
+      justifyContent: 'center',
+      backgroundColor: isDark ? 'rgba(15,23,42,0.96)' : 'rgba(255,255,255,0.98)',
+      borderWidth: 1,
+      borderColor: isDark ? 'rgba(212,175,55,0.42)' : 'rgba(212,175,55,0.52)',
+      ...Platform.select({
+        ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.12, shadowRadius: 8 },
+        android: { elevation: 4 },
+      }),
+    },
+    nearbyEyebrow: {
+      marginHorizontal: 18,
+      fontSize: 10.5,
+      fontWeight: '800',
+      color: C.textMuted,
+      letterSpacing: 2,
+      textTransform: 'uppercase',
+      marginBottom: 8,
+      textAlign: 'center',
+    },
+    nearbyHeaderRow: {
+      marginHorizontal: 18,
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: 10,
+      marginBottom: 6,
+    },
+    nearbyHeaderIconWrap: {
+      width: 30,
+      height: 30,
+      borderRadius: 15,
+      alignItems: 'center',
+      justifyContent: 'center',
+      backgroundColor: isDark ? 'rgba(212,175,55,0.16)' : 'rgba(212,175,55,0.12)',
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: 'rgba(212,175,55,0.45)',
+    },
+    nearbyTitle: {
+      fontSize: 18,
+      fontWeight: '800',
+      color: C.textPrimary,
+      letterSpacing: -0.2,
+    },
+    nearbySubtitle: {
+      marginHorizontal: 18,
+      fontSize: 13,
+      color: C.textSecondary,
+      marginBottom: 14,
+      lineHeight: 19,
+      textAlign: 'center',
+    },
+    nearbyGroupTitle: {
+      marginHorizontal: 18,
+      marginTop: 8,
+      marginBottom: 8,
+      fontSize: 11.5,
+      fontWeight: '800',
+      letterSpacing: 1.2,
+      textTransform: 'uppercase',
+      color: C.textMuted,
+    },
+    nearbyScrollContent: {
+      paddingHorizontal: 18,
+      gap: 12,
+    },
+    nearbyCard: {
+      width: 206,
+      borderRadius: 18,
+      overflow: 'hidden',
+      backgroundColor: surface,
+      borderWidth: 1,
+      borderColor: hairline,
+      ...Platform.select({
+        ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.09, shadowRadius: 16 },
+        android: { elevation: 4 },
+      }),
+    },
+    nearbyCardImageWrap: {
+      width: '100%',
+      height: 112,
+      backgroundColor: C.pillBg,
+      position: 'relative',
+    },
+    nearbyCardImage: {
+      width: '100%',
+      height: '100%',
+    },
+    nearbyCardFallback: {
+      flex: 1,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    nearbyCardBody: {
+      paddingHorizontal: 12,
+      paddingTop: 10,
+      paddingBottom: 13,
+      gap: 6,
+    },
+    nearbyCardTitle: {
+      fontSize: 14,
+      fontWeight: '700',
+      color: C.textPrimary,
+      letterSpacing: 0.1,
+    },
+    nearbyCardMetaRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 5,
+    },
+    nearbyCardMetaText: {
+      flex: 1,
+      fontSize: 12,
+      color: C.textSecondary,
+    },
+    nearbyLoadingRow: {
+      marginHorizontal: 18,
+      marginTop: 8,
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 8,
+    },
+    nearbyEmpty: {
+      marginHorizontal: 18,
+      marginTop: 8,
+      borderRadius: 14,
+      paddingVertical: 14,
+      paddingHorizontal: 12,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: hairline,
+      borderStyle: 'dashed',
+    },
+    nearbyEmptyText: {
+      fontSize: 12.5,
+      color: C.textMuted,
+      textAlign: 'center',
+    },
   };
 }
 
@@ -1340,11 +1565,15 @@ export default function ClientProfileModal({
   const styles = React.useMemo(() => StyleSheet.create(getModalStyles(COLORS, isDark)), [COLORS, isDark]);
   const { width: screenWidth = 375, height: screenHeight = 812 } = useWindowDimensions();
   const [client, setClient] = useState(null);
+  const [activeClientId, setActiveClientId] = useState(clientId || null);
   const [restaurant, setRestaurant] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [clientPosts, setClientPosts] = useState([]);
   const [clientReviews, setClientReviews] = useState([]);
+  const [nearbyPlaces, setNearbyPlaces] = useState([]);
+  const [nearbyRestaurants, setNearbyRestaurants] = useState([]);
+  const [nearbyLoading, setNearbyLoading] = useState(false);
   const [postsLoading, setPostsLoading] = useState(false);
   const [reviewsLoading, setReviewsLoading] = useState(false);
   const [showFullDescription, setShowFullDescription] = useState(false);
@@ -1354,6 +1583,8 @@ export default function ClientProfileModal({
   const [scrollY, setScrollY] = useState(0);
   const slideAnim = useRef(new Animated.Value(1)).current;
   const fadeAnim = useRef(new Animated.Value(0)).current;
+  const nearbySectionOpacity = useRef(new Animated.Value(0)).current;
+  const nearbySectionTranslate = useRef(new Animated.Value(12)).current;
   const tabIndicatorX = useRef(new Animated.Value(0)).current;
   const [tabSegment, setTabSegment] = useState(0);
   const prevTabSegment = useRef(0);
@@ -1367,6 +1598,13 @@ export default function ClientProfileModal({
   const closeInFlightRef = useRef(false);
   const sheetDragY = useRef(new Animated.Value(0)).current;
   const sheetDragOffsetRef = useRef(0);
+  const profileScrollRef = useRef(null);
+
+  useEffect(() => {
+    if (!visible) return
+    if (!clientId) return
+    setActiveClientId(clientId)
+  }, [visible, clientId]);
 
   useEffect(() => {
     if (visible) {
@@ -1396,7 +1634,7 @@ export default function ClientProfileModal({
   }, [visible, slideAnim, fadeAnim]);
 
   useEffect(() => {
-    if (!visible || !clientId) {
+    if (!visible || !activeClientId) {
       setClient(null);
       setRestaurant(null);
       setError(null);
@@ -1408,7 +1646,7 @@ export default function ClientProfileModal({
       setViewerOpen(false);
       return;
     }
-    if (initialClientData && initialClientData.client_a_uuid === clientId) {
+    if (initialClientData && initialClientData.client_a_uuid === activeClientId) {
       setClient((prev) => prev || initialClientData);
       const seededClientBasics = {
         client_a_uuid: initialClientData.client_a_uuid,
@@ -1421,15 +1659,15 @@ export default function ClientProfileModal({
         timings: initialClientData.timings ?? null,
         __cachePartial: true,
       };
-      clientCacheRef.current.set(clientId, {
-        ...(clientCacheRef.current.get(clientId) || {}),
+      clientCacheRef.current.set(activeClientId, {
+        ...(clientCacheRef.current.get(activeClientId) || {}),
         ...seededClientBasics,
       });
     }
-    const cachedClient = clientCacheRef.current.get(clientId);
+    const cachedClient = clientCacheRef.current.get(activeClientId);
     if (cachedClient) {
       setClient(cachedClient);
-      setRestaurant(restaurantCacheRef.current.get(cachedClient.client_a_uuid || clientId) || null);
+      setRestaurant(restaurantCacheRef.current.get(cachedClient.client_a_uuid || activeClientId) || null);
       setError(null);
       if (!cachedClient.__cachePartial) {
         setLoading(false);
@@ -1444,12 +1682,12 @@ export default function ClientProfileModal({
         const { data: byUuid, error: e1 } = await supabase
           .from('client')
           .select('*')
-          .eq('client_a_uuid', clientId)
+          .eq('client_a_uuid', activeClientId)
           .maybeSingle();
         if (cancelled) return;
         let finalClient = null;
         if (e1) {
-          const { data: byId } = await supabase.from('client').select('*').eq('id', clientId).maybeSingle();
+          const { data: byId } = await supabase.from('client').select('*').eq('id', activeClientId).maybeSingle();
           if (cancelled) return;
           if (byId) finalClient = byId;
           else setError(e1.message || 'Could not load profile');
@@ -1460,7 +1698,7 @@ export default function ClientProfileModal({
         }
         if (finalClient) {
           setClient(finalClient);
-          clientCacheRef.current.set(clientId, {
+          clientCacheRef.current.set(activeClientId, {
             ...finalClient,
             __cachePartial: false,
           });
@@ -1488,7 +1726,7 @@ export default function ClientProfileModal({
       }
     })();
     return () => { cancelled = true; };
-  }, [visible, clientId]);
+  }, [visible, activeClientId]);
 
   useEffect(() => {
     if (!client) {
@@ -1618,6 +1856,119 @@ export default function ClientProfileModal({
   }, [client?.client_a_uuid]);
 
   useEffect(() => {
+    if (!visible) {
+      nearbySectionOpacity.setValue(0)
+      nearbySectionTranslate.setValue(12)
+      return
+    }
+    nearbySectionOpacity.setValue(0)
+    nearbySectionTranslate.setValue(12)
+    Animated.parallel([
+      Animated.timing(nearbySectionOpacity, {
+        toValue: 1,
+        duration: 320,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: true,
+      }),
+      Animated.spring(nearbySectionTranslate, {
+        toValue: 0,
+        friction: 10,
+        tension: 76,
+        useNativeDriver: true,
+      }),
+    ]).start()
+  }, [visible, activeClientId, nearbySectionOpacity, nearbySectionTranslate]);
+
+  useEffect(() => {
+    if (!visible) {
+      setNearbyPlaces([]);
+      setNearbyRestaurants([]);
+      setNearbyLoading(false);
+      return
+    }
+
+    const originLat = toFiniteNumber(client?.lat)
+    const originLng = toFiniteNumber(client?.long)
+    if (originLat == null || originLng == null) {
+      setNearbyPlaces([])
+      setNearbyRestaurants([])
+      setNearbyLoading(false)
+      return
+    }
+
+    let cancelled = false
+    setNearbyLoading(true)
+
+    ;(async () => {
+      try {
+        const { data, error: nearbyError } = await supabase
+          .from('client')
+          .select('client_a_uuid, business_name, client_image, client_type, rating, lat, long')
+          .limit(140)
+
+        if (nearbyError) throw nearbyError
+        if (cancelled) return
+
+        const currentUuid = client?.client_a_uuid
+        const ranked = (data || [])
+          .map((row) => {
+            const lat = toFiniteNumber(row?.lat)
+            const lng = toFiniteNumber(row?.long)
+            if (lat == null || lng == null) return null
+            if (currentUuid && row?.client_a_uuid === currentUuid) return null
+
+            const distanceKm = haversineKm(originLat, originLng, lat, lng)
+            if (!Number.isFinite(distanceKm)) return null
+
+            const combinedType = `${row?.client_type || ''} ${row?.category || ''}`
+            return {
+              id: row?.client_a_uuid || `${row?.business_name || row?.name || 'spot'}-${lat}-${lng}`,
+              clientId: row?.client_a_uuid || null,
+              title: row?.business_name || 'Nearby spot',
+              imageUri: resolvePublicImageUrl(row?.client_image),
+              rating: row?.rating != null && row?.rating !== '' ? Number(row.rating) : null,
+              category: formatClientCategoryLabel(row?.client_type || ''),
+              location: '',
+              lat,
+              lng,
+              distanceKm,
+              distanceLabel: formatDistanceLabel(distanceKm),
+              isRestaurant: isRestaurantCategory(combinedType),
+            }
+          })
+          .filter(Boolean)
+          .sort((a, b) => a.distanceKm - b.distanceKm)
+
+        const nextRestaurants = []
+        const nextPlaces = []
+
+        for (const item of ranked) {
+          if (item.isRestaurant) {
+            if (nextRestaurants.length < 8) nextRestaurants.push(item)
+          } else if (nextPlaces.length < 8) {
+            nextPlaces.push(item)
+          }
+          if (nextRestaurants.length >= 8 && nextPlaces.length >= 8) break
+        }
+
+        setNearbyRestaurants(nextRestaurants)
+        setNearbyPlaces(nextPlaces)
+      } catch (_) {
+        if (!cancelled) {
+          setNearbyRestaurants([])
+          setNearbyPlaces([])
+        }
+      } finally {
+        if (!cancelled) setNearbyLoading(false)
+      }
+    })()
+
+    return () => {
+      cancelled = true
+    }
+  }, [visible, client?.client_a_uuid, client?.lat, client?.long]);
+
+  useEffect(() => {
     if (tabSegment <= 0) return;
     const hadSegment = prevTabSegment.current > 0;
     const segmentResized = hadSegment && Math.abs(prevTabSegment.current - tabSegment) > 0.5;
@@ -1642,6 +1993,27 @@ export default function ClientProfileModal({
   const handleCloseViewer = useCallback(() => {
     setViewerOpen(false);
   }, []);
+
+  const handleNearbyProfilePress = useCallback((nextClientId) => {
+    if (!nextClientId) return
+    if (nextClientId === activeClientId) return
+    setViewerOpen(false)
+    setShowFullDescription(false)
+    setActiveTab(PROFILE_TAB_POSTS)
+    setScrollY(0)
+    profileScrollRef.current?.scrollTo?.({ y: 0, animated: false })
+    setClient(null)
+    setRestaurant(null)
+    setClientPosts([])
+    setClientReviews([])
+    setNearbyPlaces([])
+    setNearbyRestaurants([])
+    setLoading(true)
+    setPostsLoading(true)
+    setReviewsLoading(true)
+    setNearbyLoading(true)
+    setActiveClientId(nextClientId)
+  }, [activeClientId]);
 
   const handleRequestClose = useCallback(() => {
     if (closeInFlightRef.current) return
@@ -1727,6 +2099,7 @@ export default function ClientProfileModal({
   const foodTypes = parseJsonField(restaurant?.food_type);
   const speciality = restaurant?.speciality;
   const isFoodTruck = restaurant?.isfoodtruck === true;
+  const isCurrentProfileRestaurant = isRestaurantCategory(`${client?.client_type || ''} ${category || ''}`)
 
   const GRID_COLS = 3;
   const GALLERY_H_PAD = 14;
@@ -1832,6 +2205,7 @@ export default function ClientProfileModal({
           </View>
         ) : client ? (
           <ScrollView
+            ref={profileScrollRef}
             style={{ flex: 1 }}
             showsVerticalScrollIndicator={false}
             scrollEventThrottle={16}
@@ -2115,6 +2489,166 @@ export default function ClientProfileModal({
                   )}
                 </View>
               )}
+
+              <Animated.View
+                style={[
+                  styles.nearbySection,
+                  {
+                    paddingBottom: (insets?.bottom ?? 0) + 22,
+                    opacity: nearbySectionOpacity,
+                    transform: [{ translateY: nearbySectionTranslate }],
+                  },
+                ]}
+              >
+                <View style={styles.nearbyDividerWrap}>
+                  <View style={styles.nearbyDividerLine}>
+                    <LinearGradient
+                      colors={['transparent', 'rgba(212,175,55,0.8)', 'transparent']}
+                      start={{ x: 0, y: 0.5 }}
+                      end={{ x: 1, y: 0.5 }}
+                      style={StyleSheet.absoluteFill}
+                    />
+                  </View>
+                  <View style={styles.nearbyDividerCenter}>
+                    <Ionicons name="compass-outline" size={14} color={isDark ? GOLD_LIGHT : '#8A6A14'} />
+                  </View>
+                </View>
+                <Text style={styles.nearbyEyebrow}>Discover More</Text>
+                <View style={styles.nearbyHeaderRow}>
+                  <View style={styles.nearbyHeaderIconWrap}>
+                    <Ionicons name="compass-outline" size={16} color={isDark ? GOLD_LIGHT : '#8A6A14'} />
+                  </View>
+                  <Text style={styles.nearbyTitle}>Nearby</Text>
+                </View>
+                <Text style={styles.nearbySubtitle}>
+                  Explore nearby places and restaurants around this profile
+                </Text>
+
+                {nearbyLoading ? (
+                  <View style={styles.nearbyLoadingRow}>
+                    <ActivityIndicator size="small" color={COLORS.primary} />
+                    <Text style={styles.nearbyCardMetaText}>Finding nearby recommendations...</Text>
+                  </View>
+                ) : null}
+
+                {!nearbyLoading && nearbyPlaces.length === 0 && nearbyRestaurants.length === 0 ? (
+                  <View style={styles.nearbyEmpty}>
+                    <Text style={styles.nearbyEmptyText}>No nearby places or restaurants found</Text>
+                  </View>
+                ) : null}
+
+                {!nearbyLoading && (isCurrentProfileRestaurant ? nearbyRestaurants.length > 0 : nearbyPlaces.length > 0) ? (
+                  <>
+                    <Text style={styles.nearbyGroupTitle}>{isCurrentProfileRestaurant ? 'Restaurants' : 'Places'}</Text>
+                    <ScrollView
+                      horizontal
+                      showsHorizontalScrollIndicator={false}
+                      nestedScrollEnabled
+                      contentContainerStyle={styles.nearbyScrollContent}
+                    >
+                      {(isCurrentProfileRestaurant ? nearbyRestaurants : nearbyPlaces).map((item, idx) => (
+                        <NearbyCardAnimated
+                          key={`${item.id}-${isCurrentProfileRestaurant ? 'rest' : 'place'}-${idx}`}
+                          idx={idx}
+                        >
+                          <TouchableOpacity
+                            style={styles.nearbyCard}
+                            activeOpacity={0.88}
+                            onPress={() => handleNearbyProfilePress(item.clientId)}
+                            accessibilityRole="button"
+                            accessibilityLabel={`Open ${item.title} profile`}
+                          >
+                            <View style={styles.nearbyCardImageWrap}>
+                              {item.imageUri ? (
+                                <CachedImage source={{ uri: item.imageUri }} style={styles.nearbyCardImage} resizeMode="cover" recyclingKey={item.imageUri} />
+                              ) : (
+                                <View style={styles.nearbyCardFallback}>
+                                  <Ionicons
+                                    name={isCurrentProfileRestaurant ? 'restaurant-outline' : 'location-outline'}
+                                    size={28}
+                                    color={COLORS.textMuted}
+                                  />
+                                </View>
+                              )}
+                            </View>
+                            <View style={styles.nearbyCardBody}>
+                              <Text style={styles.nearbyCardTitle} numberOfLines={2}>{item.title}</Text>
+                              <View style={styles.nearbyCardMetaRow}>
+                                <Ionicons name="navigate-outline" size={13} color={COLORS.textSecondary} />
+                                <Text style={styles.nearbyCardMetaText} numberOfLines={1}>{item.distanceLabel}</Text>
+                              </View>
+                              {item.rating != null ? (
+                                <View style={styles.nearbyCardMetaRow}>
+                                  <Ionicons name="star" size={12} color={GOLD} />
+                                  <Text style={styles.nearbyCardMetaText} numberOfLines={1}>
+                                    {Number(item.rating).toFixed(1)}
+                                  </Text>
+                                </View>
+                              ) : null}
+                            </View>
+                          </TouchableOpacity>
+                        </NearbyCardAnimated>
+                      ))}
+                    </ScrollView>
+                  </>
+                ) : null}
+
+                {!nearbyLoading && (isCurrentProfileRestaurant ? nearbyPlaces.length > 0 : nearbyRestaurants.length > 0) ? (
+                  <>
+                    <Text style={styles.nearbyGroupTitle}>{isCurrentProfileRestaurant ? 'Places' : 'Restaurants'}</Text>
+                    <ScrollView
+                      horizontal
+                      showsHorizontalScrollIndicator={false}
+                      nestedScrollEnabled
+                      contentContainerStyle={styles.nearbyScrollContent}
+                    >
+                      {(isCurrentProfileRestaurant ? nearbyPlaces : nearbyRestaurants).map((item, idx) => (
+                        <NearbyCardAnimated
+                          key={`${item.id}-${isCurrentProfileRestaurant ? 'place' : 'rest'}-${idx}`}
+                          idx={idx}
+                        >
+                          <TouchableOpacity
+                            style={styles.nearbyCard}
+                            activeOpacity={0.88}
+                            onPress={() => handleNearbyProfilePress(item.clientId)}
+                            accessibilityRole="button"
+                            accessibilityLabel={`Open ${item.title} profile`}
+                          >
+                            <View style={styles.nearbyCardImageWrap}>
+                              {item.imageUri ? (
+                                <CachedImage source={{ uri: item.imageUri }} style={styles.nearbyCardImage} resizeMode="cover" recyclingKey={item.imageUri} />
+                              ) : (
+                                <View style={styles.nearbyCardFallback}>
+                                  <Ionicons
+                                    name={isCurrentProfileRestaurant ? 'location-outline' : 'restaurant-outline'}
+                                    size={28}
+                                    color={COLORS.textMuted}
+                                  />
+                                </View>
+                              )}
+                            </View>
+                            <View style={styles.nearbyCardBody}>
+                              <Text style={styles.nearbyCardTitle} numberOfLines={2}>{item.title}</Text>
+                              <View style={styles.nearbyCardMetaRow}>
+                                <Ionicons name="navigate-outline" size={13} color={COLORS.textSecondary} />
+                                <Text style={styles.nearbyCardMetaText} numberOfLines={1}>{item.distanceLabel}</Text>
+                              </View>
+                              {item.rating != null ? (
+                                <View style={styles.nearbyCardMetaRow}>
+                                  <Ionicons name="star" size={12} color={GOLD} />
+                                  <Text style={styles.nearbyCardMetaText} numberOfLines={1}>
+                                    {Number(item.rating).toFixed(1)}
+                                  </Text>
+                                </View>
+                              ) : null}
+                            </View>
+                          </TouchableOpacity>
+                        </NearbyCardAnimated>
+                      ))}
+                    </ScrollView>
+                  </>
+                ) : null}
+              </Animated.View>
             </Animated.View>
           </ScrollView>
         ) : null}

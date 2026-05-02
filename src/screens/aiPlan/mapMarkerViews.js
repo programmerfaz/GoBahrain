@@ -60,52 +60,35 @@ export function AnimatedPlaceMarker({
   hideLabel = false,
   selectedGlow = false,
 }) {
-  const scaleAnim = useRef(new Animated.Value(0)).current;
+  const scaleAnim = useRef(new Animated.Value(1)).current;
   const opacityAnim = useRef(new Animated.Value(0)).current;
   const pulseRing = useRef(new Animated.Value(0)).current;
   const breatheScale = useRef(new Animated.Value(1)).current;
 
-  /** Snappy overshoot pop — used on mount and on each sequential plan reveal step (syncs with map pan). */
-  const playMarkerPop = useCallback(() => {
-    scaleAnim.stopAnimation()
+  /** Soft fade-in for marker entrance/reveal (no pop/overshoot). */
+  const playMarkerFadeIn = useCallback(() => {
     opacityAnim.stopAnimation()
-    scaleAnim.setValue(0)
+    scaleAnim.setValue(1)
     opacityAnim.setValue(0)
-    Animated.parallel([
-      Animated.timing(opacityAnim, {
-        toValue: 1,
-        duration: 220,
-        easing: Easing.out(Easing.cubic),
-        useNativeDriver: true,
-      }),
-      Animated.sequence([
-        Animated.spring(scaleAnim, {
-          toValue: 1.14,
-          friction: 5,
-          tension: 260,
-          useNativeDriver: true,
-        }),
-        Animated.spring(scaleAnim, {
-          toValue: 1,
-          friction: 7,
-          tension: 200,
-          useNativeDriver: true,
-        }),
-      ]),
-    ]).start()
+    Animated.timing(opacityAnim, {
+      toValue: 1,
+      duration: 320,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: true,
+    }).start()
   }, [scaleAnim, opacityAnim])
 
-  // Plan build: pop when this stop becomes the newest visible pin (matches camera pan in useAIPlanScreenOuter).
+  // Plan build: fade when this stop becomes the newest visible pin (matches camera pan in useAIPlanScreenOuter).
   useEffect(() => {
     if (revealPopStep == null) return
     if (revealPopStep !== mk.idx + 1) return
-    playMarkerPop()
-  }, [revealPopStep, mk.idx, playMarkerPop])
+    playMarkerFadeIn()
+  }, [revealPopStep, mk.idx, playMarkerFadeIn])
 
   // Pre-plan markers, or plan pins when not in sequential reveal — one-time entrance (mount only).
   useEffect(() => {
     if (revealPopStep != null) return
-    playMarkerPop()
+    playMarkerFadeIn()
     // revealPopStep intentionally read only at mount so pins do not all re-pop when reveal ends.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -138,7 +121,8 @@ export function AnimatedPlaceMarker({
   const ringScale = pulseRing.interpolate({ inputRange: [0, 1], outputRange: [1, 1.6] });
   const ringOpacity = pulseRing.interpolate({ inputRange: [0, 0.6, 1], outputRange: [0.6, 0.2, 0] });
   const combinedScale = Animated.multiply(scaleAnim, breatheScale);
-  const showLabel = !hideLabel && zoomScale >= 0.55;
+  const shouldPrioritizeLabel = isCurrent || selectedGlow
+  const showLabel = !hideLabel && zoomScale >= 0.78 && shouldPrioritizeLabel
 
   const mkCat = mapMarkerFilterCategoryKey(mk);
   const pinIcon = mkCat === 'restaurant' ? 'restaurant' : mkCat === 'event' ? 'calendar' : 'location';
@@ -151,7 +135,7 @@ export function AnimatedPlaceMarker({
       {showRadius && (
         <Circle
           center={{ latitude: mk.lat, longitude: mk.lng }}
-          radius={260}
+          radius={170}
           fillColor={`${accent}0D`}
           strokeColor={`${accent}2E`}
           strokeWidth={1.5}
@@ -210,7 +194,7 @@ export function AnimatedPlaceMarker({
                   ) : (
                     <>
                       <View style={[styles.animatedMarkerIconBg, { backgroundColor: accent }]}>
-                        <Ionicons name={pinIcon} size={18} color="#FFF" />
+                        <Ionicons name={pinIcon} size={14} color="#FFF" />
                       </View>
                       {showBadge ? (
                         <View style={[styles.animatedMarkerBadge, { backgroundColor: accent }]}>

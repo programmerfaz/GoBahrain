@@ -52,6 +52,7 @@ import {
   fetchRestaurants,
   fetchBreakfastSpots,
   fetchEvents,
+  resolvePlanRetrievalBuckets,
   generateDayPlan,
   fetchClientsWithLocation,
   enhancePlanStopAtIndex,
@@ -132,23 +133,18 @@ import { useAIPlanScreenMiddle } from './useAIPlanScreenMiddle'
 
 export function useAIPlanScreenOuter() {
   const mid = useAIPlanScreenMiddle()
+  const [enhancingIndices, setEnhancingIndices] = useState(() => new Set())
   const getSelectedPreferenceLabels = useCallback(() => {
-    const selected = mid.selectedPreferences
+    return mid.selectedPreferences
       .map((id) => PREFERENCES.find((p) => p.id === id)?.label)
       .filter(Boolean)
-    const custom = (mid.customPreferenceInput || '').trim()
-    if (custom && !selected.includes(custom)) selected.push(custom)
-    return selected
-  }, [mid.selectedPreferences, mid.customPreferenceInput])
+  }, [mid.selectedPreferences])
 
   const getSelectedFoodLabels = useCallback(() => {
-    const selected = mid.selectedFoodCategories
+    return mid.selectedFoodCategories
       .map((id) => FOOD_CATEGORIES.find((f) => f.id === id)?.label)
       .filter(Boolean)
-    const custom = (mid.customFoodInput || '').trim()
-    if (custom && !selected.includes(custom)) selected.push(custom)
-    return selected
-  }, [mid.selectedFoodCategories, mid.customFoodInput])
+  }, [mid.selectedFoodCategories])
   const handleCopyShareText = useCallback(async () => {
     const { message } = formatPlanShareMessage(mid.dayPlan);
     try {
@@ -167,7 +163,8 @@ export function useAIPlanScreenOuter() {
 
   const handleEnhanceStop = useCallback(async (planIndex) => {
     if (planIndex == null || planIndex < 0) return
-    if (mid.enhancingIndex !== null || mid.loading) return
+    if (mid.loading) return
+    if (enhancingIndices.has(planIndex)) return
     if (mid.planReadOnly) {
       Alert.alert('View only', 'This plan is shared for viewing only.')
       return
@@ -176,7 +173,11 @@ export function useAIPlanScreenOuter() {
       Alert.alert('Unavailable', 'Build a plan first so we can swap this stop.')
       return
     }
-    mid.setEnhancingIndex(planIndex)
+    setEnhancingIndices((prev) => {
+      const next = new Set(prev)
+      next.add(planIndex)
+      return next
+    })
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {})
     const prevKeys = mid.dayPlan.map((x) => x._planRowKey)
     const draft = [...mid.dayPlan]
@@ -212,12 +213,16 @@ export function useAIPlanScreenOuter() {
     } catch (e) {
       Alert.alert('Enhance failed', e?.message || 'Please try again.')
     } finally {
-      mid.setEnhancingIndex(null)
+      setEnhancingIndices((prev) => {
+        const next = new Set(prev)
+        next.delete(planIndex)
+        return next
+      })
     }
   }, [
+    enhancingIndices,
     mid.dayPlan,
     mid.pineconeMatches,
-    mid.enhancingIndex,
     mid.loading,
     mid.planReadOnly,
     mid.generalLabels,
@@ -409,7 +414,10 @@ export function useAIPlanScreenOuter() {
 
       const prefsKey = prefLabels.join('|');
       const personaKey = retrievalPersonaCacheKey(mid.preferences?.profileSummary)
-      const retrievalOpts = { profileNarrative: mid.preferences?.profileSummary || '' }
+      const retrievalOpts = {
+        profileNarrative: mid.preferences?.profileSummary || '',
+        profileActivity: mid.activityLabels,
+      }
       const cached = mid.prefetchRef.current;
 
       let places;
@@ -438,12 +446,7 @@ export function useAIPlanScreenOuter() {
           restaurantsResult,
           breakfastResult,
           eventsResult,
-        ] = await Promise.all([
-          fetchPlaces(prefLabels, retrievalOpts),
-          fetchRestaurants(foodLabels, retrievalOpts),
-          fetchBreakfastSpots(retrievalOpts),
-          fetchEvents(prefLabels, retrievalOpts),
-        ]);
+        ] = await resolvePlanRetrievalBuckets(prefLabels, foodLabels, retrievalOpts);
         places = placesResult;
         restaurants = restaurantsResult;
         breakfastSpots = breakfastResult;
@@ -459,6 +462,20 @@ export function useAIPlanScreenOuter() {
       mid.setLoadingStatus('Shortlisting restaurants & experiences for you…');
       await new Promise((res) => setTimeout(res, 380));
       mid.setLoadingStatus('Khalid is crafting your perfect day…');
+      const lastSavedPlanSpots = (
+        Array.isArray(mid.savedPlansList) && Array.isArray(mid.savedPlansList[0]?.plan_data)
+          ? mid.savedPlansList[0].plan_data
+          : []
+      )
+        .map((row) => row?.spot)
+        .filter((name) => typeof name === 'string' && name.trim().length > 0)
+        .slice(-80)
+      const recentVisitedSpots = [
+        ...lastSavedPlanSpots,
+        ...(Array.isArray(mid.dayPlan) ? mid.dayPlan : []).map((row) => row?.spot),
+      ]
+        .filter((name) => typeof name === 'string' && name.trim().length > 0)
+        .slice(-80);
       const plan = await generateDayPlan(places, restaurants, breakfastSpots, events, prefLabels, foodLabels, {
         profileGeneral: mid.generalLabels,
         profileActivity: mid.activityLabels,
@@ -468,10 +485,23 @@ export function useAIPlanScreenOuter() {
         travelExplore: mid.travelExploreId,
         originLat,
         originLng,
+        strictAvoidSpots: lastSavedPlanSpots,
+        recentVisitedSpots,
       });
       generatedPlan = plan;
+      const initialKeyedPlan = attachPlanRowKeys(plan);
+      mid.setDayPlan(initialKeyedPlan);
       const enriched = await enrichPlanWithClientData(plan, allMatches, mid.allPlaceMarkers);
-      mid.setDayPlan(attachPlanRowKeys(enriched));
+      const enrichedWithStableKeys = attachPlanRowKeys(
+        enriched.map((item, idx) => ({
+          ...item,
+          _planRowKey: initialKeyedPlan[idx]?._planRowKey || item?._planRowKey,
+        })),
+      );
+      mid.setDayPlan(enrichedWithStableKeys);
+      await mid.autoSavePlanSilently(enrichedWithStableKeys).catch((e) =>
+        console.warn('[AI Plan] auto save failed:', e?.message),
+      )
       mid.setError(null);
 
       // Debug markers
@@ -545,6 +575,10 @@ export function useAIPlanScreenOuter() {
   );
 
   const handleBuildDayQuickFindGoBack = useCallback(() => {
+    if (mid.buildDayModalPhase === 'joinCode') {
+      mid.setBuildDayModalPhase('menu');
+      return;
+    }
     if (mid.buildDayModalPhase === 'quickSub') {
       mid.setBuildDayModalPhase('quickKind');
       mid.setQuickFindKind(null);
@@ -586,6 +620,19 @@ export function useAIPlanScreenOuter() {
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
   }, [mid]);
 
+  const handleBuildDayPickEnterCode = useCallback(() => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+    mid.setBuildDayModalPhase('joinCode');
+  }, [mid]);
+
+  const handleBuildDaySubmitJoinCode = useCallback(() => {
+    const code = String(mid.joinCodeInput || '').trim().toUpperCase();
+    if (!code) return;
+    mid.setShowBuildModePickerModal(false);
+    mid.setBuildDayModalPhase('menu');
+    mid.applyShareCodeFromString(code);
+  }, [mid]);
+
   const dismissQuickFindResult = useCallback(() => {
     mid.setDayPlan(null);
     mid.setQuickFindMapOnly(false);
@@ -616,7 +663,10 @@ export function useAIPlanScreenOuter() {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
       try {
         let matches = [];
-        const retrievalOpts = { profileNarrative: mid.preferences?.profileSummary || '' }
+        const retrievalOpts = {
+          profileNarrative: mid.preferences?.profileSummary || '',
+          profileActivity: mid.activityLabels,
+        }
         if (kind === 'place') {
           matches = await fetchPlaces([label], retrievalOpts);
         } else if (kind === 'restaurant') {
@@ -879,6 +929,7 @@ export function useAIPlanScreenOuter() {
 
   return {
     ...mid,
+    enhancingIndices,
     regionThrottleRef,
     panResponder,
     showcaseMarkerAccent,
@@ -898,6 +949,8 @@ export function useAIPlanScreenOuter() {
     handleBuildDayQuickFindSelectKind,
     handleBuildDayQuickFindGoBack,
     handleBuildDayPickCustomPlan,
+    handleBuildDayPickEnterCode,
+    handleBuildDaySubmitJoinCode,
     handleQuickFindPickSubCategory,
     dismissQuickFindResult,
     closeBuildModePickerModal,

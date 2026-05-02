@@ -16,6 +16,7 @@ import CommunitiesScreen from './src/screens/CommunitiesScreen'
 import CommunityPostDetailScreen from './src/screens/CommunityPostDetailScreen'
 import ProfileScreen from './src/screens/ProfileScreen'
 import MyReviewsScreen from './src/screens/MyReviewsScreen'
+import SavedPlansScreen from './src/screens/SavedPlansScreen'
 import ARScreen from './src/screens/ARScreen'
 import OnboardingScreen from './src/screens/OnboardingScreen'
 import BottomControlBar from './src/components/BottomControlBar'
@@ -97,6 +98,14 @@ function ProfileStackNavigator() {
           title: 'My reviews',
         }}
       />
+      <ProfileStack.Screen
+        name="SavedPlans"
+        component={SavedPlansScreen}
+        options={{
+          headerShown: true,
+          title: 'Saved plans',
+        }}
+      />
     </ProfileStack.Navigator>
   )
 }
@@ -165,18 +174,9 @@ function AppContent() {
 }
 
 export default function App() {
-  const [fontsLoaded, fontError] = useFonts({
+  useFonts({
     [BRAND_WORDMARK_FONT]: require('./assets/fonts/RusticRoadway.otf'),
   })
-
-  if (!fontsLoaded && !fontError) {
-    if (Platform.OS === 'web') {
-      return (
-        <GestureHandlerRootView style={{ flex: 1, backgroundColor: '#F8FAFC' }} />
-      )
-    }
-    return null
-  }
 
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>

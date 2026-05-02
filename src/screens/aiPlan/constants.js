@@ -54,7 +54,7 @@ export const getPlanSheetBottomPadding = (insets) => {
 export const SHEET_VISIBLE_PEEK = 0.28
 export const SHEET_VISIBLE_MID = 0.75
 /** Fraction of screen height for the sheet (list + masthead). Higher = taller plan container */
-export const SHEET_VISIBLE_EXPANDED = 0.94
+export const SHEET_VISIBLE_EXPANDED = 0.92
 
 export const SHEET_HEIGHT = SCREEN_HEIGHT * SHEET_VISIBLE_EXPANDED
 export const SHEET_TOP_EXPANDED = SCREEN_HEIGHT - SHEET_HEIGHT
@@ -138,5 +138,8 @@ export const STOP_DETAIL_SWIPE_PEEK_RANGE = SCREEN_WIDTH * 0.34
 export const STOP_DETAIL_EXIT_X = SCREEN_WIDTH * 1.12
 export const STOP_DETAIL_SWIPE_SNAP_BACK = { damping: 19, stiffness: 260, mass: 0.72 }
 export const STOP_DETAIL_SWIPE_COMMIT = { damping: 17, stiffness: 300, mass: 0.58 }
+
+export const PLAN_MODAL_MAX_PREFERENCES = 5
+export const PLAN_MODAL_MAX_FOOD_CATEGORIES = 3
 
 

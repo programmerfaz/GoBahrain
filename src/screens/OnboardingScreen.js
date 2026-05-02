@@ -90,6 +90,14 @@ const FloatingBubble = ({ size, color, startX, startY, duration, delay }) => {
 
 const ONBOARDING_QUESTIONS = [
   {
+    key: 'profile-age',
+    type: 'age-slider',
+    title: 'How old are you?',
+    subtitle: 'We tune recommendations and pacing for your age range.',
+    icon: 'calendar-outline',
+    minSelected: 1,
+  },
+  {
     key: 'general-companion',
     type: 'general-group',
     groupKey: 'companion',
@@ -100,33 +108,32 @@ const ONBOARDING_QUESTIONS = [
     selectionMode: 'single',
   },
   {
-    key: 'general-pace',
-    type: 'general-group',
-    groupKey: 'pace',
-    title: 'How should your day feel?',
-    subtitle: 'Relaxed, balanced, or packed — this sets your pacing.',
-    icon: 'speedometer-outline',
-    minSelected: 1,
-    selectionMode: 'single',
-  },
-  {
     key: 'general-interests',
     type: 'general-group',
     groupKey: 'interests',
     title: 'Which experiences light you up?',
-    subtitle: 'Pick 3–5. We build the day around these.',
+    subtitle: 'Pick 3–5. This helps us understand your travel personality.',
     icon: 'sparkles-outline',
     minSelected: 3,
-    maxSelected: 6,
+    maxSelected: 5,
     selectionMode: 'multi',
+    optionIds: [
+      'foodie',
+      'adventure',
+      'instagram-spots',
+      'local-authentic',
+      'family-friendly',
+      'quiet-peaceful',
+      'social-lively',
+    ],
   },
   {
-    key: 'general-planning',
+    key: 'general-pace',
     type: 'general-group',
-    groupKey: 'planning',
-    title: 'How do you like your plans structured?',
-    subtitle: 'Choose your preferred planning style.',
-    icon: 'list-outline',
+    groupKey: 'pace',
+    title: 'How do you like your day to feel?',
+    subtitle: 'We tune itinerary intensity around your pace.',
+    icon: 'speedometer-outline',
     minSelected: 1,
     selectionMode: 'single',
   },
@@ -140,7 +147,22 @@ const ONBOARDING_QUESTIONS = [
     minSelected: 1,
     selectionMode: 'single',
   },
+  {
+    key: 'general-planning',
+    type: 'general-group',
+    groupKey: 'planning',
+    title: 'How do you like plans to be organized?',
+    subtitle: 'This helps us decide between flexible and structured flow.',
+    icon: 'list-outline',
+    minSelected: 1,
+    selectionMode: 'single',
+  },
 ]
+
+const AGE_MIN = 13
+const AGE_MAX = 80
+const AGE_WHEEL_ITEM_HEIGHT = 44
+const AGE_OPTIONS = Array.from({ length: AGE_MAX - AGE_MIN + 1 }, (_, idx) => AGE_MIN + idx)
 
 const ChipItem = ({ item, selected, onPress, isDark, isGrid }) => {
   const popAnim = useRef(new Animated.Value(1)).current
@@ -905,9 +927,11 @@ export default function OnboardingScreen() {
   const { width = 375 } = useWindowDimensions()
   const [generalIds, setGeneralIds] = useState([])
   const [foodIds, setFoodIds] = useState([])
+  const [age, setAge] = useState(28)
   const [step, setStep] = useState(0)
   const [finishPhase, setFinishPhase] = useState(null)
   const [craftingError, setCraftingError] = useState(null)
+  const ageWheelRef = useRef(null)
   const rootFade = useRef(new Animated.Value(1)).current
   const rootLift = useRef(new Animated.Value(0)).current
 
@@ -1053,16 +1077,16 @@ export default function OnboardingScreen() {
       generalIds,
       activityIds,
       foodIds,
-      profileAnswers: {},
+      profileAnswers: { age },
     })
     await setPreferences({
       generalIds,
       activityIds,
       foodIds,
-      profileAnswers: {},
+      profileAnswers: { age },
       profileSummary,
     })
-  }, [generalIds, foodIds, setPreferences])
+  }, [generalIds, foodIds, age, setPreferences])
 
   const runFinishWork = useCallback(async () => {
     setCraftingError(null)
@@ -1159,6 +1183,8 @@ export default function OnboardingScreen() {
 
   const selectedCount = currentStep?.type === 'general-group'
     ? generalIds.filter((id) => GENERAL_PREFERENCES.some((p) => p.group === currentStep.groupKey && p.id === id)).length
+    : currentStep?.type === 'age-slider'
+      ? 1
     : currentStep?.type === 'food'
       ? foodIds.length
       : 0
@@ -1174,11 +1200,23 @@ export default function OnboardingScreen() {
   const bgColors = isDark ? gradients.heroDark : gradients.heroLight
   const optionsForCurrentStep = useMemo(() => {
     if (currentStep?.type === 'general-group') {
-      return GENERAL_PREFERENCES.filter((p) => p.group === currentStep.groupKey)
+      const grouped = GENERAL_PREFERENCES.filter((p) => p.group === currentStep.groupKey)
+      if (Array.isArray(currentStep.optionIds) && currentStep.optionIds.length > 0) {
+        return grouped.filter((p) => currentStep.optionIds.includes(p.id))
+      }
+      return grouped
     }
     if (currentStep?.type === 'food') return FOOD_CATEGORIES
     return []
   }, [currentStep, GENERAL_PREFERENCES, FOOD_CATEGORIES])
+
+  useEffect(() => {
+    if (currentStep?.type !== 'age-slider') return
+    const index = Math.max(0, AGE_OPTIONS.indexOf(age))
+    requestAnimationFrame(() => {
+      ageWheelRef.current?.scrollTo({ y: index * AGE_WHEEL_ITEM_HEIGHT, animated: false })
+    })
+  }, [currentStep?.type])
 
   return (
     <Animated.View
@@ -1248,44 +1286,101 @@ export default function OnboardingScreen() {
           </Animated.View>
 
           <View style={[s.questionPanel, { backgroundColor: 'transparent', borderColor: 'transparent' }]}>
-            <View style={s.chipList}>
-              {optionsForCurrentStep.map((p, idx) => {
-                const isGrid = optionsForCurrentStep.length > 6
-                return (
-                  <FadeInView
-                    key={`${currentStep.key}-${p.id}`}
-                    delay={idx * 15}
-                    from={6}
-                    duration={250}
-                    springUp
-                    style={isGrid ? { width: '31%' } : { width: '100%' }}
+            {currentStep?.type === 'age-slider' ? (
+              <View style={[s.ageSliderWrap, { backgroundColor: C.surface, borderColor: C.panelBorder }]}>
+                <View style={[s.ageValuePill, { backgroundColor: `${C.primary}18` }]}>
+                  <Text style={[s.ageValueText, { color: C.primary }]}>{age} years old</Text>
+                </View>
+                <View style={s.ageWheelShell}>
+                  <ScrollView
+                    ref={ageWheelRef}
+                    style={s.ageWheel}
+                    contentContainerStyle={s.ageWheelContent}
+                    showsVerticalScrollIndicator={false}
+                    decelerationRate="fast"
+                    snapToInterval={AGE_WHEEL_ITEM_HEIGHT}
+                    snapToAlignment="start"
+                    onMomentumScrollEnd={(event) => {
+                      const offsetY = event.nativeEvent.contentOffset.y
+                      const index = Math.round(offsetY / AGE_WHEEL_ITEM_HEIGHT)
+                      const clamped = Math.max(0, Math.min(AGE_OPTIONS.length - 1, index))
+                      setAge(AGE_OPTIONS[clamped])
+                    }}
+                    onScrollEndDrag={(event) => {
+                      const offsetY = event.nativeEvent.contentOffset.y
+                      const index = Math.round(offsetY / AGE_WHEEL_ITEM_HEIGHT)
+                      const clamped = Math.max(0, Math.min(AGE_OPTIONS.length - 1, index))
+                      setAge(AGE_OPTIONS[clamped])
+                    }}
+                    accessibilityLabel="Age wheel picker"
                   >
-                    <ChipItem
-                      item={p}
-                      isGrid={isGrid}
-                      selected={
-                        currentStep?.type === 'general-group'
-                          ? generalIds.includes(p.id)
-                          : foodIds.includes(p.id)
-                      }
-                      onPress={() =>
-                        currentStep?.type === 'general-group'
-                          ? toggleGeneral(p.id, currentStep.groupKey, currentStep.selectionMode, currentStep.maxSelected)
-                          : toggleFood(p.id, currentStep.selectionMode, currentStep.maxSelected)
-                      }
-                      isDark={isDark}
-                    />
-                  </FadeInView>
-                )
-              })}
-            </View>
+                    {AGE_OPTIONS.map((value) => {
+                      const selected = value === age
+                      return (
+                        <TouchableOpacity
+                          key={`age-${value}`}
+                          style={s.ageWheelItem}
+                          onPress={() => {
+                            const idx = value - AGE_MIN
+                            setAge(value)
+                            ageWheelRef.current?.scrollTo({ y: idx * AGE_WHEEL_ITEM_HEIGHT, animated: true })
+                          }}
+                          activeOpacity={0.75}
+                        >
+                          <Text style={[s.ageWheelItemText, { color: selected ? C.primary : C.textMuted }, selected && s.ageWheelItemTextSelected]}>
+                            {value}
+                          </Text>
+                        </TouchableOpacity>
+                      )
+                    })}
+                  </ScrollView>
+                  <View style={[s.ageWheelFocusRow, { borderColor: `${C.primary}45`, backgroundColor: `${C.primary}10` }]} pointerEvents="none" />
+                </View>
+                <View style={s.ageRangeRow}>
+                  <Text style={[s.ageRangeText, { color: C.textMuted }]}>{AGE_MIN}</Text>
+                  <Text style={[s.ageRangeText, { color: C.textMuted }]}>{AGE_MAX}</Text>
+                </View>
+              </View>
+            ) : (
+              <View style={s.chipList}>
+                {optionsForCurrentStep.map((p, idx) => {
+                  const isGrid = optionsForCurrentStep.length > 6
+                  return (
+                    <FadeInView
+                      key={`${currentStep.key}-${p.id}`}
+                      delay={idx * 15}
+                      from={6}
+                      duration={250}
+                      springUp
+                      style={isGrid ? { width: '31%' } : { width: '100%' }}
+                    >
+                      <ChipItem
+                        item={p}
+                        isGrid={isGrid}
+                        selected={
+                          currentStep?.type === 'general-group'
+                            ? generalIds.includes(p.id)
+                            : foodIds.includes(p.id)
+                        }
+                        onPress={() =>
+                          currentStep?.type === 'general-group'
+                            ? toggleGeneral(p.id, currentStep.groupKey, currentStep.selectionMode, currentStep.maxSelected)
+                            : toggleFood(p.id, currentStep.selectionMode, currentStep.maxSelected)
+                        }
+                        isDark={isDark}
+                      />
+                    </FadeInView>
+                  )
+                })}
+              </View>
+            )}
           </View>
         </Animated.View>
 
         {!finishPhase ? (
         <Animated.View style={[s.footer, { transform: [{ translateY: ctaLift }] }]}>
           <View style={s.footerTop}>
-            {selectedCount > 0 && (
+            {selectedCount > 0 && currentStep?.type !== 'age-slider' && (
               <Animated.View 
                 style={[s.countBadge, { backgroundColor: `${C.primary}15` }]}
               >
@@ -1504,6 +1599,71 @@ const s = StyleSheet.create({
     fontWeight: '600',
     letterSpacing: 0.1,
     textAlign: 'center',
+  },
+  ageSliderWrap: {
+    width: '100%',
+    borderWidth: 1,
+    borderRadius: 20,
+    paddingHorizontal: 16,
+    paddingVertical: 18,
+    gap: 12,
+  },
+  ageValuePill: {
+    alignSelf: 'center',
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 999,
+  },
+  ageValueText: {
+    fontSize: 17,
+    fontWeight: '700',
+    letterSpacing: -0.2,
+  },
+  ageWheelShell: {
+    width: '100%',
+    height: AGE_WHEEL_ITEM_HEIGHT * 5,
+    borderRadius: 16,
+    overflow: 'hidden',
+    position: 'relative',
+  },
+  ageWheel: {
+    flex: 1,
+  },
+  ageWheelContent: {
+    paddingVertical: AGE_WHEEL_ITEM_HEIGHT * 2,
+  },
+  ageWheelItem: {
+    height: AGE_WHEEL_ITEM_HEIGHT,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  ageWheelItemText: {
+    fontSize: 21,
+    fontWeight: '600',
+    letterSpacing: -0.2,
+  },
+  ageWheelItemTextSelected: {
+    fontSize: 24,
+    fontWeight: '800',
+    letterSpacing: -0.35,
+  },
+  ageWheelFocusRow: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    top: AGE_WHEEL_ITEM_HEIGHT * 2,
+    height: AGE_WHEEL_ITEM_HEIGHT,
+    borderTopWidth: 1,
+    borderBottomWidth: 1,
+  },
+  ageRangeRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingHorizontal: 4,
+  },
+  ageRangeText: {
+    fontSize: 13,
+    fontWeight: '600',
   },
   footer: {
     paddingHorizontal: 24,

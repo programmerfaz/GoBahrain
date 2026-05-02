@@ -2,7 +2,6 @@ import React from 'react'
 import {
   StyleSheet,
   Text,
-  TextInput,
   View,
   Animated,
   PanResponder,
@@ -33,7 +32,6 @@ import MapView from 'react-native-maps'
 import { Ionicons } from '@expo/vector-icons'
 import DraggableFlatList, { ScaleDecorator } from 'react-native-draggable-flatlist'
 import { openGoogleMapsDirections } from '../../utils/googleMapsDirections'
-import { colors as themeColors } from '../../theme/designTokens'
 import styles from '../AIPlanScreen.styles'
 import ClientProfileModal from '../../components/ClientProfileModal'
 import {
@@ -45,6 +43,7 @@ import {
   getPlanSheetBottomPadding,
   PREFERENCES,
   FOOD_CATEGORIES,
+  PLAN_MODAL_MAX_FOOD_CATEGORIES,
   STOP_DIALOG_SLIDE_WIDTH,
   STOP_DIALOG_IMAGE_H,
   STOP_DIALOG_IMAGE_W,
@@ -75,6 +74,11 @@ import {
 export function AIPlanScreenViewDialogsA({ screen }) {
   const iconColor = screen.isDark ? '#CBD5E1' : '#0F172A'
   const modalBackdrop = screen.isDark ? '#020617' : '#07060A'
+  const isPrefStep = screen.planModalStep === 1
+  const hasSelectionLimit = !isPrefStep
+  const selectedCount = isPrefStep ? screen.selectedPreferences.length : screen.selectedFoodCategories.length
+  const maxSelected = PLAN_MODAL_MAX_FOOD_CATEGORIES
+  const isAtLimit = hasSelectionLimit && selectedCount >= maxSelected
   return (
 <>
 
@@ -139,7 +143,7 @@ export function AIPlanScreenViewDialogsA({ screen }) {
                               <Text style={styles.pmCinematicSub}>
                                 {screen.planModalStep === 1
                                   ? 'Pick the vibes that match your Bahrain trip'
-                                  : 'Choose your food mood for the day'}
+                                  : `Choose up to ${PLAN_MODAL_MAX_FOOD_CATEGORIES} food moods for the day`}
                               </Text>
                             ) : (
                               <View style={{ height: 28, alignItems: 'center', justifyContent: 'center' }}>
@@ -148,7 +152,7 @@ export function AIPlanScreenViewDialogsA({ screen }) {
                                   <Text style={styles.pmCinematicPickedText}>
                                     {screen.planModalStep === 1
                                       ? `${screen.getSelectedPreferenceLabels().length} picked`
-                                      : `${screen.getSelectedFoodLabels().length} picked`}
+                                      : `${screen.getSelectedFoodLabels().length}/${PLAN_MODAL_MAX_FOOD_CATEGORIES} picked`}
                                   </Text>
                                 </View>
                               </View>
@@ -176,11 +180,15 @@ export function AIPlanScreenViewDialogsA({ screen }) {
                                     ? screen.selectedPreferences.includes(item.id)
                                     : screen.selectedFoodCategories.includes(item.id)
                                 const handlePressItem = (item) => {
+                                  const isSelected = isSelectedFn(item)
+                                  if (!isSelected && isAtLimit) {
+                                    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning).catch(() => {})
+                                    return
+                                  }
                                   Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {})
                                   return screen.planModalStep === 1 ? screen.togglePreference(item.id) : screen.toggleFoodCategory(item.id)
                                 }
-                                const allItems = [...items, { id: 'other', label: 'Other', icon: 'create-outline', color: themeColors.primary }]
-                                return allItems.map((item, idx) => (
+                                return items.map((item, idx) => (
                                   <PopIn key={`${screen.planModalStep}-${item.id}`} delay={280 + idx * 30} trigger={screen.planModalStep}>
                                     <AnimatedOptionChip
                                       item={item}
@@ -191,29 +199,12 @@ export function AIPlanScreenViewDialogsA({ screen }) {
                                 ))
                               })()}
                             </View>
-                            {screen.planModalStep === 1 && screen.selectedPreferences.includes('other') ? (
-                              <TextInput
-                                style={styles.pmCinematicOtherInput}
-                                value={screen.customPreferenceInput}
-                                onChangeText={screen.setCustomPreferenceInput}
-                                placeholder="Type your other preference"
-                                placeholderTextColor="rgba(255,255,255,0.5)"
-                                autoCapitalize="sentences"
-                                returnKeyType="done"
-                              />
-                            ) : null}
-                            {screen.planModalStep === 2 && screen.selectedFoodCategories.includes('other') ? (
-                              <TextInput
-                                style={styles.pmCinematicOtherInput}
-                                value={screen.customFoodInput}
-                                onChangeText={screen.setCustomFoodInput}
-                                placeholder="Type your other cuisine"
-                                placeholderTextColor="rgba(255,255,255,0.5)"
-                                autoCapitalize="sentences"
-                                returnKeyType="done"
-                              />
-                            ) : null}
                           </ScrollView>
+                          {hasSelectionLimit && isAtLimit ? (
+                            <Text style={styles.pmCinematicLimitHint}>
+                              {`Max ${PLAN_MODAL_MAX_FOOD_CATEGORIES} food categories selected`}
+                            </Text>
+                          ) : null}
 
                           <PopIn delay={500} trigger={screen.planModalStep}>
                             <View style={styles.pmCinematicActionRow}>

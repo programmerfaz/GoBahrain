@@ -11,6 +11,7 @@ import {
   Animated,
   Easing,
   TouchableOpacity,
+  Modal,
   Platform,
   Vibration,
   ActivityIndicator,
@@ -19,13 +20,20 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { Ionicons } from '@expo/vector-icons'
 import { LinearGradient } from 'expo-linear-gradient'
 import { useTheme } from '../context/ThemeContext'
-import { fetchBrowseClientsGrouped, fetchExploreEventsFromSupabase } from '../services/aiPipeline'
+import {
+  fetchBrowseClientsGrouped,
+  fetchExploreEventsFromSupabase,
+  fetchPlaces,
+  fetchRestaurants,
+  fetchEvents,
+} from '../services/aiPipeline'
 import ClientProfileModal from '../components/ClientProfileModal'
 import EventDetailModal from '../components/EventDetailModal'
 import { coerceImageValueToString, resolvePublicImageUrl } from '../utils/imageUrl'
 import { FadeInView, ShimmerPlaceholder, AnimatedPressable, PulseView } from '../components/AnimatedUI'
 import { LUXURY, luxuryCardShadow } from '../theme/luxuryPremium'
 import { layoutContentWidth } from '../constants/webLayout'
+import { useUserPreferences } from '../context/UserPreferencesContext'
 
 const TAB_BAR_HEIGHT = Platform.OS === 'ios' ? 70 : 60
 
@@ -33,6 +41,20 @@ const AnimatedScrollView = Animated.createAnimatedComponent(ScrollView)
 
 const CARD_GAP = 12
 const AUTO_ADVANCE_MS = 4000
+const PERSONALIZED_PAGE_SIZE = 12
+const PERSONALIZED_ROLL_STEP_PX = 0.8
+const PERSONALIZED_ROLL_TICK_MS = 16
+
+const MASONRY_HEIGHT_RATIOS = [0.88, 1.02, 1.18, 1.34, 1.5, 1.12, 1.26, 0.96, 1.42]
+
+const masonryRatioFor = (seed, index = 0) => {
+  const s = String(seed || `seed-${index}`)
+  let hash = 0
+  for (let i = 0; i < s.length; i++) {
+    hash = (hash * 31 + s.charCodeAt(i) + index) % 2147483647
+  }
+  return MASONRY_HEIGHT_RATIOS[Math.abs(hash) % MASONRY_HEIGHT_RATIOS.length]
+}
 
 /** Vertical scan line over the icon only — same pattern as CommunitiesScreen `FabOptionIconScanning`. */
 const ArScanIcon = ({ name, size = 24, color = '#FFF' }) => {
@@ -103,6 +125,142 @@ const buildMergedEventBrowseItems = (eventsCarousel, clientEvents) => {
     raw: c,
   }))
   return [...fromDb, ...fromClient]
+}
+
+const deriveImageUri = (item) => {
+  if (!item) return null
+  if (item.kind === 'dbEvent') return resolvePublicImageUrl(item.image) || coerceImageValueToString(item.image)
+  if (item.kind === 'client') return resolvePublicImageUrl(item.image) || coerceImageValueToString(item.image)
+  return resolvePublicImageUrl(item.client_image) || resolvePublicImageUrl(item.image) || coerceImageValueToString(item.image)
+}
+
+const buildCultureBooklets = ({ restaurants, places, events, mergedEventBrowseItems }) => {
+  const safeRestaurants = restaurants || []
+  const safePlaces = places || []
+  const safeEvents = events || []
+  const safeMerged = mergedEventBrowseItems || []
+
+  return [
+    {
+      key: 'culture-heritage',
+      title: 'Culture & Heritage',
+      subtitle: 'Museums, forts, old souqs, and stories of Bahrain',
+      icon: 'library-outline',
+      color: '#7C3AED',
+      items: safePlaces.slice(0, 6),
+    },
+    {
+      key: 'culture-food',
+      title: 'Taste of Bahrain',
+      subtitle: 'Traditional flavors, modern dining, and local gems',
+      icon: 'restaurant-outline',
+      color: '#F97316',
+      items: safeRestaurants.slice(0, 6),
+    },
+    {
+      key: 'culture-experience',
+      title: 'Events & Experiences',
+      subtitle: 'Curated from AI + Pinecone + your live database',
+      icon: 'sparkles-outline',
+      color: '#0EA5E9',
+      items: safeMerged.slice(0, 6).length ? safeMerged.slice(0, 6) : safeEvents.slice(0, 6),
+    },
+  ]
+}
+
+const buildWeekendMustDo = ({ events, restaurants, places }) => {
+  const eventItems = (events || []).map((e, index) => {
+    const m = e?.metadata || {}
+    return {
+      key: `wknd-event-${e?.id || index}`,
+      title: m.event_name || 'Featured event',
+      subtitle: [m.venue, m.start_date].filter(Boolean).join(' • ') || 'Event pick from your AI feed',
+      icon: 'calendar-outline',
+      image: m.image,
+      lat: m.lat,
+      lng: m.long,
+      kind: 'event',
+      sourceEvent: e,
+    }
+  })
+
+  const placeItems = (places || []).map((p, index) => ({
+    key: `wknd-place-${p?.client_a_uuid || p?.clientId || index}`,
+    title: p?.name || p?.business_name || 'Featured place',
+    subtitle: 'Top place to visit in Bahrain this weekend',
+    icon: 'location-outline',
+    image: p?.client_image,
+    clientId: p?.client_a_uuid || p?.clientId,
+    kind: 'client',
+  }))
+
+  const foodItems = (restaurants || []).map((r, index) => ({
+    key: `wknd-food-${r?.client_a_uuid || r?.clientId || index}`,
+    title: r?.name || r?.business_name || 'Featured dining',
+    subtitle: 'Recommended restaurant from your curated list',
+    icon: 'restaurant-outline',
+    image: r?.client_image,
+    clientId: r?.client_a_uuid || r?.clientId,
+    kind: 'client',
+  }))
+
+  return [...eventItems, ...placeItems, ...foodItems].slice(0, 7)
+}
+
+const normalizePersonalizedCard = (match, fallbackType = 'place') => {
+  const meta = match?.metadata || {}
+  const rawImageCandidates = [
+    meta.image,
+    meta.client_image,
+    meta.post_image,
+    meta.thumbnail,
+    meta.thumbnail_url,
+    meta.cover_image,
+    meta.banner_image,
+    meta.photo,
+    meta.image_url,
+    match?.image,
+  ]
+  const resolvedImage =
+    rawImageCandidates
+      .map((v) => resolvePublicImageUrl(v) || coerceImageValueToString(v))
+      .find(Boolean) || null
+
+  const resolvedClientId =
+    meta.client_a_uuid ||
+    meta.client_uuid ||
+    meta.client_id ||
+    (fallbackType !== 'event' ? String(match?.id || '').trim() || null : null)
+
+  const resolvedLat = meta.lat ?? meta.latitude ?? null
+  const resolvedLng = meta.long ?? meta.lng ?? meta.longitude ?? null
+
+  const type =
+    fallbackType === 'event' || meta.record_type === 'event'
+      ? 'event'
+      : String(meta.client_type || '').toLowerCase() === 'restaurant'
+        ? 'restaurant'
+        : 'place'
+  return {
+    key: `pc-${match?.id || meta.event_uuid || meta.client_a_uuid || Math.random().toString(36).slice(2)}`,
+    title: meta.event_name || meta.business_name || meta.name || meta.place_name || 'Bahrain pick',
+    subtitle:
+      type === 'event'
+        ? [meta.venue, meta.start_date || meta.start_time].filter(Boolean).join(' • ') || 'Live event in Bahrain'
+        : meta.location || meta.area || meta.category || (type === 'restaurant' ? 'Dining in Bahrain' : 'Top attraction in Bahrain'),
+    image: resolvedImage,
+    lat: resolvedLat,
+    lng: resolvedLng,
+    clientId: resolvedClientId,
+    type,
+    sourceEvent:
+      type === 'event'
+        ? {
+            id: String(match?.id || meta.event_uuid || `event-${Math.random().toString(36).slice(2)}`),
+            metadata: meta,
+          }
+        : null,
+  }
 }
 
 function HeroAmbientLayer({ accent, isDark }) {
@@ -178,8 +336,10 @@ const ambientStyles = StyleSheet.create({
   orb: { position: 'absolute' },
 })
 
-function CinematicEventCard({ item, index, cardWidth, cardHeight, scrollX, onPress }) {
+function CinematicEventCard({ item, cardWidth, cardHeight, onPress }) {
   const cardRef = useRef(null)
+  const { width: screenW = 375 } = useWindowDimensions()
+  const compact = screenW < 430
   const handleCardPress = useCallback(() => {
     const node = cardRef.current
     if (!node || typeof node.measureInWindow !== 'function') {
@@ -194,7 +354,7 @@ function CinematicEventCard({ item, index, cardWidth, cardHeight, scrollX, onPre
   const m = item?.metadata || {}
   const name = m.event_name || 'Event'
   const venue = m.venue || ''
-  const time = [m.start_time, m.end_time].filter(Boolean).join(' – ')
+  const time = [m.start_time, m.end_time].filter(Boolean).join(' - ')
   const date = m.start_date || m.end_date || ''
   const eventType = m.event_type || ''
   const imageUri = useMemo(() => {
@@ -204,373 +364,189 @@ function CinematicEventCard({ item, index, cardWidth, cardHeight, scrollX, onPre
     if (s && (s.startsWith('http://') || s.startsWith('https://'))) return s
     return null
   }, [m.image])
-  const itemWidth = cardWidth + CARD_GAP
-
-  const sheenPhase = useRef(new Animated.Value(0)).current
-  useEffect(() => {
-    const loop = Animated.loop(
-      Animated.sequence([
-        Animated.timing(sheenPhase, {
-          toValue: 1,
-          duration: 4800,
-          easing: Easing.inOut(Easing.sin),
-          useNativeDriver: true,
-        }),
-        Animated.timing(sheenPhase, {
-          toValue: 0,
-          duration: 4800,
-          easing: Easing.inOut(Easing.sin),
-          useNativeDriver: true,
-        }),
-      ])
-    )
-    loop.start()
-    return () => loop.stop()
-  }, [sheenPhase])
-
-  const sheenTranslateX = sheenPhase.interpolate({
-    inputRange: [0, 1],
-    outputRange: [-cardWidth * 0.95, cardWidth * 0.95],
-  })
-
-  const scale = scrollX.interpolate({
-    inputRange: [(index - 1) * itemWidth, index * itemWidth, (index + 1) * itemWidth],
-    outputRange: [0.93, 1, 0.93],
-    extrapolate: 'clamp',
-  })
-  const translateY = scrollX.interpolate({
-    inputRange: [(index - 1) * itemWidth, index * itemWidth, (index + 1) * itemWidth],
-    outputRange: [12, 0, 12],
-    extrapolate: 'clamp',
-  })
-  const imageTranslateX = scrollX.interpolate({
-    inputRange: [(index - 1) * itemWidth, index * itemWidth, (index + 1) * itemWidth],
-    outputRange: [32, 0, -32],
-    extrapolate: 'clamp',
-  })
-  const cardOpacity = scrollX.interpolate({
-    inputRange: [(index - 1) * itemWidth, index * itemWidth, (index + 1) * itemWidth],
-    outputRange: [0.76, 1, 0.76],
-    extrapolate: 'clamp',
-  })
-  const focusShadow = scrollX.interpolate({
-    inputRange: [(index - 1) * itemWidth, index * itemWidth, (index + 1) * itemWidth],
-    outputRange: [0.16, 0.38, 0.16],
-    extrapolate: 'clamp',
-  })
-  const focusLift = scrollX.interpolate({
-    inputRange: [(index - 1) * itemWidth, index * itemWidth, (index + 1) * itemWidth],
-    outputRange: [10, 22, 10],
-    extrapolate: 'clamp',
-  })
-
-  const whenLine = [date, time].filter(Boolean).join(' · ')
-  const topRightDateLabel = date || whenLine
-  const showDateTop = Boolean(topRightDateLabel)
-  const showBottomTime = Boolean(date && time)
-  const rimLight = isDark ? 'rgba(255,255,255,0.14)' : 'rgba(255,255,255,0.22)'
+  const whenLine = [date, time].filter(Boolean).join(' • ')
+  const parsedDate = useMemo(() => {
+    if (!date) return null
+    const d = new Date(date)
+    if (Number.isNaN(d.getTime())) return null
+    return d
+  }, [date])
+  const month = parsedDate
+    ? parsedDate.toLocaleString('en-US', { month: 'short' }).toUpperCase()
+    : ''
+  const day = parsedDate ? String(parsedDate.getDate()).padStart(2, '0') : ''
+  const year = parsedDate ? String(parsedDate.getFullYear()) : ''
+  const subtitle = [venue, time].filter(Boolean).join(' • ')
 
   return (
     <View ref={cardRef} collapsable={false} style={{ width: cardWidth }}>
-    <AnimatedPressable
-      scaleDown={0.982}
-      activeOpacity={1}
-      onPress={handleCardPress}
-      style={{ width: cardWidth }}
-      accessibilityRole="button"
-      accessibilityLabel={`${name}${whenLine ? `, ${whenLine}` : ''}${venue ? `, ${venue}` : ''}`}
-    >
-      <Animated.View
-        style={[
-          cs.card,
-          {
-            width: cardWidth,
-            height: cardHeight,
-            opacity: cardOpacity,
-            transform: [{ scale }, { translateY }],
-            borderColor: rimLight,
-            ...Platform.select({
-              ios: {
-                shadowOpacity: focusShadow,
-                shadowRadius: focusLift,
-                shadowOffset: { width: 0, height: 14 },
-                shadowColor: '#0a0608',
-              },
-              android: { elevation: 14 },
-            }),
-          },
-        ]}
+      <AnimatedPressable
+        scaleDown={0.985}
+        activeOpacity={0.95}
+        onPress={handleCardPress}
+        style={{ width: cardWidth }}
+        accessibilityRole="button"
+        accessibilityLabel={`${name}${whenLine ? `, ${whenLine}` : ''}${venue ? `, ${venue}` : ''}`}
       >
-        <View style={[cs.cardImageRegion, { height: cardHeight, width: cardWidth }]}>
-          <View style={[cs.cardImageWrap, { height: cardHeight }]}>
-            <Animated.View style={[cs.cardImageInner, { height: cardHeight, width: cardWidth + 64, transform: [{ translateX: imageTranslateX }] }]}>
-              {imageUri ? (
-                <Image
-                  source={{ uri: imageUri }}
-                  style={[StyleSheet.absoluteFill, { width: cardWidth + 64, left: -32 }]}
-                  resizeMode="cover"
-                />
-              ) : (
-                <LinearGradient
-                  colors={isDark ? ['#1a1520', '#2d2640', '#3d3555'] : ['#e8ecf2', '#d4dae4', '#b8c2d1']}
-                  start={{ x: 0, y: 0 }}
-                  end={{ x: 1, y: 1 }}
-                  style={[StyleSheet.absoluteFill, { width: cardWidth + 64, left: -32 }]}
-                />
-              )}
-            </Animated.View>
-          </View>
-
-          <View style={[cs.cardSheenMask, { height: cardHeight * 0.38 }]} pointerEvents="none">
-            <Animated.View style={[cs.cardSheenStrip, { transform: [{ translateX: sheenTranslateX }] }]}>
-              <LinearGradient
-                colors={['transparent', 'rgba(255,255,255,0.1)', 'rgba(255,255,255,0.03)', 'transparent']}
-                locations={[0, 0.45, 0.55, 1]}
-                start={{ x: 0, y: 0.5 }}
-                end={{ x: 1, y: 0.5 }}
-                style={{ width: cardWidth * 0.55, height: '100%' }}
-              />
-            </Animated.View>
-          </View>
-
-          <LinearGradient
-            colors={['rgba(255,255,255,0.12)', 'transparent']}
-            start={{ x: 0.5, y: 0 }}
-            end={{ x: 0.5, y: 1 }}
-            style={cs.cardTopHighlight}
-            pointerEvents="none"
-          />
-
-          {eventType ? (
-            <View style={[cs.cardTagTop, { maxWidth: cardWidth * 0.52 }]} pointerEvents="none">
-              <LinearGradient
-                colors={[`${colors.primary}F0`, colors.primaryDark, `${colors.primary}99`]}
-                locations={[0, 0.5, 1]}
-                start={{ x: 0, y: 0 }}
-                end={{ x: 1, y: 1 }}
-                style={cs.cardTagTopPill}
-              >
-                <Ionicons name="pricetag" size={12} color="#FFF" style={cs.cardPanelTagIcon} />
-                <Text style={cs.cardBadgeText} numberOfLines={2}>
-                  {eventType}
-                </Text>
-              </LinearGradient>
-            </View>
-          ) : null}
-
-          {showDateTop ? (
-            <View style={[cs.cardDateTop, { maxWidth: cardWidth * 0.58 }]} pointerEvents="none">
-              <LinearGradient
-                colors={['rgba(255,255,255,0.14)', `${colors.primary}55`, 'rgba(8,6,10,0.88)']}
-                locations={[0, 0.45, 1]}
-                start={{ x: 0, y: 0 }}
-                end={{ x: 1, y: 1 }}
-                style={cs.cardDateTopInner}
-              >
-                <Ionicons name="calendar-outline" size={13} color="#FFF" />
-                <Text style={cs.cardDateTopText} numberOfLines={1}>
-                  {topRightDateLabel}
-                </Text>
-              </LinearGradient>
-            </View>
-          ) : null}
+      <View style={[cs.card, { width: cardWidth, height: cardHeight }]}>
+        <View style={cs.cardImageWrap}>
+          {imageUri ? (
+            <Image
+              source={{ uri: imageUri }}
+              style={StyleSheet.absoluteFill}
+              resizeMode="cover"
+            />
+          ) : (
+            <LinearGradient
+              colors={isDark ? ['#140e1e', '#2c1c3f', '#542648'] : ['#eef2f8', '#c8d2e6', '#8aa2c6']}
+              start={{ x: 0.02, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={StyleSheet.absoluteFill}
+            />
+          )}
         </View>
 
         <LinearGradient
-          pointerEvents="none"
-          colors={['transparent', 'rgba(0,0,0,0.04)', 'rgba(8,6,12,0.42)', 'rgba(6,4,10,0.82)']}
-          locations={[0, 0.2, 0.55, 1]}
-          style={cs.cardBottomScrim}
+          colors={['rgba(5,8,20,0.04)', 'rgba(5,8,20,0.22)', 'rgba(5,8,20,0.58)']}
+          start={{ x: 0.5, y: 0.02 }}
+          end={{ x: 0.5, y: 1 }}
+          style={cs.cardPosterOverlay}
         />
 
-        <View style={cs.cardContentOverlay} pointerEvents="box-none">
-          <Text style={cs.cardTitle} numberOfLines={2}>
+        {!!eventType && (
+          <View style={cs.cardTopTagWrap}>
+            <View style={cs.cardTopTag}>
+              <Text style={cs.cardTopTagText} numberOfLines={1}>{String(eventType).toUpperCase()}</Text>
+            </View>
+          </View>
+        )}
+
+        {!!parsedDate && (
+          <View style={cs.cardTopRightBadgeWrap}>
+            <View style={cs.cardBottomLeftBadge}>
+              {!!month && <Text style={cs.cardBadgeMonth}>{month}</Text>}
+              {!!day && <Text style={cs.cardBadgeDay}>{day}</Text>}
+              {!!year && <Text style={cs.cardBadgeYear}>{year}</Text>}
+            </View>
+          </View>
+        )}
+
+        <View style={cs.cardBottomContent}>
+          <Text style={[cs.cardTitle, compact ? cs.cardTitleCompact : null]} numberOfLines={2}>
             {name}
           </Text>
-
-          {(showBottomTime || venue) ? (
-            <View style={cs.cardMetaCol}>
-              {showBottomTime ? (
-                <View style={cs.cardMetaPill}>
-                  <Ionicons name="time-outline" size={14} color={colors.primaryLight} />
-                  <Text style={cs.cardMetaPlain} numberOfLines={2}>
-                    {time}
-                  </Text>
-                </View>
-              ) : null}
-              {venue ? (
-                <View style={cs.cardMetaPill}>
-                  <Ionicons name="location-outline" size={14} color="rgba(147,197,253,0.95)" />
-                  <Text style={cs.cardMetaPlain} numberOfLines={2}>
-                    {venue}
-                  </Text>
-                </View>
-              ) : null}
-            </View>
-          ) : null}
+          {!!subtitle && (
+            <Text style={cs.cardSubTitle} numberOfLines={1}>
+              {subtitle}
+            </Text>
+          )}
         </View>
-      </Animated.View>
-    </AnimatedPressable>
+      </View>
+      </AnimatedPressable>
     </View>
   )
 }
 
 const cs = StyleSheet.create({
   card: {
-    borderRadius: LUXURY.radiusHero,
+    borderRadius: 32,
     overflow: 'hidden',
-    backgroundColor: 'transparent',
     borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.22)',
     position: 'relative',
-    ...luxuryCardShadow,
     ...Platform.select({
-      ios: { shadowColor: '#050308', shadowOffset: { width: 0, height: 16 } },
-      android: { elevation: 14 },
+      ios: { shadowColor: '#020617', shadowOffset: { width: 0, height: 18 }, shadowOpacity: 0.34, shadowRadius: 26 },
+      android: { elevation: 12 },
     }),
-  },
-  cardImageRegion: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    overflow: 'hidden',
-    backgroundColor: 'transparent',
   },
   cardImageWrap: { ...StyleSheet.absoluteFillObject, overflow: 'hidden' },
-  cardImageInner: { overflow: 'hidden' },
-  cardSheenMask: {
+  cardPosterOverlay: { ...StyleSheet.absoluteFillObject },
+  cardTopTagWrap: {
     position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    overflow: 'hidden',
+    top: 16,
+    left: 16,
   },
-  cardSheenStrip: {
-    height: '100%',
-    alignItems: 'center',
-    justifyContent: 'flex-start',
-  },
-  cardTopHighlight: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    height: '36%',
-    opacity: 0.65,
-  },
-  cardTagTop: {
-    position: 'absolute',
-    top: 14,
-    left: 14,
-    zIndex: 3,
-  },
-  cardTagTopPill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    borderRadius: 14,
-    maxWidth: '100%',
+  cardTopTag: {
+    borderRadius: 999,
+    maxWidth: 180,
+    backgroundColor: 'rgba(6,11,25,0.26)',
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: 'rgba(255,255,255,0.35)',
-    ...Platform.select({
-      ios: {
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 4 },
-        shadowOpacity: 0.35,
-        shadowRadius: 8,
-      },
-      android: { elevation: 4 },
-    }),
+    borderColor: 'rgba(255,255,255,0.34)',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
   },
-  cardDateTop: {
+  cardTopTagText: { color: '#FFF', fontSize: 9, fontWeight: '800', letterSpacing: 0.8 },
+  cardBottomContent: {
     position: 'absolute',
-    top: 14,
-    right: 14,
-    zIndex: 3,
-  },
-  cardDateTopInner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    borderRadius: 14,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: 'rgba(255,255,255,0.35)',
-    ...Platform.select({
-      ios: {
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 4 },
-        shadowOpacity: 0.35,
-        shadowRadius: 10,
-      },
-      android: { elevation: 6 },
-    }),
-  },
-  cardDateTopText: {
-    flexShrink: 1,
-    fontSize: 11,
-    fontWeight: '700',
-    color: '#FFF',
-    letterSpacing: 0.2,
-  },
-  cardBottomScrim: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
-    height: '62%',
-    zIndex: 1,
-  },
-  cardContentOverlay: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
-    zIndex: 2,
-    paddingHorizontal: 18,
-    paddingTop: 14,
-    paddingBottom: 18,
-  },
-  cardPanelTagIcon: { marginTop: 1 },
-  cardBadgeText: {
-    flexShrink: 1,
-    fontSize: 12,
-    fontWeight: '700',
-    color: '#FFF',
-    letterSpacing: 0.2,
-    lineHeight: 16,
+    left: 18,
+    right: 18,
+    bottom: 18,
   },
   cardTitle: {
-    fontSize: 23,
-    fontWeight: '900',
-    letterSpacing: -1,
     color: '#FFF',
-    lineHeight: 28,
-    marginBottom: 10,
-    textShadowColor: 'rgba(0,0,0,0.55)',
+    fontSize: 28,
+    fontWeight: '900',
+    letterSpacing: -0.8,
+    lineHeight: 30,
+    textShadowColor: 'rgba(0,0,0,0.5)',
     textShadowOffset: { width: 0, height: 2 },
     textShadowRadius: 8,
   },
-  cardMetaCol: { gap: 8, marginBottom: 0 },
-  cardMetaPill: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 8,
-    paddingVertical: 8,
-    paddingHorizontal: 11,
-    borderRadius: 12,
-    backgroundColor: 'rgba(255,255,255,0.08)',
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: 'rgba(255,255,255,0.12)',
-  },
-  cardMetaPlain: {
-    flex: 1,
+  cardTitleCompact: { fontSize: 22, lineHeight: 24 },
+  cardSubTitle: {
+    color: 'rgba(255,255,255,0.9)',
     fontSize: 12,
     fontWeight: '600',
-    color: 'rgba(255,255,255,0.9)',
-    lineHeight: 17,
+    marginTop: 6,
+    letterSpacing: 0.1,
+    lineHeight: 16,
+    textShadowColor: 'rgba(0,0,0,0.45)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 4,
+  },
+  cardTopRightBadgeWrap: {
+    position: 'absolute',
+    right: 18,
+    top: 22,
+    maxWidth: 96,
+  },
+  cardBottomLeftBadge: {
+    borderRadius: 16,
+    paddingHorizontal: 14,
+    paddingTop: 13,
+    paddingBottom: 11,
+    minWidth: 84,
+    alignItems: 'center',
+    backgroundColor: 'rgba(244,246,251,0.9)',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(255,255,255,0.95)',
+    ...Platform.select({
+      ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.22, shadowRadius: 14 },
+      android: { elevation: 8 },
+    }),
+  },
+  cardBadgeMonth: {
+    color: '#30343C',
+    fontSize: 7,
+    fontWeight: '700',
+    letterSpacing: 6,
+    marginBottom: 5,
+    textAlign: 'center',
+  },
+  cardBadgeDay: {
+    color: '#12151A',
+    fontSize: 58,
+    fontWeight: '900',
+    letterSpacing: -2.4,
+    lineHeight: 56,
+    marginBottom: 6,
+  },
+  cardBadgeYear: {
+    color: '#2C3138',
+    fontSize: 7,
+    fontWeight: '700',
+    letterSpacing: 4.5,
+    textAlign: 'center',
   },
 })
 
@@ -595,25 +571,38 @@ function LoadingSkeleton({ width: w, height: h }) {
 
 export default function ExploreScreen({ navigation }) {
   const { colors, isDark } = useTheme()
+  const { activityLabels, foodLabels, preferences } = useUserPreferences()
   const insets = useSafeAreaInsets()
   const { width: winW = 375, height = 667 } = useWindowDimensions()
+  const isMobile = winW < 430
+  const personalizedColumnCount = winW >= 1200 ? 4 : winW >= 800 ? 3 : 2
+  const editorialTitleSize = isMobile ? 18 : winW < 800 ? 22 : 27
+  const largeSectionTitleSize = isMobile ? 31 : winW < 800 ? 38 : 46
   const layoutW = layoutContentWidth(winW)
   const bottomPadding = TAB_BAR_HEIGHT + (Platform.OS === 'android' ? insets.bottom : 0)
 
-  const cardWidth = Math.round(layoutW * 0.82)
-  const cardHeight = Math.round(height * 0.52)
-  const peekPadding = (layoutW - cardWidth) / 2
+  const cardWidth = Math.round(layoutW * (isMobile ? 0.74 : 0.66))
+  const cardHeight = Math.round(Math.min(height * 0.64, cardWidth * 1.48))
+  const peekPadding = 24
   const itemStride = cardWidth + CARD_GAP
 
   const [events, setEvents] = useState([])
   const [loadError, setLoadError] = useState(null)
   const [browseClients, setBrowseClients] = useState({ restaurants: [], places: [], events: [] })
   const [browseLoadError, setBrowseLoadError] = useState(null)
+  const [personalizedRails, setPersonalizedRails] = useState({
+    places: [],
+    restaurants: [],
+    events: [],
+  })
+  const [personalizedError, setPersonalizedError] = useState(null)
+  const [activeBookletGuide, setActiveBookletGuide] = useState(null)
   const [profileClientId, setProfileClientId] = useState(null)
   const [detailEvent, setDetailEvent] = useState(null)
   const [detailSourceRect, setDetailSourceRect] = useState(null)
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
+  const [eventTab, setEventTab] = useState('all')
   const [activeIndex, setActiveIndex] = useState(0)
   const [progressTrackW, setProgressTrackW] = useState(0)
   const scrollX = useRef(new Animated.Value(0)).current
@@ -623,6 +612,10 @@ export default function ExploreScreen({ navigation }) {
   const isUserInteractingRef = useRef(false)
   const didInitialScrollRef = useRef(false)
   const autoAdvanceTimerRef = useRef(null)
+  const personalizedSliderRef = useRef(null)
+  const personalizedSliderTimerRef = useRef(null)
+  const personalizedSliderOffsetRef = useRef(0)
+  const personalizedIsDraggingRef = useRef(false)
   const headerOpacity = useRef(new Animated.Value(0)).current
   const headerTranslateY = useRef(new Animated.Value(20)).current
   const titlePop = useRef(new Animated.Value(0.88)).current
@@ -663,19 +656,44 @@ export default function ExploreScreen({ navigation }) {
     }).start()
   }, [titlePop])
 
+  const filteredEvents = useMemo(() => {
+    if (!Array.isArray(events) || events.length === 0) return []
+    if (eventTab === 'all') return events
+    const now = new Date()
+    const currentMonth = now.getMonth()
+    const currentYear = now.getFullYear()
+    return events.filter((e) => {
+      const m = e?.metadata || {}
+      const baseDate = m.start_date || m.end_date
+      if (!baseDate) return false
+      const parsed = new Date(baseDate)
+      if (Number.isNaN(parsed.getTime())) return false
+      const month = parsed.getMonth()
+      const year = parsed.getFullYear()
+      if (eventTab === 'thisMonth') {
+        return month === currentMonth && year === currentYear
+      }
+      if (eventTab === 'nextMonth') {
+        const nextMonthDate = new Date(currentYear, currentMonth + 1, 1)
+        return month === nextMonthDate.getMonth() && year === nextMonthDate.getFullYear()
+      }
+      return true
+    })
+  }, [events, eventTab])
+
   useEffect(() => {
-    if (loading || events.length === 0 || progressTrackW <= 0) {
-      if (events.length === 0) fillW.setValue(0)
+    if (loading || filteredEvents.length === 0 || progressTrackW <= 0) {
+      if (filteredEvents.length === 0) fillW.setValue(0)
       return
     }
-    const target = Math.max(((activeIndex + 1) / events.length) * progressTrackW, 8)
+    const target = Math.max(((activeIndex + 1) / filteredEvents.length) * progressTrackW, 8)
     Animated.spring(fillW, {
       toValue: target,
       friction: 8,
       tension: 72,
       useNativeDriver: false,
     }).start()
-  }, [activeIndex, events.length, progressTrackW, loading, fillW])
+  }, [activeIndex, filteredEvents.length, progressTrackW, loading, fillW])
 
   const loadExplore = useCallback(async () => {
     try {
@@ -693,17 +711,32 @@ export default function ExploreScreen({ navigation }) {
         events: browseRes.events || [],
       })
       setBrowseLoadError(browseRes.error || null)
+
+      const profileNarrative = preferences?.profileSummary || ''
+      const [pPlaces, pRestaurants, pEvents] = await Promise.all([
+        fetchPlaces(activityLabels || [], { profileNarrative }),
+        fetchRestaurants(foodLabels || [], { profileNarrative }),
+        fetchEvents(activityLabels || [], { profileNarrative }),
+      ])
+      setPersonalizedRails({
+        places: (pPlaces || []).slice(0, 10).map((m) => normalizePersonalizedCard(m, 'place')),
+        restaurants: (pRestaurants || []).slice(0, 10).map((m) => normalizePersonalizedCard(m, 'restaurant')),
+        events: (pEvents || []).slice(0, 10).map((m) => normalizePersonalizedCard(m, 'event')),
+      })
+      setPersonalizedError(null)
     } catch (e) {
       console.warn('[Explore] loadExplore failed:', e?.message)
       setEvents([])
       setBrowseClients({ restaurants: [], places: [], events: [] })
       setLoadError(e?.message || 'Could not load')
       setBrowseLoadError(e?.message || null)
+      setPersonalizedRails({ places: [], restaurants: [], events: [] })
+      setPersonalizedError(e?.message || null)
     } finally {
       setLoading(false)
       setRefreshing(false)
     }
-  }, [])
+  }, [activityLabels, foodLabels, preferences?.profileSummary])
 
   useEffect(() => {
     loadExplore()
@@ -713,7 +746,68 @@ export default function ExploreScreen({ navigation }) {
     () => buildMergedEventBrowseItems(events, browseClients.events),
     [events, browseClients.events],
   )
-
+  const cultureBooklets = useMemo(
+    () =>
+      buildCultureBooklets({
+        restaurants: browseClients.restaurants,
+        places: browseClients.places,
+        events,
+        mergedEventBrowseItems,
+      }),
+    [browseClients.restaurants, browseClients.places, events, mergedEventBrowseItems],
+  )
+  const weekendMustDo = useMemo(
+    () =>
+      buildWeekendMustDo({
+        events,
+        restaurants: browseClients.restaurants,
+        places: browseClients.places,
+      }),
+    [events, browseClients.restaurants, browseClients.places],
+  )
+  const weekendEditorialItems = useMemo(() => {
+    const cols = winW >= 1200 ? 4 : winW >= 800 ? 3 : 2
+    const heightPattern = [1.45, 0.95, 1.1, 1.32, 0.88, 1.22, 1.04, 1.38]
+    return (weekendMustDo || []).map((item, index) => ({
+      ...item,
+      col: index % cols,
+      heightRatio: heightPattern[index % heightPattern.length],
+    }))
+  }, [weekendMustDo, winW])
+  const weekendEditorialColumns = useMemo(() => {
+    const cols = winW >= 1200 ? 4 : winW >= 800 ? 3 : 2
+    return Array.from({ length: cols }, (_, colIndex) => weekendEditorialItems.filter((x) => x.col === colIndex))
+  }, [weekendEditorialItems, winW])
+  const personalizedEditorialPages = useMemo(() => {
+    const seeds = [
+      ...(personalizedRails.events || []).map((item) => ({ ...item, editorialTag: 'EVENTS' })),
+      ...(personalizedRails.places || []).map((item) => ({ ...item, editorialTag: 'PLACES' })),
+      ...(personalizedRails.restaurants || []).map((item) => ({ ...item, editorialTag: 'DINING' })),
+    ]
+      .slice(0, 24)
+      .map((item, index) => ({
+      ...item,
+      heightRatio: masonryRatioFor(item.key, index),
+    }))
+    if (seeds.length === 0) return []
+    const pages = []
+    for (let i = 0; i < seeds.length; i += PERSONALIZED_PAGE_SIZE) {
+      const pageItems = seeds.slice(i, i + PERSONALIZED_PAGE_SIZE).map((it, idx) => ({
+        ...it,
+        col: idx % personalizedColumnCount,
+      }))
+      pages.push(
+        Array.from({ length: personalizedColumnCount }, (_, colIndex) =>
+          pageItems.filter((x) => x.col === colIndex),
+        ),
+      )
+    }
+    return pages
+  }, [personalizedRails.events, personalizedRails.places, personalizedRails.restaurants, personalizedColumnCount])
+  const personalizedRollingPages = useMemo(() => {
+    if (personalizedEditorialPages.length === 0) return []
+    return [...personalizedEditorialPages, ...personalizedEditorialPages]
+  }, [personalizedEditorialPages])
   const handleBrowseDbEventPress = useCallback(
     (item) => {
       const lat = parseFloat(item.lat)
@@ -725,47 +819,94 @@ export default function ExploreScreen({ navigation }) {
     [navigation],
   )
 
+  const openBookletGuide = useCallback((booklet) => {
+    if (!booklet) return
+    setActiveBookletGuide(booklet)
+  }, [])
+
+  const handleOpenBookletItem = useCallback((item) => {
+    if (!item) return
+    const maybeClientId = item.client_a_uuid || item.clientId || item.raw?.client_a_uuid
+    if (maybeClientId) {
+      setActiveBookletGuide(null)
+      setProfileClientId(maybeClientId)
+      return
+    }
+    const sourceEventId = item.id || item.raw?.id
+    if (sourceEventId) {
+      const matched = (events || []).find((ev) => String(ev?.id) === String(sourceEventId))
+      if (matched) {
+        setActiveBookletGuide(null)
+        setDetailSourceRect(null)
+        setDetailEvent(matched)
+        return
+      }
+    }
+    const lat = parseFloat(item.lat ?? item.raw?.lat)
+    const lng = parseFloat(item.long ?? item.lng ?? item.raw?.long ?? item.raw?.lng)
+    if (!Number.isNaN(lat) && !Number.isNaN(lng)) {
+      setActiveBookletGuide(null)
+      navigation.navigate('AR', { navigateTo: { lat, lng, name: item.name || 'Destination' } })
+    }
+  }, [events, navigation])
+
+  const bookletGuideDetails = useMemo(() => {
+    const guide = activeBookletGuide
+    const items = guide?.items || []
+    const heroImage = deriveImageUri(items[0]) || null
+    const overview =
+      guide?.subtitle ||
+      'A curated Bahrain mini-guide with culture, dining, and local experiences selected for this travel theme.'
+    const tipsByGuide = {
+      'culture-heritage': [
+        'Start early to enjoy heritage sites before peak heat.',
+        'Keep modest attire for mosques and old districts.',
+        'Combine one museum stop with a nearby souq walk.',
+      ],
+      'culture-food': [
+        'Pair one local breakfast with one modern dining spot.',
+        'Reserve popular restaurants for evening hours.',
+        'Try one Bahraini dish and one regional specialty.',
+      ],
+      'culture-experience': [
+        'Check event start times and venue distance beforehand.',
+        'Mix one headline event with one low-key local stop.',
+        'Leave buffer time for traffic around event venues.',
+      ],
+    }
+    return {
+      heroImage,
+      overview,
+      tips: tipsByGuide[guide?.key] || [
+        'Start with one anchor stop, then explore nearby gems.',
+        'Use this guide as a flexible route, not a strict schedule.',
+        'Capture sunrise or sunset moments for the best photos.',
+      ],
+      route: items.slice(0, 5),
+      highlights: items,
+    }
+  }, [activeBookletGuide])
+
   useEffect(() => {
-    if (events.length === 0) return
-    setActiveIndex((idx) => (idx >= events.length ? events.length - 1 : idx))
-  }, [events.length])
+    if (filteredEvents.length === 0) return
+    setActiveIndex((idx) => (idx >= filteredEvents.length ? filteredEvents.length - 1 : idx))
+  }, [filteredEvents.length])
 
   const loopedEvents = useMemo(() => {
-    if (events.length < 2) return events
-    return [...events, ...events, ...events]
-  }, [events])
+    return filteredEvents
+  }, [filteredEvents])
 
   useEffect(() => {
     didInitialScrollRef.current = false
-  }, [events])
+  }, [filteredEvents])
 
   const handleCarouselContentSizeChange = useCallback(() => {
     if (didInitialScrollRef.current) return
-    if (events.length < 2) return
-    flatListRef.current?.scrollToOffset({
-      offset: events.length * itemStride,
-      animated: false,
-    })
-    virtualIndexRef.current = events.length
-    didInitialScrollRef.current = true
-  }, [events.length, itemStride])
+  }, [itemStride])
 
   const scheduleAutoAdvance = useCallback(() => {
     if (autoAdvanceTimerRef.current) clearTimeout(autoAdvanceTimerRef.current)
-    if (events.length < 2) return
-    autoAdvanceTimerRef.current = setTimeout(() => {
-      if (isUserInteractingRef.current) {
-        scheduleAutoAdvance()
-        return
-      }
-      if (!flatListRef.current) return
-      const nextVirtual = virtualIndexRef.current + 1
-      flatListRef.current.scrollToOffset({
-        offset: nextVirtual * itemStride,
-        animated: true,
-      })
-    }, AUTO_ADVANCE_MS)
-  }, [events.length, itemStride])
+  }, [])
 
   useEffect(() => {
     scheduleAutoAdvance()
@@ -773,6 +914,35 @@ export default function ExploreScreen({ navigation }) {
       if (autoAdvanceTimerRef.current) clearTimeout(autoAdvanceTimerRef.current)
     }
   }, [scheduleAutoAdvance])
+
+  useEffect(() => {
+    personalizedSliderOffsetRef.current = 0
+    if (personalizedSliderRef.current && typeof personalizedSliderRef.current.scrollTo === 'function') {
+      personalizedSliderRef.current.scrollTo({ x: 0, y: 0, animated: false })
+    }
+  }, [personalizedEditorialPages.length])
+
+  useEffect(() => {
+    if (personalizedSliderTimerRef.current) clearInterval(personalizedSliderTimerRef.current)
+    if (personalizedEditorialPages.length <= 1) return undefined
+    const pageWidth = Math.max(260, layoutW - 48)
+    const loopWidth = pageWidth * personalizedEditorialPages.length
+    personalizedSliderTimerRef.current = setInterval(() => {
+      if (personalizedIsDraggingRef.current) return
+      if (!personalizedSliderRef.current || typeof personalizedSliderRef.current.scrollTo !== 'function') return
+      let nextOffset = personalizedSliderOffsetRef.current + PERSONALIZED_ROLL_STEP_PX
+      if (nextOffset >= loopWidth) {
+        nextOffset -= loopWidth
+        personalizedSliderRef.current.scrollTo({ x: nextOffset, y: 0, animated: false })
+      } else {
+        personalizedSliderRef.current.scrollTo({ x: nextOffset, y: 0, animated: false })
+      }
+      personalizedSliderOffsetRef.current = nextOffset
+    }, PERSONALIZED_ROLL_TICK_MS)
+    return () => {
+      if (personalizedSliderTimerRef.current) clearInterval(personalizedSliderTimerRef.current)
+    }
+  }, [personalizedEditorialPages.length, layoutW])
 
   const onRefresh = useCallback(() => {
     setRefreshing(true)
@@ -786,6 +956,23 @@ export default function ExploreScreen({ navigation }) {
     setDetailEvent(item)
   }, [])
 
+  const handleOpenPersonalizedItem = useCallback((item) => {
+    if (!item) return
+    if (item.type === 'event' && item.sourceEvent) {
+      handleCardPress(item.sourceEvent, null)
+      return
+    }
+    if (item.clientId) {
+      setProfileClientId(item.clientId)
+      return
+    }
+    const lat = parseFloat(item.lat)
+    const lng = parseFloat(item.lng ?? item.long)
+    if (!Number.isNaN(lat) && !Number.isNaN(lng)) {
+      navigation.navigate('AR', { navigateTo: { lat, lng, name: item.title || 'Destination' } })
+    }
+  }, [handleCardPress, navigation])
+
   const handleCloseEventDetail = useCallback(() => {
     setDetailEvent(null)
   }, [])
@@ -794,27 +981,15 @@ export default function ExploreScreen({ navigation }) {
     const offset = e.nativeEvent.contentOffset.x
     const index = Math.round(offset / itemStride)
     virtualIndexRef.current = index
-    if (events.length > 0) {
-      const display = ((index % events.length) + events.length) % events.length
+    if (filteredEvents.length > 0) {
+      const display = ((index % filteredEvents.length) + filteredEvents.length) % filteredEvents.length
       setActiveIndex(display)
     }
-  }, [itemStride, events.length])
+  }, [itemStride, filteredEvents.length])
 
   const handleMomentumScrollEnd = useCallback((e) => {
-    if (events.length < 2) return
-    const offset = e.nativeEvent.contentOffset.x
-    const index = Math.round(offset / itemStride)
-    if (index < events.length) {
-      const newIdx = index + events.length
-      flatListRef.current?.scrollToOffset({ offset: newIdx * itemStride, animated: false })
-      virtualIndexRef.current = newIdx
-    } else if (index >= events.length * 2) {
-      const newIdx = index - events.length
-      flatListRef.current?.scrollToOffset({ offset: newIdx * itemStride, animated: false })
-      virtualIndexRef.current = newIdx
-    }
     scheduleAutoAdvance()
-  }, [events.length, itemStride, scheduleAutoAdvance])
+  }, [scheduleAutoAdvance])
 
   const handleScrollBeginDrag = useCallback(() => {
     isUserInteractingRef.current = true
@@ -888,11 +1063,21 @@ export default function ExploreScreen({ navigation }) {
   const eventAccent = colors.event
   const eventsCarouselSectionHeader = (
     <View style={s.eventsHeadingRow}>
-      <View style={s.browseSectionHeader}>
-        <View style={[s.browseSectionIcon, { backgroundColor: `${eventAccent}18` }]}>
-          <Ionicons name="calendar" size={20} color={eventAccent} />
-        </View>
-        <Text style={[s.browseSectionTitle, { color: eventAccent }]}>Events</Text>
+      <View style={s.calendarHeaderTopRow} />
+      <View style={s.calendarTabRow}>
+        {[
+          { key: 'all', label: 'ALL EVENTS' },
+          { key: 'thisMonth', label: 'THIS MONTH' },
+          { key: 'nextMonth', label: 'NEXT MONTH' },
+        ].map((tab) => {
+          const active = eventTab === tab.key
+          return (
+            <TouchableOpacity key={tab.key} activeOpacity={0.82} onPress={() => setEventTab(tab.key)} style={s.calendarTabBtn}>
+              <Text style={[s.calendarTabText, { color: active ? colors.textPrimary : colors.textMuted }]}>{tab.label}</Text>
+              {active ? <View style={[s.calendarTabUnderline, { backgroundColor: eventAccent }]} /> : null}
+            </TouchableOpacity>
+          )
+        })}
       </View>
     </View>
   )
@@ -930,18 +1115,8 @@ export default function ExploreScreen({ navigation }) {
             <View style={s.heroTextCol}>
               <FadeInView delay={120} from={22} duration={560}>
                 <Animated.Text style={[s.heroTitle, { color: colors.textPrimary, transform: [{ scale: titlePop }] }]}>
-                  Explore
+                  Explore Bahrain
                 </Animated.Text>
-              </FadeInView>
-              <FadeInView delay={200} from={14} duration={480}>
-                <Text
-                  style={[s.heroSub, { color: colors.textSecondary }]}
-                  numberOfLines={1}
-                  adjustsFontSizeToFit
-                  minimumFontScale={0.78}
-                >
-                  Discover what Bahrain has to offer
-                </Text>
               </FadeInView>
             </View>
             <FadeInView delay={160} from={28} duration={520} style={s.heroArWrap}>
@@ -965,7 +1140,7 @@ export default function ExploreScreen({ navigation }) {
             {eventsCarouselSectionHeader}
             <LoadingSkeleton width={cardWidth} height={cardHeight} />
           </View>
-        ) : events.length === 0 ? (
+        ) : filteredEvents.length === 0 ? (
           <FadeInView delay={300} from={24} style={s.eventsSectionTopSpacer}>
             {eventsCarouselSectionHeader}
             <View style={[s.emptyWrap, { backgroundColor: isDark ? colors.surface : colors.surface, borderColor: colors.border }]}>
@@ -978,10 +1153,10 @@ export default function ExploreScreen({ navigation }) {
                 </LinearGradient>
               </PulseView>
               <Text style={[s.emptyTitle, { color: colors.textPrimary }]}>
-                {loadError ? 'Could not load events' : 'Nothing happening yet'}
+                {loadError ? 'Could not load events' : 'No events for this tab'}
               </Text>
               <Text style={[s.emptySub, { color: colors.textMuted }]}>
-                {loadError ? loadError : 'Pull down to refresh or explore Bahrain through AR'}
+                {loadError ? loadError : 'Try another month tab or pull to refresh'}
               </Text>
               {!loadError && __DEV__ ? (
                 <Text style={[s.emptySub, { color: colors.textMuted, fontSize: 12, marginTop: 10, paddingHorizontal: 8 }]}>
@@ -1013,9 +1188,7 @@ export default function ExploreScreen({ navigation }) {
               horizontal
               pagingEnabled={false}
               showsHorizontalScrollIndicator={false}
-              snapToInterval={itemStride}
-              snapToAlignment="center"
-              decelerationRate="fast"
+              decelerationRate="normal"
               onScroll={Animated.event(
                 [{ nativeEvent: { contentOffset: { x: scrollX } } }],
                 { useNativeDriver: false, listener: onScroll }
@@ -1025,7 +1198,7 @@ export default function ExploreScreen({ navigation }) {
               onMomentumScrollEnd={handleMomentumScrollEnd}
               onContentSizeChange={handleCarouselContentSizeChange}
               scrollEventThrottle={16}
-              contentContainerStyle={{ paddingHorizontal: peekPadding }}
+              contentContainerStyle={{ paddingHorizontal: peekPadding, paddingRight: peekPadding + 8 }}
               ItemSeparatorComponent={() => <View style={{ width: CARD_GAP }} />}
               removeClippedSubviews={false}
             />
@@ -1052,10 +1225,271 @@ export default function ExploreScreen({ navigation }) {
         {!loading && (
           <FadeInView delay={120} from={14} duration={420}>
             <View style={s.browseWrap}>
-              <Text style={[s.browseHeading, { color: colors.textPrimary }]}>Browse by category</Text>
               {browseLoadError ? (
                 <Text style={[s.browseInlineError, { color: colors.error }]}>{browseLoadError}</Text>
               ) : null}
+
+              <View style={s.bookletWrap}>
+                <View style={s.experienceHeaderRow}>
+                  <View>
+                    <Text style={[s.experienceHeading, { color: colors.textPrimary, fontSize: isMobile ? 29 : 38, lineHeight: isMobile ? 33 : 42 }]}>Experience Bahrain</Text>
+                    <Text style={[s.experienceSubheading, { color: colors.textSecondary }]}>
+                      Curated stories, itineraries and places for your next Bahrain trip
+                    </Text>
+                  </View>
+                  <TouchableOpacity
+                    activeOpacity={0.85}
+                    onPress={() => {
+                      const firstBooklet = cultureBooklets?.[0]
+                      openBookletGuide(firstBooklet)
+                    }}
+                    style={[s.experienceDiscoverBtn, { borderColor: colors.border, backgroundColor: isDark ? 'rgba(255,255,255,0.04)' : '#FFF' }]}
+                  >
+                    <Text style={[s.experienceDiscoverText, { color: colors.primary }]}>DISCOVER MORE</Text>
+                    <Ionicons name="arrow-forward" size={14} color={colors.primary} />
+                  </TouchableOpacity>
+                </View>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.bookletHorizontalContent}>
+                  {cultureBooklets.map((booklet) => (
+                    <TouchableOpacity
+                      key={booklet.key}
+                      activeOpacity={0.86}
+                      onPress={() => openBookletGuide(booklet)}
+                      style={[
+                        s.experienceCard,
+                        {
+                          backgroundColor: isDark ? 'rgba(15,23,42,0.45)' : '#F8FAFC',
+                          borderColor: isDark ? 'rgba(148,163,184,0.2)' : '#E2E8F0',
+                        },
+                      ]}
+                    >
+                      {deriveImageUri(booklet?.items?.[0]) ? (
+                        <Image source={{ uri: deriveImageUri(booklet?.items?.[0]) }} style={s.experienceCardImage} resizeMode="cover" />
+                      ) : (
+                        <LinearGradient
+                          colors={[`${booklet.color}55`, `${booklet.color}22`, '#0F172A']}
+                          start={{ x: 0, y: 0 }}
+                          end={{ x: 1, y: 1 }}
+                          style={s.experienceCardImage}
+                        />
+                      )}
+                      <LinearGradient
+                        colors={['transparent', 'rgba(0,0,0,0.2)', 'rgba(0,0,0,0.78)']}
+                        style={s.experienceCardScrim}
+                      />
+                      <View style={s.experienceCardContent}>
+                        <Text style={s.experienceCardTag}>BOOKLET</Text>
+                        <Text style={[s.experienceCardTitle, { fontSize: isMobile ? 20 : 31, lineHeight: isMobile ? 22 : 33 }]} numberOfLines={isMobile ? 3 : 2}>
+                          {booklet.title}
+                        </Text>
+                        <Text style={s.experienceCardSub} numberOfLines={2}>
+                          {booklet.subtitle}
+                        </Text>
+                      </View>
+                    </TouchableOpacity>
+                  ))}
+                </ScrollView>
+              </View>
+
+              <View style={s.personalizedWrap}>
+                <View style={s.personalizedHeaderRow}>
+                  <View style={s.personalizedHeaderTextCol}>
+                    <Text style={[s.personalizedHeading, { color: colors.textPrimary, fontSize: isMobile ? 24 : 32 }]}>Personalized by AI</Text>
+                    <Text style={[s.personalizedSub, { color: colors.textSecondary }]}>
+                      Ranked from your profile + Pinecone similarity + live database freshness
+                    </Text>
+                  </View>
+                  <TouchableOpacity
+                    activeOpacity={0.85}
+                    onPress={() => {
+                      const first = personalizedEditorialPages?.[0]?.[0]?.[0]
+                      if (!first) return
+                      handleOpenPersonalizedItem(first)
+                    }}
+                    style={[
+                      s.personalizedDiscoverBtn,
+                      {
+                        borderColor: colors.border,
+                        backgroundColor: isDark ? 'rgba(255,255,255,0.04)' : '#FFFFFF',
+                      },
+                    ]}
+                  >
+                    <Text style={[s.personalizedDiscoverText, { color: colors.primary }]}>DISCOVER MORE</Text>
+                    <Ionicons name="arrow-forward" size={14} color={colors.primary} />
+                  </TouchableOpacity>
+                </View>
+                {personalizedError ? (
+                  <Text style={[s.browseInlineError, { color: colors.error }]}>{personalizedError}</Text>
+                ) : null}
+                {personalizedEditorialPages.length === 0 ? (
+                  <Text style={[s.browseEmpty, { color: colors.textMuted }]}>No curated picks yet</Text>
+                ) : (
+                  <View style={s.personalizedSliderWrap}>
+                    <ScrollView
+                      ref={personalizedSliderRef}
+                      horizontal
+                      pagingEnabled={false}
+                      showsHorizontalScrollIndicator={false}
+                      decelerationRate="fast"
+                      scrollEventThrottle={16}
+                      onScroll={(e) => {
+                        const x = e?.nativeEvent?.contentOffset?.x
+                        if (typeof x === 'number') personalizedSliderOffsetRef.current = x
+                      }}
+                      onScrollBeginDrag={() => {
+                        personalizedIsDraggingRef.current = true
+                      }}
+                      onScrollEndDrag={() => {
+                        personalizedIsDraggingRef.current = false
+                      }}
+                      onMomentumScrollEnd={() => {
+                        personalizedIsDraggingRef.current = false
+                      }}
+                      contentContainerStyle={s.personalizedSliderContent}
+                    >
+                      {personalizedRollingPages.map((columns, pageIndex) => (
+                        <View key={`pers-page-${pageIndex}`} style={[s.personalizedEditorialGrid, { width: Math.max(260, layoutW - 48) }]}>
+                          {columns.map((column, colIndex) => (
+                            <View key={`pers-col-${pageIndex}-${colIndex}`} style={s.personalizedEditorialCol}>
+                              {column.map((item, index) => {
+                                const imageUri = resolvePublicImageUrl(item.image) || coerceImageValueToString(item.image)
+                                const colW = (Math.max(260, layoutW - 48) - 12 * (personalizedColumnCount - 1)) / personalizedColumnCount
+                                const tileHeight = Math.round(Math.max(88, colW * item.heightRatio))
+                                const onPress = () => handleOpenPersonalizedItem(item)
+                                return (
+                                  <TouchableOpacity
+                                    key={item.key}
+                                    onPress={onPress}
+                                    activeOpacity={0.9}
+                                    style={[
+                                      s.personalizedEditorialCard,
+                                      {
+                                        height: tileHeight,
+                                        marginTop: index === 0 ? 0 : 12,
+                                        borderColor: isDark ? 'rgba(148,163,184,0.16)' : '#E2E8F0',
+                                      },
+                                    ]}
+                                  >
+                                    {imageUri ? (
+                                      <Image source={{ uri: imageUri }} style={s.personalizedEditorialImage} resizeMode="cover" />
+                                    ) : (
+                                      <LinearGradient
+                                        colors={isDark ? ['#1a1520', '#2d2640', '#3d3555'] : ['#e8ecf2', '#d4dae4', '#b8c2d1']}
+                                        style={s.personalizedEditorialImage}
+                                      />
+                                    )}
+                                    <LinearGradient
+                                      colors={['rgba(0,0,0,0.04)', 'rgba(0,0,0,0.24)', 'rgba(0,0,0,0.78)']}
+                                      locations={[0, 0.45, 1]}
+                                      style={s.personalizedEditorialOverlay}
+                                    />
+                                    <View style={s.personalizedEditorialContent}>
+                                      <Text style={s.personalizedEditorialTag}>{item.editorialTag}</Text>
+                                      <Text style={[s.personalizedEditorialTitle, { fontSize: editorialTitleSize, lineHeight: editorialTitleSize + 2 }]} numberOfLines={isMobile ? 3 : 4}>
+                                        {item.title}
+                                      </Text>
+                                    </View>
+                                  </TouchableOpacity>
+                                )
+                              })}
+                            </View>
+                          ))}
+                        </View>
+                      ))}
+                    </ScrollView>
+                  </View>
+                )}
+              </View>
+
+              <View style={s.mustDoWrap}>
+                <View style={s.mustDoHeaderRow}>
+                  <View style={s.mustDoHeaderTextCol}>
+                    <Text style={[s.mustDoHeading, { color: colors.textPrimary, fontSize: largeSectionTitleSize, lineHeight: largeSectionTitleSize + 4 }]}>Experience Bahrain</Text>
+                    <Text style={[s.mustDoSubtitle, { color: colors.textSecondary }]}>
+                      An exciting adventure awaits you in Bahrain, through ancient wonders, modern marvels, bustling souqs, adrenaline-filled activities, relaxing beaches and more.
+                    </Text>
+                  </View>
+                  <TouchableOpacity
+                    activeOpacity={0.85}
+                    onPress={() => {
+                      const first = weekendMustDo?.[0]
+                      if (!first) return
+                      if (first.kind === 'event' && first.sourceEvent) {
+                        handleCardPress(first.sourceEvent, null)
+                        return
+                      }
+                      if (first.clientId) setProfileClientId(first.clientId)
+                    }}
+                    style={[
+                      s.mustDoDiscoverBtn,
+                      {
+                        borderColor: colors.border,
+                        backgroundColor: isDark ? 'rgba(255,255,255,0.04)' : '#FFFFFF',
+                      },
+                    ]}
+                  >
+                    <Text style={[s.mustDoDiscoverText, { color: colors.primary }]}>DISCOVER MORE</Text>
+                    <Ionicons name="arrow-forward" size={14} color={colors.primary} />
+                  </TouchableOpacity>
+                </View>
+                {weekendMustDo.length === 0 ? (
+                  <Text style={[s.browseEmpty, { color: colors.textMuted }]}>No weekend picks yet</Text>
+                ) : (
+                  <View style={s.mustDoEditorialGrid}>
+                    {weekendEditorialColumns.map((column, colIndex) => (
+                      <View key={`wknd-col-${colIndex}`} style={s.mustDoEditorialCol}>
+                        {column.map((item, index) => {
+                          const imageUri = resolvePublicImageUrl(item.image) || coerceImageValueToString(item.image)
+                          const tileHeight = Math.round(Math.max(160, cardHeight * item.heightRatio * 0.72))
+                          const handlePress = () => {
+                            if (item.kind === 'event' && item.sourceEvent) {
+                              handleCardPress(item.sourceEvent, null)
+                              return
+                            }
+                            if (item.clientId) setProfileClientId(item.clientId)
+                          }
+                          return (
+                            <TouchableOpacity
+                              key={item.key}
+                              activeOpacity={0.9}
+                              onPress={handlePress}
+                              style={[
+                                s.mustDoEditorialCard,
+                                {
+                                  height: tileHeight,
+                                  borderColor: isDark ? 'rgba(148,163,184,0.16)' : '#E2E8F0',
+                                  marginTop: index === 0 ? 0 : 12,
+                                },
+                              ]}
+                            >
+                              {imageUri ? (
+                                <Image source={{ uri: imageUri }} style={s.mustDoEditorialImage} resizeMode="cover" />
+                              ) : (
+                                <LinearGradient
+                                  colors={isDark ? ['#1a1520', '#2d2640', '#3d3555'] : ['#e8ecf2', '#d4dae4', '#b8c2d1']}
+                                  style={s.mustDoEditorialImage}
+                                />
+                              )}
+                              <LinearGradient
+                                colors={['rgba(0,0,0,0.04)', 'rgba(0,0,0,0.24)', 'rgba(0,0,0,0.78)']}
+                                locations={[0, 0.45, 1]}
+                                style={s.mustDoEditorialOverlay}
+                              />
+                              <View style={s.mustDoEditorialTitleWrap}>
+                                <Text style={[s.mustDoEditorialTitle, { fontSize: isMobile ? 20 : 31, lineHeight: isMobile ? 22 : 33 }]} numberOfLines={isMobile ? 3 : 4}>
+                                  {item.title}
+                                </Text>
+                              </View>
+                            </TouchableOpacity>
+                          )
+                        })}
+                      </View>
+                    ))}
+                  </View>
+                )}
+              </View>
+
+              <Text style={[s.sectionEyebrow, { color: colors.textMuted, marginTop: 6 }]}>Browse more</Text>
               {['restaurants', 'places', 'events'].map((key) => {
                 const sectionLabel = key === 'restaurants' ? 'Restaurants' : key === 'places' ? 'Places' : 'Events'
                 const items =
@@ -1083,12 +1517,7 @@ export default function ExploreScreen({ navigation }) {
                         {`No ${sectionLabel.toLowerCase()} yet`}
                       </Text>
                     ) : (
-                      <ScrollView
-                        horizontal
-                        showsHorizontalScrollIndicator={false}
-                        nestedScrollEnabled
-                        contentContainerStyle={s.browseHorizontalContent}
-                      >
+                      <ScrollView horizontal showsHorizontalScrollIndicator={false} nestedScrollEnabled contentContainerStyle={s.browseHorizontalContent}>
                         {key === 'events'
                           ? items.map((item) => {
                               if (item.kind === 'client') {
@@ -1096,7 +1525,13 @@ export default function ExploreScreen({ navigation }) {
                                 return (
                                   <TouchableOpacity
                                     key={item.key}
-                                    style={s.browseClientCard}
+                                    style={[
+                                      s.browseClientContainer,
+                                      {
+                                        backgroundColor: isDark ? 'rgba(15,23,42,0.45)' : '#FFFFFF',
+                                        borderColor: isDark ? 'rgba(148,163,184,0.16)' : '#E2E8F0',
+                                      },
+                                    ]}
                                     activeOpacity={0.7}
                                     onPress={() => setProfileClientId(item.clientId)}
                                   >
@@ -1107,7 +1542,7 @@ export default function ExploreScreen({ navigation }) {
                                         <Ionicons name="calendar" size={32} color={accent} />
                                       )}
                                     </View>
-                                    <Text style={[s.browseClientName, { color: colors.textSecondary }]} numberOfLines={2}>
+                                    <Text style={[s.browseClientName, { color: colors.textPrimary }]} numberOfLines={2}>
                                       {item.name}
                                     </Text>
                                   </TouchableOpacity>
@@ -1117,7 +1552,13 @@ export default function ExploreScreen({ navigation }) {
                               return (
                                 <TouchableOpacity
                                   key={item.key}
-                                  style={s.browseClientCard}
+                                  style={[
+                                    s.browseClientContainer,
+                                    {
+                                      backgroundColor: isDark ? 'rgba(15,23,42,0.45)' : '#FFFFFF',
+                                      borderColor: isDark ? 'rgba(148,163,184,0.16)' : '#E2E8F0',
+                                    },
+                                  ]}
                                   activeOpacity={0.7}
                                   onPress={() => handleBrowseDbEventPress(item)}
                                 >
@@ -1128,7 +1569,7 @@ export default function ExploreScreen({ navigation }) {
                                       <Ionicons name="calendar" size={32} color={accent} />
                                     )}
                                   </View>
-                                  <Text style={[s.browseClientName, { color: colors.textSecondary }]} numberOfLines={2}>
+                                  <Text style={[s.browseClientName, { color: colors.textPrimary }]} numberOfLines={2}>
                                     {item.name}
                                   </Text>
                                 </TouchableOpacity>
@@ -1139,7 +1580,13 @@ export default function ExploreScreen({ navigation }) {
                               return (
                                 <TouchableOpacity
                                   key={client.client_a_uuid || client.clientId}
-                                  style={s.browseClientCard}
+                                  style={[
+                                    s.browseClientContainer,
+                                    {
+                                      backgroundColor: isDark ? 'rgba(15,23,42,0.45)' : '#FFFFFF',
+                                      borderColor: isDark ? 'rgba(148,163,184,0.16)' : '#E2E8F0',
+                                    },
+                                  ]}
                                   activeOpacity={0.7}
                                   onPress={() => setProfileClientId(client.client_a_uuid || client.clientId)}
                                 >
@@ -1154,7 +1601,7 @@ export default function ExploreScreen({ navigation }) {
                                       />
                                     )}
                                   </View>
-                                  <Text style={[s.browseClientName, { color: colors.textSecondary }]} numberOfLines={2}>
+                                  <Text style={[s.browseClientName, { color: colors.textPrimary }]} numberOfLines={2}>
                                     {client.name || client.business_name || 'Spot'}
                                   </Text>
                                 </TouchableOpacity>
@@ -1169,6 +1616,123 @@ export default function ExploreScreen({ navigation }) {
           </FadeInView>
         )}
       </AnimatedScrollView>
+
+      <Modal
+        visible={!!activeBookletGuide}
+        animationType="slide"
+        onRequestClose={() => setActiveBookletGuide(null)}
+      >
+        <View style={[s.bookletGuideRoot, { backgroundColor: colors.background, paddingTop: insets.top + 4 }]}>
+          <View style={[s.bookletGuideTopBar, { borderColor: colors.border }]}>
+            <TouchableOpacity onPress={() => setActiveBookletGuide(null)} style={s.bookletGuideBackBtn} activeOpacity={0.84}>
+              <Ionicons name="arrow-back" size={20} color={colors.textPrimary} />
+            </TouchableOpacity>
+            <Text style={[s.bookletGuideTopBarTitle, { color: colors.textPrimary }]} numberOfLines={1}>Guidebook</Text>
+            <View style={s.bookletGuideBackBtn} />
+          </View>
+
+          <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={[s.bookletGuideContent, { paddingBottom: Math.max(22, insets.bottom + 10) }]}>
+            <View style={[s.bookletGuideHero, { borderColor: colors.border }]}>
+              {bookletGuideDetails.heroImage ? (
+                <Image source={{ uri: bookletGuideDetails.heroImage }} style={s.bookletGuideHeroImage} resizeMode="cover" />
+              ) : (
+                <LinearGradient
+                  colors={isDark ? ['#1a1520', '#2d2640', '#3d3555'] : ['#e8ecf2', '#d4dae4', '#b8c2d1']}
+                  style={s.bookletGuideHeroImage}
+                />
+              )}
+              <LinearGradient
+                colors={['rgba(0,0,0,0.04)', 'rgba(0,0,0,0.3)', 'rgba(0,0,0,0.82)']}
+                locations={[0, 0.42, 1]}
+                style={s.bookletGuideHeroScrim}
+              />
+              <View style={s.bookletGuideHeroTextWrap}>
+                <Text style={s.bookletGuideHeroEyebrow}>Bahrain Guide</Text>
+                <Text style={s.bookletGuideHeroTitle} numberOfLines={3}>
+                  {activeBookletGuide?.title || 'Booklet guide'}
+                </Text>
+              </View>
+            </View>
+
+            <View style={s.bookletGuideSection}>
+              <Text style={[s.bookletGuideSectionTitle, { color: colors.textPrimary }]}>Overview</Text>
+              <Text style={[s.bookletGuideBody, { color: colors.textSecondary }]}>
+                {bookletGuideDetails.overview}
+              </Text>
+            </View>
+
+            <View style={s.bookletGuideSection}>
+              <Text style={[s.bookletGuideSectionTitle, { color: colors.textPrimary }]}>Local tips</Text>
+              <View style={s.bookletGuideTipsList}>
+                {bookletGuideDetails.tips.map((tip, idx) => (
+                  <View key={`tip-${idx}`} style={[s.bookletGuideTipCard, { borderColor: colors.border, backgroundColor: isDark ? 'rgba(15,23,42,0.44)' : '#FFFFFF' }]}>
+                    <Ionicons name="bulb-outline" size={16} color={colors.primary} />
+                    <Text style={[s.bookletGuideTipText, { color: colors.textSecondary }]}>{tip}</Text>
+                  </View>
+                ))}
+              </View>
+            </View>
+
+            <View style={s.bookletGuideSection}>
+              <Text style={[s.bookletGuideSectionTitle, { color: colors.textPrimary }]}>Suggested route</Text>
+              <View style={s.bookletGuideRouteList}>
+                {bookletGuideDetails.route.map((item, index) => {
+                  const itemName = item?.name || item?.business_name || item?.metadata?.event_name || `Guide stop ${index + 1}`
+                  return (
+                    <TouchableOpacity
+                      key={`route-${index}-${itemName}`}
+                      activeOpacity={0.86}
+                      onPress={() => handleOpenBookletItem(item)}
+                      style={[s.bookletGuideRouteItem, { borderColor: colors.border, backgroundColor: isDark ? 'rgba(15,23,42,0.42)' : '#FFFFFF' }]}
+                    >
+                      <View style={[s.bookletGuideRouteIndex, { backgroundColor: `${colors.primary}22` }]}>
+                        <Text style={[s.bookletGuideRouteIndexText, { color: colors.primary }]}>{index + 1}</Text>
+                      </View>
+                      <View style={{ flex: 1, minWidth: 0 }}>
+                        <Text style={[s.bookletGuideRouteTitle, { color: colors.textPrimary }]} numberOfLines={2}>{itemName}</Text>
+                        <Text style={[s.bookletGuideRouteSub, { color: colors.textMuted }]} numberOfLines={1}>Open details</Text>
+                      </View>
+                      <Ionicons name="chevron-forward" size={18} color={colors.textMuted} />
+                    </TouchableOpacity>
+                  )
+                })}
+              </View>
+            </View>
+
+            <View style={s.bookletGuideSection}>
+              <Text style={[s.bookletGuideSectionTitle, { color: colors.textPrimary }]}>Curated highlights</Text>
+              <View style={s.bookletGuideHighlightsGrid}>
+                {bookletGuideDetails.highlights.map((item, index) => {
+                  const itemImage = deriveImageUri(item)
+                  const itemName = item?.name || item?.business_name || item?.metadata?.event_name || `Spot ${index + 1}`
+                  return (
+                    <TouchableOpacity
+                      key={`highlight-${index}-${itemName}`}
+                      activeOpacity={0.88}
+                      onPress={() => handleOpenBookletItem(item)}
+                      style={[s.bookletGuideHighlightCard, { borderColor: colors.border }]}
+                    >
+                      {itemImage ? (
+                        <Image source={{ uri: itemImage }} style={s.bookletGuideHighlightImage} resizeMode="cover" />
+                      ) : (
+                        <LinearGradient
+                          colors={isDark ? ['#1a1520', '#2d2640', '#3d3555'] : ['#e8ecf2', '#d4dae4', '#b8c2d1']}
+                          style={s.bookletGuideHighlightImage}
+                        />
+                      )}
+                      <LinearGradient
+                        colors={['transparent', 'rgba(0,0,0,0.72)']}
+                        style={s.bookletGuideHighlightScrim}
+                      />
+                      <Text style={s.bookletGuideHighlightTitle} numberOfLines={2}>{itemName}</Text>
+                    </TouchableOpacity>
+                  )
+                })}
+              </View>
+            </View>
+          </ScrollView>
+        </View>
+      </Modal>
 
       <ClientProfileModal
         visible={!!profileClientId}
@@ -1274,9 +1838,146 @@ const s = StyleSheet.create({
 
   eventsSectionTopSpacer: { marginTop: -10 },
   eventsHeadingRow: { paddingHorizontal: 24 },
+  calendarHeaderTopRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 12, marginBottom: 14 },
+  calendarHeading: { fontSize: 40, fontWeight: '900', letterSpacing: -0.8, marginBottom: 4 },
+  calendarSubheading: { fontSize: 13, lineHeight: 18, maxWidth: 420 },
+  calendarDiscoverBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    borderWidth: 1,
+    borderRadius: 18,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    marginTop: 4,
+  },
+  calendarDiscoverText: { fontSize: 11, fontWeight: '800', letterSpacing: 0.4 },
+  calendarTabRow: { flexDirection: 'row', alignItems: 'center', gap: 18, marginBottom: 12 },
+  calendarTabBtn: { paddingBottom: 8 },
+  calendarTabText: { fontSize: 12, fontWeight: '800', letterSpacing: 0.3 },
+  calendarTabUnderline: { height: 2, borderRadius: 1, marginTop: 6 },
 
   browseWrap: { paddingHorizontal: 24, paddingTop: 8, paddingBottom: 8 },
   browseHeading: { fontSize: 18, fontWeight: '800', letterSpacing: -0.3, marginBottom: 14 },
+  guideSubheading: { fontSize: 13, lineHeight: 18, marginTop: -6, marginBottom: 14 },
+  sectionEyebrow: { fontSize: 11, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 },
+  bookletWrap: { marginBottom: 20 },
+  bookletHorizontalContent: { flexDirection: 'row', gap: 12, paddingRight: 18 },
+  experienceHeaderRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 10, gap: 10 },
+  experienceHeading: { fontSize: 38, fontWeight: '900', letterSpacing: -0.9, marginBottom: 3 },
+  experienceSubheading: { fontSize: 13, lineHeight: 18, maxWidth: 430 },
+  experienceDiscoverBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    borderWidth: 1,
+    borderRadius: 16,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    marginTop: 2,
+  },
+  experienceDiscoverText: { fontSize: 11, fontWeight: '800', letterSpacing: 0.3 },
+  experienceCard: {
+    width: 272,
+    height: 204,
+    borderRadius: 14,
+    borderWidth: 1,
+    overflow: 'hidden',
+    position: 'relative',
+  },
+  experienceCardImage: { width: '100%', height: '100%' },
+  experienceCardScrim: { ...StyleSheet.absoluteFillObject },
+  experienceCardContent: {
+    position: 'absolute',
+    left: 12,
+    right: 12,
+    bottom: 10,
+  },
+  experienceCardTag: { fontSize: 10, fontWeight: '800', color: 'rgba(255,255,255,0.85)', letterSpacing: 0.5, marginBottom: 5 },
+  experienceCardTitle: { fontSize: 31, fontWeight: '900', color: '#FFF', lineHeight: 33, letterSpacing: -0.8 },
+  experienceCardSub: { fontSize: 12, color: 'rgba(255,255,255,0.9)', lineHeight: 16, marginTop: 5 },
+  bookletCard: {
+    width: 214,
+    borderRadius: 16,
+    borderWidth: 1,
+    paddingHorizontal: 14,
+    paddingVertical: 14,
+  },
+  bookletIconBg: { width: 34, height: 34, borderRadius: 11, alignItems: 'center', justifyContent: 'center', marginBottom: 10 },
+  bookletTitle: { fontSize: 15, fontWeight: '800', marginBottom: 4 },
+  bookletSubtitle: { fontSize: 12, lineHeight: 17, marginBottom: 8 },
+  bookletCount: { fontSize: 12, fontWeight: '700' },
+  mustDoWrap: { marginBottom: 28, marginTop: 2 },
+  mustDoHeaderRow: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: 14, marginBottom: 16 },
+  mustDoHeaderTextCol: { flex: 1, minWidth: 0 },
+  mustDoHeading: { fontSize: 46, fontWeight: '900', letterSpacing: -1, marginBottom: 5 },
+  mustDoSubtitle: { fontSize: 13, lineHeight: 18, maxWidth: 540 },
+  mustDoDiscoverBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    borderWidth: 1,
+    borderRadius: 18,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    marginTop: 2,
+  },
+  mustDoDiscoverText: { fontSize: 11, fontWeight: '800', letterSpacing: 0.4 },
+  mustDoEditorialGrid: { flexDirection: 'row', gap: 12, width: '100%' },
+  mustDoEditorialCol: { flex: 1, minWidth: 0 },
+  mustDoEditorialCard: {
+    borderRadius: 16,
+    borderWidth: 1,
+    overflow: 'hidden',
+    position: 'relative',
+    backgroundColor: '#0F172A',
+    ...Platform.select({
+      ios: { shadowColor: '#020617', shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.2, shadowRadius: 14 },
+      android: { elevation: 7 },
+    }),
+  },
+  mustDoEditorialImage: { width: '100%', height: '100%' },
+  mustDoEditorialOverlay: { ...StyleSheet.absoluteFillObject },
+  mustDoEditorialTitleWrap: { position: 'absolute', left: 12, right: 12, bottom: 11 },
+  mustDoEditorialTitle: { color: '#FFF', fontSize: 31, fontWeight: '900', lineHeight: 33, letterSpacing: -0.7 },
+  personalizedWrap: { marginBottom: 24 },
+  personalizedHeaderRow: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: 14, marginBottom: 12 },
+  personalizedHeaderTextCol: { flex: 1, minWidth: 0 },
+  personalizedHeading: { fontSize: 32, fontWeight: '900', letterSpacing: -0.8, marginBottom: 4 },
+  personalizedSub: { fontSize: 12, lineHeight: 17, maxWidth: 520 },
+  personalizedDiscoverBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    borderWidth: 1,
+    borderRadius: 18,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    marginTop: 2,
+  },
+  personalizedDiscoverText: { fontSize: 11, fontWeight: '800', letterSpacing: 0.35 },
+  personalizedSliderWrap: { overflow: 'hidden' },
+  personalizedSliderContent: { alignItems: 'flex-start' },
+  personalizedEditorialGrid: { flexDirection: 'row', gap: 12, width: '100%' },
+  personalizedEditorialCol: { flex: 1, minWidth: 0 },
+  personalizedEditorialCard: {
+    borderRadius: 16,
+    borderWidth: 1,
+    overflow: 'hidden',
+    position: 'relative',
+    backgroundColor: '#0F172A',
+    ...Platform.select({
+      ios: { shadowColor: '#020617', shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.2, shadowRadius: 14 },
+      android: { elevation: 7 },
+    }),
+  },
+  personalizedEditorialImage: { width: '100%', height: '100%' },
+  personalizedEditorialOverlay: { ...StyleSheet.absoluteFillObject },
+  personalizedEditorialContent: { position: 'absolute', left: 12, right: 12, bottom: 11 },
+  personalizedEditorialTag: { fontSize: 10, fontWeight: '800', color: 'rgba(255,255,255,0.82)', letterSpacing: 0.5, marginBottom: 5 },
+  personalizedEditorialTitle: { color: '#FFF', fontSize: 27, fontWeight: '900', lineHeight: 29, letterSpacing: -0.6 },
+  personalizedPagerDots: { flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 6, marginTop: 10 },
+  personalizedPagerDot: { width: 7, height: 7, borderRadius: 4 },
   browseInlineError: { fontSize: 13, marginBottom: 8, fontWeight: '600' },
   browseSection: { marginBottom: 22 },
   browseSectionHeader: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 12 },
@@ -1289,8 +1990,15 @@ const s = StyleSheet.create({
   },
   browseSectionTitle: { fontSize: 15, fontWeight: '800', letterSpacing: 0.2 },
   browseEmpty: { fontSize: 14, fontWeight: '500', fontStyle: 'italic' },
-  browseHorizontalContent: { flexDirection: 'row', gap: 14, paddingRight: 8 },
-  browseClientCard: { alignItems: 'center', width: 76 },
+  browseHorizontalContent: { flexDirection: 'row', gap: 10, paddingRight: 8 },
+  browseClientContainer: {
+    width: 110,
+    borderRadius: 14,
+    borderWidth: 1,
+    alignItems: 'center',
+    paddingVertical: 10,
+    paddingHorizontal: 8,
+  },
   browseClientCircle: {
     width: 64,
     height: 64,
@@ -1307,11 +2015,11 @@ const s = StyleSheet.create({
   },
   browseClientImage: { width: '100%', height: '100%' },
   browseClientName: {
-    fontSize: 11,
-    fontWeight: '600',
+    fontSize: 12,
+    fontWeight: '700',
     textAlign: 'center',
     marginTop: 6,
-    maxWidth: 76,
+    maxWidth: 98,
     lineHeight: 14,
   },
 
@@ -1359,6 +2067,90 @@ const s = StyleSheet.create({
     }),
   },
   emptyCtaText: { fontSize: 17, fontWeight: '800', color: '#FFF', letterSpacing: 0.2 },
+
+  bookletGuideRoot: { flex: 1 },
+  bookletGuideTopBar: {
+    height: 52,
+    borderBottomWidth: 1,
+    paddingHorizontal: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  bookletGuideBackBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  bookletGuideTopBarTitle: { fontSize: 16, fontWeight: '800', letterSpacing: -0.2 },
+  bookletGuideContent: { paddingHorizontal: 16, paddingTop: 12 },
+  bookletGuideHero: {
+    height: 260,
+    borderRadius: 18,
+    overflow: 'hidden',
+    borderWidth: 1,
+    marginBottom: 14,
+  },
+  bookletGuideHeroImage: { width: '100%', height: '100%' },
+  bookletGuideHeroScrim: { ...StyleSheet.absoluteFillObject },
+  bookletGuideHeroTextWrap: { position: 'absolute', left: 14, right: 14, bottom: 12 },
+  bookletGuideHeroEyebrow: { fontSize: 11, fontWeight: '800', color: 'rgba(255,255,255,0.82)', letterSpacing: 0.5, marginBottom: 4 },
+  bookletGuideHeroTitle: { fontSize: 28, fontWeight: '900', color: '#FFF', lineHeight: 30, letterSpacing: -0.7 },
+  bookletGuideSection: { marginBottom: 14 },
+  bookletGuideSectionTitle: { fontSize: 18, fontWeight: '900', letterSpacing: -0.3, marginBottom: 8 },
+  bookletGuideBody: { fontSize: 14, lineHeight: 21 },
+  bookletGuideTipsList: { gap: 8 },
+  bookletGuideTipCard: {
+    borderRadius: 12,
+    borderWidth: 1,
+    paddingHorizontal: 11,
+    paddingVertical: 10,
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+  },
+  bookletGuideTipText: { flex: 1, fontSize: 13, lineHeight: 18 },
+  bookletGuideRouteList: { gap: 8 },
+  bookletGuideRouteItem: {
+    borderRadius: 12,
+    borderWidth: 1,
+    paddingHorizontal: 10,
+    paddingVertical: 9,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 9,
+  },
+  bookletGuideRouteIndex: { width: 24, height: 24, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
+  bookletGuideRouteIndexText: { fontSize: 12, fontWeight: '900' },
+  bookletGuideRouteTitle: { fontSize: 14, fontWeight: '800', lineHeight: 18, marginBottom: 1 },
+  bookletGuideRouteSub: { fontSize: 12, fontWeight: '600' },
+  bookletGuideHighlightsGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'space-between',
+    rowGap: 10,
+  },
+  bookletGuideHighlightCard: {
+    width: '48.5%',
+    height: 142,
+    borderRadius: 13,
+    overflow: 'hidden',
+    borderWidth: 1,
+  },
+  bookletGuideHighlightImage: { width: '100%', height: '100%' },
+  bookletGuideHighlightScrim: { ...StyleSheet.absoluteFillObject },
+  bookletGuideHighlightTitle: {
+    position: 'absolute',
+    left: 9,
+    right: 9,
+    bottom: 8,
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#FFF',
+    lineHeight: 16,
+  },
 
   doorOverlay: { ...StyleSheet.absoluteFillObject, zIndex: 9999, elevation: 9999 },
   doorHalf: { position: 'absolute', top: 0, bottom: 0, overflow: 'hidden' },

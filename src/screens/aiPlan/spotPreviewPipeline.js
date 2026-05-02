@@ -300,10 +300,18 @@ export async function enrichPlanWithClientData(plan, pineconeMatches, loadedClie
     const picked = new Map()
     for (const item of items || []) {
       const typeKey = String(item?.type || '').toLowerCase().trim() || 'place'
+      const timeKey = String(item?.time || '').toLowerCase().trim() || 'any'
       const clientIdKey = String(item?.clientId || '').trim()
       const spotKey = normName(item?.spot || '')
-      const key = clientIdKey ? `${typeKey}::cid::${clientIdKey}` : `${typeKey}::spot::${spotKey}`
-      if (!key || key.endsWith('::spot::')) continue
+      const key = clientIdKey
+        ? `${timeKey}::${typeKey}::cid::${clientIdKey}`
+        : `${timeKey}::${typeKey}::spot::${spotKey}`
+      if (!key || key.endsWith('::spot::')) {
+        const fallbackKey = `${timeKey}::${typeKey}::raw::${String(item?.spot || '').trim().toLowerCase()}`
+        if (!String(item?.spot || '').trim()) continue
+        if (!picked.has(fallbackKey)) picked.set(fallbackKey, { item, score: 0 })
+        continue
+      }
       const coords = parsePlanItemCoords(item)
       const hasImage = !!resolvePublicImageUrl(item?.image)
       const score = (coords ? 3 : 0) + (hasImage ? 2 : 0) + (item?.clientId ? 1 : 0)
@@ -388,6 +396,9 @@ export async function enrichPlanWithClientData(plan, pineconeMatches, loadedClie
       lat: cachedCoords ? cachedCoords.lat : null,
       lng: cachedCoords ? cachedCoords.lng : null,
       eventMetadata: match?.eventMetadata ?? item.eventMetadata ?? null,
+      ...(match?.isfoodtruck === true ? { isfoodtruck: true } : {}),
+      ...(match?.restaurantMealType ? { restaurantMealType: match.restaurantMealType } : {}),
+      ...(match?.restaurantFoodType ? { restaurantFoodType: match.restaurantFoodType } : {}),
     };
   });
 
@@ -502,7 +513,7 @@ export async function enrichPlanWithClientData(plan, pineconeMatches, loadedClie
     let restRows = []
     const { data: directRows, error: directErr } = await supabase
       .from('restaurant_client')
-      .select('a_uuid, branch')
+      .select('a_uuid, branch, isfoodtruck, meal_type, food_type, speciality')
       .in('a_uuid', restaurantIds)
     if (!directErr && Array.isArray(directRows)) {
       restRows = directRows
@@ -514,20 +525,37 @@ export async function enrichPlanWithClientData(plan, pineconeMatches, loadedClie
       restRows = Array.isArray(fallbackRows) ? fallbackRows : []
     }
     const branchesById = {}
+    const restaurantExtrasById = {}
     for (const row of restRows) {
       const id = row?.a_uuid || row?.client_a_uuid
       if (!id) continue
       const parsed = parseBranchCoords(row?.branch ?? row?.branches ?? null)
       if (parsed.length > 0) branchesById[id] = parsed
+      restaurantExtrasById[id] = {
+        isfoodtruck: row?.isfoodtruck === true || row?.isfoodtruck === 'true',
+        meal_type: row?.meal_type,
+        food_type: row?.food_type,
+        speciality: row?.speciality,
+      }
     }
     enriched = enriched.map((item, idx, arr) => {
       const isRestaurant = String(item?.client_type || item?.type || '').toLowerCase().trim() === 'restaurant'
       if (!isRestaurant || !item?.clientId) return item
+      const ex = restaurantExtrasById[item.clientId]
+      let next = { ...item }
+      if (ex) {
+        const ft = ex.isfoodtruck === true || ex.isfoodtruck === 'true'
+        next = { ...next, isfoodtruck: ft }
+        if (ex.meal_type != null && String(ex.meal_type).trim() !== '')
+          next = { ...next, restaurantMealType: String(ex.meal_type).trim() }
+        if (ex.food_type != null && String(ex.food_type).trim() !== '')
+          next = { ...next, restaurantFoodType: String(ex.food_type).trim() }
+      }
       const options = branchesById[item.clientId]
-      if (!options || options.length === 0) return item
+      if (!options || options.length === 0) return next
       const best = pickBestBranchForIndex(arr, idx, options)
-      if (!best) return item
-      return { ...item, lat: best.lat, lng: best.lng }
+      if (!best) return next
+      return { ...next, lat: best.lat, lng: best.lng }
     })
   }
 

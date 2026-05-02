@@ -1,5 +1,5 @@
 import React, { useRef, useEffect, useLayoutEffect, useState, useMemo, useCallback } from 'react'
-import { View, ScrollView, StyleSheet, Animated, Easing, Platform } from 'react-native'
+import { View, StyleSheet, Animated, Easing, Platform } from 'react-native'
 import { LinearGradient } from 'expo-linear-gradient'
 import { Ionicons } from '@expo/vector-icons'
 import Reanimated, { useSharedValue, useAnimatedStyle, withSpring, withTiming, runOnJS } from 'react-native-reanimated'
@@ -23,8 +23,7 @@ export function StopDetailGallery({
   bottomRadius = 24,
   hideBottomDotsRow = false,
 }) {
-  const scrollRef = useRef(null)
-  const indexRef = useRef(0)
+  const marqueeTranslateX = useRef(new Animated.Value(0)).current
   const [pageIdx, setPageIdx] = useState(0)
   const list = useMemo(
     () => (Array.isArray(images) && images.length > 0 ? images.filter(Boolean) : []),
@@ -32,29 +31,36 @@ export function StopDetailGallery({
   )
 
   useEffect(() => {
-    indexRef.current = 0
     setPageIdx(0)
-    requestAnimationFrame(() => {
-      scrollRef.current?.scrollTo({ x: 0, animated: false })
-    })
     if (list.length < 2) return undefined
-    const id = setInterval(() => {
-      indexRef.current = (indexRef.current + 1) % list.length
-      const next = indexRef.current
-      setPageIdx(next)
-      scrollRef.current?.scrollTo({ x: next * slideWidth, animated: true })
-    }, 5000)
-    return () => clearInterval(id)
-  }, [list, slideWidth])
+    const cycleDistance = Math.max(1, slideWidth * list.length)
+    const pxPerSecond = 24
+    const durationMs = Math.max(12000, Math.round((cycleDistance / pxPerSecond) * 1000))
+    marqueeTranslateX.setValue(0)
 
-  const handleMomentumEnd = (e) => {
-    if (list.length < 2) return
-    const x = e.nativeEvent.contentOffset.x
-    const i = Math.round(x / Math.max(1, slideWidth))
-    const clamped = Math.max(0, Math.min(list.length - 1, i))
-    indexRef.current = clamped
-    setPageIdx(clamped)
-  }
+    const listenerId = marqueeTranslateX.addListener(({ value }) => {
+      const distance = Math.abs(value)
+      const nextIdx = Math.floor(distance / Math.max(1, slideWidth)) % list.length
+      setPageIdx((prev) => (prev === nextIdx ? prev : nextIdx))
+    })
+
+    const loop = Animated.loop(
+      Animated.timing(marqueeTranslateX, {
+        toValue: -cycleDistance,
+        duration: durationMs,
+        easing: Easing.linear,
+        useNativeDriver: true,
+      })
+    )
+    loop.start()
+
+    return () => {
+      loop.stop()
+      marqueeTranslateX.removeListener(listenerId)
+      marqueeTranslateX.stopAnimation()
+      marqueeTranslateX.setValue(0)
+    }
+  }, [list, slideWidth, marqueeTranslateX])
 
   const primaryUri = list[0] || singleUri
   if (!primaryUri) {
@@ -109,22 +115,20 @@ export function StopDetailGallery({
           backgroundColor: '#E2E8F0',
         }}
       >
-        <ScrollView
-          ref={scrollRef}
-          horizontal
-          pagingEnabled
-          showsHorizontalScrollIndicator={false}
-          onMomentumScrollEnd={handleMomentumEnd}
-          decelerationRate="fast"
-          style={{ width: slideWidth, height: imageHeight }}
-          keyboardShouldPersistTaps="handled"
+        <Animated.View
+          style={{
+            width: slideWidth * list.length * 2,
+            height: imageHeight,
+            flexDirection: 'row',
+            transform: [{ translateX: marqueeTranslateX }],
+          }}
         >
-          {list.map((img, i) => (
+          {[...list, ...list].map((img, i) => (
             <View key={`${String(img)}-${i}`} style={{ width: slideWidth, height: imageHeight, backgroundColor: '#E2E8F0' }}>
               <PreviewImage uri={img} style={StyleSheet.absoluteFill} />
             </View>
           ))}
-        </ScrollView>
+        </Animated.View>
       </View>
       {!hideBottomDotsRow ? (
         <View

@@ -1,5 +1,5 @@
 const PINECONE_API_KEY = process.env.PINECONE_API_KEY;
-const PINECONE_HOST = 'https://gobahrain-1pj8txc.svc.aped-4627-b74a.pinecone.io';
+const PINECONE_HOST = (process.env.PINECONE_HOST || '').trim() || 'https://gobahrain-1pj8txc.svc.aped-4627-b74a.pinecone.io';
 const PINECONE_QUERY_URL = `${PINECONE_HOST}/query`;
 const PINECONE_API_VERSION = '2024-07';
 const FETCH_TIMEOUT_MS = 45000;
@@ -17,7 +17,7 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = FETCH_TIMEOUT_MS)
 /**
  * Direct fetch to Pinecone query — same approach as the frontend.
  */
-async function pineconeQuery(vector, topK, filter, namespace = '') {
+export async function pineconeQuery(vector, topK, filter = undefined, namespace = '') {
   const body = {
     vector,
     topK,
@@ -88,6 +88,23 @@ export async function queryClients(embedding, options = {}) {
   return matches.map((m) => ({
     score: m.score,
     id: m.id,
+    metadata: m.metadata || {},
+  }));
+}
+
+/**
+ * Broad semantic search for RAG — no metadata filter so clients and events can rank together.
+ * @param {number[]} embedding
+ * @param {{ topK?: number, namespace?: string }} options
+ */
+export async function queryRagTopMatches(embedding, options = {}) {
+  const topK = options.topK ?? 5;
+  const namespace =
+    typeof options.namespace === 'string' ? options.namespace : process.env.PINECONE_RAG_NAMESPACE?.trim?.() ?? '';
+  const matches = await pineconeQuery(embedding, topK, undefined, namespace || undefined);
+  return matches.map((m) => ({
+    id: m.id,
+    score: typeof m.score === 'number' ? m.score : Number(m.score) || 0,
     metadata: m.metadata || {},
   }));
 }

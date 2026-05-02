@@ -99,7 +99,25 @@ export function matchPlanToPinecone(planItem, pineconeMatches) {
       const clientId = meta.client_a_uuid || meta.id || m.id || null;
       const rating = meta.rating != null && meta.rating !== '' ? meta.rating : null;
       const eventMetadata = isEventStop ? buildEventMetadataFromPineconeMeta(meta) : null
-      best = { image, clientId, rating, coords, eventMetadata };
+      const isFt = meta.isfoodtruck === true || meta.is_food_truck === true || meta?.isFoodTruck === true
+      best = {
+        image,
+        clientId,
+        rating,
+        coords,
+        eventMetadata,
+        isfoodtruck: isFt,
+        restaurantMealType:
+          meta.restaurant_meal_type != null && String(meta.restaurant_meal_type).trim()
+            ? String(meta.restaurant_meal_type).trim()
+            : meta.meal_type != null && String(meta.meal_type).trim()
+              ? String(meta.meal_type).trim()
+              : null,
+        restaurantFoodType:
+          meta.restaurant_food_type != null && String(meta.restaurant_food_type).trim()
+            ? String(meta.restaurant_food_type).trim()
+            : null,
+      };
     }
   }
   return best;

@@ -23,9 +23,9 @@ const groupGeneralIdsByCategory = (ids) => {
 }
 
 /**
- * Maps onboarding "interest" GENERAL_PREFERENCES ids to plan-generation
- * activity ids (from PREFERENCES). Keeps the Pinecone query labels working
- * even though the onboarding flow no longer asks the activities question directly.
+ * Maps onboarding profile signals from GENERAL_PREFERENCES to plan-generation
+ * activity ids (from PREFERENCES). This keeps personalization useful even when
+ * onboarding questions are profile-focused and independent from plan modal picks.
  */
 const INTEREST_TO_ACTIVITY_MAP = {
   'culture-history': ['cultural', 'historical'],
@@ -43,6 +43,15 @@ const INTEREST_TO_ACTIVITY_MAP = {
   'quiet-peaceful': ['leisure'],
   'social-lively': [],
   'hidden-gems': ['sightseeing'],
+  'pace-relaxed': ['leisure', 'scenic', 'nature'],
+  'pace-balanced': ['sightseeing', 'cultural', 'nature'],
+  'pace-packed': ['adventure', 'instagram', 'sightseeing'],
+  'plan-structured': ['historical', 'cultural'],
+  'plan-flexible': ['leisure', 'nature'],
+  'plan-mix': ['sightseeing', 'leisure'],
+  'time-early': ['nature', 'scenic'],
+  'time-afternoon': ['sightseeing', 'cultural'],
+  'time-late': ['leisure', 'instagram'],
 }
 
 export const deriveActivityIdsFromInterestIds = (ids) => {
@@ -91,7 +100,7 @@ export async function generateUserPersonaSummary({
 
   const systemPrompt = [
     'You are a senior personalization strategist for a travel app in Bahrain.',
-    'Given a user\'s onboarding answers, write ONE rich, third-person profile paragraph (70–110 words) that feels like a real friend describing them.',
+    'Given a user\'s onboarding answers, write ONE rich, third-person profile paragraph (50-70 words) that feels like a real friend describing them.',
     'Cover: who they travel with, the pace/energy they like, spending comfort, the 2–3 experience themes that matter most, food personality, and what they probably want to feel by the end of a great day.',
     'Write in present tense. Use warm, specific language ("This traveler loves…"). No bullet lists. No headings. No hedging.',
     'End with one short sentence that states the vibe their perfect Bahrain day should deliver — this sentence will guide later itinerary generation.',

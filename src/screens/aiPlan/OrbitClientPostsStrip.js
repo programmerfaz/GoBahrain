@@ -3,9 +3,9 @@ import { View, ScrollView, StyleSheet, Platform, Animated, Easing, Text } from '
 import { LinearGradient } from 'expo-linear-gradient'
 import { CachedImage } from '../../components/CachedImage'
 
-const ITEM_W = 116
-const ITEM_H = 150
-const GAP = 12
+const ITEM_W = 98
+const ITEM_H = 116
+const GAP = 10
 const GOLD = '#E9C877'
 const GOLD_SOFT = '#F7DFA0'
 
@@ -155,15 +155,15 @@ function OrbitTile({ uri, accent, accentRing, delay = 0 }) {
 const styles = StyleSheet.create({
   wrap: {
     width: '100%',
-    paddingTop: 4,
-    paddingBottom: 2,
+    paddingTop: 3,
+    paddingBottom: 1,
   },
   overlineRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
-    paddingHorizontal: 16,
-    paddingBottom: 6,
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingBottom: 4,
   },
   overlineDot: {
     width: 6,
@@ -176,10 +176,10 @@ const styles = StyleSheet.create({
     }),
   },
   overlineText: {
-    fontSize: 10.5,
+    fontSize: 9.5,
     fontWeight: '800',
     color: GOLD_SOFT,
-    letterSpacing: 1.6,
+    letterSpacing: 1.2,
   },
   overlineBar: {
     flex: 1,
@@ -187,12 +187,12 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(233,200,119,0.35)',
   },
   reelFrame: {
-    height: ITEM_H + 22,
+    height: ITEM_H + 12,
     justifyContent: 'center',
     position: 'relative',
   },
   scrollContent: {
-    paddingHorizontal: 18,
+    paddingHorizontal: 10,
     alignItems: 'center',
   },
   tileWrap: {
@@ -216,10 +216,10 @@ const styles = StyleSheet.create({
   tile: {
     width: ITEM_W,
     height: ITEM_H,
-    borderRadius: 18,
+    borderRadius: 14,
     overflow: 'hidden',
     borderWidth: 1,
-    backgroundColor: '#0B0A0F',
+    backgroundColor: '#111827',
     ...Platform.select({
       ios: {
         shadowColor: '#000000',

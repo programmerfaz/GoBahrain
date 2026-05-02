@@ -5,6 +5,7 @@ import {
   buildPlacesContext,
   generateDayPlan,
 } from '../services/aiPlannerService.js';
+import { buildHydratedPlanCatalog } from '../services/planHydratedCatalogService.js';
 
 const router = Router();
 
@@ -67,6 +68,24 @@ router.post('/', async (req, res) => {
     });
   } catch (err) {
     console.error('AI plan error:', err.message);
+    res.status(500).json({ error: err.message, latency_ms: Date.now() - start });
+  }
+});
+
+/**
+ * POST /api/ai-plan/hydrated-catalog
+ * Pinecone (4 buckets) → Supabase merge → JSON for in-app generateDayPlan().
+ */
+router.post('/hydrated-catalog', async (req, res) => {
+  const start = Date.now();
+  try {
+    const out = await buildHydratedPlanCatalog(req.body || {});
+    res.json({
+      ...out,
+      latency_ms: Date.now() - start,
+    });
+  } catch (err) {
+    console.error('[ai-plan] hydrated-catalog:', err.message);
     res.status(500).json({ error: err.message, latency_ms: Date.now() - start });
   }
 });

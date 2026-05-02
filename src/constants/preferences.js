@@ -52,17 +52,15 @@ export const GENERAL_PREFERENCES = [
 
 /** Activity types — for plan generation only (what to do). */
 export const PREFERENCES = [
-  { id: 'sightseeing', label: 'sightseeing', icon: 'business-outline', color: M.afternoon },
-  { id: 'instagram', label: 'instagram', icon: 'camera-outline', color: M.event },
-  { id: 'leisure', label: 'Leisure', icon: 'bed-outline', color: M.success },
-  { id: 'nature', label: 'nature', icon: 'footsteps-outline', color: M.success },
-  { id: 'historical', label: 'historical', icon: 'time-outline', color: M.indigo },
-  { id: 'cultural', label: 'cultural', icon: 'color-palette-outline', color: M.indigo },
-  { id: 'adventure', label: 'Adventure', icon: 'rocket-outline', color: M.dining },
-  { id: 'family-friendly', label: 'family friendly', icon: 'people-outline', color: M.success },
-  { id: 'beach', label: 'beach', icon: 'umbrella-outline', color: M.morning },
-  { id: 'parks', label: 'parks', icon: 'leaf-outline', color: M.success },
-  { id: 'scenic', label: 'scenic', icon: 'image-outline', color: M.event },
+  { id: 'culture', label: 'Culture', icon: 'library-outline', color: M.indigo },
+  { id: 'art', label: 'Art', icon: 'brush-outline', color: M.event },
+  { id: 'shopping', label: 'Shopping', icon: 'storefront-outline', color: M.afternoon },
+  { id: 'waterfronts', label: 'Waterfronts', icon: 'boat-outline', color: M.morning },
+  { id: 'beaches', label: 'Beaches', icon: 'umbrella-outline', color: M.morning },
+  { id: 'fun', label: 'Fun', icon: 'happy-outline', color: M.success },
+  { id: 'parks', label: 'Parks', icon: 'leaf-outline', color: M.success },
+  { id: 'historical', label: 'Historical', icon: 'time-outline', color: M.indigo },
+  { id: 'nature', label: 'Nature', icon: 'earth-outline', color: M.success },
 ];
 
 /** How far the user will travel for the AI day plan — drives catalog size, ordering, and prompts. */
@@ -89,19 +87,16 @@ export const TRAVEL_EXPLORE_OPTIONS = [
 
 /** Food types — for plan generation only (what to eat). */
 export const FOOD_CATEGORIES = [
-  { id: 'local', label: 'local', icon: 'home-outline', color: M.dining },
-  { id: 'arabic-middle-eastern', label: 'Arabic/middle eastern', icon: 'home-outline', color: M.dining },
-  { id: 'indian', label: 'indian', icon: 'flame-outline', color: M.morning },
-  { id: 'american', label: 'american', icon: 'fast-food-outline', color: M.morning },
-  { id: 'italian', label: 'italian', icon: 'pizza-outline', color: M.success },
-  { id: 'chinenese', label: 'Chinenese', icon: 'grid-outline', color: M.dining },
-  { id: 'japanese', label: 'Japanese', icon: 'fish-outline', color: M.dining },
-  { id: 'turkish', label: 'Turkish', icon: 'beer-outline', color: M.dining },
-  { id: 'lebanese', label: 'lebanese', icon: 'restaurant-outline', color: M.dining },
-  { id: 'international', label: 'international', icon: 'globe-outline', color: M.indigo },
-  { id: 'cafe', label: 'cafe', icon: 'cafe-outline', color: M.morning },
-  { id: 'pakistani', label: 'pakistani', icon: 'nutrition-outline', color: M.afternoon },
-  { id: 'asian', label: 'asian', icon: 'layers-outline', color: M.dining },
+  { id: 'local-arabic', label: 'Local & Arabic', icon: 'home-outline', color: M.dining },
+  { id: 'asian', label: 'Asian', icon: 'layers-outline', color: M.dining },
+  { id: 'indian-pakistani', label: 'Indian/Pakistani', icon: 'flame-outline', color: M.morning },
+  { id: 'italian', label: 'Italian', icon: 'pizza-outline', color: M.success },
+  { id: 'american', label: 'American', icon: 'fast-food-outline', color: M.afternoon },
+  { id: 'seafood', label: 'Seafood', icon: 'fish-outline', color: M.indigo },
+  { id: 'turkish-lebanese', label: 'Turkish/Lebanese', icon: 'restaurant-outline', color: M.dining },
+  { id: 'cafe-desserts', label: 'Cafe & Desserts', icon: 'cafe-outline', color: M.morning },
+  { id: 'international', label: 'International', icon: 'globe-outline', color: M.indigo },
+  { id: 'fast-food', label: 'Fast Food', icon: 'fast-food-outline', color: M.event },
 ];
 
 export const GENERAL_GROUPS = [

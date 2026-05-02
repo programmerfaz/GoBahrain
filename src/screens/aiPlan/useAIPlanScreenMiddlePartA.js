@@ -53,6 +53,7 @@ import {
   fetchBreakfastSpots,
   fetchEvents,
   generateDayPlan,
+  generatePlanTitleFromAI,
   fetchClientsWithLocation,
   enhancePlanStopAtIndex,
   retrievalPersonaCacheKey,
@@ -96,6 +97,7 @@ import {
   STOP_DETAIL_EXIT_X,
   STOP_DETAIL_SWIPE_SNAP_BACK,
   STOP_DETAIL_SWIPE_COMMIT,
+  PLAN_MODAL_MAX_FOOD_CATEGORIES,
   getPlanSheetBottomPadding,
 } from './constants'
 import {
@@ -161,43 +163,6 @@ export function useAIPlanScreenMiddlePartA(inner) {
       return '';
     }
   };
-
-  const handleOpenEditSavedPlanTitle = useCallback(
-    (planId) => {
-      if (!planId) return;
-      const row = inner.savedPlansList.find((p) => p.id === planId);
-      const initial = typeof row?.title === 'string' && row.title.trim() ? row.title.trim() : 'My plan';
-      inner.setEditSavedPlanTitleId(planId);
-      inner.setEditSavedPlanTitleDraft(initial);
-      inner.setShowEditSavedPlanTitleModal(true);
-    },
-    [inner.savedPlansList],
-  );
-
-  const handleCloseEditSavedPlanTitleModal = useCallback(() => {
-    if (inner.editSavedPlanTitleBusy) return;
-    inner.setShowEditSavedPlanTitleModal(false);
-    inner.setEditSavedPlanTitleId(null);
-    inner.setEditSavedPlanTitleDraft('');
-  }, [inner.editSavedPlanTitleBusy]);
-
-  const handleSubmitEditSavedPlanTitle = useCallback(async () => {
-    if (!inner.editSavedPlanTitleId) return;
-    const trimmed = inner.editSavedPlanTitleDraft.trim() || 'My plan';
-    inner.setEditSavedPlanTitleBusy(true);
-    try {
-      await updateSavedPlan(inner.editSavedPlanTitleId, { title: trimmed });
-      await inner.refreshSavedPlans();
-      inner.setShowEditSavedPlanTitleModal(false);
-      inner.setEditSavedPlanTitleId(null);
-      inner.setEditSavedPlanTitleDraft('');
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
-    } catch (e) {
-      Alert.alert('Could not update title', e?.message ?? 'Try again.');
-    } finally {
-      inner.setEditSavedPlanTitleBusy(false);
-    }
-  }, [inner.editSavedPlanTitleId, inner.editSavedPlanTitleDraft, inner.refreshSavedPlans]);
 
   const handleRequestDeleteSavedPlan = useCallback(
     (plan) => {
@@ -349,8 +314,10 @@ export function useAIPlanScreenMiddlePartA(inner) {
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
         Alert.alert('Saved', 'Your plan is updated.');
       } else {
-        const defaultTitle = `My plan · ${new Date().toLocaleDateString()}`;
-        const id = await createSavedPlan({ title: defaultTitle, planData: payload });
+        const aiTitle = await generatePlanTitleFromAI(inner.dayPlan, {
+          profileNarrative: inner.preferences?.profileSummary || '',
+        });
+        const id = await createSavedPlan({ title: aiTitle, planData: payload });
         if (id) inner.setActiveSavedPlanId(id);
         await inner.refreshSavedPlans();
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
@@ -361,9 +328,46 @@ export function useAIPlanScreenMiddlePartA(inner) {
     } finally {
       inner.setSavePlanBusy(false);
     }
-  }, [inner.dayPlan, inner.activeSavedPlanId, inner.refreshSavedPlans, inner.planReadOnly, inner.sharedCollaboration]);
+  }, [inner.dayPlan, inner.activeSavedPlanId, inner.refreshSavedPlans, inner.planReadOnly, inner.sharedCollaboration, inner.preferences?.profileSummary]);
 
-  const handleOpenShareModal = useCallback(async () => {
+  const autoSavePlanSilently = useCallback(
+    async (planOverride) => {
+      const sourcePlan = Array.isArray(planOverride) ? planOverride : inner.dayPlan
+      if (!Array.isArray(sourcePlan) || sourcePlan.length === 0) return
+      if (inner.planReadOnly) return
+
+      const payload = serializePlanForStorage(sourcePlan)
+      if (!Array.isArray(payload) || payload.length === 0) return
+
+      if (inner.sharedCollaboration?.role === 'editor' && inner.sharedCollaboration.code) {
+        await pushSharedPlanUpdate(inner.sharedCollaboration.code, payload)
+        return
+      }
+
+      if (inner.activeSavedPlanId) {
+        await updateSavedPlan(inner.activeSavedPlanId, { planData: payload })
+        return
+      }
+
+      const aiTitle = await generatePlanTitleFromAI(sourcePlan, {
+        profileNarrative: inner.preferences?.profileSummary || '',
+      })
+      const id = await createSavedPlan({ title: aiTitle, planData: payload })
+      if (id) inner.setActiveSavedPlanId(id)
+      await inner.refreshSavedPlans()
+    },
+    [
+      inner.dayPlan,
+      inner.planReadOnly,
+      inner.sharedCollaboration,
+      inner.activeSavedPlanId,
+      inner.refreshSavedPlans,
+      inner.preferences?.profileSummary,
+    ],
+  )
+
+  const handleOpenShareModal = useCallback(async (options = {}) => {
+    const openModal = options?.openModal !== false
     if (!inner.dayPlan?.length) {
       Alert.alert('Nothing to share', 'Create a plan first.');
       return;
@@ -377,8 +381,11 @@ export function useAIPlanScreenMiddlePartA(inner) {
       let planId = inner.activeSavedPlanId;
       if (!planId) {
         const payload = serializePlanForStorage(inner.dayPlan);
+        const aiTitle = await generatePlanTitleFromAI(inner.dayPlan, {
+          profileNarrative: inner.preferences?.profileSummary || '',
+        });
         planId = await createSavedPlan({
-          title: `Plan · ${new Date().toLocaleDateString()}`,
+          title: aiTitle,
           planData: payload,
         });
         if (planId) inner.setActiveSavedPlanId(planId);
@@ -392,27 +399,35 @@ export function useAIPlanScreenMiddlePartA(inner) {
       const row = rows.find((r) => r.id === planId);
       inner.setSharePermissionDraft(row?.share_permission === 'edit' ? 'edit' : 'view');
       inner.setShareModalCode(row?.share_code || null);
-      inner.setShowSharePlanModal(true);
+      if (openModal) inner.setShowSharePlanModal(true);
     } catch (e) {
       Alert.alert('Could not open sharing', e?.message ?? 'Try again.');
     } finally {
       inner.setShareModalBusy(false);
     }
-  }, [inner.dayPlan, inner.activeSavedPlanId, inner.refreshSavedPlans, inner.planReadOnly]);
+  }, [inner.dayPlan, inner.activeSavedPlanId, inner.refreshSavedPlans, inner.planReadOnly, inner.preferences?.profileSummary]);
 
-  const handleConfirmShareSettings = useCallback(async () => {
+  const handleConfirmShareSettings = useCallback(async (options = {}) => {
+    const skipClipboard = options?.skipClipboard === true
+    const skipSuccessAlert = options?.skipSuccessAlert === true
     if (!inner.activeSavedPlanId) return;
     inner.setShareModalBusy(true);
     try {
       const code = await enableSharingForPlan(inner.activeSavedPlanId, inner.sharePermissionDraft);
       inner.setShareModalCode(code);
       await inner.refreshSavedPlans();
-      const link = ExpoLinking.createURL(`plan/${code}`);
-      await Clipboard.setStringAsync(`${link}\nCode: ${code}`);
+      if (!skipClipboard) {
+        const link = ExpoLinking.createURL(`plan/${code}`);
+        await Clipboard.setStringAsync(`${link}\nCode: ${code}`);
+      }
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
-      Alert.alert('Copied', 'Link and code are on your clipboard.');
+      if (!skipSuccessAlert) {
+        Alert.alert('Copied', 'Link and code are on your clipboard.');
+      }
+      return code;
     } catch (e) {
       Alert.alert('Sharing failed', e?.message ?? 'Try again.');
+      return null;
     } finally {
       inner.setShareModalBusy(false);
     }
@@ -456,6 +471,17 @@ export function useAIPlanScreenMiddlePartA(inner) {
   }, [inner.route.params?.shareCode, inner.route.params?.code, applyShareCodeFromString])
 
   useEffect(() => {
+    const savedPlan = inner.route.params?.openSavedPlan
+    if (!savedPlan?.id || !Array.isArray(savedPlan?.plan_data)) return
+    handleOpenSavedPlanRow(savedPlan)
+    try {
+      inner.navigation.setParams({ openSavedPlan: undefined })
+    } catch (_) {
+      /* older navigators */
+    }
+  }, [inner.route.params?.openSavedPlan, handleOpenSavedPlanRow])
+
+  useEffect(() => {
     const onUrl = ({ url }) => {
       const c = parseShareCodeFromUrl(url)
       if (c) applyShareCodeFromString(c)
@@ -481,17 +507,16 @@ export function useAIPlanScreenMiddlePartA(inner) {
 
   const togglePreference = (id) => {
     inner.setSelectedPreferences((prev) => {
-      const next = prev.includes(id) ? prev.filter((p) => p !== id) : [...prev, id]
-      if (id === 'other' && !next.includes('other')) inner.setCustomPreferenceInput('')
-      return next
+      if (prev.includes(id)) return prev.filter((p) => p !== id)
+      return [...prev, id]
     });
   };
 
   const toggleFoodCategory = (id) => {
     inner.setSelectedFoodCategories((prev) => {
-      const next = prev.includes(id) ? prev.filter((f) => f !== id) : [...prev, id]
-      if (id === 'other' && !next.includes('other')) inner.setCustomFoodInput('')
-      return next
+      if (prev.includes(id)) return prev.filter((f) => f !== id)
+      if (prev.length >= PLAN_MODAL_MAX_FOOD_CATEGORIES) return prev
+      return [...prev, id]
     });
   };
 
@@ -536,5 +561,5 @@ export function useAIPlanScreenMiddlePartA(inner) {
       }
     })();
   };
-  return { ...inner, appliedLinkCodeRef, handleOpenEditSavedPlanTitle, handleCloseEditSavedPlanTitleModal, handleSubmitEditSavedPlanTitle, handleRequestDeleteSavedPlan, fitMapToPlan, applyShareCodeFromString, handleOpenSavedPlanRow, handleSavePlanToCloud, handleOpenShareModal, handleConfirmShareSettings, handleCopyShareLinkOnly, handleDisableSharing, formatSavedPlanDate, togglePreference, toggleFoodCategory, startBackgroundPrefetch }
+  return { ...inner, appliedLinkCodeRef, handleRequestDeleteSavedPlan, fitMapToPlan, applyShareCodeFromString, handleOpenSavedPlanRow, handleSavePlanToCloud, autoSavePlanSilently, handleOpenShareModal, handleConfirmShareSettings, handleCopyShareLinkOnly, handleDisableSharing, formatSavedPlanDate, togglePreference, toggleFoodCategory, startBackgroundPrefetch }
 }

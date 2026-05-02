@@ -1,6 +1,6 @@
 import { supabase } from '../config/supabase'
 import AsyncStorage from '@react-native-async-storage/async-storage'
-import { ensureImageUrl } from '../utils/imageUrl'
+import { ensureImageUrl, parseStorageImageUrl, IMAGE_QUALITY_PRESETS } from '../utils/imageUrl'
 
 /**
  * Feed service — fast, quality, personalized home feed.
@@ -23,6 +23,7 @@ const RECENT_TAGS_KEY = '@gobahrain_feed_recent_tags'
 
 const CACHE_EXPIRY_MS = 5 * 60 * 1000
 const PERSONA_CACHE_TTL_MS = 10 * 60 * 1000
+const PERSONA_FETCH_TIMEOUT_MS = 650
 const BATCH_SIZE = 15
 const MAX_SEEN_IDS = 500
 /** Client-side only: how many ids we honor when filtering refresh candidates (order matters — see buildRefreshExcludePostIds). */
@@ -270,6 +271,30 @@ const loadUserPersonalization = async (fallbackSummary = '') => {
   }
 }
 
+const withTimeout = (promise, ms, fallbackValue) =>
+  new Promise((resolve) => {
+    let settled = false
+    const timer = setTimeout(() => {
+      if (settled) return
+      settled = true
+      resolve(fallbackValue)
+    }, ms)
+
+    Promise.resolve(promise)
+      .then((value) => {
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        resolve(value)
+      })
+      .catch(() => {
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        resolve(fallbackValue)
+      })
+  })
+
 /** Warm the persona cache at app start for an instant-first-feed UX. */
 export const prefetchPersonalization = async (fallbackSummary = '') => {
   await loadUserPersonalization(fallbackSummary)
@@ -483,7 +508,8 @@ const diversifyFeed = (rankedPosts) => {
 
 /** ---------- Image normalization ---------- */
 
-const resolveImageUri = (raw) => {
+/** Same resolver as Home feed (`PostCard`): JSON `[{ url }]` + `homePost` transform presets. */
+export function resolveFeedPostImageUri(raw) {
   let imageUri = raw
   if (imageUri && typeof imageUri === 'string' && imageUri.startsWith('[{')) {
     try {
@@ -494,14 +520,11 @@ const resolveImageUri = (raw) => {
       /* fall through */
     }
   }
-  if (imageUri && typeof imageUri === 'string' && !imageUri.startsWith('http')) {
-    const clean = imageUri.startsWith('gobahrain-post-images/')
-      ? imageUri.replace('gobahrain-post-images/', '')
-      : imageUri
-    imageUri = `https://zonhaprelkjyjugpqfdn.supabase.co/storage/v1/object/public/gobahrain-post-images/${clean}`
-  }
-  return imageUri || null
+  if (!imageUri || typeof imageUri !== 'string') return null
+  return ensureImageUrl(imageUri, 'gobahrain-post-images', IMAGE_QUALITY_PRESETS.homePost) || null
 }
+
+const resolveImageUri = resolveFeedPostImageUri
 
 const parseTags = (tags) => {
   if (tags == null) return []
@@ -569,6 +592,7 @@ export const fetchFeedPage = async ({
   searchQuery = null,
   useCache = true,
   isRefresh = false,
+  useWideRefreshWindow = true,
   userPersonaSummary = '',
   excludePostIds = null,
   /** If refresh still surfaces this id first, replace it (safety vs stale exclude / fallback fetch). */
@@ -596,7 +620,9 @@ export const fetchFeedPage = async ({
     }
 
     const fetchLimit =
-      !cursor && isRefresh && excludeIds.length > 0 ? REFRESH_FETCH_WINDOW : limit
+      !cursor && isRefresh && useWideRefreshWindow && excludeIds.length > 0
+        ? REFRESH_FETCH_WINDOW
+        : limit
 
     const runPostsQuery = (beforeCreatedAt = null) => {
       let q = supabase
@@ -610,9 +636,20 @@ export const fetchFeedPage = async ({
     }
 
     /** Parallelize: voter id, persona, recent tags, and posts. */
+    const fallbackPersona = {
+      personaSummary: userPersonaSummary || '',
+      generalIds: [],
+      activityIds: [],
+      foodIds: [],
+      profileAnswers: {},
+    }
     const [voterId, persona, recentTags, firstPostsRes] = await Promise.all([
       getVoterId(),
-      loadUserPersonalization(userPersonaSummary),
+      withTimeout(
+        loadUserPersonalization(userPersonaSummary),
+        PERSONA_FETCH_TIMEOUT_MS,
+        fallbackPersona
+      ),
       loadRecentTags(),
       runPostsQuery(),
     ])
@@ -741,11 +778,13 @@ export const fetchFeedPage = async ({
       const postPrice = row.price_range != null && row.price_range !== '' ? row.price_range : null
       const priceRange = postPrice ?? clientPrice
       const businessName = client?.business_name ?? null
-      const rawClientImage =
-        client?.client_image != null && String(client.client_image).trim() !== ''
-          ? String(client.client_image).trim()
-          : null
-      const clientImage = rawClientImage ? ensureImageUrl(rawClientImage) || rawClientImage : null
+      const rawClientImage = client?.client_image ?? null
+      const clientImage =
+        parseStorageImageUrl(rawClientImage, IMAGE_QUALITY_PRESETS.homeAvatar) ||
+        (rawClientImage
+          ? ensureImageUrl(String(rawClientImage).trim(), 'gobahrain-post-images', IMAGE_QUALITY_PRESETS.homeAvatar) ||
+            String(rawClientImage).trim()
+          : null)
 
       const imageUri = resolveImageUri(row.post_image)
       const lat = client?.lat != null && client?.lat !== '' ? parseFloat(client.lat) : null

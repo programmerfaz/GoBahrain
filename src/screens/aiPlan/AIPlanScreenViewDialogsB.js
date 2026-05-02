@@ -125,6 +125,15 @@ export function AIPlanScreenViewDialogsB({ screen }) {
     return () => sub.remove()
   }, [screen.showBuildModePickerModal, screen.closeBuildModePickerModal])
 
+  useEffect(() => {
+    if (!screen.showShareActionPickerModal) return undefined
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      screen.setShowShareActionPickerModal(false)
+      return true
+    })
+    return () => sub.remove()
+  }, [screen.showShareActionPickerModal, screen.setShowShareActionPickerModal])
+
   return (
 <>
 
@@ -159,6 +168,8 @@ export function AIPlanScreenViewDialogsB({ screen }) {
               <Text style={styles.buildModeLuxuryEyebrow}>SIYAHABH PLAN BUILDER</Text>
             </Reanimated.View>
             <Reanimated.View entering={ZoomInEasyDown.duration(340)} style={styles.buildModeStandaloneWrap}>
+              {screen.buildDayModalPhase === 'menu' ? (
+                <>
                 <Text style={styles.buildModeStandaloneTitle}>Build your day</Text>
                 <Text style={styles.buildModeStandaloneHint}>Choose how you want to build your Bahrain day.</Text>
                 <View style={styles.buildModeStandaloneButtonRow}>
@@ -195,7 +206,59 @@ export function AIPlanScreenViewDialogsB({ screen }) {
                       </View>
                     </TouchableOpacity>
                   </Reanimated.View>
+                  <Reanimated.View entering={FadeInDown.delay(180).duration(360)} style={styles.buildModeStandaloneOptionSlot}>
+                    <TouchableOpacity
+                      style={styles.buildModeStandaloneButton}
+                      activeOpacity={0.9}
+                      onPress={screen.handleBuildDayPickEnterCode}
+                      accessibilityRole="button"
+                      accessibilityLabel="Enter shared code"
+                    >
+                      <View style={styles.buildModeStandaloneButtonOutline}>
+                        <Ionicons name="key-outline" size={22} color="#F7DFA0" />
+                        <Text style={styles.buildModeStandaloneButtonText}>Enter{'\n'}code</Text>
+                      </View>
+                    </TouchableOpacity>
+                  </Reanimated.View>
                 </View>
+                </>
+              ) : (
+                <>
+                  <Text style={styles.buildModeStandaloneTitle}>Enter code</Text>
+                  <Text style={styles.buildModeStandaloneHint}>Paste a shared plan code to open it instantly.</Text>
+                  <View style={styles.buildModeJoinCard}>
+                    <TextInput
+                      style={styles.buildModeJoinInput}
+                      value={screen.joinCodeInput}
+                      onChangeText={(t) => screen.setJoinCodeInput(t.toUpperCase())}
+                      placeholder="ENTER CODE"
+                      placeholderTextColor="rgba(148,163,184,0.9)"
+                      autoCapitalize="characters"
+                      autoCorrect={false}
+                      maxLength={12}
+                      editable={!screen.joinCodeBusy}
+                      accessibilityLabel="Shared plan code"
+                    />
+                    <TouchableOpacity
+                      style={[
+                        styles.buildModeJoinOpenBtn,
+                        !screen.joinCodeInput?.trim() && styles.buildModeJoinOpenBtnDisabled,
+                      ]}
+                      activeOpacity={0.85}
+                      disabled={screen.joinCodeBusy || !screen.joinCodeInput?.trim()}
+                      onPress={screen.handleBuildDaySubmitJoinCode}
+                      accessibilityRole="button"
+                      accessibilityLabel="Open shared plan"
+                    >
+                      {screen.joinCodeBusy ? (
+                        <ActivityIndicator color="#FFFFFF" size="small" />
+                      ) : (
+                        <Text style={styles.buildModeJoinOpenBtnText}>Open</Text>
+                      )}
+                    </TouchableOpacity>
+                  </View>
+                </>
+              )}
                 <View style={styles.buildModeFooterRow}>
                   <TouchableOpacity
                     style={styles.buildModeGlassCloseBtn}
@@ -208,6 +271,88 @@ export function AIPlanScreenViewDialogsB({ screen }) {
                   </TouchableOpacity>
                 </View>
               </Reanimated.View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal
+        visible={!!screen.showShareActionPickerModal}
+        transparent
+        statusBarTranslucent
+        animationType="none"
+        onRequestClose={() => screen.setShowShareActionPickerModal(false)}
+      >
+        <View style={styles.buildModeLayer}>
+          <Pressable
+            style={styles.buildModeBackdrop}
+            onPress={() => screen.setShowShareActionPickerModal(false)}
+            accessibilityLabel="Dismiss"
+            accessibilityRole="button"
+          />
+          <LinearGradient
+            pointerEvents="none"
+            colors={['rgba(6,8,16,0.6)', 'rgba(6,8,16,0.85)']}
+            style={StyleSheet.absoluteFill}
+          />
+          <View
+            style={[styles.buildModeCenterWrap, { paddingBottom: screen.insets.bottom + 16 }]}
+            pointerEvents="box-none"
+          >
+            <Reanimated.View entering={ZoomInEasyDown.duration(340)} style={styles.buildModeStandaloneWrap}>
+              <Text style={styles.buildModeStandaloneTitle}>Sharing settings</Text>
+              <Text style={styles.buildModeStandaloneHint}>
+                Pick permission, then share. Link and code are copied automatically.
+              </Text>
+              <View style={styles.sharePlanModalPermRow}>
+                <TouchableOpacity
+                  style={[
+                    styles.sharePlanModalPermChip,
+                    screen.sharePermissionDraft === 'view' && styles.sharePlanModalPermChipActive,
+                  ]}
+                  onPress={() => screen.setSharePermissionDraft('view')}
+                  accessibilityRole="button"
+                  accessibilityLabel="View only"
+                >
+                  <Text style={styles.sharePlanModalPermChipText}>View only</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[
+                    styles.sharePlanModalPermChip,
+                    screen.sharePermissionDraft === 'edit' && styles.sharePlanModalPermChipActive,
+                  ]}
+                  onPress={() => screen.setSharePermissionDraft('edit')}
+                  accessibilityRole="button"
+                  accessibilityLabel="Can edit"
+                >
+                  <Text style={styles.sharePlanModalPermChipText}>Can edit</Text>
+                </TouchableOpacity>
+              </View>
+              <View style={styles.sharePlanModalActions}>
+                <TouchableOpacity
+                  style={styles.sharePlanModalBtn}
+                  onPress={screen.handleShareActionEnableAndBack}
+                  disabled={screen.shareModalBusy}
+                >
+                  <Text style={styles.sharePlanModalBtnText}>
+                    {screen.shareModalBusy ? '…' : 'Share plan'}
+                  </Text>
+                </TouchableOpacity>
+              </View>
+              <View style={styles.buildModeFooterRow}>
+                <TouchableOpacity
+                  style={styles.buildModeGlassCloseBtn}
+                  activeOpacity={0.7}
+                  onPress={() => {
+                    screen.setShareActionModalPhase('settings')
+                    screen.setShowShareActionPickerModal(false)
+                  }}
+                  accessibilityLabel="Close"
+                  accessibilityRole="button"
+                >
+                  <Ionicons name="close" size={22} color={screen.isDark ? 'rgba(226,232,240,0.72)' : 'rgba(15,23,42,0.72)'} />
+                </TouchableOpacity>
+              </View>
+            </Reanimated.View>
           </View>
         </View>
       </Modal>
@@ -450,65 +595,6 @@ export function AIPlanScreenViewDialogsB({ screen }) {
               <Text style={{ fontSize: 15, fontWeight: '700', color: tertiaryTextColor }}>Close</Text>
             </TouchableOpacity>
           </View>
-        </View>
-      </Modal>
-
-      <Modal
-        visible={screen.showEditSavedPlanTitleModal}
-        transparent
-        animationType="fade"
-        onRequestClose={screen.handleCloseEditSavedPlanTitleModal}
-      >
-        <View style={styles.sharePlanModalRoot}>
-          <TouchableOpacity
-            style={StyleSheet.absoluteFill}
-            activeOpacity={1}
-            onPress={screen.handleCloseEditSavedPlanTitleModal}
-            accessibilityLabel="Dismiss rename dialog"
-            accessibilityRole="button"
-          />
-          <KeyboardAvoidingView
-            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-            style={{ zIndex: 2, maxWidth: 400, width: '100%', alignSelf: 'center' }}
-          >
-            <View style={styles.sharePlanModalCard} pointerEvents="box-none">
-              <Text style={styles.sharePlanModalTitle}>Plan name</Text>
-              <Text style={styles.sharePlanModalSub}>Choose a short name so you can find this plan later.</Text>
-              <TextInput
-                style={styles.editSavedPlanTitleModalInput}
-                value={screen.editSavedPlanTitleDraft}
-                onChangeText={screen.setEditSavedPlanTitleDraft}
-                placeholder="My plan"
-                placeholderTextColor={placeholderColor}
-                maxLength={120}
-                editable={!screen.editSavedPlanTitleBusy}
-                autoFocus
-                accessibilityLabel="Plan title"
-                returnKeyType="done"
-                onSubmitEditing={screen.handleSubmitEditSavedPlanTitle}
-              />
-              <View style={styles.sharePlanModalActions}>
-                <TouchableOpacity
-                  style={[styles.sharePlanModalBtn, styles.sharePlanModalBtnSecondary]}
-                  onPress={screen.handleCloseEditSavedPlanTitleModal}
-                  disabled={screen.editSavedPlanTitleBusy}
-                  accessibilityRole="button"
-                  accessibilityLabel="Cancel rename"
-                >
-                  <Text style={[styles.sharePlanModalBtnText, styles.sharePlanModalBtnTextDark]}>Cancel</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={styles.sharePlanModalBtn}
-                  onPress={screen.handleSubmitEditSavedPlanTitle}
-                  disabled={screen.editSavedPlanTitleBusy}
-                  accessibilityRole="button"
-                  accessibilityLabel="Save plan name"
-                >
-                  <Text style={styles.sharePlanModalBtnText}>{screen.editSavedPlanTitleBusy ? '…' : 'Save'}</Text>
-                </TouchableOpacity>
-              </View>
-            </View>
-          </KeyboardAvoidingView>
         </View>
       </Modal>
 

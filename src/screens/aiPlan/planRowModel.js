@@ -1,4 +1,19 @@
 import { PLAN_TIME_SLOTS } from './constants'
+import { isTruthyFoodTruck } from '../../utils/restaurantClientMeta'
+
+/**
+ * Extra chips on plan rows — food trucks show a single Food truck tag only (no Dining + snack duplicates).
+ * @returns {{ key: string, label: string, variant: 'food_truck' }[]}
+ */
+export const getPlanStopVenueExtraTags = (item) => {
+  if (!item || (item.type !== 'restaurant' && String(item.client_type || '').toLowerCase() !== 'restaurant')) {
+    return []
+  }
+  if (!isTruthyFoodTruck(item?.isfoodtruck)) {
+    return []
+  }
+  return [{ key: 'food_truck', label: 'Food truck', variant: 'food_truck' }]
+}
 
 /** Stable keys for draggable list rows (persist across reorder; replace on enhance). */
 export function attachPlanRowKeys(plan) {
@@ -40,12 +55,14 @@ export function buildDraftStopFromClient(client, existingPlan) {
 
 export const getLuxuryCategoryStyle = (item) => {
   if (item.type === 'restaurant') {
-    return { label: 'Dining', bg: '#FFE8EE', fg: '#FF4B78', icon: 'restaurant-outline' }
+    /** Warm rose / red — food */
+    return { label: 'Dining', bg: '#FEF2F2', fg: '#B91C1C', icon: 'restaurant-outline' }
   }
   if (item.type === 'event') {
     return { label: 'Events', bg: '#EDE9FE', fg: '#7C3AED', icon: 'calendar-outline' }
   }
-  return { label: 'Attractions', bg: '#FFE4F0', fg: '#DB2777', icon: 'location-outline' }
+  /** Cool sky blue — places / explore (visually distinct from pink Dining) */
+  return { label: 'Attractions', bg: '#EFF6FF', fg: '#2563EB', icon: 'location-outline' }
 }
 
 

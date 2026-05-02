@@ -48,10 +48,9 @@ import MapView from 'react-native-maps'
 import { Ionicons } from '@expo/vector-icons'
 import DraggableFlatList, { ScaleDecorator } from 'react-native-draggable-flatlist'
 import {
-  fetchPlaces,
+  resolvePlanRetrievalBuckets,
   fetchRestaurants,
   fetchBreakfastSpots,
-  fetchEvents,
   generateDayPlan,
   fetchClientsWithLocation,
   enhancePlanStopAtIndex,
@@ -98,7 +97,6 @@ import {
 } from './constants'
 import {
   clampRegionToBahrain,
-  formatPlanShareMessage,
   parseShareCodeFromUrl,
   openAllStopsInGoogleMaps,
   parsePlanItemCoords,
@@ -130,6 +128,8 @@ export function useAIPlanScreenMiddlePartB(midA) {
   const planHeaderReelScrollRef = useRef(null)
   const planHeaderReelOffsetRef = useRef(0)
   const REEL_ITEM_STEP = 74
+  const [showShareActionPickerModal, setShowShareActionPickerModal] = useState(false)
+  const [shareActionModalPhase, setShareActionModalPhase] = useState('settings')
 
   const handleSurpriseMe = () => {
     if (midA.surpriseSpinning) return;
@@ -188,18 +188,16 @@ export function useAIPlanScreenMiddlePartB(midA) {
               const { originLat, originLng } = await midA.resolveOriginCoordsForPlanGeneration({ preferFreshFix: true })
               midA.setLoadingStatus(`Scouting venues & live posts for your ${theme.label.toLowerCase()} day…`)
 
-              const retrievalOpts = { profileNarrative: midA.preferences?.profileSummary || '' }
+              const retrievalOpts = {
+                profileNarrative: midA.preferences?.profileSummary || '',
+                profileActivity: midA.activityLabels,
+              }
               const [
                 places,
                 restaurants,
                 breakfastSpots,
                 events,
-              ] = await Promise.all([
-                fetchPlaces(prefLabels, retrievalOpts),
-                fetchRestaurants(foodLabels, retrievalOpts),
-                fetchBreakfastSpots(retrievalOpts),
-                fetchEvents(prefLabels, retrievalOpts),
-              ]);
+              ] = await resolvePlanRetrievalBuckets(prefLabels, foodLabels, retrievalOpts)
 
               console.log(`[Surprise ${theme.label}] ${places.length}P ${restaurants.length}R ${breakfastSpots.length}B ${events.length}E`);
 
@@ -209,6 +207,20 @@ export function useAIPlanScreenMiddlePartB(midA) {
               midA.setLoadingStatus('Shortlisting restaurants & cafés that fit your vibe…');
               await new Promise((res) => setTimeout(res, 380));
               midA.setLoadingStatus(`Khalid is crafting your ${theme.label.toLowerCase()} day…`);
+              const lastSavedPlanSpots = (
+                Array.isArray(midA.savedPlansList) && Array.isArray(midA.savedPlansList[0]?.plan_data)
+                  ? midA.savedPlansList[0].plan_data
+                  : []
+              )
+                .map((row) => row?.spot)
+                .filter((name) => typeof name === 'string' && name.trim().length > 0)
+                .slice(-80)
+              const recentVisitedSpots = [
+                ...lastSavedPlanSpots,
+                ...(Array.isArray(midA.dayPlan) ? midA.dayPlan : []).map((row) => row?.spot),
+              ]
+                .filter((name) => typeof name === 'string' && name.trim().length > 0)
+                .slice(-80);
               const plan = await generateDayPlan(places, restaurants, breakfastSpots, events, prefLabels, foodLabels, {
                 profileGeneral: midA.generalLabels,
                 profileActivity: midA.activityLabels,
@@ -218,10 +230,23 @@ export function useAIPlanScreenMiddlePartB(midA) {
                 travelExplore: 'balanced',
                 originLat,
                 originLng,
+                strictAvoidSpots: lastSavedPlanSpots,
+                recentVisitedSpots,
               });
               generatedPlan = plan;
+              const initialKeyedPlan = attachPlanRowKeys(plan);
+              midA.setDayPlan(initialKeyedPlan);
               const enriched = await enrichPlanWithClientData(plan, allMatches, midA.allPlaceMarkers);
-              midA.setDayPlan(attachPlanRowKeys(enriched));
+              const enrichedWithStableKeys = attachPlanRowKeys(
+                enriched.map((item, idx) => ({
+                  ...item,
+                  _planRowKey: initialKeyedPlan[idx]?._planRowKey || item?._planRowKey,
+                })),
+              );
+              midA.setDayPlan(enrichedWithStableKeys);
+              await midA.autoSavePlanSilently(enrichedWithStableKeys).catch((e) =>
+                console.warn('[AI Plan] surprise auto save failed:', e?.message),
+              )
               midA.setError(null);
 
               const validMarkers = buildMapMarkers(plan, midA.allPlaceMarkers).filter(m => m.lat && m.lng);
@@ -321,19 +346,49 @@ export function useAIPlanScreenMiddlePartB(midA) {
     ]).start()
   };
 
-  const handleSharePlanWithFriends = useCallback(async () => {
-    const { message, title } = formatPlanShareMessage(midA.dayPlan);
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+  const handleOpenShareActionPickerModal = useCallback(() => {
+    if (!midA.dayPlan?.length) {
+      Alert.alert('Nothing to share', 'Create a plan first.')
+      return
+    }
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {})
+    setShareActionModalPhase('settings')
+    setShowShareActionPickerModal(true)
+  }, [midA.dayPlan])
+
+  const handleSharePlanCode = useCallback(async () => {
+    let code = midA.shareModalCode || midA.sharedCollaboration?.code || null
+    if (!code) {
+      await midA.handleOpenShareModal({ openModal: false })
+      if (!midA.activeSavedPlanId) return
+      code = await midA.handleConfirmShareSettings({ skipClipboard: true, skipSuccessAlert: true })
+      if (!code) return
+    }
+    const link = ExpoLinking.createURL(`plan/${code}`)
+    const message = `${link}\nCode: ${code}`
     try {
+      await Clipboard.setStringAsync(message)
       await Share.share(
         Platform.OS === 'ios'
-          ? { message, title }
-          : { message, title: title || 'SiyahaBH' },
-      );
+          ? { message, title: 'Share plan' }
+          : { message, title: 'SiyahaBH' },
+      )
     } catch (_) {
       /* dismissed */
+    } finally {
+      setShowShareActionPickerModal(false)
     }
-  }, [midA.dayPlan]);
+  }, [
+    midA.shareModalCode,
+    midA.sharedCollaboration,
+    midA.handleOpenShareModal,
+    midA.activeSavedPlanId,
+    midA.handleConfirmShareSettings,
+  ])
+
+  const handleShareActionEnableAndBack = useCallback(async () => {
+    await handleSharePlanCode()
+  }, [handleSharePlanCode])
 
   const planHeaderReel = useMemo(() => {
     if (!midA.dayPlan?.length) return []
@@ -382,44 +437,54 @@ export function useAIPlanScreenMiddlePartB(midA) {
       midA.sharedCollaboration?.role === 'viewer' || midA.sharedCollaboration?.role === 'editor'
         ? 'Shared Bahrain day'
         : 'Your Bahrain day'
-    const canEditSavedPlanTitle =
-      !!midA.activeSavedPlanId &&
-      !midA.planReadOnly &&
-      (midA.sharedCollaboration == null || midA.sharedCollaboration.role === 'owner')
     const rowForTitle = midA.savedPlansList.find((p) => p.id === midA.activeSavedPlanId)
     const savedTitleRaw = typeof rowForTitle?.title === 'string' ? rowForTitle.title.trim() : ''
-    const primaryTitle = canEditSavedPlanTitle && savedTitleRaw ? savedTitleRaw : titleLabel
+    const primaryTitle = savedTitleRaw || titleLabel
     return (
       <View style={styles.planLuxuryOverviewCard} accessibilityRole="summary">
         <View style={styles.planLuxuryOverviewAccentTop} />
+        <TouchableOpacity
+          style={styles.planLuxuryOverviewBackBtnTop}
+          activeOpacity={0.65}
+          hitSlop={{ top: 10, bottom: 10, left: 8, right: 8 }}
+          onPress={() => {
+            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {})
+            midA.setQuickFindMapOnly(false)
+            midA.setDrawerStep(0)
+            midA.setDayPlan(null)
+            midA.setError(null)
+            midA.setActiveSavedPlanId(null)
+            midA.setSharedCollaboration(null)
+          }}
+          accessibilityRole="button"
+          accessibilityLabel="Back to plans"
+        >
+          <Ionicons name="chevron-back" size={20} color="#0F172A" />
+        </TouchableOpacity>
         {sharedBanner ? (
           <View style={styles.planShareBanner} accessibilityRole="text">
             <Text style={styles.planShareBannerText}>{sharedBanner}</Text>
           </View>
         ) : null}
         <View style={styles.planLuxuryOverviewHeaderRow}>
-          <TouchableOpacity
-            style={styles.planLuxuryOverviewBackBtn}
-            activeOpacity={0.8}
-            onPress={() => {
-              midA.setDrawerStep(0)
-              midA.setDayPlan(null)
-              midA.setError(null)
-              midA.setActiveSavedPlanId(null)
-              midA.setSharedCollaboration(null)
-            }}
-            accessibilityRole="button"
-            accessibilityLabel="Back to plans"
-          >
-            <Ionicons name="chevron-back" size={20} color="#0F172A" />
-          </TouchableOpacity>
+          <View style={styles.planLuxuryOverviewSideSlot} />
           <View style={styles.planLuxuryOverviewHeaderMainCol}>
             <View style={styles.planLuxuryOverviewTitleBlock}>
               <View style={styles.planLuxuryOverviewTitleRow}>
-                <Text style={[styles.planLuxuryOverviewTitle, { flex: 1, minWidth: 0 }]} numberOfLines={1}>
-                  {primaryTitle}
-                </Text>
+                  <Text
+                    style={styles.planLuxuryOverviewTitle}
+                    numberOfLines={2}
+                    adjustsFontSizeToFit
+                    minimumFontScale={0.8}
+                  >
+                    {primaryTitle}
+                  </Text>
               </View>
+                <View style={styles.planLuxuryOverviewDividerRow} accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
+                  <View style={styles.planLuxuryOverviewDividerLine} />
+                  <View style={styles.planLuxuryOverviewDividerDot} />
+                  <View style={styles.planLuxuryOverviewDividerLine} />
+                </View>
               <Text
                 style={styles.planLuxuryOverviewSubtitle}
                 numberOfLines={1}
@@ -432,56 +497,7 @@ export function useAIPlanScreenMiddlePartB(midA) {
             </View>
           </View>
 
-          <View style={styles.planLuxuryOverviewHeaderActions}>
-            {canEditSavedPlanTitle && (
-              <TouchableOpacity
-                style={styles.planLuxuryOverviewIconBtn}
-                activeOpacity={0.75}
-                onPress={() => midA.handleOpenEditSavedPlanTitle(midA.activeSavedPlanId)}
-                accessibilityRole="button"
-                accessibilityLabel="Edit plan title"
-              >
-                <Ionicons name="create-outline" size={19} color="#64748B" />
-              </TouchableOpacity>
-            )}
-            {!midA.planReadOnly && (
-              <TouchableOpacity
-                style={styles.planLuxuryOverviewIconBtn}
-                activeOpacity={0.75}
-                onPress={midA.handleSavePlanToCloud}
-                disabled={midA.savePlanBusy}
-                accessibilityRole="button"
-                accessibilityLabel="Save plan"
-              >
-                {midA.savePlanBusy ? (
-                  <ActivityIndicator size="small" color={themeColors.primary} />
-                ) : (
-                  <Ionicons name="cloud-upload-outline" size={19} color={themeColors.primary} />
-                )}
-              </TouchableOpacity>
-            )}
-            {!midA.planReadOnly && (
-              <TouchableOpacity
-                style={styles.planLuxuryOverviewIconBtn}
-                activeOpacity={0.75}
-                onPress={midA.handleOpenShareModal}
-                disabled={midA.shareModalBusy}
-                accessibilityRole="button"
-                accessibilityLabel="Link and share options"
-              >
-                <Ionicons name="link-outline" size={19} color={themeColors.primary} />
-              </TouchableOpacity>
-            )}
-            <TouchableOpacity
-              style={styles.planLuxuryOverviewIconBtn}
-              activeOpacity={0.75}
-              onPress={handleSharePlanWithFriends}
-              accessibilityRole="button"
-              accessibilityLabel="Share plan as text"
-            >
-              <Ionicons name="share-outline" size={19} color={themeColors.primary} />
-            </TouchableOpacity>
-          </View>
+          <View style={styles.planLuxuryOverviewSideSlot} />
         </View>
         <View style={styles.planLuxuryOverviewControlTray}>
           <View style={styles.planLuxuryOverviewMapRow}>
@@ -523,32 +539,18 @@ export function useAIPlanScreenMiddlePartB(midA) {
                 <Ionicons name="add-circle-outline" size={19} color={themeColors.primary} />
                 <Text style={styles.planLuxuryOverviewAddBtnText}>Add stop</Text>
               </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.planLuxuryOverviewShareBtnInline}
+                activeOpacity={0.85}
+                onPress={handleOpenShareActionPickerModal}
+                accessibilityRole="button"
+                accessibilityLabel="Share plan"
+              >
+                <Ionicons name="share-outline" size={18} color={themeColors.primary} />
+                <Text style={styles.planLuxuryOverviewShareBtnText}>Share</Text>
+              </TouchableOpacity>
             </View>
           </View>
-        </View>
-        <View style={styles.planLuxuryReelSection}>
-          <Text style={styles.planLuxuryReelLabel}>Plan preview</Text>
-          <ScrollView
-            ref={planHeaderReelScrollRef}
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={styles.planLuxuryReelContent}
-            accessibilityRole="scrollbar"
-            accessibilityLabel="Spot photo previews"
-            scrollEnabled={planHeaderReel.length <= 1}
-          >
-            {planHeaderReelLoop.map(({ key, uri }, idx) => (
-              <View key={`${String(key)}-${idx}`} style={styles.planLuxuryReelThumbWrap}>
-                {uri ? (
-                  <PreviewImage uri={uri} style={styles.planLuxuryReelThumbImg} noFade />
-                ) : (
-                  <View style={[styles.planLuxuryReelThumbImg, styles.planLuxuryReelThumbEmpty]}>
-                    <Ionicons name="image-outline" size={18} color="#C7C7CC" />
-                  </View>
-                )}
-              </View>
-            ))}
-          </ScrollView>
         </View>
       </View>
     )
@@ -556,21 +558,27 @@ export function useAIPlanScreenMiddlePartB(midA) {
     midA.dayPlan,
     midA.openingMaps,
     midA.handleOpenInGoogleMaps,
-    handleSharePlanWithFriends,
+    handleOpenShareActionPickerModal,
     midA.setShowSearchModal,
     midA.sharedCollaboration,
     midA.planReadOnly,
-    midA.handleSavePlanToCloud,
-    midA.savePlanBusy,
     midA.handleOpenShareModal,
     midA.shareModalBusy,
     midA.activeSavedPlanId,
     midA.savedPlansList,
-    midA.handleOpenEditSavedPlanTitle,
-    planHeaderReel,
-    planHeaderReelLoop,
   ])
 
 
-  return { ...midA, handleSharePlanWithFriends, renderPlanTimelineOverviewHeader, handleSurpriseMe, startSetup }
+  return {
+    ...midA,
+    renderPlanTimelineOverviewHeader,
+    handleSurpriseMe,
+    startSetup,
+    showShareActionPickerModal,
+    setShowShareActionPickerModal,
+    shareActionModalPhase,
+    setShareActionModalPhase,
+    handleSharePlanCode,
+    handleShareActionEnableAndBack,
+  }
 }

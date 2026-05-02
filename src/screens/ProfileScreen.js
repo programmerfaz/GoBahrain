@@ -30,6 +30,7 @@ import { FadeInView, AnimatedPressable, GradientButton } from '../components/Ani
 import { fetchMyCommunityPosts, getCommunityUserId } from '../services/community'
 import { buildAndPersistUserPersona } from '../services/personalization'
 import { invalidatePersonalizationCache } from '../services/feedService'
+import { listSavedPlans } from '../services/savedPlans'
 
 const TILE_GAP = 10
 const TILE_COLS = 3
@@ -172,6 +173,7 @@ export default function ProfileScreen() {
   const [editIdealDay, setEditIdealDay] = useState('')
   const [editAvoidList, setEditAvoidList] = useState('')
   const [myReviewCount, setMyReviewCount] = useState(0)
+  const [savedPlansCount, setSavedPlansCount] = useState(0)
   const avatarPulse = useRef(new Animated.Value(0)).current
 
   const loadMyReviewCount = useCallback(async () => {
@@ -189,10 +191,20 @@ export default function ProfileScreen() {
     }
   }, [])
 
+  const loadSavedPlansCount = useCallback(async () => {
+    try {
+      const list = await listSavedPlans()
+      setSavedPlansCount(Array.isArray(list) ? list.length : 0)
+    } catch {
+      setSavedPlansCount(0)
+    }
+  }, [])
+
   useFocusEffect(
     useCallback(() => {
       loadMyReviewCount()
-    }, [loadMyReviewCount])
+      loadSavedPlansCount()
+    }, [loadMyReviewCount, loadSavedPlansCount])
   )
 
   useEffect(() => {
@@ -278,7 +290,7 @@ export default function ProfileScreen() {
   /** Home feed cards: marginHorizontal 12 + inner padding 14 each side */
   const feedCardContentW = Math.max(1, winW - 24 - 28)
   const statGap = 10
-  const statW = Math.max(1, Math.floor((feedCardContentW - statGap * 2) / 3))
+  const statW = Math.max(1, Math.floor((feedCardContentW - statGap) / 2))
   const prefChipGap = 10
   const prefChipW = Math.max(96, Math.floor((winW - 40 - prefChipGap * 2) / 3))
 
@@ -399,22 +411,6 @@ export default function ProfileScreen() {
                   </TouchableOpacity>
                 </FadeInView>
                 <FadeInView delay={260} from={18} duration={380} springUp>
-                  <View
-                    style={[
-                      s.statCard,
-                      {
-                        width: statW,
-                        backgroundColor: isDark ? 'rgba(167,139,250,0.12)' : 'rgba(124,58,237,0.08)',
-                        borderColor: C.borderLight,
-                      },
-                    ]}
-                  >
-                    <Ionicons name="calendar" size={17} color={isDark ? '#A78BFA' : '#7C3AED'} />
-                    <Text style={[s.statValue, { color: C.textPrimary }]}>0</Text>
-                    <Text style={[s.statLabel, { color: C.textMuted }]}>Plans</Text>
-                  </View>
-                </FadeInView>
-                <FadeInView delay={300} from={18} duration={380} springUp>
                   <TouchableOpacity
                     style={s.statTouchable}
                     onPress={() => navigation.navigate('MyReviews')}
@@ -466,6 +462,16 @@ export default function ProfileScreen() {
                 />
               </FadeInView>
               <FadeInView delay={450} from={14} duration={320} springUp>
+                <SettingsRow
+                  icon="bookmark-outline"
+                  iconColor={isDark ? '#A78BFA' : '#7C3AED'}
+                  label="Saved plans"
+                  value={String(savedPlansCount)}
+                  onPress={() => navigation.navigate('SavedPlans')}
+                  C={C}
+                />
+              </FadeInView>
+              <FadeInView delay={480} from={14} duration={320} springUp>
                 <SettingsRow
                   icon="heart-outline"
                   iconColor={C.primary}
