@@ -60,7 +60,6 @@ import { colors as themeColors } from '../../theme/designTokens'
 import styles from '../AIPlanScreen.styles'
 import { useTheme } from '../../context/ThemeContext'
 import { supabase } from '../../config/supabase'
-import { useAuth } from '../../context/AuthContext'
 import { getCommunityPalette } from '../../components/community/CommunityReviewViews'
 import {
   listSavedPlans,
@@ -161,6 +160,7 @@ export function useAIPlanScreenMiddlePartB(midA) {
           midA.setPineconeMatches([]);
           midA.setError(null);
           midA.setQuickFindMapOnly(false);
+          midA.resetQuickFindRotationState();
           midA.setShowBuildModePickerModal(false);
           midA.setLoading(true);
           midA.setLoadingStatus('Getting your location…');
@@ -191,6 +191,7 @@ export function useAIPlanScreenMiddlePartB(midA) {
               const retrievalOpts = {
                 profileNarrative: midA.preferences?.profileSummary || '',
                 profileActivity: midA.activityLabels,
+                profileAnswers: midA.preferences?.profileAnswers || {},
               }
               const [
                 places,
@@ -207,20 +208,6 @@ export function useAIPlanScreenMiddlePartB(midA) {
               midA.setLoadingStatus('Shortlisting restaurants & cafés that fit your vibe…');
               await new Promise((res) => setTimeout(res, 380));
               midA.setLoadingStatus(`Khalid is crafting your ${theme.label.toLowerCase()} day…`);
-              const lastSavedPlanSpots = (
-                Array.isArray(midA.savedPlansList) && Array.isArray(midA.savedPlansList[0]?.plan_data)
-                  ? midA.savedPlansList[0].plan_data
-                  : []
-              )
-                .map((row) => row?.spot)
-                .filter((name) => typeof name === 'string' && name.trim().length > 0)
-                .slice(-80)
-              const recentVisitedSpots = [
-                ...lastSavedPlanSpots,
-                ...(Array.isArray(midA.dayPlan) ? midA.dayPlan : []).map((row) => row?.spot),
-              ]
-                .filter((name) => typeof name === 'string' && name.trim().length > 0)
-                .slice(-80);
               const plan = await generateDayPlan(places, restaurants, breakfastSpots, events, prefLabels, foodLabels, {
                 profileGeneral: midA.generalLabels,
                 profileActivity: midA.activityLabels,
@@ -230,8 +217,7 @@ export function useAIPlanScreenMiddlePartB(midA) {
                 travelExplore: 'balanced',
                 originLat,
                 originLng,
-                strictAvoidSpots: lastSavedPlanSpots,
-                recentVisitedSpots,
+                viewerUType: midA.viewerUType,
               });
               generatedPlan = plan;
               const initialKeyedPlan = attachPlanRowKeys(plan);
@@ -277,6 +263,7 @@ export function useAIPlanScreenMiddlePartB(midA) {
               } else {
                 midA.sheetOpacity.setValue(1);
                 midA.lastSnap.current = SNAP_POINTS[0];
+                midA.setPlanSheetSnapIndex(0);
                 Animated.spring(midA.sheetAnim, {
                   toValue: SNAP_POINTS[0],
                   useNativeDriver: true,
@@ -295,6 +282,7 @@ export function useAIPlanScreenMiddlePartB(midA) {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {})
     midA.setCustomPlanDraftActive(false)
     midA.setQuickFindMapOnly(false)
+    midA.resetQuickFindRotationState()
     midA.setShowBuildModePickerModal(false)
     midA.setBuildDayModalPhase('menu')
     midA.setQuickFindKind(null)
@@ -304,8 +292,9 @@ export function useAIPlanScreenMiddlePartB(midA) {
     midA.sheetOpacity.setValue(1)
     midA.setActiveSavedPlanId(null)
     midA.setSharedCollaboration(null)
-    midA.setSelectedPreferences(Array.isArray(midA.preferences?.activityIds) ? midA.preferences.activityIds : [])
-    midA.setSelectedFoodCategories(Array.isArray(midA.preferences?.foodIds) ? midA.preferences.foodIds : [])
+    // Plan modal picks are session-only — do not seed from profile personalization
+    midA.setSelectedPreferences([])
+    midA.setSelectedFoodCategories([])
     midA.setCustomPreferenceInput('')
     midA.setCustomFoodInput('')
     midA.setDayPlan(null)
@@ -450,6 +439,7 @@ export function useAIPlanScreenMiddlePartB(midA) {
           onPress={() => {
             Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {})
             midA.setQuickFindMapOnly(false)
+            midA.resetQuickFindRotationState()
             midA.setDrawerStep(0)
             midA.setDayPlan(null)
             midA.setError(null)

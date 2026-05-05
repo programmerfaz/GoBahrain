@@ -11,6 +11,8 @@ import {
   ActivityIndicator,
   PanResponder,
   Platform,
+  Linking,
+  Alert,
   useWindowDimensions,
   Easing,
   StatusBar,
@@ -727,6 +729,207 @@ function formatClientTimings(value) {
   return String(value)
 }
 
+const MINUTES_PER_DAY = 24 * 60
+const WEEKDAY_FULL = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday']
+
+function dayKeyAliasesForReferenceDate(d) {
+  const idx = d.getDay()
+  const full = WEEKDAY_FULL[idx]
+  return new Set([full, full.slice(0, 3), String(idx)])
+}
+
+function objectKeyMatchesToday(key, aliases) {
+  const k = String(key || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[_-]/g, ' ')
+  if (!k) return false
+  for (const alias of aliases) {
+    const a = String(alias).toLowerCase()
+    if (k === a) return true
+    if (a.length >= 3 && (k.startsWith(a) || k === a.slice(0, 3))) return true
+  }
+  return false
+}
+
+function objectKeyLooksLikeWeekday(key) {
+  const n = String(key || '').trim().toLowerCase().replace(/[_-]+/g, ' ')
+  if (!n) return false
+  return WEEKDAY_FULL.some((full) => n === full || n.startsWith(full.slice(0, 3)))
+}
+
+function parseTimeTokenToMinutes(token) {
+  const raw = String(token ?? '')
+    .trim()
+    .toLowerCase()
+  if (!raw) return null
+
+  const ampmTail = raw.match(/^(\d{1,2})(?::(\d{2}))?\s*(am|pm)\.?$/)
+  if (ampmTail) {
+    let hh = Number(ampmTail[1])
+    const mm = Number(ampmTail[2] || 0)
+    const ap = ampmTail[3]
+    if (!Number.isFinite(hh) || !Number.isFinite(mm) || mm < 0 || mm > 59) return null
+    if (ap === 'pm' && hh < 12) hh += 12
+    if (ap === 'am' && hh === 12) hh = 0
+    if (hh < 0 || hh > 23) return null
+    return hh * 60 + mm
+  }
+
+  const hhmm = raw.match(/^(\d{1,2}):(\d{2})$/)
+  if (hhmm) {
+    const hh = Number(hhmm[1])
+    const mm = Number(hhmm[2])
+    if (!Number.isFinite(hh) || !Number.isFinite(mm) || hh < 0 || hh > 23 || mm < 0 || mm > 59) return null
+    return hh * 60 + mm
+  }
+
+  const hourOnly = raw.match(/^(\d{1,2})$/)
+  if (hourOnly) {
+    const hh = Number(hourOnly[1])
+    if (!Number.isFinite(hh) || hh < 0 || hh > 23) return null
+    return hh * 60
+  }
+
+  return null
+}
+
+/** @returns {'open' | 'closed' | null} null if unparseable */
+function isNowWithinOpenMinutes(nowMin, openMin, rawCloseMin) {
+  if (openMin === null || rawCloseMin === null) return null
+  if (openMin === rawCloseMin) return null
+
+  let endExclusive = rawCloseMin
+  if (rawCloseMin === 0 && openMin > 0) {
+    endExclusive = MINUTES_PER_DAY
+  }
+
+  if (openMin < endExclusive) {
+    const open = nowMin >= openMin && nowMin < endExclusive
+    return open ? 'open' : 'closed'
+  }
+
+  if (openMin > endExclusive) {
+    const open = nowMin >= openMin || nowMin < endExclusive
+    return open ? 'open' : 'closed'
+  }
+
+  return null
+}
+
+function inferOpenClosedFromRangeString(segment, referenceDate) {
+  const raw = String(segment || '').trim()
+  if (!raw) return null
+  if (/^closed\b/i.test(raw)) return 'closed'
+
+  const dayPrefix = raw.match(/^([a-z]{3,9})\s*:\s*(.+)$/i)
+  let body = raw
+  if (dayPrefix) {
+    const dayPart = dayPrefix[1]
+    const aliases = dayKeyAliasesForReferenceDate(referenceDate)
+    if (!objectKeyMatchesToday(dayPart, aliases)) return null
+    body = dayPrefix[2].trim()
+  }
+
+  if (/\b24\s*h/i.test(body) || /\ball\s*day\b/i.test(body) || /^open\s*24/i.test(body)) return 'open'
+
+  const parts = body.split(/\s*-\s*/)
+  if (parts.length !== 2) return null
+  const o = parseTimeTokenToMinutes(parts[0])
+  const c = parseTimeTokenToMinutes(parts[1])
+  if (o === null || c === null) return null
+
+  const nowMin = referenceDate.getHours() * 60 + referenceDate.getMinutes()
+  return isNowWithinOpenMinutes(nowMin, o, c)
+}
+
+function inferOpenClosedFromTimings(value, referenceDate) {
+  if (value == null) return null
+
+  if (typeof value === 'string') {
+    const trimmed = value.trim()
+    if (!trimmed) return null
+    if (/^closed\b/i.test(trimmed)) return 'closed'
+    if (/\b24\s*h/i.test(trimmed) || /\ball\s*day\b/i.test(trimmed) || /^open\s*24/i.test(trimmed)) return 'open'
+
+    try {
+      const parsed = JSON.parse(trimmed)
+      return inferOpenClosedFromTimings(parsed, referenceDate)
+    } catch {
+      const segments = trimmed.split(/\s*\|\s*/)
+      let sawData = false
+      let anyOpen = false
+      for (const seg of segments) {
+        const r = inferOpenClosedFromRangeString(seg, referenceDate)
+        if (r === null) continue
+        sawData = true
+        if (r === 'open') anyOpen = true
+      }
+      if (!sawData) return null
+      return anyOpen ? 'open' : 'closed'
+    }
+  }
+
+  if (Array.isArray(value)) {
+    let sawData = false
+    let anyOpen = false
+    for (const entry of value) {
+      const r = inferOpenClosedFromTimings(entry, referenceDate)
+      if (r === null) continue
+      sawData = true
+      if (r === 'open') anyOpen = true
+    }
+    if (!sawData) return null
+    return anyOpen ? 'open' : 'closed'
+  }
+
+  if (typeof value === 'object') {
+    const directOpen = value.open || value.opening || value.opening_time
+    const directClose = value.close || value.closing || value.closing_time
+    if (directOpen || directClose) {
+      if (directOpen && directClose) {
+        const o = parseTimeTokenToMinutes(directOpen)
+        const c = parseTimeTokenToMinutes(directClose)
+        const nowMin = referenceDate.getHours() * 60 + referenceDate.getMinutes()
+        return isNowWithinOpenMinutes(nowMin, o, c)
+      }
+      return null
+    }
+
+    const entries = Object.entries(value).filter(([ky]) => String(ky || '').trim() !== '')
+    const weeklyPairs = entries.filter(([ky]) => objectKeyLooksLikeWeekday(ky))
+
+    if (weeklyPairs.length > 0) {
+      const aliases = dayKeyAliasesForReferenceDate(referenceDate)
+      const todayPairs = weeklyPairs.filter(([ky]) => objectKeyMatchesToday(ky, aliases))
+      if (todayPairs.length === 0) return 'closed'
+      let parsable = false
+      let anyOpen = false
+      for (const [, span] of todayPairs) {
+        const r = inferOpenClosedFromTimings(span, referenceDate)
+        if (r === null) continue
+        parsable = true
+        if (r === 'open') anyOpen = true
+      }
+      if (!parsable) return null
+      return anyOpen ? 'open' : 'closed'
+    }
+
+    let fallbackSaw = false
+    let fallbackAnyOpen = false
+    for (const [, span] of entries) {
+      const r = inferOpenClosedFromTimings(span, referenceDate)
+      if (r === null) continue
+      fallbackSaw = true
+      if (r === 'open') fallbackAnyOpen = true
+    }
+    if (!fallbackSaw) return null
+    return fallbackAnyOpen ? 'open' : 'closed'
+  }
+
+  return null
+}
+
 function formatClientCategoryLabel(value) {
   const raw = String(value || '').trim()
   if (!raw) return ''
@@ -1013,6 +1216,11 @@ function getModalStyles(C, isDark) {
       letterSpacing: 2.5,
       textTransform: 'uppercase',
     },
+    heroOpeningStatusWrap: {
+      marginTop: 12,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
     ratingHeroRow: {
       flexDirection: 'row',
       alignItems: 'center',
@@ -1175,6 +1383,25 @@ function getModalStyles(C, isDark) {
       gap: 6,
       marginBottom: 4,
     },
+    openingStatusPill: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 5,
+      paddingHorizontal: 9,
+      paddingVertical: 4,
+      borderRadius: 999,
+    },
+    openingStatusDot: {
+      width: 6,
+      height: 6,
+      borderRadius: 3,
+    },
+    openingStatusText: {
+      fontSize: 10,
+      fontWeight: '800',
+      letterSpacing: 0.6,
+      textTransform: 'uppercase',
+    },
     timingsTopLabel: {
       fontSize: 11,
       fontWeight: '800',
@@ -1206,6 +1433,41 @@ function getModalStyles(C, isDark) {
       borderRadius: 6,
       backgroundColor: C.pillBg,
       alignSelf: 'center',
+    },
+    hoursPhoneRow: {
+      flexDirection: 'row',
+      alignItems: 'stretch',
+      gap: 10,
+      marginTop: 12,
+      alignSelf: 'center',
+      width: '100%',
+      maxWidth: 320,
+    },
+    hoursPhoneRowEnd: {
+      justifyContent: 'flex-end',
+    },
+    hoursBlockFlex: {
+      flex: 1,
+      minWidth: 0,
+    },
+    phoneIconCard: {
+      width: 48,
+      alignSelf: 'stretch',
+      borderRadius: 14,
+      justifyContent: 'center',
+      alignItems: 'center',
+      backgroundColor: isDark ? 'rgba(15,23,42,0.78)' : 'rgba(255,255,255,0.92)',
+      borderWidth: 1,
+      borderColor: isDark ? 'rgba(255,255,255,0.18)' : 'rgba(15,23,42,0.12)',
+      ...Platform.select({
+        ios: {
+          shadowColor: '#000',
+          shadowOffset: { width: 0, height: 4 },
+          shadowOpacity: 0.14,
+          shadowRadius: 10,
+        },
+        android: { elevation: 4 },
+      }),
     },
 
     /* ===================  CTA  =================== */
@@ -1599,6 +1861,23 @@ export default function ClientProfileModal({
   const sheetDragY = useRef(new Animated.Value(0)).current;
   const sheetDragOffsetRef = useRef(0);
   const profileScrollRef = useRef(null);
+  const [openingStatusTick, setOpeningStatusTick] = useState(0);
+
+  const openingHoursStatus = React.useMemo(
+    () => inferOpenClosedFromTimings(client?.timings ?? null, new Date()),
+    [client?.timings, openingStatusTick],
+  );
+
+  useEffect(() => {
+    if (!visible) return undefined;
+    const id = setInterval(() => setOpeningStatusTick((x) => x + 1), 60_000);
+    return () => clearInterval(id);
+  }, [visible]);
+
+  useEffect(() => {
+    if (!visible || !client) return;
+    setOpeningStatusTick((x) => x + 1);
+  }, [visible, client?.timings, client?.client_a_uuid]);
 
   useEffect(() => {
     if (!visible) return
@@ -1697,9 +1976,28 @@ export default function ClientProfileModal({
           setError('Profile not found');
         }
         if (finalClient) {
-          setClient(finalClient);
+          let mergedClient = finalClient;
+          try {
+            const cid = finalClient.client_a_uuid;
+            if (cid) {
+              const { data: contactRow, error: rpcErr } = await supabase.rpc('get_client_public_contact', {
+                p_client_a_uuid: cid,
+              });
+              if (!rpcErr && contactRow && typeof contactRow === 'object') {
+                const phoneStrRaw = contactRow.phone;
+                const phoneStr =
+                  phoneStrRaw != null && String(phoneStrRaw).trim() !== ''
+                    ? String(phoneStrRaw).trim()
+                    : '';
+                if (phoneStr) mergedClient = { ...finalClient, contact_phone: phoneStr };
+              }
+            }
+          } catch {
+            // RPC may be missing until migration 006 is applied
+          }
+          setClient(mergedClient);
           clientCacheRef.current.set(activeClientId, {
-            ...finalClient,
+            ...mergedClient,
             __cachePartial: false,
           });
           const uuidForRest = finalClient.client_a_uuid;
@@ -2090,6 +2388,9 @@ export default function ClientProfileModal({
   const priceRange = client?.price_range != null && client?.price_range !== '' ? String(client.price_range) : null;
   const category = formatClientCategoryLabel(client?.category || client?.client_type || '');
   const cuisine = client?.cuisine || client?.cuisine_type || restaurant?.cuisine || '';
+  const displayPhoneRaw = client?.contact_phone ?? client?.phone;
+  const displayPhone =
+    displayPhoneRaw != null && String(displayPhoneRaw).trim() !== '' ? String(displayPhoneRaw).trim() : '';
   const profileAvatarUri = client?.client_image ? resolvePublicImageUrl(String(client.client_image).trim()) : null;
   const isVerified = Boolean(client?.verified || client?.is_verified || client?.status === 'verified');
   const timingsLabel = formatClientTimings(client?.timings);
@@ -2126,6 +2427,23 @@ export default function ClientProfileModal({
     presentation === 'sheet'
       ? [...slideTransform, { translateY: sheetDragY }]
       : slideTransform
+
+  const handleDialPhone = () => {
+    if (!displayPhone) return;
+    const tel = displayPhone.replace(/[^\d+]/g, '');
+    if (!tel) return;
+    Alert.alert(
+      'Call this number?',
+      displayPhone,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Call',
+          onPress: () => Linking.openURL(`tel:${tel}`).catch(() => {}),
+        },
+      ],
+    )
+  }
 
   const avatarScale = avatarEntrance.interpolate({ inputRange: [0, 1], outputRange: [0.7, 1] });
   const avatarOpacityAnim = avatarEntrance.interpolate({ inputRange: [0, 1], outputRange: [0, 1] });
@@ -2288,25 +2606,80 @@ export default function ClientProfileModal({
                       </View>
                     ) : null}
 
+                    {(openingHoursStatus === 'open' || openingHoursStatus === 'closed') ? (
+                      <View style={styles.heroOpeningStatusWrap}>
+                        {openingHoursStatus === 'open' ? (
+                          <View
+                            style={[styles.openingStatusPill, { backgroundColor: colors.successMuted }]}
+                            accessibilityRole="text"
+                            accessibilityLabel="Open now"
+                          >
+                            <View style={[styles.openingStatusDot, { backgroundColor: colors.success }]} />
+                            <Text style={[styles.openingStatusText, { color: colors.success }]}>Open</Text>
+                          </View>
+                        ) : (
+                          <View
+                            style={[styles.openingStatusPill, { backgroundColor: colors.errorMuted }]}
+                            accessibilityRole="text"
+                            accessibilityLabel="Closed now"
+                          >
+                            <View style={[styles.openingStatusDot, { backgroundColor: colors.error }]} />
+                            <Text style={[styles.openingStatusText, { color: colors.error }]}>Closed</Text>
+                          </View>
+                        )}
+                      </View>
+                    ) : null}
+
                     {rating != null ? (
                       <View style={styles.ratingHeroRow}>
                         <Ionicons name="star" size={13} color={isDark ? GOLD_LIGHT : '#8A6A14'} />
                         <Text style={styles.ratingHeroText}>{Number(rating).toFixed(1)} · Rated</Text>
                       </View>
                     ) : null}
-                    {timingsLabel ? (
-                      <View style={styles.timingsTopWrap}>
-                        <View style={styles.timingsTopLabelRow}>
-                          <Ionicons name="time-outline" size={13} color={isDark ? GOLD_LIGHT : '#8A6A14'} />
-                          <Text style={styles.timingsTopLabel}>Opening Hours</Text>
-                        </View>
-                        <Text style={styles.timingsTopValue}>{timingsLabel}</Text>
+                    {(timingsLabel || showTimingsSkeleton || displayPhone) ? (
+                      <View
+                        style={[
+                          styles.hoursPhoneRow,
+                          !(timingsLabel || showTimingsSkeleton) && displayPhone ? styles.hoursPhoneRowEnd : null,
+                        ]}
+                      >
+                        {(timingsLabel || showTimingsSkeleton) ? (
+                          timingsLabel ? (
+                            <View style={[styles.timingsTopWrap, styles.hoursBlockFlex, { marginTop: 0 }]}>
+                              <View style={styles.timingsTopLabelRow}>
+                                <Ionicons name="time-outline" size={13} color={isDark ? GOLD_LIGHT : '#8A6A14'} />
+                                <Text style={styles.timingsTopLabel}>Opening Hours</Text>
+                              </View>
+                              <Text style={styles.timingsTopValue}>{timingsLabel}</Text>
+                            </View>
+                          ) : (
+                            <Animated.View
+                              style={[
+                                styles.timingsTopSkeletonWrap,
+                                styles.hoursBlockFlex,
+                                { marginTop: 0, opacity: skeletonPulse },
+                              ]}
+                            >
+                              <View style={[styles.timingsTopSkeletonLine, { width: 108, marginBottom: 8 }]} />
+                              <View style={[styles.timingsTopSkeletonLine, { width: '86%' }]} />
+                            </Animated.View>
+                          )
+                        ) : null}
+                        {displayPhone ? (
+                          <Pressable
+                            onPress={handleDialPhone}
+                            style={({ pressed }) => [
+                              styles.phoneIconCard,
+                              { opacity: pressed ? 0.82 : 1 },
+                            ]}
+                            accessibilityRole="button"
+                            accessibilityLabel={`Call ${displayPhone}. Opens call options.`}
+                            accessibilityHint="Shows a confirmation before placing the call"
+                          >
+                            <Ionicons name="call" size={22} color={colors.success} />
+                          </Pressable>
+                        ) : null}
                       </View>
-                    ) : showTimingsSkeleton ? (
-                      <Animated.View style={[styles.timingsTopSkeletonWrap, { opacity: skeletonPulse }]}>
-                        <View style={[styles.timingsTopSkeletonLine, { width: 108, marginBottom: 8 }]} />
-                        <View style={[styles.timingsTopSkeletonLine, { width: 210 }]} />
-                      </Animated.View>
                     ) : null}
                   </Animated.View>
                 </View>

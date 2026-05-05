@@ -125,38 +125,55 @@ export function AIPlanScreenViewDialogsA({ screen }) {
                     >
                       <View style={styles.pmCinematicContent} pointerEvents="box-none">
                         <View style={styles.pmCinematicHero} pointerEvents="none">
-                          <PopIn delay={60} trigger={screen.planModalStep}>
+                          <PopIn key={`cine-dots-${screen.planModalStep}`} delay={60}>
                             <View style={styles.pmCinematicStepDots}>
                               <View style={[styles.pmCinematicDot, screen.planModalStep >= 1 && styles.pmCinematicDotActive]} />
                               <View style={styles.pmCinematicDotLine} />
                               <View style={[styles.pmCinematicDot, screen.planModalStep >= 2 && styles.pmCinematicDotActive]} />
                             </View>
                           </PopIn>
-                          <PopIn delay={140} trigger={screen.planModalStep}>
+                          <PopIn key={`cine-title-${screen.planModalStep}`} delay={140}>
                             <Text style={styles.pmCinematicTitle}>
                               {screen.planModalStep === 1 ? 'What excites you?' : 'What are you craving?'}
                             </Text>
                           </PopIn>
-                          <PopIn delay={200} trigger={screen.planModalStep}>
-                            {(!((screen.planModalStep === 1 && screen.selectedPreferences.length > 0) ||
-                                (screen.planModalStep === 2 && screen.selectedFoodCategories.length > 0))) ? (
-                              <Text style={styles.pmCinematicSub}>
-                                {screen.planModalStep === 1
+                          <PopIn key={`cine-sub-${screen.planModalStep}`} delay={200}>
+                            {(() => {
+                              const prefCount = screen.selectedPreferences.length
+                              const foodCount = screen.selectedFoodCategories.length
+                              const isFoodStep = screen.planModalStep === 2
+                              const pickedCount = isFoodStep ? foodCount : prefCount
+                              const hasPick = pickedCount > 0
+                              const subtitle =
+                                screen.planModalStep === 1
                                   ? 'Pick the vibes that match your Bahrain trip'
-                                  : `Choose up to ${PLAN_MODAL_MAX_FOOD_CATEGORIES} food moods for the day`}
-                              </Text>
-                            ) : (
-                              <View style={{ height: 28, alignItems: 'center', justifyContent: 'center' }}>
-                                <View style={styles.pmCinematicPickedPill}>
-                                  <Ionicons name="checkmark-circle" size={13} color="#E9C877" />
-                                  <Text style={styles.pmCinematicPickedText}>
-                                    {screen.planModalStep === 1
-                                      ? `${screen.getSelectedPreferenceLabels().length} picked`
-                                      : `${screen.getSelectedFoodLabels().length}/${PLAN_MODAL_MAX_FOOD_CATEGORIES} picked`}
-                                  </Text>
+                                  : `Choose up to ${PLAN_MODAL_MAX_FOOD_CATEGORIES} food moods for the day`
+                              const tallyText = isFoodStep
+                                ? `${foodCount}/${PLAN_MODAL_MAX_FOOD_CATEGORIES} picked`
+                                : `${prefCount} picked`
+
+                              return (
+                                <View style={styles.pmCinematicHeroMeta} accessibilityLiveRegion="polite">
+                                  <Text style={styles.pmCinematicSub}>{subtitle}</Text>
+                                  <View
+                                    style={[
+                                      styles.pmCinematicPickedPill,
+                                      !hasPick && styles.pmCinematicPickedPillIdle,
+                                    ]}
+                                    accessibilityLabel={tallyText}
+                                  >
+                                    <Ionicons
+                                      name={hasPick ? 'checkmark-circle' : 'ellipse-outline'}
+                                      size={14}
+                                      color={hasPick ? '#E9C877' : 'rgba(255,255,255,0.42)'}
+                                    />
+                                    <Text style={[styles.pmCinematicPickedText, !hasPick && styles.pmCinematicPickedTextIdle]}>
+                                      {tallyText}
+                                    </Text>
+                                  </View>
                                 </View>
-                              </View>
-                            )}
+                              )
+                            })()}
                           </PopIn>
                         </View>
 
@@ -172,7 +189,7 @@ export function AIPlanScreenViewDialogsA({ screen }) {
                             contentContainerStyle={[styles.pmCinematicChipsScrollContent, { paddingTop: 10 }]}
                             showsVerticalScrollIndicator={false}
                           >
-                            <View style={styles.pmChipsGrid}>
+                            <View style={styles.pmOptionGrid}>
                               {(() => {
                                 const items = screen.planModalStep === 1 ? PREFERENCES : FOOD_CATEGORIES
                                 const isSelectedFn = (item) =>
@@ -189,9 +206,10 @@ export function AIPlanScreenViewDialogsA({ screen }) {
                                   return screen.planModalStep === 1 ? screen.togglePreference(item.id) : screen.toggleFoodCategory(item.id)
                                 }
                                 return items.map((item, idx) => (
-                                  <PopIn key={`${screen.planModalStep}-${item.id}`} delay={280 + idx * 30} trigger={screen.planModalStep}>
+                                  <PopIn key={`${screen.planModalStep}-cchip-${item.id}`} delay={280 + idx * 30}>
                                     <AnimatedOptionChip
                                       item={item}
+                                      variant="dark"
                                       isSelected={isSelectedFn(item)}
                                       onPress={() => handlePressItem(item)}
                                     />
@@ -206,7 +224,7 @@ export function AIPlanScreenViewDialogsA({ screen }) {
                             </Text>
                           ) : null}
 
-                          <PopIn delay={500} trigger={screen.planModalStep}>
+                          <PopIn key={`cine-actions-${screen.planModalStep}`} delay={500}>
                             <View style={styles.pmCinematicActionRow}>
                               {screen.planModalStep === 1 ? (
                                 <>

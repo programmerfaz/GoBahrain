@@ -23,6 +23,8 @@ import { CachedImage } from './CachedImage'
 const HERO_HEIGHT_RATIO = 0.5
 const HERO_COLLAPSED_EXTRA = 68
 const CARD_RADIUS = 22
+const SHEET_TOP_RADIUS = 28
+const SHEET_TOP_OVERLAP = 18
 const OPEN_DURATION = 460
 const CLOSE_DURATION = 320
 const SWIPE_DISMISS_RATIO = 0.28
@@ -31,36 +33,148 @@ const SWIPE_TRAVEL_RATIO = 0.55
 
 const AnimatedScrollViewComp = Animated.ScrollView
 
-const formatMetaPills = (metadata) => {
-  const pills = []
-  const eventType = metadata?.event_type
-  if (eventType) pills.push({ key: 'type', icon: 'pricetag', label: String(eventType) })
-  const date = metadata?.start_date || metadata?.end_date
-  if (date) pills.push({ key: 'date', icon: 'calendar-outline', label: String(date) })
-  const time = [metadata?.start_time, metadata?.end_time].filter(Boolean).join(' – ')
-  if (time) pills.push({ key: 'time', icon: 'time-outline', label: time })
-  if (metadata?.venue) pills.push({ key: 'venue', icon: 'location-outline', label: String(metadata.venue) })
-  if (metadata?.indoor_outdoor) pills.push({ key: 'io', icon: 'sunny-outline', label: String(metadata.indoor_outdoor) })
-  if (metadata?.status) pills.push({ key: 'status', icon: 'ribbon-outline', label: String(metadata.status) })
-  return pills
+/** Structured rows for essentials panel (replacing unstructured pill wraps). */
+const buildEventEssentialRows = (metadata) => {
+  const rows = []
+  if (metadata?.event_type) {
+    rows.push({
+      key: 'type',
+      icon: 'pricetag-outline',
+      caption: 'Category',
+      value: String(metadata.event_type),
+    })
+  }
+  const start = metadata?.start_date
+  const end = metadata?.end_date
+  if (start || end) {
+    const dateValue =
+      start && end && start !== end ? `${start} → ${end}` : String(start || end)
+    rows.push({ key: 'date', icon: 'calendar-outline', caption: 'Date', value: dateValue })
+  }
+  const startT = metadata?.start_time
+  const endT = metadata?.end_time
+  if (startT || endT) {
+    const timeValue = [startT, endT].filter(Boolean).join(' — ')
+    rows.push({ key: 'time', icon: 'time-outline', caption: 'Time', value: timeValue })
+  }
+  if (metadata?.venue) {
+    rows.push({
+      key: 'venue',
+      icon: 'location-outline',
+      caption: 'Venue',
+      value: String(metadata.venue),
+    })
+  }
+  if (metadata?.indoor_outdoor) {
+    rows.push({
+      key: 'io',
+      icon: 'partly-sunny-outline',
+      caption: 'Setting',
+      value: String(metadata.indoor_outdoor),
+    })
+  }
+  if (metadata?.status) {
+    rows.push({
+      key: 'status',
+      icon: 'ribbon-outline',
+      caption: 'Status',
+      value: String(metadata.status),
+    })
+  }
+  return rows
 }
 
-function MetaPill({ icon, label, color, bg }) {
+function SectionHeader({ overline, title, colors }) {
   return (
-    <View style={[styles.pill, { backgroundColor: bg }]}>
-      <Ionicons name={icon} size={13} color={color} />
-      <Text style={[styles.pillText, { color }]} numberOfLines={1}>
-        {label}
-      </Text>
+    <View style={styles.sectionHeader}>
+      {overline ? (
+        <Text style={[styles.sectionOverline, { color: colors.textMuted }]}>{overline}</Text>
+      ) : null}
+      <Text style={[styles.sectionHeadline, { color: colors.textPrimary }]}>{title}</Text>
     </View>
   )
 }
 
-function OrganizerCard({ organizer, colors, onOpenProfile }) {
+function DetailDivider({ color }) {
+  return <View style={[styles.detailDivider, { backgroundColor: color }]} />
+}
+
+function EssentialRow({ icon, caption, value, colors, isDark, showDivider }) {
+  return (
+    <>
+      <View style={styles.essentialRow}>
+        <View
+          style={[
+            styles.essentialIconWrap,
+            {
+              backgroundColor: isDark ? 'rgba(255,255,255,0.07)' : 'rgba(15,23,42,0.045)',
+              borderColor: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(15,23,42,0.06)',
+            },
+          ]}
+        >
+          <Ionicons name={icon} size={17} color={colors.textSecondary} />
+        </View>
+        <View style={styles.essentialTextCol}>
+          <Text style={[styles.essentialCaption, { color: colors.textMuted }]}>{caption}</Text>
+          <Text style={[styles.essentialValue, { color: colors.textPrimary }]} numberOfLines={4}>
+            {value}
+          </Text>
+        </View>
+      </View>
+      {showDivider ? <DetailDivider color={isDark ? 'rgba(255,255,255,0.06)' : colors.borderLight} /> : null}
+    </>
+  )
+}
+
+function EssentialsPanel({ rows, colors, isDark, cardShadow }) {
+  if (!rows?.length) return null
+  return (
+    <View style={styles.essentialsBlock}>
+      <SectionHeader overline="At a glance" title="Essentials" colors={colors} />
+      <View
+        style={[
+          styles.premiumPanel,
+          {
+            backgroundColor: colors.surface,
+            borderColor: isDark ? 'rgba(255,255,255,0.09)' : colors.border,
+          },
+          Platform.OS === 'ios' ? cardShadow : {},
+          Platform.OS === 'android' ? { elevation: 3 } : {},
+        ]}
+      >
+        <View style={styles.premiumPanelInner}>
+          {rows.map((row, idx) => (
+            <EssentialRow
+              key={row.key}
+              icon={row.icon}
+              caption={row.caption}
+              value={row.value}
+              colors={colors}
+              isDark={isDark}
+              showDivider={idx < rows.length - 1}
+            />
+          ))}
+        </View>
+      </View>
+    </View>
+  )
+}
+
+function OrganizerCard({ organizer, colors, isDark, cardShadow, onOpenProfile }) {
   if (!organizer) {
     return (
-      <View style={[styles.organizerCard, { backgroundColor: colors.surface, borderColor: colors.border }]}>
-        <View style={[styles.organizerAvatar, { backgroundColor: colors.border }]}>
+      <View
+        style={[
+          styles.organizerCard,
+          {
+            backgroundColor: colors.surface,
+            borderColor: isDark ? 'rgba(255,255,255,0.1)' : colors.border,
+          },
+          Platform.OS === 'ios' && cardShadow ? cardShadow : null,
+          Platform.OS === 'android' ? { elevation: 3 } : null,
+        ]}
+      >
+        <View style={[styles.organizerAvatar, { backgroundColor: colors.border, borderColor: colors.border }]}>
           <Ionicons name="person-outline" size={22} color={colors.textMuted} />
         </View>
         <View style={{ flex: 1 }}>
@@ -76,11 +190,30 @@ function OrganizerCard({ organizer, colors, onOpenProfile }) {
 
   return (
     <TouchableOpacity
-      activeOpacity={0.85}
+      activeOpacity={0.88}
       onPress={onOpenProfile}
-      style={[styles.organizerCard, { backgroundColor: colors.surface, borderColor: colors.border }]}
+      style={[
+        styles.organizerCard,
+        {
+          backgroundColor: colors.surface,
+          borderColor: isDark ? 'rgba(255,255,255,0.1)' : colors.border,
+        },
+        Platform.OS === 'ios' && cardShadow ? cardShadow : null,
+        Platform.OS === 'android' ? { elevation: 3 } : null,
+      ]}
     >
-      <View style={[styles.organizerAvatar, { borderColor: colors.primary }]}>
+      <LinearGradient
+        pointerEvents="none"
+        colors={
+          isDark
+            ? ['rgba(255,255,255,0.06)', 'rgba(255,255,255,0)']
+            : ['rgba(200,16,46,0.04)', 'rgba(248,250,252,0)']
+        }
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={StyleSheet.absoluteFill}
+      />
+      <View style={[styles.organizerAvatar, { borderColor: colors.primaryMuted }]}>
         {avatar ? (
           <CachedImage source={{ uri: avatar }} style={styles.organizerAvatarImg} resizeMode="cover" />
         ) : (
@@ -110,7 +243,7 @@ function OrganizerCard({ organizer, colors, onOpenProfile }) {
   )
 }
 
-function OrganizerPosts({ clientUuid, visible, colors }) {
+function OrganizerPosts({ clientUuid, visible, colors, isDark }) {
   const [posts, setPosts] = useState([])
   const [loading, setLoading] = useState(false)
 
@@ -145,18 +278,28 @@ function OrganizerPosts({ clientUuid, visible, colors }) {
   }, [visible, clientUuid])
 
   if (!visible || !clientUuid) return null
+  if (loading && posts.length === 0) return null
   if (!loading && posts.length === 0) return null
 
   return (
-    <View style={styles.section}>
-      <Text style={[styles.sectionTitle, { color: colors.textPrimary }]}>Photos</Text>
+    <View style={styles.gallerySection}>
+      <SectionHeader overline="From the host" title="Gallery" colors={colors} />
       <ScrollView
         horizontal
         showsHorizontalScrollIndicator={false}
         contentContainerStyle={styles.galleryRow}
       >
         {posts.map((p) => (
-          <View key={p.id} style={[styles.galleryItem, { backgroundColor: colors.border }]}>
+          <View
+            key={p.id}
+            style={[
+              styles.galleryItem,
+              {
+                backgroundColor: colors.border,
+                borderColor: isDark ? 'rgba(255,255,255,0.08)' : 'rgba(15,23,42,0.06)',
+              },
+            ]}
+          >
             <CachedImage source={{ uri: p.imageUri }} style={StyleSheet.absoluteFill} resizeMode="cover" />
           </View>
         ))}
@@ -166,7 +309,7 @@ function OrganizerPosts({ clientUuid, visible, colors }) {
 }
 
 export default function EventDetailModal({ visible, event, sourceRect, onClose, onOpenOrganizer }) {
-  const { colors, isDark } = useTheme()
+  const { colors, isDark, shadows } = useTheme()
   const insets = useSafeAreaInsets()
   const { width: screenW, height: screenH } = useWindowDimensions()
 
@@ -200,7 +343,7 @@ export default function EventDetailModal({ visible, event, sourceRect, onClose, 
   const srcW = hasSource ? sourceRect.width : 120
   const srcH = hasSource ? sourceRect.height : 120
 
-  const metaPills = useMemo(() => formatMetaPills(metadata), [metadata])
+  const essentialRows = useMemo(() => buildEventEssentialRows(metadata), [metadata])
 
   useEffect(() => {
     if (visible) {
@@ -441,7 +584,10 @@ export default function EventDetailModal({ visible, event, sourceRect, onClose, 
           <AnimatedScrollViewComp
             ref={scrollRef}
             style={StyleSheet.absoluteFill}
-            contentContainerStyle={{ paddingTop: heroH, paddingBottom: insets.bottom + 48 }}
+            contentContainerStyle={{
+              paddingTop: heroH,
+              paddingBottom: insets.bottom + 56,
+            }}
             showsVerticalScrollIndicator={false}
             bounces
             scrollEventThrottle={16}
@@ -455,50 +601,73 @@ export default function EventDetailModal({ visible, event, sourceRect, onClose, 
                   backgroundColor: colors.background,
                   opacity: contentOpacity,
                   transform: [{ translateY: contentTranslate }],
-                  minHeight: screenH - collapsedHeroH + 40,
+                  minHeight: screenH - collapsedHeroH + 40 + SHEET_TOP_OVERLAP,
+                  borderTopLeftRadius: SHEET_TOP_RADIUS,
+                  borderTopRightRadius: SHEET_TOP_RADIUS,
+                  marginTop: -SHEET_TOP_OVERLAP,
+                  ...shadows.sm,
                 },
               ]}
             >
-              <View style={{ paddingHorizontal: 20, paddingTop: 20 }}>
-                {metaPills.length > 0 ? (
-                  <View style={styles.metaRow}>
-                    {metaPills.map((p) => (
-                      <MetaPill
-                        key={p.key}
-                        icon={p.icon}
-                        label={p.label}
-                        color={colors.textPrimary}
-                        bg={isDark ? 'rgba(255,255,255,0.06)' : 'rgba(17,17,24,0.05)'}
-                      />
-                    ))}
-                  </View>
-                ) : null}
+              <View style={styles.sheetInner}>
+                <View
+                  style={[
+                    styles.sheetHandleBar,
+                    { backgroundColor: isDark ? 'rgba(255,255,255,0.14)' : 'rgba(15,23,42,0.12)' },
+                  ]}
+                />
+                <EssentialsPanel
+                  rows={essentialRows}
+                  colors={colors}
+                  isDark={isDark}
+                  cardShadow={shadows.sm}
+                />
 
                 {metadata.description ? (
-                  <View style={styles.section}>
-                    <Text style={[styles.sectionTitle, { color: colors.textPrimary }]}>About</Text>
-                    <Text style={[styles.body, { color: colors.textSecondary }]}>{metadata.description}</Text>
+                  <View style={styles.aboutSection}>
+                    <SectionHeader overline="The experience" title="About" colors={colors} />
+                    <View
+                      style={[
+                        styles.aboutPanel,
+                        {
+                          backgroundColor: colors.surface,
+                          borderColor: isDark ? 'rgba(255,255,255,0.09)' : colors.border,
+                        },
+                        shadows.sm,
+                      ]}
+                    >
+                      <Text style={[styles.aboutBody, { color: colors.textSecondary }]}>
+                        {metadata.description}
+                      </Text>
+                    </View>
                   </View>
                 ) : null}
 
                 {clientUuid ? (
-                  <View style={styles.section}>
-                    <Text style={[styles.sectionTitle, { color: colors.textPrimary }]}>Organizer</Text>
+                  <View style={styles.organizerSection}>
+                    <SectionHeader overline="Presented by" title="Organizer" colors={colors} />
                     <OrganizerCard
                       organizer={organizerLoading && !organizer ? null : organizer}
                       colors={colors}
+                      isDark={isDark}
+                      cardShadow={Platform.OS === 'ios' ? shadows.sm : undefined}
                       onOpenProfile={() => onOpenOrganizer?.(clientUuid)}
                     />
                   </View>
                 ) : null}
 
-                <OrganizerPosts clientUuid={clientUuid} visible={rendered} colors={colors} />
+                <OrganizerPosts clientUuid={clientUuid} visible={rendered} colors={colors} isDark={isDark} />
 
-                <View style={styles.swipeHint}>
-                  <Ionicons name="chevron-down" size={16} color={colors.textMuted} />
-                  <Text style={[styles.swipeHintText, { color: colors.textMuted }]}>
-                    Swipe down to close
-                  </Text>
+                <View
+                  style={[
+                    styles.swipeHintWrap,
+                    {
+                      borderTopColor: isDark ? 'rgba(255,255,255,0.06)' : colors.borderLight,
+                    },
+                  ]}
+                >
+                  <Ionicons name="chevron-down" size={14} color={colors.textMuted} />
+                  <Text style={[styles.swipeHintText, { color: colors.textMuted }]}>Swipe down to close</Text>
                 </View>
               </View>
             </Animated.View>
@@ -535,8 +704,8 @@ export default function EventDetailModal({ visible, event, sourceRect, onClose, 
             )}
 
             <LinearGradient
-              colors={['rgba(0,0,0,0.28)', 'transparent', 'rgba(0,0,0,0.55)']}
-              locations={[0, 0.45, 1]}
+              colors={['rgba(0,0,0,0.22)', 'rgba(0,0,0,0.08)', 'rgba(0,0,0,0.72)']}
+              locations={[0, 0.38, 1]}
               style={StyleSheet.absoluteFill}
               pointerEvents="none"
             />
@@ -571,7 +740,7 @@ export default function EventDetailModal({ visible, event, sourceRect, onClose, 
             >
               {eventType ? (
                 <View style={styles.heroTypeBadge}>
-                  <Ionicons name="pricetag" size={11} color="#FFF" />
+                  <Ionicons name="pricetag" size={10} color="#FFF" />
                   <Text style={styles.heroTypeText} numberOfLines={1}>
                     {eventType}
                   </Text>
@@ -618,24 +787,24 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
   },
   closeBtn: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: 'rgba(0,0,0,0.45)',
+    backgroundColor: 'rgba(0,0,0,0.38)',
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: 'rgba(255,255,255,0.22)',
+    borderColor: 'rgba(255,255,255,0.28)',
   },
   closeBtnPlaceholder: {
-    width: 38,
-    height: 38,
+    width: 40,
+    height: 40,
   },
   dragPill: {
-    width: 42,
-    height: 5,
-    borderRadius: 3,
-    backgroundColor: 'rgba(255,255,255,0.55)',
+    width: 36,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: 'rgba(255,255,255,0.42)',
   },
   heroTextWrap: {
     position: 'absolute',
@@ -648,44 +817,58 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    paddingVertical: 6,
-    paddingHorizontal: 10,
-    borderRadius: 12,
-    backgroundColor: 'rgba(0,0,0,0.55)',
+    paddingVertical: 7,
+    paddingHorizontal: 12,
+    borderRadius: 100,
+    backgroundColor: 'rgba(0,0,0,0.48)',
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: 'rgba(255,255,255,0.25)',
-    marginBottom: 10,
+    borderColor: 'rgba(255,255,255,0.32)',
+    marginBottom: 12,
   },
   heroTypeText: {
     color: '#FFF',
-    fontSize: 11,
+    fontSize: 10,
     fontWeight: '700',
-    letterSpacing: 0.2,
+    letterSpacing: 1.2,
+    textTransform: 'uppercase',
   },
   heroTitle: {
     color: '#FFF',
-    fontSize: 28,
-    fontWeight: '900',
-    letterSpacing: -0.6,
-    lineHeight: 32,
-    textShadowColor: 'rgba(0,0,0,0.55)',
+    fontSize: 30,
+    fontWeight: '800',
+    letterSpacing: -0.85,
+    lineHeight: 35,
+    textShadowColor: 'rgba(0,0,0,0.5)',
     textShadowOffset: { width: 0, height: 2 },
-    textShadowRadius: 8,
+    textShadowRadius: 12,
   },
   heroVenueRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    marginTop: 10,
+    marginTop: 12,
   },
   heroVenue: {
     flex: 1,
-    color: 'rgba(255,255,255,0.92)',
+    color: 'rgba(255,255,255,0.94)',
     fontSize: 13,
     fontWeight: '600',
+    letterSpacing: 0.15,
   },
   sheet: {
     overflow: 'hidden',
+  },
+  sheetInner: {
+    paddingHorizontal: 22,
+    paddingTop: 10,
+    paddingBottom: 8,
+  },
+  sheetHandleBar: {
+    alignSelf: 'center',
+    width: 36,
+    height: 3,
+    borderRadius: 2,
+    marginBottom: 18,
   },
   compactBar: {
     position: 'absolute',
@@ -706,60 +889,105 @@ const styles = StyleSheet.create({
     textShadowOffset: { width: 0, height: 1 },
     textShadowRadius: 6,
   },
-  sheetHandle: {
-    alignSelf: 'center',
-    width: 44,
-    height: 4,
-    borderRadius: 2,
-    marginTop: 10,
+  sectionHeader: {
+    marginBottom: 12,
+  },
+  sectionOverline: {
+    fontSize: 10,
+    fontWeight: '700',
+    letterSpacing: 2,
+    textTransform: 'uppercase',
     marginBottom: 4,
   },
-  metaRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-    marginTop: 18,
-  },
-  pill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    paddingVertical: 7,
-    paddingHorizontal: 11,
-    borderRadius: 12,
-    maxWidth: '100%',
-  },
-  pillText: {
-    fontSize: 12,
-    fontWeight: '700',
-    letterSpacing: 0.2,
-    maxWidth: 200,
-  },
-  section: {
-    marginTop: 22,
-  },
-  sectionTitle: {
-    fontSize: 16,
+  sectionHeadline: {
+    fontSize: 20,
     fontWeight: '800',
-    letterSpacing: -0.2,
-    marginBottom: 10,
+    letterSpacing: -0.35,
   },
-  body: {
-    fontSize: 14,
-    lineHeight: 20,
+  essentialsBlock: {
+    marginBottom: 8,
+  },
+  premiumPanel: {
+    borderRadius: 20,
+    borderWidth: StyleSheet.hairlineWidth,
+    overflow: 'hidden',
+  },
+  premiumPanelInner: {
+    paddingVertical: 4,
+    paddingHorizontal: 4,
+  },
+  essentialRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 14,
+    paddingVertical: 14,
+    paddingHorizontal: 14,
+  },
+  essentialIconWrap: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+  essentialTextCol: {
+    flex: 1,
+    minWidth: 0,
+  },
+  essentialCaption: {
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 0.6,
+    textTransform: 'uppercase',
+    marginBottom: 4,
+  },
+  essentialValue: {
+    fontSize: 15,
+    fontWeight: '600',
+    letterSpacing: -0.2,
+    lineHeight: 21,
+  },
+  detailDivider: {
+    height: StyleSheet.hairlineWidth,
+    marginHorizontal: 18,
+  },
+  aboutSection: {
+    marginTop: 28,
+  },
+  aboutPanel: {
+    borderRadius: 20,
+    borderWidth: StyleSheet.hairlineWidth,
+    paddingHorizontal: 18,
+    paddingVertical: 18,
+    overflow: 'hidden',
+  },
+  aboutBody: {
+    fontSize: 15,
+    lineHeight: 24,
+    letterSpacing: -0.1,
+  },
+  organizerSection: {
+    marginTop: 28,
+  },
+  gallerySection: {
+    marginTop: 28,
   },
   organizerCard: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 14,
-    padding: 12,
-    borderRadius: 16,
+    paddingVertical: 16,
+    paddingHorizontal: 16,
+    borderRadius: 20,
     borderWidth: StyleSheet.hairlineWidth,
+    overflow: 'hidden',
+    position: 'relative',
   },
   organizerAvatar: {
-    width: 52,
-    height: 52,
-    borderRadius: 26,
+    width: 56,
+    height: 56,
+    borderRadius: 28,
     overflow: 'hidden',
     alignItems: 'center',
     justifyContent: 'center',
@@ -769,14 +997,14 @@ const styles = StyleSheet.create({
   },
   organizerAvatarImg: { width: '100%', height: '100%' },
   organizerName: {
-    fontSize: 15,
+    fontSize: 16,
     fontWeight: '800',
-    letterSpacing: -0.2,
+    letterSpacing: -0.25,
   },
   organizerBio: {
     fontSize: 13,
-    lineHeight: 17,
-    marginTop: 2,
+    lineHeight: 18,
+    marginTop: 4,
   },
   organizerLocRow: {
     flexDirection: 'row',
@@ -790,26 +1018,31 @@ const styles = StyleSheet.create({
   },
   galleryRow: {
     flexDirection: 'row',
-    gap: 10,
-    paddingRight: 8,
+    gap: 12,
+    paddingRight: 4,
+    paddingBottom: 4,
   },
   galleryItem: {
-    width: 130,
-    height: 160,
-    borderRadius: 14,
+    width: 132,
+    height: 168,
+    borderRadius: 18,
     overflow: 'hidden',
+    borderWidth: StyleSheet.hairlineWidth,
   },
-  swipeHint: {
+  swipeHintWrap: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 6,
-    marginTop: 28,
-    opacity: 0.75,
+    marginTop: 32,
+    paddingTop: 22,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    opacity: 0.85,
   },
   swipeHintText: {
-    fontSize: 12,
-    fontWeight: '600',
-    letterSpacing: 0.2,
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
   },
 })

@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState, useMemo } from 'react';
 import {
   View,
   Text,
@@ -34,8 +34,10 @@ import {
   fetchPineconePlacesForChat,
   buildKhalidPineconeQueryText,
   extractKhalidTopicHintFromPriorTurns,
+  normalizeViewerUType,
 } from '../services/aiPipeline';
 import { useUserPreferences } from '../context/UserPreferencesContext';
+import { useAuth } from '../context/AuthContext';
 import ClientProfileModal from './ClientProfileModal';
 import { useTheme } from '../context/ThemeContext';
 import { colors as themeColors } from '../theme/designTokens';
@@ -54,6 +56,13 @@ import SearchLogoIcon from './SearchLogoIcon';
 import MapLogoIcon from './MapLogoIcon';
 
 const OPENAI_CHAT_URL = 'https://api.openai.com/v1/chat/completions';
+
+/** GPT sometimes emits **markdown** — chat bubbles are plain text (matches Ask-chip replies). */
+const sanitizeKhalidAssistantReplyPlain = (t) =>
+  String(t || '')
+    .replace(/\*\*([^*]+)\*\*/g, '$1')
+    .replace(/\*([^*\n]+)\*/g, '$1')
+    .trim();
 
 /** Side tabs that use selection + press scale animation */
 const NAV_TAB_SCREENS = ['Home', 'Explore', 'Community', 'Profile'];
@@ -490,7 +499,7 @@ const SWIPE_UP_THRESHOLD = 72;
 const TAP_MAX_MOVE = 18;
 const TAP_MAX_MS = 400;
 
-const KHALID_SUGGESTIONS_DEFAULT = [
+const KHALID_SUGGESTIONS_TOURIST = [
   'What are the best restaurants?',
   'Show me photos of places',
   'Where should I go for breakfast?',
@@ -498,7 +507,15 @@ const KHALID_SUGGESTIONS_DEFAULT = [
   'Find me something with great views',
 ];
 
-function getSmartSuggestions(generalLabels = [], activityLabels = [], foodLabels = []) {
+const KHALID_SUGGESTIONS_LOCAL = [
+  'What should I try this weekend that locals love?',
+  'Quiet spots for dinner outside mall crowds',
+  'New openings worth a look right now',
+  'Best karak paired with a late stroll?',
+  'Show me hidden gems photo sets',
+];
+
+function getSmartSuggestions(generalLabels = [], activityLabels = [], foodLabels = [], viewerUType = 'local') {
   const out = [];
   
   // Food preference-based suggestions
@@ -537,9 +554,12 @@ function getSmartSuggestions(generalLabels = [], activityLabels = [], foodLabels
     out.push('Show me photos of places');
   }
   
+  const fallbackPool =
+    String(viewerUType || '').toLowerCase() === 'tourist' ? KHALID_SUGGESTIONS_TOURIST : KHALID_SUGGESTIONS_LOCAL
+
   // Add defaults to fill up to 5 suggestions
   while (out.length < 5) {
-    const next = KHALID_SUGGESTIONS_DEFAULT.find((d) => !out.includes(d));
+    const next = fallbackPool.find((d) => !out.includes(d));
     if (!next) break;
     out.push(next);
   }
@@ -555,11 +575,16 @@ const TYPEWRITER_MS_PER_CHAR = 28;
 const TYPEWRITER_MIN_MS = 500;
 const TYPEWRITER_MAX_MS = 3800;
 
-function AnimatedMessageText({ text, isUser, style }) {
+function AnimatedMessageText({ text, isUser, style, messageId, skipTypewriter = false, onTypewriterComplete }) {
   const fullLen = (text || '').length;
-  const [visibleLen, setVisibleLen] = useState(isUser ? fullLen : 0);
-  const progressRef = useRef(new Animated.Value(0)).current;
-  const hasStarted = useRef(false);
+  const revealAll = isUser || skipTypewriter;
+  const [visibleLen, setVisibleLen] = useState(revealAll ? fullLen : 0);
+  const progressRef = useRef(new Animated.Value(revealAll && !isUser ? 1 : 0)).current;
+  const hasStarted = useRef(revealAll);
+  const onCompleteRef = useRef(onTypewriterComplete);
+  useEffect(() => {
+    onCompleteRef.current = onTypewriterComplete;
+  }, [onTypewriterComplete]);
 
   useEffect(() => {
     if (hasStarted.current) return;
@@ -582,9 +607,10 @@ function AnimatedMessageText({ text, isUser, style }) {
     }).start(() => {
       progressRef.removeListener(listener);
       setVisibleLen(len);
+      if (messageId) onCompleteRef.current?.(messageId);
     });
     return () => progressRef.removeAllListeners();
-  }, [fullLen, isUser, progressRef]);
+  }, [fullLen, isUser, progressRef, messageId]);
 
   const displayText = (text || '').slice(0, visibleLen);
   const showCaret = !isUser && visibleLen < (text || '').length;
@@ -1152,7 +1178,7 @@ function BubbleIn({ isUser, children }) {
   );
 }
 
-function buildKhalidSystemPrompt(pineconePlacesContext, userPreferences = {}) {
+function buildKhalidSystemPrompt(pineconePlacesContext, userPreferences = {}, orbitVenuePin = null) {
   const rawPlaces = pineconePlacesContext && String(pineconePlacesContext).trim()
     ? String(pineconePlacesContext).trim()
     : '';
@@ -1168,6 +1194,11 @@ function buildKhalidSystemPrompt(pineconePlacesContext, userPreferences = {}) {
   const activityLabels = userPreferences.activityLabels || [];
   const foodLabels = userPreferences.foodLabels || [];
   const personaSummary = typeof userPreferences.personaSummary === 'string' ? userPreferences.personaSummary.trim() : '';
+  const viewerUType = String(userPreferences.viewerUType || 'local').toLowerCase() === 'tourist' ? 'tourist' : 'local'
+  const audienceKhalid =
+    viewerUType === 'tourist'
+      ? '\n\nAUDIENCE: User is visiting Bahrain — be welcoming with light orientation when helpful; still never invent venues.\n'
+      : '\n\nAUDIENCE: User lives in Bahrain — prioritize efficient, insider-style answers; skip tourist basics unless they ask.\n'
   const hasPersona = personaSummary.length > 0;
   const hasGeneral = generalLabels.length > 0;
   const hasPlanPrefs = activityLabels.length > 0 || foodLabels.length > 0;
@@ -1180,8 +1211,30 @@ Mirror their vibe in wording; never invent venues to match the persona.\n`
     ? `\n\nUSER PREFERENCES (use when choosing browse queries—not to manufacture facts):\n${hasGeneral ? `Travel style: ${generalLabels.join(', ')}.\n` : ''}${hasPlanPrefs ? `Activities: ${activityLabels.length ? activityLabels.join(', ') : 'open'}\nFood: ${foodLabels.length ? foodLabels.join(', ') : 'open'}\n` : ''}\n`
     : '';
 
+  const pinnedName =
+    orbitVenuePin && typeof orbitVenuePin.placeName === 'string'
+      ? String(orbitVenuePin.placeName).trim().slice(0, 160)
+      : ''
+  const curatedPin =
+    orbitVenuePin && typeof orbitVenuePin.curatedSummary === 'string'
+      ? String(orbitVenuePin.curatedSummary).trim().slice(0, 1200)
+      : ''
+  const hasOrbitVenuePin = pinnedName.length > 0
+  const orbitVenuePinBlock = hasOrbitVenuePin
+    ? `\n\n═══ PLANNER MAP PIN (user tapped Ask Khalid on this venue) ═══\nFocused venue name: "${pinnedName}"${curatedPin.length > 0
+        ? `\nCurated venue notes from our listings (when they align with ALLOWED PLACES bullets, treat as authoritative):\n${curatedPin}\n`
+        : `\nNo long curated paragraph is stored for this listing in the index—still help in a Khalid-local way using WHO YOU'RE TALKING TO + USER PREFERENCES + Bahrain-sensible guidance within safety/grounding rules. Use directory retrieval when relevant (go_show_clients for alternatives or pics).\nIMPORTANT: Never reply with apologies like "no AI summary", "no profile summary", or "I don't have notes"—answer practically (vibe fit, timings, pairing with stops, quieter alternatives).\n`
+      }`
+    : ''
+  const hasOrbitVenuePinForRules = hasOrbitVenuePin
+
   return `You are Khalid, Bahrain guide for SiyahaBH. You output a SINGLE JSON OBJECT with keys "reply" (string) and "actions" (array). No markdown fences, no extra keys.
-${personaBlock}${prefsBlock}
+${audienceKhalid}${personaBlock}${prefsBlock}${orbitVenuePinBlock}
+
+REPLY STYLE (critical — matches the in-app Ask button on venue cards):
+- Write the "reply" as the answer itself—direct, conversational Bahrain-local tips. Never open with meta lines like “You asked about …”, “go ahead with your questions”, “I will answer using…”, or a recap of what they typed unless one short clause is truly needed for clarity.
+- No markdown formatting in "reply": no **bold**, no # headings, no bullet markdown—plain sentences only.
+
 PERSONALITY: Warm, concise (1–2 short sentences), proactive—prefer showing cards when users want choices.
 
 VISUAL INTENT: Users usually want tap-to-see listings with photos. Use go_show_clients whenever they browse categories (food, beaches, nightlife, cafes, pics, what's good nearby, cuisines, moods).
@@ -1200,7 +1253,9 @@ SPECIFIC NAMED VENUES:
 ${hasAllowedList
     ? `- If the name CLEARLY matches a bullet in ALLOWED PLACES (fuzzy match OK), reply with ONLY what that line supports (+ type/cuisine/tags already there). Invite them to open the card for fuller info.
 - If the name does NOT match any bullet: say it's not in the current matches, then EITHER go_show_clients with query derived from their text (best effort) OR point to the closest name from the list—never invent missing venues.`
-    : '- Without directory lines loaded, avoid detailed answers about named venues—use go_show_clients or steer them to typed search.'}
+    : hasOrbitVenuePinForRules
+      ? `- User pinned a planner venue (${pinnedName}). Help using persona/preferences and grounding rules—even without a dense directory line. Prefer go_show_clients when they want photos, comparisons, or "similar spots". Avoid inventing hard facts not in bullets or PLANNER PIN notes.`
+      : '- Without directory lines loaded, avoid detailed answers about named venues—use go_show_clients or steer them to typed search.'}
 
 ${placesBlock}${groundingWhenList}
 
@@ -1221,7 +1276,7 @@ GROUNDED EXAMPLES (do not hallucinate extras beyond these patterns):
 User context: italian food recommendation
 Same pattern with query italian.
 
-{"reply":"I'm only seeing the snippet the app indexed for **[venue from ALLOWED]**—tap View for images and verified details rather than guesses.","actions":[]}
+{"reply":"I only have the short line the app indexed for that spot—tap View on the card for photos and fuller details rather than guesses.","actions":[]}
 Use only when venue matches ALLOWED bullet.
 
 {"reply":"I'm not seeing that venue in today's directory matches—I can pull similar spots instead.","actions":[{"type":"go_show_clients","query":"user cue","client_type":"restaurant"}]}
@@ -1235,7 +1290,8 @@ CRITICAL RULES:
 2. Prefer go_show_clients for exploratory questions; reserve action [] for greetings, disclaimers, or tight summaries when a lone venue line truly matches.
 3. Never stall with clarification questions—pick a sensible query.
 4. Short follow-ups about pics or "more" inherit the active venue/topic from prior turns; keep retrieval aligned with that thread.
-5. Return strict JSON every turn.`;
+5. Return strict JSON every turn.
+6. Never put markdown (**, *, # ) inside "reply"; user sees plain bubbles.`;
 }
 
 export default function BottomControlBar({ state, navigation }) {
@@ -1345,7 +1401,15 @@ export default function BottomControlBar({ state, navigation }) {
   const hideTabBarForCommunityDetail = communityFocusedChild === 'CommunityPostDetail';
   const hideTabBar = hideTabBarForCommunityDetail;
   const { generalLabels, activityLabels, foodLabels, preferences } = useUserPreferences();
+  const { profile } = useAuth();
   const personaSummary = preferences?.profileSummary || '';
+  const khalidViewerUType = useMemo(() => normalizeViewerUType(profile?.user?.u_type), [profile?.user?.u_type])
+  const khalidIntroText = useMemo(() => {
+    if (khalidViewerUType === 'tourist') {
+      return "Hi, I'm Khalid — your Bahrain guide. Ask for breakfast spots, practical tips for visitors, landmarks, neighborhood walks, or say “show me pics” and I'll load real venues.";
+    }
+    return "Hi, I'm Khalid — your shortcut to fresh weekend ideas, quieter corners, food worth the drive, and what's trending with locals. Say “show me pics” anytime.";
+  }, [khalidViewerUType]);
 
   const navTabPressAnim = React.useMemo(() => {
     const o = {};
@@ -1376,18 +1440,48 @@ export default function BottomControlBar({ state, navigation }) {
     {
       id: 'intro',
       role: 'assistant',
-      text: "Hi, I'm Khalid — your Bahrain guide. Ask me for breakfast spots, things to do, or say “show me pics” and I’ll help you discover the best of Bahrain.",
+      text:
+        "Hi, I'm Khalid — your Bahrain guide. Ask me for breakfast spots, things to do, or say “show me pics” and I’ll help you discover the best of Bahrain.",
     },
   ]);
+
+  useEffect(() => {
+    setKhalidMessages((prev) => {
+      if (prev.length !== 1 || prev[0]?.id !== 'intro') return prev;
+      const t = khalidIntroText;
+      if (prev[0]?.text === t) return prev;
+      return [{ id: 'intro', role: 'assistant', text: t }];
+    });
+  }, [khalidIntroText]);
   const khalidMessagesRef = useRef(khalidMessages);
+  /** Assistant bubble ids that already played typewriter — skip replay when Khalid modal remounts after close */
+  const khalidTypewriterDoneIdsRef = useRef(new Set());
   useEffect(() => {
     khalidMessagesRef.current = khalidMessages;
   }, [khalidMessages]);
+
+  const handleKhalidTypewriterComplete = React.useCallback((id) => {
+    if (id) khalidTypewriterDoneIdsRef.current.add(id);
+  }, []);
+
+  const markKhalidAssistantTypewriterDoneForClose = React.useCallback(() => {
+    const list = khalidMessagesRef.current || [];
+    for (let i = 0; i < list.length; i += 1) {
+      const m = list[i];
+      if (m?.role === 'assistant' && m?.id && m?.type !== 'card') {
+        khalidTypewriterDoneIdsRef.current.add(m.id);
+      }
+    }
+  }, []);
   const [khalidInput, setKhalidInput] = useState('');
   const [khalidLoading, setKhalidLoading] = useState(false);
   const [khalidInputFocused, setKhalidInputFocused] = useState(false);
   const [khalidError, setKhalidError] = useState(null);
   const lastOrbitChatTsRef = useRef(0);
+  /** While Khalid overlay is open from orbit "Ask Khalid", model + retrieval bias toward pinned venue until user closes overlay. */
+  const orbitVenueAskContextRef = useRef(null);
+  /** Stable ref so orbit link subscription can invoke the latest send handler (avoid stale []). */
+  const sendMessageWithTextRef = useRef(async () => {});
   const khalidListRef = useRef(null);
   const khalidPrefetchRef = useRef({ key: '', context: '', inflight: null });
   const khalidPrefetchTimerRef = useRef(null);
@@ -1442,8 +1536,10 @@ export default function BottomControlBar({ state, navigation }) {
         useNativeDriver: true,
       }),
     ]).start(() => {
+      markKhalidAssistantTypewriterDoneForClose();
       setShowKhalidOverlay(false);
       khalidContentTranslateY.setValue(64);
+      orbitVenueAskContextRef.current = null;
     });
   };
 
@@ -1497,31 +1593,6 @@ export default function BottomControlBar({ state, navigation }) {
     const seedQuery = seedParts.join(', ');
     if (seedQuery) startKhalidPrefetch(seedQuery);
   }, [showKhalidOverlay]);
-
-  useEffect(() => {
-    const unsubscribe = khalidChatLink.subscribe((payload) => {
-      if (!payload || payload.source !== 'orbit') return;
-      const ts = Number(payload.ts || 0);
-      if (!ts || ts === lastOrbitChatTsRef.current) return;
-      lastOrbitChatTsRef.current = ts;
-      const place = String(payload.place || 'this place').trim();
-      const summary = String(payload.summary || '').trim();
-      const text = summary || 'I do not have a summary yet for this place.';
-      setShowKhalidOverlay(true);
-      setKhalidError(null);
-      setKhalidInput('');
-      setKhalidMessages((prev) => ([
-        ...prev,
-        {
-          id: `orbit-summary-${ts}`,
-          role: 'assistant',
-          text: `About ${place}:\n\n${text}`,
-        },
-      ]));
-      setTimeout(scrollKhalidToEnd, 120);
-    });
-    return unsubscribe;
-  }, []);
 
   const typingLoopRef = useRef(null);
   const siriOrbLoopRef = useRef(null);
@@ -1884,7 +1955,16 @@ export default function BottomControlBar({ state, navigation }) {
     try {
       setKhalidLoading(true);
       const historyForApi = khalidUiToApiHistory(nextMessages);
-      const retrievalQueryText = buildKhalidPineconeQueryText(trimmed, historyForApi);
+      let retrievalQueryText = buildKhalidPineconeQueryText(trimmed, historyForApi);
+      const orbitPin = orbitVenueAskContextRef.current
+      const pinnedPlaceRaw = orbitPin && typeof orbitPin.placeName === 'string' ? orbitPin.placeName.trim() : ''
+      if (
+        pinnedPlaceRaw.length >= 2 &&
+        !String(retrievalQueryText || '').includes(pinnedPlaceRaw.slice(0, Math.min(24, pinnedPlaceRaw.length)))
+      ) {
+        const merged = `${pinnedPlaceRaw} ${String(retrievalQueryText || trimmed).trim()}`.replace(/\s+/g, ' ').trim()
+        retrievalQueryText = merged.slice(0, 950)
+      }
 
       const cacheKey = buildPrefetchKey(trimmed, retrievalQueryText);
       const cache = khalidPrefetchRef.current;
@@ -1903,12 +1983,18 @@ export default function BottomControlBar({ state, navigation }) {
         });
         khalidPrefetchRef.current = { key: cacheKey, context: pineconePlacesContext || '', inflight: null };
       }
-      const systemPrompt = buildKhalidSystemPrompt(pineconePlacesContext, {
-        generalLabels,
-        activityLabels,
-        foodLabels,
-        personaSummary,
-      });
+      const orbitPinForPrompt = orbitVenueAskContextRef.current
+      const systemPrompt = buildKhalidSystemPrompt(
+        pineconePlacesContext,
+        {
+          generalLabels,
+          activityLabels,
+          foodLabels,
+          personaSummary,
+          viewerUType: khalidViewerUType,
+        },
+        orbitPinForPrompt && orbitPinForPrompt.placeName ? orbitPinForPrompt : null,
+      );
 
       const res = await fetch(OPENAI_CHAT_URL, {
         method: 'POST',
@@ -1951,6 +2037,8 @@ export default function BottomControlBar({ state, navigation }) {
         console.warn('[Khalid] Failed to parse JSON, using raw text:', parseError.message);
         // fall back to raw text
       }
+
+      replyText = sanitizeKhalidAssistantReplyPlain(replyText)
 
       console.log('[Khalid] Extracted actions:', actions);
 
@@ -2058,6 +2146,32 @@ export default function BottomControlBar({ state, navigation }) {
       setKhalidLoading(false);
     }
   };
+  sendMessageWithTextRef.current = sendMessageWithText;
+
+  useEffect(() => {
+    const unsubscribe = khalidChatLink.subscribe((payload) => {
+      if (!payload || payload.source !== 'orbit') return;
+      const ts = Number(payload.ts || 0);
+      if (!ts || ts === lastOrbitChatTsRef.current) return;
+      lastOrbitChatTsRef.current = ts;
+      const placeRaw = String(payload.place || '').trim();
+      const placeLabel = placeRaw || 'this place';
+      const curatedSummary = String(payload.summary || '').trim();
+      orbitVenueAskContextRef.current = {
+        placeName: placeLabel,
+        curatedSummary,
+      };
+      setShowKhalidOverlay(true);
+      setKhalidError(null);
+      setKhalidInput('');
+      /** Same utterance path as tapping Ask on a venue card → one real assistant turn instead of a filler bubble */
+      const query = `Tell me more about ${placeLabel}`;
+      requestAnimationFrame(() => {
+        setTimeout(() => void sendMessageWithTextRef.current?.(query), 120);
+      });
+    });
+    return unsubscribe;
+  }, []);
 
   const sendKhalidMessage = () => sendMessageWithText(khalidInput);
 
@@ -2116,6 +2230,9 @@ export default function BottomControlBar({ state, navigation }) {
             )}
             {!isUser && <View style={styles.khalidBubbleAccent} pointerEvents="none" />}
             <AnimatedMessageText
+              messageId={item.id}
+              skipTypewriter={!isUser && khalidTypewriterDoneIdsRef.current.has(item.id)}
+              onTypewriterComplete={handleKhalidTypewriterComplete}
               text={item.text}
               isUser={isUser}
               style={[
@@ -2544,7 +2661,7 @@ export default function BottomControlBar({ state, navigation }) {
                   <Text style={styles.khalidSuggestionsLabel}>Quick suggestions</Text>
                 </View>
                 <View style={styles.khalidSuggestionsRow}>
-                  {getSmartSuggestions(generalLabels, activityLabels, foodLabels).map((s) => (
+                  {getSmartSuggestions(generalLabels, activityLabels, foodLabels, khalidViewerUType).map((s) => (
                     <TouchableOpacity
                       key={s}
                       onPress={() => sendMessageWithText(s)}

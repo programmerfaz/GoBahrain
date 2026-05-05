@@ -15,6 +15,7 @@ import { BlurView } from 'expo-blur'
 import { Ionicons } from '@expo/vector-icons'
 import { LinearGradient } from 'expo-linear-gradient'
 import { useUserPreferences } from '../context/UserPreferencesContext'
+import { useAuth } from '../context/AuthContext'
 import { useTheme } from '../context/ThemeContext'
 import { gradients } from '../theme/designTokens'
 import { FadeInView, AnimatedPressable, GradientButton } from '../components/AnimatedUI'
@@ -923,6 +924,7 @@ const finishStyles = StyleSheet.create({
 export default function OnboardingScreen() {
   const { colors, isDark } = useTheme()
   const { GENERAL_PREFERENCES, FOOD_CATEGORIES, completeOnboarding, setPreferences } = useUserPreferences()
+  const { profile } = useAuth()
   const { startFadeGateUntilHomeReady } = useDoorTransition()
   const { width = 375 } = useWindowDimensions()
   const [generalIds, setGeneralIds] = useState([])
@@ -1073,11 +1075,14 @@ export default function OnboardingScreen() {
 
   const persistPersona = useCallback(async () => {
     const activityIds = deriveActivityIdsFromInterestIds(generalIds)
+    const viewerUType =
+      String(profile?.user?.u_type || '').toLowerCase() === 'tourist' ? 'tourist' : 'local'
     const profileSummary = await buildAndPersistUserPersona({
       generalIds,
       activityIds,
       foodIds,
       profileAnswers: { age },
+      viewerUType,
     })
     await setPreferences({
       generalIds,
@@ -1086,7 +1091,7 @@ export default function OnboardingScreen() {
       profileAnswers: { age },
       profileSummary,
     })
-  }, [generalIds, foodIds, age, setPreferences])
+  }, [generalIds, foodIds, age, setPreferences, profile?.user?.u_type])
 
   const runFinishWork = useCallback(async () => {
     setCraftingError(null)

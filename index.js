@@ -3,6 +3,8 @@ import 'react-native-gesture-handler';
 import * as SplashScreen from 'expo-splash-screen';
 import { registerRootComponent } from 'expo';
 
+/** Prime GoTrue `initialize()` before App.js pulls the rest of the tree (reduces raced first-queries on cold start). */
+import './src/config/supabase';
 import App from './App';
 
 SplashScreen.preventAutoHideAsync().catch(() => {})

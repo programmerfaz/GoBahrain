@@ -63,7 +63,7 @@ export const deriveActivityIdsFromInterestIds = (ids) => {
   return [...out]
 }
 
-const buildFallbackSummary = ({ grouped, activityLabels, foodLabels, profileAnswers }) => {
+const buildFallbackSummary = ({ grouped, activityLabels, foodLabels, profileAnswers, viewerUType = 'local' }) => {
   const parts = []
   if (grouped.companion.length) parts.push(`Usually travels as: ${grouped.companion.join(' / ')}`)
   if (grouped.pace.length) parts.push(`Ideal day pace: ${grouped.pace.join(' / ')}`)
@@ -73,10 +73,37 @@ const buildFallbackSummary = ({ grouped, activityLabels, foodLabels, profileAnsw
   if (foodLabels.length) parts.push(`Food personality: ${foodLabels.slice(0, 4).join(', ')}`)
   if (profileAnswers?.idealDay) parts.push(`Ideal day notes: ${String(profileAnswers.idealDay).trim()}`)
   if (profileAnswers?.avoidList) parts.push(`Avoid: ${String(profileAnswers.avoidList).trim()}`)
+  const p = profileAnswers && typeof profileAnswers === 'object' ? profileAnswers : {}
+  if (p.homeCountry && String(p.homeCountry).trim())
+    parts.push(`Home country: ${String(p.homeCountry).trim()}`)
+  if (p.tripLengthDays != null && String(p.tripLengthDays).trim())
+    parts.push(`Trip length: ~${String(p.tripLengthDays).trim()} days`)
+  if (p.travelParty && String(p.travelParty).trim())
+    parts.push(`Usually travels: ${String(p.travelParty).trim()}`)
+  if (p.budgetBand && String(p.budgetBand).trim())
+    parts.push(`Budget comfort: ${String(p.budgetBand).trim()}`)
+  if (p.dietaryHardNos && String(p.dietaryHardNos).trim())
+    parts.push(`Food constraints: ${String(p.dietaryHardNos).trim()}`)
+  if (p.mobilityNotes && String(p.mobilityNotes).trim())
+    parts.push(`Mobility: ${String(p.mobilityNotes).trim()}`)
+  if (p.heatSensitivity && String(p.heatSensitivity).trim())
+    parts.push(`Heat sensitivity: ${String(p.heatSensitivity).trim()}`)
+  if (p.sessionIntentDay && String(p.sessionIntentDay).trim())
+    parts.push(`Trip intent: ${String(p.sessionIntentDay).trim()}`)
+  const vt = String(viewerUType || '').toLowerCase() === 'tourist' ? 'tourist' : 'local'
+  const audienceTail =
+    vt === 'tourist'
+      ? ' They are visiting Bahrain — guidance should feel welcoming, geographically clear, and trip-friendly.'
+      : ' They live in Bahrain — favor practical outings, rotation, and local nuance over repeating basic sightseeing introductions.'
+
   if (!parts.length) {
-    return 'This user is open to a balanced Bahrain day — mixing a bit of culture, some food, and a relaxed vibe.'
+    const open =
+      vt === 'tourist'
+        ? 'Open to a balanced Bahrain visit — culture, food, and a relaxed travel pace.'
+        : 'Open to a balanced Bahrain day out — mixing culture, food, and relaxed energy without repeating tired staples.'
+    return `${open}${audienceTail}`
   }
-  return `This user — ${parts.join('. ')}.`
+  return `This user — ${parts.join('. ')}.${audienceTail}`
 }
 
 export async function generateUserPersonaSummary({
@@ -84,7 +111,9 @@ export async function generateUserPersonaSummary({
   activityIds = [],
   foodIds = [],
   profileAnswers = {},
+  viewerUType = 'local',
 }) {
+  const vt = String(viewerUType || '').toLowerCase() === 'tourist' ? 'tourist' : 'local'
   const grouped = groupGeneralIdsByCategory(generalIds)
   const activityLabels = pickLabels(activityIds, PREFERENCES)
   const foodLabels = pickLabels(foodIds, FOOD_CATEGORIES)
@@ -94,19 +123,27 @@ export async function generateUserPersonaSummary({
     activityLabels,
     foodLabels,
     profileAnswers,
+    viewerUType: vt,
   })
 
   if (!OPENAI_KEY) return fallback
 
+  const audienceInstruction =
+    vt === 'tourist'
+      ? ' The account is labeled as a visitor to Bahrain — phrasing should suit someone on a trip (orientation-light, approachable).'
+      : ' The account is labeled as a Bahrain resident — phrasing should suit repeat outings (practical tone, insider-friendly, not generic sightseeing copy).'
+
   const systemPrompt = [
     'You are a senior personalization strategist for a travel app in Bahrain.',
     'Given a user\'s onboarding answers, write ONE rich, third-person profile paragraph (50-70 words) that feels like a real friend describing them.',
+    audienceInstruction,
     'Cover: who they travel with, the pace/energy they like, spending comfort, the 2–3 experience themes that matter most, food personality, and what they probably want to feel by the end of a great day.',
     'Write in present tense. Use warm, specific language ("This traveler loves…"). No bullet lists. No headings. No hedging.',
     'End with one short sentence that states the vibe their perfect Bahrain day should deliver — this sentence will guide later itinerary generation.',
   ].join(' ')
 
   const userPrompt = [
+    `Local or visitor: ${vt === 'tourist' ? 'Visitor / tourist' : 'Local resident'}`,
     `Companion: ${grouped.companion.join(', ') || 'unspecified'}`,
     `Pace preference: ${grouped.pace.join(', ') || 'unspecified'}`,
     `Budget comfort: ${grouped.budget.join(', ') || 'unspecified'}`,
@@ -117,6 +154,14 @@ export async function generateUserPersonaSummary({
     `Food personality: ${foodLabels.join(', ') || 'unspecified'}`,
     `Free-text ideal day: ${profileAnswers?.idealDay ? String(profileAnswers.idealDay) : 'none'}`,
     `Free-text avoid list: ${profileAnswers?.avoidList ? String(profileAnswers.avoidList) : 'none'}`,
+    `Home country: ${profileAnswers?.homeCountry ? String(profileAnswers.homeCountry) : 'unspecified'}`,
+    `Trip length (days): ${profileAnswers?.tripLengthDays != null ? String(profileAnswers.tripLengthDays) : 'unspecified'}`,
+    `Travel party type: ${profileAnswers?.travelParty ? String(profileAnswers.travelParty) : 'unspecified'}`,
+    `Budget band: ${profileAnswers?.budgetBand ? String(profileAnswers.budgetBand) : 'unspecified'}`,
+    `Dietary / hard nos: ${profileAnswers?.dietaryHardNos ? String(profileAnswers.dietaryHardNos) : 'none'}`,
+    `Mobility notes: ${profileAnswers?.mobilityNotes ? String(profileAnswers.mobilityNotes) : 'none'}`,
+    `Heat sensitivity: ${profileAnswers?.heatSensitivity ? String(profileAnswers.heatSensitivity) : 'unspecified'}`,
+    `Session intent / today focus text: ${profileAnswers?.sessionIntentDay ? String(profileAnswers.sessionIntentDay) : 'none'}`,
   ].join('\n')
 
   try {

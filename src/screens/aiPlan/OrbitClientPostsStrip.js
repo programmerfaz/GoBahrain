@@ -13,8 +13,9 @@ const GOLD_SOFT = '#F7DFA0'
  * Cinematic orbit filmstrip — full-bleed horizontal reel of place posts.
  * Each tile breathes with a subtle Ken-Burns idle zoom, has a gold+accent
  * hairline, and sits on a dark glass tray.
+ * @param {boolean} [isDark=true] When false (light orbit chrome), overline uses high-contrast colors.
  */
-export function OrbitClientPostsStrip({ imageUris, accent }) {
+export function OrbitClientPostsStrip({ imageUris, accent, isDark = true }) {
   const scrollRef = useRef(null)
   const offsetRef = useRef(0)
   const loopUnitW = useMemo(() => {
@@ -52,19 +53,12 @@ export function OrbitClientPostsStrip({ imageUris, accent }) {
   return (
     <View style={styles.wrap} accessibilityLabel="Place post gallery">
       <View style={styles.overlineRow} pointerEvents="none">
-        <View style={styles.overlineDot} />
-        <Text style={styles.overlineText}>STOP HIGHLIGHTS</Text>
-        <View style={styles.overlineBar} />
+        <View style={[styles.overlineDot, !isDark && styles.overlineDotLight]} />
+        <Text style={[styles.overlineText, !isDark && styles.overlineTextLight]}>STOP HIGHLIGHTS</Text>
+        <View style={[styles.overlineBar, !isDark && styles.overlineBarLight]} />
       </View>
 
       <View style={styles.reelFrame} pointerEvents="box-none">
-        <LinearGradient
-          pointerEvents="none"
-          colors={['rgba(7,6,10,0.9)', 'transparent']}
-          start={{ x: 0, y: 0.5 }}
-          end={{ x: 1, y: 0.5 }}
-          style={styles.edgeFadeLeft}
-        />
         <ScrollView
           ref={scrollRef}
           horizontal
@@ -79,13 +73,6 @@ export function OrbitClientPostsStrip({ imageUris, accent }) {
             <OrbitTile key={`${uri}-${i}`} uri={uri} accent={safeAccent} accentRing={accentRing} delay={(i % imageUris.length) * 140} />
           ))}
         </ScrollView>
-        <LinearGradient
-          pointerEvents="none"
-          colors={['transparent', 'rgba(7,6,10,0.9)']}
-          start={{ x: 0, y: 0.5 }}
-          end={{ x: 1, y: 0.5 }}
-          style={styles.edgeFadeRight}
-        />
       </View>
     </View>
   )
@@ -181,10 +168,33 @@ const styles = StyleSheet.create({
     color: GOLD_SOFT,
     letterSpacing: 1.2,
   },
+  overlineTextLight: {
+    fontSize: 10,
+    color: '#0F172A',
+    letterSpacing: 1.05,
+  },
+  overlineDotLight: {
+    backgroundColor: '#C8102E',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(200,16,46,0.35)',
+    ...Platform.select({
+      ios: {
+        shadowColor: '#C8102E',
+        shadowOffset: { width: 0, height: 0 },
+        shadowOpacity: 0.35,
+        shadowRadius: 5,
+      },
+      android: { elevation: 2 },
+    }),
+  },
   overlineBar: {
     flex: 1,
     height: StyleSheet.hairlineWidth,
     backgroundColor: 'rgba(233,200,119,0.35)',
+  },
+  overlineBarLight: {
+    height: StyleSheet.hairlineWidth * 2,
+    backgroundColor: 'rgba(15,23,42,0.16)',
   },
   reelFrame: {
     height: ITEM_H + 12,
@@ -253,21 +263,5 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1.2,
     borderRightWidth: 1.2,
     opacity: 0.8,
-  },
-  edgeFadeLeft: {
-    position: 'absolute',
-    left: 0,
-    top: 0,
-    bottom: 0,
-    width: 42,
-    zIndex: 2,
-  },
-  edgeFadeRight: {
-    position: 'absolute',
-    right: 0,
-    top: 0,
-    bottom: 0,
-    width: 42,
-    zIndex: 2,
   },
 })

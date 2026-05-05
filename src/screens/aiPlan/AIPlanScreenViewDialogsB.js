@@ -39,6 +39,8 @@ import styles from '../AIPlanScreen.styles'
 import ClientProfileModal from '../../components/ClientProfileModal'
 import {
   PLAN_MAP_CLIENT_TYPE_FILTERS,
+  QUICK_FIND_KIND_OPTIONS,
+  QUICK_FIND_SUBLABELS_BY_KIND,
   BAHRAIN_REGION,
   SCREEN_HEIGHT,
   SCREEN_WIDTH,
@@ -70,46 +72,12 @@ import {
   pickPlanStopGalleryUris,
   pickPlanStopThumbUri,
 } from './planMatching'
-
-const stringifyTagValue = (value) => {
-  if (!value) return ''
-  if (Array.isArray(value)) return value.map((item) => stringifyTagValue(item)).filter(Boolean).join(' ')
-  if (typeof value === 'object') return Object.values(value).map((item) => stringifyTagValue(item)).filter(Boolean).join(' ')
-  return String(value)
-}
-
-const getClientSearchableTags = (client) => {
-  const tagsRaw = client?.tags
-  if (!tagsRaw) return ''
-
-  if (Array.isArray(tagsRaw) || typeof tagsRaw === 'object') {
-    return stringifyTagValue(tagsRaw)
-  }
-
-  if (typeof tagsRaw === 'string') {
-    const trimmed = tagsRaw.trim()
-    if (!trimmed) return ''
-    if ((trimmed.startsWith('[') && trimmed.endsWith(']')) || (trimmed.startsWith('{') && trimmed.endsWith('}'))) {
-      try {
-        return stringifyTagValue(JSON.parse(trimmed))
-      } catch {
-        return trimmed
-      }
-    }
-    return trimmed
-  }
-
-  return String(tagsRaw)
-}
-
-const matchesSearchQuery = (client, query) => {
-  if (!query) return true
-  const nameText = (client.name || client.business_name || '').toLowerCase()
-  const arabicNameText = (client.business_name_ar || '').toLowerCase()
-  const tagsText = getClientSearchableTags(client).toLowerCase()
-  return nameText.includes(query) || arabicNameText.includes(query) || tagsText.includes(query)
-}
-
+const PLAN_SEARCH_FILTER_OPTIONS = [
+  { id: 'all', label: 'All' },
+  { id: 'restaurants', label: 'Eat' },
+  { id: 'places', label: 'Places' },
+  { id: 'events', label: 'Events' },
+]
 
 export function AIPlanScreenViewDialogsB({ screen }) {
   const blurTint = screen.isDark ? 'dark' : 'light'
@@ -170,59 +138,59 @@ export function AIPlanScreenViewDialogsB({ screen }) {
             <Reanimated.View entering={ZoomInEasyDown.duration(340)} style={styles.buildModeStandaloneWrap}>
               {screen.buildDayModalPhase === 'menu' ? (
                 <>
-                <Text style={styles.buildModeStandaloneTitle}>Build your day</Text>
-                <Text style={styles.buildModeStandaloneHint}>Choose how you want to build your Bahrain day.</Text>
-                <View style={styles.buildModeStandaloneButtonRow}>
-                  <Reanimated.View entering={FadeInDown.delay(40).duration(360)} style={styles.buildModeStandaloneOptionSlot}>
-                    <TouchableOpacity
-                      style={styles.buildModeStandaloneButton}
-                      activeOpacity={0.9}
-                      onPress={screen.handleBuildDayPickAiPlan}
-                      accessibilityRole="button"
-                      accessibilityLabel="AI plan mode"
-                    >
-                      <LinearGradient
-                        colors={[themeColors.primary, '#E63950']}
-                        start={{ x: 0, y: 0 }}
-                        end={{ x: 1, y: 1 }}
-                        style={styles.buildModeStandaloneButtonGradient}
+                  <Text style={styles.buildModeStandaloneTitle}>Build your day</Text>
+                  <Text style={styles.buildModeStandaloneHint}>Choose how you want to build your Bahrain day.</Text>
+                  <View style={styles.buildModeStandaloneButtonRow}>
+                    <Reanimated.View entering={FadeInDown.delay(40).duration(360)} style={styles.buildModeStandaloneOptionSlot}>
+                      <TouchableOpacity
+                        style={styles.buildModeStandaloneButton}
+                        activeOpacity={0.9}
+                        onPress={screen.handleBuildDayPickAiPlan}
+                        accessibilityRole="button"
+                        accessibilityLabel="AI plan mode"
                       >
-                        <Ionicons name="sparkles" size={22} color="#FFFFFF" />
-                        <Text style={styles.buildModeStandaloneButtonTextLight}>AI{'\n'}plan</Text>
-                      </LinearGradient>
-                    </TouchableOpacity>
-                  </Reanimated.View>
-                  <Reanimated.View entering={FadeInDown.delay(110).duration(360)} style={styles.buildModeStandaloneOptionSlot}>
-                    <TouchableOpacity
-                      style={styles.buildModeStandaloneButton}
-                      activeOpacity={0.9}
-                      onPress={screen.handleBuildDayPickCustomPlan}
-                      accessibilityRole="button"
-                      accessibilityLabel="Custom plan"
-                    >
-                      <View style={styles.buildModeStandaloneButtonOutline}>
-                        <Ionicons name="create-outline" size={22} color="#F7DFA0" />
-                        <Text style={styles.buildModeStandaloneButtonText}>Custom{'\n'}plan</Text>
-                      </View>
-                    </TouchableOpacity>
-                  </Reanimated.View>
-                  <Reanimated.View entering={FadeInDown.delay(180).duration(360)} style={styles.buildModeStandaloneOptionSlot}>
-                    <TouchableOpacity
-                      style={styles.buildModeStandaloneButton}
-                      activeOpacity={0.9}
-                      onPress={screen.handleBuildDayPickEnterCode}
-                      accessibilityRole="button"
-                      accessibilityLabel="Enter shared code"
-                    >
-                      <View style={styles.buildModeStandaloneButtonOutline}>
-                        <Ionicons name="key-outline" size={22} color="#F7DFA0" />
-                        <Text style={styles.buildModeStandaloneButtonText}>Enter{'\n'}code</Text>
-                      </View>
-                    </TouchableOpacity>
-                  </Reanimated.View>
-                </View>
+                        <LinearGradient
+                          colors={[themeColors.primary, '#E63950']}
+                          start={{ x: 0, y: 0 }}
+                          end={{ x: 1, y: 1 }}
+                          style={styles.buildModeStandaloneButtonGradient}
+                        >
+                          <Ionicons name="sparkles" size={22} color="#FFFFFF" />
+                          <Text style={styles.buildModeStandaloneButtonTextLight}>AI{'\n'}plan</Text>
+                        </LinearGradient>
+                      </TouchableOpacity>
+                    </Reanimated.View>
+                    <Reanimated.View entering={FadeInDown.delay(110).duration(360)} style={styles.buildModeStandaloneOptionSlot}>
+                      <TouchableOpacity
+                        style={styles.buildModeStandaloneButton}
+                        activeOpacity={0.9}
+                        onPress={screen.handleBuildDayPickCustomPlan}
+                        accessibilityRole="button"
+                        accessibilityLabel="Custom plan"
+                      >
+                        <View style={styles.buildModeStandaloneButtonOutline}>
+                          <Ionicons name="create-outline" size={22} color="#F7DFA0" />
+                          <Text style={styles.buildModeStandaloneButtonText}>Custom{'\n'}plan</Text>
+                        </View>
+                      </TouchableOpacity>
+                    </Reanimated.View>
+                    <Reanimated.View entering={FadeInDown.delay(180).duration(360)} style={styles.buildModeStandaloneOptionSlot}>
+                      <TouchableOpacity
+                        style={styles.buildModeStandaloneButton}
+                        activeOpacity={0.9}
+                        onPress={screen.handleBuildDayPickEnterCode}
+                        accessibilityRole="button"
+                        accessibilityLabel="Enter shared code"
+                      >
+                        <View style={styles.buildModeStandaloneButtonOutline}>
+                          <Ionicons name="key-outline" size={22} color="#F7DFA0" />
+                          <Text style={styles.buildModeStandaloneButtonText}>Enter{'\n'}code</Text>
+                        </View>
+                      </TouchableOpacity>
+                    </Reanimated.View>
+                  </View>
                 </>
-              ) : (
+              ) : screen.buildDayModalPhase === 'joinCode' ? (
                 <>
                   <Text style={styles.buildModeStandaloneTitle}>Enter code</Text>
                   <Text style={styles.buildModeStandaloneHint}>Paste a shared plan code to open it instantly.</Text>
@@ -257,6 +225,69 @@ export function AIPlanScreenViewDialogsB({ screen }) {
                       )}
                     </TouchableOpacity>
                   </View>
+                </>
+              ) : screen.buildDayModalPhase === 'quickKind' ? (
+                <>
+                  <Text style={styles.buildModeStandaloneTitle}>Quick AI search</Text>
+                  <Text style={styles.buildModeStandaloneHint}>Eat, places, or events — then pick a vibe for one curated match.</Text>
+                  <View style={styles.buildModeStandaloneButtonRow}>
+                    {QUICK_FIND_KIND_OPTIONS.map((opt, i) => (
+                      <Reanimated.View
+                        key={opt.id}
+                        entering={FadeInDown.delay(40 + i * 70).duration(360)}
+                        style={styles.buildModeStandaloneOptionSlot}
+                      >
+                        <TouchableOpacity
+                          style={styles.buildModeStandaloneButton}
+                          activeOpacity={0.9}
+                          onPress={() => screen.handleBuildDayQuickFindSelectKind(opt.id)}
+                          accessibilityRole="button"
+                          accessibilityLabel={`Quick search category ${opt.label}`}
+                        >
+                          <View style={styles.buildModeStandaloneButtonOutline}>
+                            <Ionicons name={opt.icon} size={22} color="#F7DFA0" />
+                            <Text
+                              style={styles.buildModeStandaloneButtonText}
+                              numberOfLines={1}
+                              adjustsFontSizeToFit
+                              minimumFontScale={0.62}
+                            >
+                              {opt.label}
+                            </Text>
+                          </View>
+                        </TouchableOpacity>
+                      </Reanimated.View>
+                    ))}
+                  </View>
+                </>
+              ) : (
+                <>
+                  <Text style={styles.buildModeStandaloneTitle}>
+                    {(() => {
+                      const k = QUICK_FIND_KIND_OPTIONS.find((o) => o.id === screen.quickFindKind)
+                      return k ? `${k.label} vibes` : 'Pick a vibe'
+                    })()}
+                  </Text>
+                  <Text style={styles.buildModeStandaloneHint}>Tap a tag — we will place one pin on your map.</Text>
+                  <ScrollView
+                    style={styles.buildModeQuickSubScroll}
+                    contentContainerStyle={styles.buildModeQuickSubContent}
+                    showsVerticalScrollIndicator={false}
+                    keyboardShouldPersistTaps="handled"
+                  >
+                    {(QUICK_FIND_SUBLABELS_BY_KIND[screen.quickFindKind] || []).map((label) => (
+                      <TouchableOpacity
+                        key={label}
+                        style={styles.buildModeQuickChip}
+                        activeOpacity={0.88}
+                        onPress={() => void screen.handleQuickFindPickSubCategory(label)}
+                        accessibilityRole="button"
+                        accessibilityLabel={`Quick search ${label}`}
+                      >
+                        <Text style={styles.buildModeQuickChipText}>{label}</Text>
+                      </TouchableOpacity>
+                    ))}
+                  </ScrollView>
                 </>
               )}
                 <View style={styles.buildModeFooterRow}>
@@ -357,156 +388,374 @@ export function AIPlanScreenViewDialogsB({ screen }) {
         </View>
       </Modal>
 
-      {/* Clients search modal — all clients by Restaurants, Places, Events */}
+      {/* Plan catalog search — fullscreen, Maps-style top search bar (not a bottom sheet) */}
       <Modal
         visible={screen.showSearchModal}
-        animationType="slide"
-        presentationStyle="pageSheet"
+        animationType="fade"
+        presentationStyle="fullScreen"
+        statusBarTranslucent={Platform.OS === 'android'}
         onRequestClose={() => {
           if (screen.addingPlanStop) return
           screen.setShowSearchModal(false)
         }}
       >
-        <View style={[styles.searchModalRoot, { paddingTop: screen.insets.top + 4 }]}>
-          {screen.searchModalLoading ? (
-            <View style={styles.searchModalLoading}>
-              <ActivityIndicator size="large" color={themeColors.primary} />
-              <Text style={styles.searchModalLoadingText}>Loading clients…</Text>
-            </View>
-          ) : (
-            <>
-              <View style={styles.searchModalHeadingWrap}>
-                <Text style={styles.searchModalHeading}>
-                  {screen.addToPlanMode ? 'Add to your day' : 'Browse clients'}
-                </Text>
-                {screen.addToPlanMode ? (
-                  <Text style={styles.searchModalSubheading}>
-                    {screen.customPlanDraftActive && (!screen.dayPlan || screen.dayPlan.length === 0)
-                      ? 'Choose your first stop to start your custom plan. After that you can keep adding from here or the map.'
-                      : 'Tap a restaurant, place, or event — it is added to the end of your list. Long-press a card to reorder anytime.'}
-                  </Text>
-                ) : null}
-              </View>
-              <View style={styles.searchModalHeaderRow}>
-                <View style={styles.searchModalSearchWrap}>
-                  <Ionicons name="search" size={20} color={themeColors.primary} style={styles.searchModalSearchIcon} />
-                  <TextInput
-                    style={styles.searchModalSearchInput}
-                    placeholder="Search restaurants, places, events, tags…"
-                    placeholderTextColor={placeholderColor}
-                    value={screen.searchModalQuery}
-                    onChangeText={screen.setSearchModalQuery}
-                    autoCapitalize="none"
-                    autoCorrect={false}
-                    returnKeyType="search"
-                  />
-                  {screen.searchModalQuery.length > 0 && (
-                    <TouchableOpacity
-                      onPress={() => screen.setSearchModalQuery('')}
-                      style={styles.searchModalSearchClear}
-                      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                    >
-                      <Ionicons name="close-circle" size={20} color={placeholderColor} />
-                    </TouchableOpacity>
-                  )}
-                </View>
+        <KeyboardAvoidingView
+          style={styles.searchModalRoot}
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        >
+          <View
+            style={[
+              styles.searchModalRoot,
+              { backgroundColor: screen.isDark ? '#0B1220' : '#FFFFFF' },
+            ]}
+          >
+            <View
+              style={[styles.planMapsSearchChrome, screen.isDark && styles.planMapsSearchChromeDark]}
+            >
+              <View
+                style={[
+                  styles.planMapsSearchTopRow,
+                  { paddingTop: screen.insets.top + 4 },
+                ]}
+              >
                 <TouchableOpacity
-                  style={styles.searchModalCloseBtn}
-                  activeOpacity={0.8}
+                  style={styles.planMapsSearchBackBtn}
+                  activeOpacity={0.65}
                   onPress={() => {
                     if (screen.addingPlanStop) return
+                    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {})
                     screen.setShowSearchModal(false)
                   }}
+                  accessibilityRole="button"
+                  accessibilityLabel="Go back to map"
                   accessibilityState={{ disabled: screen.addingPlanStop }}
                 >
-                  <Ionicons name="close" size={20} color={themeColors.primary} />
+                  <Ionicons
+                    name="arrow-back"
+                    size={24}
+                    color={screen.isDark ? '#F8FAFC' : '#202124'}
+                  />
                 </TouchableOpacity>
+                {screen.searchModalLoading ? (
+                  <View
+                    style={[styles.planMapsSearchPill, screen.isDark && styles.planMapsSearchPillDark, { opacity: 0.92 }]}
+                  >
+                    <ActivityIndicator style={{ marginRight: 10 }} size="small" color={themeColors.primary} />
+                    <Text
+                      style={[
+                        styles.planMapsSearchInput,
+                        screen.isDark && styles.planMapsSearchInputDark,
+                        { flex: 0 },
+                      ]}
+                      numberOfLines={1}
+                    >
+                      Loading catalog…
+                    </Text>
+                  </View>
+                ) : (
+                  <View
+                    style={[styles.planMapsSearchPill, screen.isDark && styles.planMapsSearchPillDark]}
+                  >
+                    <Ionicons
+                      name="search"
+                      size={22}
+                      color={screen.isDark ? '#94A3B8' : '#5F6368'}
+                      style={styles.planMapsSearchIcon}
+                    />
+                    <TextInput
+                      style={[styles.planMapsSearchInput, screen.isDark && styles.planMapsSearchInputDark]}
+                      placeholder={screen.addToPlanMode ? 'Search for a stop to add…' : 'Search places and events…'}
+                      placeholderTextColor={placeholderColor}
+                      value={screen.searchModalQuery}
+                      onChangeText={screen.setSearchModalQuery}
+                      autoCapitalize="none"
+                      autoCorrect
+                      returnKeyType="search"
+                      {...(Platform.OS === 'ios' ? { clearButtonMode: 'never' } : {})}
+                      accessibilityLabel="Search catalog"
+                    />
+                    {screen.searchModalSemanticSearching &&
+                    (screen.searchModalQuery || '').trim().length >= 2 ? (
+                      <ActivityIndicator
+                        style={styles.searchModalSearchSpinner}
+                        size="small"
+                        color={themeColors.primary}
+                      />
+                    ) : null}
+                    {screen.searchModalQuery.length > 0 ? (
+                      <TouchableOpacity
+                        onPress={() => screen.setSearchModalQuery('')}
+                        style={styles.searchModalSearchClear}
+                        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                        accessibilityRole="button"
+                        accessibilityLabel="Clear search text"
+                      >
+                        <Ionicons name="close-circle" size={22} color={placeholderColor} />
+                      </TouchableOpacity>
+                    ) : null}
+                  </View>
+                )}
               </View>
+              {!screen.searchModalLoading ? (
+                <>
+                  <Text
+                    style={[
+                      styles.planMapsSearchHintText,
+                      screen.isDark && styles.planMapsSearchHintTextDark,
+                    ]}
+                    accessibilityLiveRegion="polite"
+                  >
+                    {(screen.searchModalQuery || '').trim().length >= 2
+                      ? screen.searchModalSemanticSearching
+                        ? 'Finding similar places…'
+                        : 'Closest matches listed first.'
+                      : 'Keep typing — smart matches begin after two characters.'}
+                  </Text>
+                  <ScrollView
+                    horizontal
+                    showsHorizontalScrollIndicator={false}
+                    style={styles.planMapsChipScroll}
+                    contentContainerStyle={styles.planMapsChipRow}
+                    keyboardShouldPersistTaps="handled"
+                  >
+                    {PLAN_SEARCH_FILTER_OPTIONS.map((opt) => {
+                      const active = screen.searchModalCatalogFilter === opt.id
+                      return (
+                        <TouchableOpacity
+                          key={opt.id}
+                          onPress={() => {
+                            void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {})
+                            screen.setSearchModalCatalogFilter(opt.id)
+                          }}
+                          accessibilityRole="button"
+                          accessibilityState={{ selected: active }}
+                          accessibilityLabel={`Show ${opt.label}`}
+                          activeOpacity={0.85}
+                          style={[
+                            styles.searchModalFilterChip,
+                            screen.isDark && styles.searchModalFilterChipDark,
+                            active && styles.searchModalFilterChipActive,
+                            active && screen.isDark && styles.searchModalFilterChipActiveDark,
+                          ]}
+                        >
+                          <Text
+                            style={[
+                              styles.searchModalFilterChipLabel,
+                              screen.isDark && styles.searchModalFilterChipLabelDark,
+                              active &&
+                                (screen.isDark
+                                  ? styles.searchModalFilterChipLabelActiveOnDark
+                                  : styles.searchModalFilterChipLabelActive),
+                            ]}
+                          >
+                            {opt.label}
+                          </Text>
+                        </TouchableOpacity>
+                      )
+                    })}
+                  </ScrollView>
+                </>
+              ) : null}
+            </View>
+
+            {screen.searchModalLoading ? (
+              <View style={styles.searchModalLoading}>
+                <ActivityIndicator size="large" color={themeColors.primary} />
+                <Text
+                  style={[styles.searchModalLoadingText, screen.isDark && styles.searchModalLoadingTextDark]}
+                >
+                  Fetching venue catalog…
+                </Text>
+              </View>
+            ) : (
               <ScrollView
-                style={styles.searchModalScroll}
-                contentContainerStyle={styles.searchModalContent}
+                style={styles.planMapsSearchResultsScroll}
+                contentContainerStyle={[
+                  styles.planMapsSearchResultsContent,
+                  { paddingBottom: Math.max(screen.insets.bottom, 16) + 16 },
+                ]}
                 showsVerticalScrollIndicator={false}
                 keyboardShouldPersistTaps="handled"
+                keyboardDismissMode="on-drag"
               >
-                {['restaurants', 'places', 'events'].map((key) => {
-                  const sectionLabel = key === 'restaurants' ? 'Restaurants' : key === 'places' ? 'Places' : 'Events';
-                  const rawItems = screen.searchModalClients[key] || [];
-                  const q = (screen.searchModalQuery || '').trim().toLowerCase();
-                  const items = q
-                    ? rawItems.filter((c) => matchesSearchQuery(c, q))
-                    : rawItems;
-                const accent = key === 'restaurants' ? screen.colors.dining : key === 'events' ? screen.colors.event : screen.colors.textSecondary;
-                if (q && items.length === 0) return null;
-                return (
-                  <View key={key} style={styles.searchModalSection}>
-                    <View style={styles.searchModalSectionHeader}>
-                      <View style={[styles.searchModalSectionIcon, { backgroundColor: `${accent}18` }]}>
-                        <Ionicons
-                          name={key === 'restaurants' ? 'restaurant' : key === 'events' ? 'calendar' : 'location'}
-                          size={20}
-                          color={accent}
-                        />
-                      </View>
-                      <Text style={[styles.searchModalSectionTitle, { color: accent }]}>{sectionLabel}</Text>
-                    </View>
-                    {items.length === 0 ? (
-                      <Text style={styles.searchModalEmpty}>
-                        {q ? `No ${sectionLabel.toLowerCase()} match "${screen.searchModalQuery.trim()}"` : `No ${sectionLabel.toLowerCase()} yet`}
-                      </Text>
-                    ) : (
-                      <ScrollView
-                        horizontal
-                        showsHorizontalScrollIndicator={false}
-                        contentContainerStyle={styles.searchModalHorizontalContent}
-                      >
-                        {items.map((client) => {
-                          const imageUrl = resolvePublicImageUrl(client.client_image);
-                          return (
-                            <TouchableOpacity
-                              key={client.client_a_uuid || client.clientId}
-                              style={styles.searchModalClientCard}
-                              activeOpacity={0.7}
-                              disabled={screen.addingPlanStop}
-                              onPress={() => {
-                                if (screen.addToPlanMode) {
-                                  screen.handleAddClientToPlan(client)
-                                  return
-                                }
-                                screen.handleFocusClientFromSearch(client)
-                              }}
+                {(() => {
+                  const qTrim = (screen.searchModalQuery || '').trim()
+                  const qLow = qTrim.toLowerCase()
+                  const filt = screen.searchModalCatalogFilter
+                  const bucketKeys =
+                    filt === 'all' ? ['restaurants', 'places', 'events'] : [filt]
+                  const blocks = []
+
+                  const sectionLabelOf = (key) =>
+                    key === 'restaurants' ? 'Restaurants' : key === 'places' ? 'Places' : 'Events'
+
+                  let totalMatches = 0
+                  const display = screen.searchModalDisplayClients || {
+                    restaurants: [],
+                    places: [],
+                    events: [],
+                  }
+
+                  bucketKeys.forEach((key) => {
+                    const items = display[key] || []
+                    if (qLow) totalMatches += items.length
+                  })
+
+                  for (const key of bucketKeys) {
+                    const sectionLabel = sectionLabelOf(key)
+                    const accent =
+                      key === 'restaurants'
+                        ? screen.colors.dining
+                        : key === 'events'
+                          ? screen.colors.event
+                          : screen.colors.textSecondary
+                    const items = display[key] || []
+                    if (qLow && items.length === 0) continue
+
+                    blocks.push(
+                      <View key={key} style={styles.searchModalSection}>
+                        <View style={styles.searchModalSectionHeader}>
+                          <View style={[styles.searchModalSectionIcon, { backgroundColor: `${accent}18` }]}>
+                            <Ionicons
+                              name={key === 'restaurants' ? 'restaurant' : key === 'events' ? 'calendar' : 'location'}
+                              size={20}
+                              color={accent}
+                            />
+                          </View>
+                          <Text style={[styles.searchModalSectionTitle, { color: accent }]}>{sectionLabel}</Text>
+                          {qTrim.length >= 2 && filt !== 'all' && filt === key ? (
+                            <View
+                              style={[
+                                styles.searchModalSmartBadge,
+                                screen.isDark && styles.searchModalSmartBadgeDark,
+                                { borderColor: `${accent}55` },
+                              ]}
                             >
-                              <View style={[styles.searchModalClientCircle, { borderColor: accent }]}>
-                                {imageUrl ? (
-                                  <CachedImage source={{ uri: imageUrl }} style={styles.searchModalClientImage} recyclingKey={imageUrl} resizeMode="cover" />
-                                ) : (
-                                  <Ionicons
-                                    name={key === 'restaurants' ? 'restaurant' : key === 'events' ? 'calendar' : 'location'}
-                                    size={32}
-                                    color={accent}
-                                  />
-                                )}
-                              </View>
-                              <Text style={styles.searchModalClientName} numberOfLines={2}>
-                                {client.name || client.business_name || 'Spot'}
-                              </Text>
-                            </TouchableOpacity>
-                          );
-                        })}
-                      </ScrollView>
-                    )}
-                  </View>
-                );
-              })}
+                              <Text style={[styles.searchModalSmartBadgeLabel, { color: accent }]}>Ranked</Text>
+                            </View>
+                          ) : null}
+                        </View>
+                        {items.length === 0 ? (
+                          <Text style={[styles.searchModalEmpty, screen.isDark && styles.searchModalEmptyDark]}>
+                            {qLow ? `No ${sectionLabel.toLowerCase()} for this query` : `No ${sectionLabel.toLowerCase()} yet`}
+                          </Text>
+                        ) : (
+                          <ScrollView
+                            horizontal
+                            showsHorizontalScrollIndicator={false}
+                            contentContainerStyle={styles.searchModalHorizontalContent}
+                          >
+                            {items.map((client) => {
+                              const imageUrl = resolvePublicImageUrl(client.client_image)
+                              return (
+                                <TouchableOpacity
+                                  key={client.client_a_uuid || client.clientId}
+                                  style={[styles.searchModalClientCard, screen.isDark && styles.searchModalClientCardDark]}
+                                  activeOpacity={0.72}
+                                  disabled={screen.addingPlanStop}
+                                  accessibilityRole="button"
+                                  accessibilityLabel={`${sectionLabel}: ${client.name || client.business_name || 'Spot'}`}
+                                  onPress={() => {
+                                    if (screen.addToPlanMode) {
+                                      screen.handleAddClientToPlan(client)
+                                      return
+                                    }
+                                    screen.handleFocusClientFromSearch(client)
+                                  }}
+                                >
+                                  <View style={[styles.searchModalClientCircle, { borderColor: accent }]}>
+                                    {imageUrl ? (
+                                      <CachedImage
+                                        source={{ uri: imageUrl }}
+                                        style={styles.searchModalClientImage}
+                                        recyclingKey={imageUrl}
+                                        resizeMode="cover"
+                                      />
+                                    ) : (
+                                      <Ionicons
+                                        name={
+                                          key === 'restaurants' ? 'restaurant' : key === 'events' ? 'calendar' : 'location'
+                                        }
+                                        size={32}
+                                        color={accent}
+                                      />
+                                    )}
+                                  </View>
+                                  <Text
+                                    style={[
+                                      styles.searchModalClientName,
+                                      screen.isDark && styles.searchModalClientNameDark,
+                                    ]}
+                                    numberOfLines={2}
+                                  >
+                                    {client.name || client.business_name || 'Spot'}
+                                  </Text>
+                                </TouchableOpacity>
+                              )
+                            })}
+                          </ScrollView>
+                        )}
+                      </View>,
+                    )
+                  }
+
+                  if (qLow && totalMatches === 0) {
+                    return (
+                      <View style={styles.searchModalGlobalEmptyWrap}>
+                        <Ionicons name="search-outline" size={42} color={placeholderColor} />
+                        <Text
+                          style={[
+                            styles.searchModalGlobalEmptyTitle,
+                            screen.isDark && styles.searchModalGlobalEmptyTitleDark,
+                          ]}
+                        >
+                          No venues match "{qTrim}"
+                        </Text>
+                        <Text
+                          style={[
+                            styles.searchModalGlobalEmptySub,
+                            screen.isDark && styles.searchModalGlobalEmptySubDark,
+                          ]}
+                        >
+                          Try different words or a category chip — or spell part of the name for a keyword match.
+                        </Text>
+                      </View>
+                    )
+                  }
+
+                  if (blocks.length === 0 && !qLow) {
+                    return (
+                      <Text style={[styles.searchModalEmpty, screen.isDark && styles.searchModalEmptyDark]}>
+                        Nothing in this category yet.
+                      </Text>
+                    )
+                  }
+
+                  return blocks
+                })()}
               </ScrollView>
-            </>
-          )}
+            )}
           {screen.addingPlanStop && !screen.searchModalLoading ? (
-            <View style={styles.searchModalAddingOverlay} pointerEvents="box-none">
+            <View
+              style={[
+                styles.searchModalAddingOverlay,
+                screen.isDark && styles.searchModalAddingOverlayDark,
+              ]}
+              pointerEvents="box-none"
+            >
               <ActivityIndicator size="large" color={themeColors.primary} />
-              <Text style={styles.searchModalAddingOverlayText}>Adding to your plan…</Text>
+              <Text
+                style={[
+                  styles.searchModalAddingOverlayText,
+                  screen.isDark && styles.searchModalAddingOverlayTextDark,
+                ]}
+              >
+                Adding to your plan…
+              </Text>
             </View>
           ) : null}
-        </View>
+          </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       <Modal

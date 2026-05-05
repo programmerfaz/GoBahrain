@@ -49,21 +49,19 @@ import { Ionicons } from '@expo/vector-icons'
 import DraggableFlatList, { ScaleDecorator } from 'react-native-draggable-flatlist'
 import {
   fetchPlaces,
-  fetchRestaurants,
   fetchBreakfastSpots,
   fetchEvents,
   generateDayPlan,
   generatePlanTitleFromAI,
   fetchClientsWithLocation,
   enhancePlanStopAtIndex,
-  retrievalPersonaCacheKey,
+  planRetrievalContextKey,
 } from '../../services/aiPipeline'
 import { useUserPreferences } from '../../context/UserPreferencesContext'
 import { colors as themeColors } from '../../theme/designTokens'
 import styles from '../AIPlanScreen.styles'
 import { useTheme } from '../../context/ThemeContext'
 import { supabase } from '../../config/supabase'
-import { useAuth } from '../../context/AuthContext'
 import { getCommunityPalette } from '../../components/community/CommunityReviewViews'
 import {
   listSavedPlans,
@@ -186,6 +184,7 @@ export function useAIPlanScreenMiddlePartA(inner) {
                   inner.setActiveSavedPlanId(null);
                   inner.setSharedCollaboration(null);
                   inner.setQuickFindMapOnly(false);
+                  inner.resetQuickFindRotationState();
                 }
                 await inner.refreshSavedPlans();
                 Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
@@ -236,6 +235,7 @@ export function useAIPlanScreenMiddlePartA(inner) {
       inner.setPineconeMatches([]);
       inner.setError(null);
       inner.setQuickFindMapOnly(false);
+      inner.resetQuickFindRotationState();
       inner.setDrawerStep(3);
       inner.setActiveSavedPlanId(payload.id);
       const ownerId = payload.owner_id;
@@ -273,6 +273,7 @@ export function useAIPlanScreenMiddlePartA(inner) {
       inner.setPineconeMatches([]);
       inner.setError(null);
       inner.setQuickFindMapOnly(false);
+      inner.resetQuickFindRotationState();
       inner.setDrawerStep(3);
       inner.setActiveSavedPlanId(row.id);
       inner.setSharedCollaboration(null);
@@ -316,6 +317,7 @@ export function useAIPlanScreenMiddlePartA(inner) {
       } else {
         const aiTitle = await generatePlanTitleFromAI(inner.dayPlan, {
           profileNarrative: inner.preferences?.profileSummary || '',
+          viewerUType: inner.viewerUType,
         });
         const id = await createSavedPlan({ title: aiTitle, planData: payload });
         if (id) inner.setActiveSavedPlanId(id);
@@ -328,7 +330,7 @@ export function useAIPlanScreenMiddlePartA(inner) {
     } finally {
       inner.setSavePlanBusy(false);
     }
-  }, [inner.dayPlan, inner.activeSavedPlanId, inner.refreshSavedPlans, inner.planReadOnly, inner.sharedCollaboration, inner.preferences?.profileSummary]);
+  }, [inner.dayPlan, inner.activeSavedPlanId, inner.refreshSavedPlans, inner.planReadOnly, inner.sharedCollaboration, inner.preferences?.profileSummary, inner.viewerUType]);
 
   const autoSavePlanSilently = useCallback(
     async (planOverride) => {
@@ -351,6 +353,7 @@ export function useAIPlanScreenMiddlePartA(inner) {
 
       const aiTitle = await generatePlanTitleFromAI(sourcePlan, {
         profileNarrative: inner.preferences?.profileSummary || '',
+        viewerUType: inner.viewerUType,
       })
       const id = await createSavedPlan({ title: aiTitle, planData: payload })
       if (id) inner.setActiveSavedPlanId(id)
@@ -363,6 +366,7 @@ export function useAIPlanScreenMiddlePartA(inner) {
       inner.activeSavedPlanId,
       inner.refreshSavedPlans,
       inner.preferences?.profileSummary,
+      inner.viewerUType,
     ],
   )
 
@@ -383,6 +387,7 @@ export function useAIPlanScreenMiddlePartA(inner) {
         const payload = serializePlanForStorage(inner.dayPlan);
         const aiTitle = await generatePlanTitleFromAI(inner.dayPlan, {
           profileNarrative: inner.preferences?.profileSummary || '',
+          viewerUType: inner.viewerUType,
         });
         planId = await createSavedPlan({
           title: aiTitle,
@@ -405,7 +410,7 @@ export function useAIPlanScreenMiddlePartA(inner) {
     } finally {
       inner.setShareModalBusy(false);
     }
-  }, [inner.dayPlan, inner.activeSavedPlanId, inner.refreshSavedPlans, inner.planReadOnly, inner.preferences?.profileSummary]);
+  }, [inner.dayPlan, inner.activeSavedPlanId, inner.refreshSavedPlans, inner.planReadOnly, inner.preferences?.profileSummary, inner.viewerUType]);
 
   const handleConfirmShareSettings = useCallback(async (options = {}) => {
     const skipClipboard = options?.skipClipboard === true
@@ -523,37 +528,44 @@ export function useAIPlanScreenMiddlePartA(inner) {
   const startBackgroundPrefetch = (prefLabels) => {
     const key = (prefLabels || []).join('|');
     if (!key) return;
-    const personaKey = retrievalPersonaCacheKey(inner.preferences?.profileSummary)
-    const retrievalOpts = { profileNarrative: inner.preferences?.profileSummary || '' }
+    const warmupKey = planRetrievalContextKey(inner.preferences?.profileSummary, inner.preferences?.profileAnswers)
+    const retrievalOpts = {
+      profileNarrative: inner.preferences?.profileSummary || '',
+      profileAnswers: inner.preferences?.profileAnswers || {},
+      profileActivity: inner.activityLabels,
+    }
     const cached = inner.prefetchRef.current;
     const hasValidPrefetch =
       cached.prefsKey === key &&
-      cached.personaKey === personaKey &&
+      cached.warmupKey === warmupKey &&
       Array.isArray(cached.places) &&
       cached.places.length > 0 &&
       Array.isArray(cached.events) &&
-      cached.events.length > 0;
+      cached.events.length > 0 &&
+      Array.isArray(cached.breakfastSpots) &&
+      cached.breakfastSpots.length > 0;
     if (hasValidPrefetch) {
       return;
     }
     inner.prefetchRef.current = {
       prefsKey: key,
-      personaKey,
+      warmupKey,
       places: null,
       breakfastSpots: null,
       events: null,
     };
     (async () => {
       try {
-        const [places, events] = await Promise.all([
+        const [places, events, breakfastSpots] = await Promise.all([
           fetchPlaces(prefLabels, retrievalOpts),
           fetchEvents(prefLabels, retrievalOpts),
+          fetchBreakfastSpots(retrievalOpts),
         ]);
         inner.prefetchRef.current = {
           prefsKey: key,
-          personaKey,
+          warmupKey,
           places,
-          breakfastSpots: null,
+          breakfastSpots,
           events,
         };
       } catch {

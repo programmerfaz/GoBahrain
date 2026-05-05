@@ -1,30 +1,23 @@
-import React, { useRef, useEffect, useLayoutEffect, useState, useMemo, useCallback } from 'react'
-import {
-  StyleSheet,
-  Text,
-  View,
-  TouchableOpacity,
-  Platform,
-  Animated,
-  Easing,
-} from 'react-native'
+import React, { useMemo, useEffect } from 'react'
+import { StyleSheet, Text, View, TouchableOpacity } from 'react-native'
 import Reanimated, {
   FadeInDown,
+  FadeIn,
+  Easing,
   useSharedValue,
   useAnimatedStyle,
   withSpring,
+  withTiming,
 } from 'react-native-reanimated'
 import { LinearGradient } from 'expo-linear-gradient'
 import { Ionicons } from '@expo/vector-icons'
 import styles from '../AIPlanScreen.styles'
-import { colors as themeColors } from '../../theme/designTokens'
-import { PLAN_COLORS } from './constants'
 
 
 export const AnimatedStopRow = ({ isVisible, children, style }) => {
   const scale = useSharedValue(0)
   const opacity = useSharedValue(0)
-  
+
   React.useEffect(() => {
     if (isVisible) {
       scale.value = withSpring(1, { damping: 12, stiffness: 200, mass: 0.7 })
@@ -34,12 +27,12 @@ export const AnimatedStopRow = ({ isVisible, children, style }) => {
       opacity.value = 0
     }
   }, [isVisible])
-  
+
   const animatedStyle = useAnimatedStyle(() => ({
     transform: [{ scale: scale.value }],
     opacity: opacity.value,
   }))
-  
+
   return (
     <Reanimated.View style={[style, animatedStyle]}>
       {children}
@@ -59,29 +52,20 @@ export function AiStagger({ children, delay = 0, style, entering }) {
   )
 }
 
-export function PopIn({ delay = 0, trigger, children, style }) {
-  const scale = useRef(new Animated.Value(0.7)).current
-  const opacity = useRef(new Animated.Value(0)).current
-  const ty = useRef(new Animated.Value(14)).current
-
-  useEffect(() => {
-    scale.setValue(0.7)
-    opacity.setValue(0)
-    ty.setValue(14)
-    const timer = setTimeout(() => {
-      Animated.parallel([
-        Animated.spring(scale, { toValue: 1, tension: 170, friction: 8, useNativeDriver: true }),
-        Animated.timing(opacity, { toValue: 1, duration: 220, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
-        Animated.spring(ty, { toValue: 0, tension: 170, friction: 10, useNativeDriver: true }),
-      ]).start()
-    }, delay)
-    return () => clearTimeout(timer)
-  }, [trigger])
+/** Quiet staggered fade + slide — no bounce / scale pop */
+export function PopIn({ delay = 0, children, style }) {
+  const entering = useMemo(
+    () =>
+      FadeInDown.delay(delay)
+        .duration(380)
+        .easing(Easing.out(Easing.cubic)),
+    [delay],
+  )
 
   return (
-    <Animated.View style={[style, { transform: [{ scale }, { translateY: ty }], opacity }]}>
+    <Reanimated.View entering={entering} style={style}>
       {children}
-    </Animated.View>
+    </Reanimated.View>
   )
 }
 
@@ -104,68 +88,111 @@ const hexToRgba = (hex, alpha) => {
   return `rgba(${r},${g},${b},${alpha})`
 }
 
-export function AnimatedOptionChip({ item, isSelected, onPress }) {
-  const scaleAnim = useRef(new Animated.Value(1)).current
-  const bounceAnim = useRef(new Animated.Value(0)).current
+const PM_TILE_RADIUS = 16
+
+/** 3-column grid tile — stacked icon + label; `variant`: light modal vs cinematic overlay */
+export function AnimatedOptionChip({ item, isSelected, onPress, variant = 'light' }) {
+  const isDark = variant === 'dark'
+  const rimLight = useSharedValue(isSelected ? 1 : 0)
 
   useEffect(() => {
-    if (isSelected) {
-      Animated.parallel([
-        Animated.spring(scaleAnim, { toValue: 1.03, tension: 200, friction: 10, useNativeDriver: true }),
-        Animated.sequence([
-          Animated.timing(bounceAnim, { toValue: -3, duration: 100, useNativeDriver: true }),
-          Animated.spring(bounceAnim, { toValue: 0, tension: 300, friction: 6, useNativeDriver: true }),
-        ]),
-      ]).start()
-    } else {
-      Animated.spring(scaleAnim, { toValue: 1, tension: 150, friction: 14, useNativeDriver: true }).start()
-    }
-  }, [isSelected, scaleAnim, bounceAnim])
+    rimLight.value = withTiming(isSelected ? 1 : 0, {
+      duration: 240,
+      easing: Easing.out(Easing.cubic),
+    })
+  }, [isSelected, rimLight])
+
+  const rimStyle = useAnimatedStyle(() => ({
+    opacity: rimLight.value * (isDark ? 0.5 : 0.38),
+  }))
+
+  const touchBase = isDark ? styles.pmOptTileTouchableDark : {}
+  const selectedShell = isDark ? styles.pmOptTileSelectedDark : styles.pmOptTileSelectedLight
+
+  const iconTint = {}
+  if (!isSelected && item?.color) {
+    iconTint.backgroundColor = hexToRgba(item.color, isDark ? 0.09 : 0.1)
+    iconTint.borderColor = hexToRgba(item.color, 0.24)
+  }
+
+  const labelStyle = [
+    styles.pmOptTileLabel,
+    isDark && styles.pmOptTileLabelDark,
+    isSelected && (isDark ? styles.pmOptTileLabelSelectedDark : styles.pmOptTileLabelSelected),
+  ]
 
   return (
-    <Animated.View style={{ transform: [{ scale: scaleAnim }, { translateY: bounceAnim }] }}>
+    <View style={styles.pmOptTileWrap}>
       <TouchableOpacity
         style={[
-          styles.pmChip,
-          isSelected && styles.pmChipSelected,
+          styles.pmOptTileTouchable,
+          touchBase,
+          isSelected && selectedShell,
         ]}
-        activeOpacity={0.85}
+        activeOpacity={0.88}
         onPress={onPress}
         accessibilityRole="button"
         accessibilityState={{ selected: isSelected }}
         accessibilityLabel={item.label}
       >
-        {isSelected && (
-          <LinearGradient
-            colors={['#FFF9F0', '#FFFFFF']}
-            start={{ x: 0, y: 0 }}
-            end={{ x: 1, y: 1 }}
-            style={[StyleSheet.absoluteFill, { borderRadius: 24 }]}
-            pointerEvents="none"
-          />
-        )}
+        {isSelected ? (
+          <>
+            <LinearGradient
+              colors={isDark ? ['rgba(253,246,232,0.12)', 'rgba(255,251,246,0.05)', 'rgba(200,157,71,0.08)'] : ['#FFFEFA', '#F5F1E9', '#EBE6DC']}
+              start={{ x: 0.1, y: 0 }}
+              end={{ x: 0.92, y: 1 }}
+              style={[StyleSheet.absoluteFillObject, { borderRadius: PM_TILE_RADIUS }]}
+              pointerEvents="none"
+            />
+            {!isDark ? (
+              <LinearGradient
+                colors={['rgba(255,253,247,0.75)', 'rgba(255,255,255,0)', 'rgba(201,164,76,0.05)']}
+                start={{ x: 0.5, y: 0 }}
+                end={{ x: 0.5, y: 1 }}
+                locations={[0, 0.4, 1]}
+                style={[StyleSheet.absoluteFillObject, { borderRadius: PM_TILE_RADIUS }]}
+                pointerEvents="none"
+              />
+            ) : null}
+          </>
+        ) : null}
+
+        <Reanimated.View pointerEvents="none" style={[styles.pmOptTileRimGlow, rimStyle]} />
+
         <View
           style={[
-            styles.pmChipIcon,
-            isSelected && { backgroundColor: 'rgba(233,200,119,0.15)' },
-            !isSelected && { backgroundColor: hexToRgba(item.color, 0.08) },
+            styles.pmOptTileIconCircle,
+            isDark && styles.pmOptTileIconCircleDark,
+            isSelected && (isDark ? styles.pmOptTileIconCircleSelectedDark : styles.pmOptTileIconCircleSelected),
+            iconTint,
           ]}
         >
-          <Ionicons 
-            name={item.icon} 
-            size={16} 
-            color={isSelected ? '#1A120A' : item.color} 
+          <Ionicons
+            name={item.icon}
+            size={21}
+            color={isSelected ? (isDark ? '#fcf9f4' : '#252018') : isDark ? 'rgba(240,236,229,0.88)' : item.color}
           />
         </View>
-        <Text style={[styles.pmChipText, isSelected && styles.pmChipTextSelected]}>
+        <Text style={labelStyle} numberOfLines={3}>
           {item.label}
         </Text>
-        {isSelected && (
-          <View style={styles.pmChipCheck}>
-            <Ionicons name="checkmark" size={12} color="#FFFFFF" />
-          </View>
-        )}
+
+        {isSelected ? (
+          <Reanimated.View
+            entering={FadeIn.duration(200).easing(Easing.out(Easing.cubic))}
+            style={styles.pmOptTileCheckSlot}
+          >
+            <LinearGradient
+              colors={['#F2E6C3', '#D4B058', '#8B6919']}
+              start={{ x: 0.2, y: 0 }}
+              end={{ x: 0.9, y: 1 }}
+              style={styles.pmOptTileCheckGradient}
+            >
+              <Ionicons name="checkmark" size={13} color="#14110D" />
+            </LinearGradient>
+          </Reanimated.View>
+        ) : null}
       </TouchableOpacity>
-    </Animated.View>
+    </View>
   )
 }

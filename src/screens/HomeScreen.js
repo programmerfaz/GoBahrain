@@ -1697,7 +1697,10 @@ export default function HomeScreen() {
     } catch (err) {
       console.error('[Home] Failed to fetch posts:', err);
       const errMsg = String(err?.message ?? err ?? '');
-      const isNetworkError = /network request failed|failed to fetch|network error/i.test(errMsg);
+      const isTimedOutBatch = /feed_first_batch_timeout/i.test(errMsg)
+      const isNetworkError =
+        isTimedOutBatch ||
+        /network request failed|failed to fetch|network error/i.test(errMsg)
       setFetchError(isNetworkError ? 'network' : errMsg || 'unknown');
       if (!append) setPosts([]);
     } finally {
@@ -1708,10 +1711,40 @@ export default function HomeScreen() {
     }
   }, [nextCursor, userPosition?.latitude, userPosition?.longitude, searchQuery, preferences?.profileSummary]);
 
+  const fetchPostsRef = useRef(fetchPosts)
+  fetchPostsRef.current = fetchPosts
+  const bootstrapFeedRetryAttemptsRef = useRef(0)
+
   useEffect(() => {
-    fetchPosts();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    let cancelled = false
+    ;(async () => {
+      await new Promise((resolve) => {
+        InteractionManager.runAfterInteractions(() => resolve(undefined))
+      })
+      if (cancelled) return
+      await new Promise((r) => setTimeout(r, 120))
+      if (cancelled) return
+      await fetchPostsRef.current()
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  useEffect(() => {
+    if (loading) return
+    if (refreshingRef.current) return
+    if (posts.length > 0) return
+    if (fetchError !== 'network') return
+    bootstrapFeedRetryAttemptsRef.current += 1
+    const attempt = bootstrapFeedRetryAttemptsRef.current
+    if (attempt > 6) return
+    const delayMs = Math.min(500 + attempt * attempt * 250, 10000)
+    const t = setTimeout(() => {
+      fetchPostsRef.current({ skipGlobalLoading: true })
+    }, delayMs)
+    return () => clearTimeout(t)
+  }, [loading, fetchError, posts.length])
 
   useEffect(() => {
     if (!loading && isAwaitingHomeOpen) {
@@ -1774,7 +1807,10 @@ export default function HomeScreen() {
     } catch (err) {
       console.error('[Home] Failed to refresh:', err);
       const errMsg = String(err?.message ?? err ?? '');
-      const isNetworkError = /network request failed|failed to fetch|network error/i.test(errMsg);
+      const isTimedOutBatch = /feed_first_batch_timeout/i.test(errMsg)
+      const isNetworkError =
+        isTimedOutBatch ||
+        /network request failed|failed to fetch|network error/i.test(errMsg);
       setFetchError(isNetworkError ? 'network' : errMsg || 'unknown');
     } finally {
       setRefreshing(false);

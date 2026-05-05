@@ -282,7 +282,9 @@ export function buildSpotPreviewsFromPlan(plan) {
     rating: null,
   }));
 }
-export async function enrichPlanWithClientData(plan, pineconeMatches, loadedClientMarkers = []) {
+export async function enrichPlanWithClientData(plan, pineconeMatches, loadedClientMarkers = [], enrichOptions = {}) {
+  const quickFindLight =
+    enrichOptions?.quickFindLight === true && Array.isArray(plan) && plan.length > 0 && plan.length <= 2
   const haversineKm = (a, b) => {
     if (!a || !b) return 0
     const R = 6371
@@ -405,14 +407,20 @@ export async function enrichPlanWithClientData(plan, pineconeMatches, loadedClie
   // Step 2: Fetch client images from Supabase (for matched clientIds); backfill coords from DB when still missing/invalid
   const clientIds = [...new Set(enriched.map((i) => i.clientId).filter(Boolean))];
   let clientImageMap = {};
+  /** Rows from the targeted `.in(clientIds)` fetch — reused in quick-find light mode instead of scanning 600 clients */
+  let hydratedClientRows = []
   if (clientIds.length > 0) {
+    const step2Select = quickFindLight
+      ? 'client_a_uuid, client_image, client_type, lat, long, latitude, longitude, description, rating, business_name, name, business_name_ar'
+      : 'client_a_uuid, client_image, client_type, lat, long, latitude, longitude'
     const { data: clients } = await supabase
       .from('client')
-      .select('client_a_uuid, client_image, client_type, lat, long, latitude, longitude')
-      .in('client_a_uuid', clientIds);
+      .select(step2Select)
+      .in('client_a_uuid', clientIds)
+    hydratedClientRows = Array.isArray(clients) ? clients : []
     const coordByClientId = {};
     const clientTypeByUuid = {};
-    (clients || []).forEach((c) => {
+    hydratedClientRows.forEach((c) => {
       if (c.client_a_uuid && c.client_image) {
         const u = resolvePublicImageUrl(String(c.client_image).trim());
         if (u) clientImageMap[c.client_a_uuid] = u;
@@ -436,12 +444,17 @@ export async function enrichPlanWithClientData(plan, pineconeMatches, loadedClie
   }
 
   // Step 3: Fetch clients from Supabase and force DB lat/long whenever we can match a client.
-  // This avoids wrong map pins from model/Pinecone coords drift.
-  const { data: allClients } = await supabase
-    .from('client')
-    .select('client_a_uuid, business_name, name, business_name_ar, client_image, client_type, rating, lat, long, latitude, longitude, description')
-    .limit(600);
-  const clientsList = allClients || [];
+  // Quick-find light skips the heavy 600-row hydrate (still uses Step 2 rows + loaded markers + coords patch below).
+  let clientsList = []
+  if (quickFindLight) {
+    clientsList = hydratedClientRows
+  } else {
+    const { data: allClients } = await supabase
+      .from('client')
+      .select('client_a_uuid, business_name, name, business_name_ar, client_image, client_type, rating, lat, long, latitude, longitude, description')
+      .limit(600)
+    clientsList = allClients || []
+  }
   const clientById = new Map(clientsList.map((c) => [c.client_a_uuid, c]));
   enriched = enriched.map((item) => {
     let client = item.clientId ? clientById.get(item.clientId) : null;
@@ -567,60 +580,65 @@ export async function enrichPlanWithClientData(plan, pineconeMatches, loadedClie
     return item;
   });
 
-  // Step 6: Fallback — fetch first post image when client_image is null
-  const stillNoImage = enriched.filter((i) => !resolvePublicImageUrl(i.image) && i.clientId);
-  if (stillNoImage.length > 0) {
-    const postIds = [...new Set(stillNoImage.map((i) => i.clientId))];
-    for (const cid of postIds) {
-      if (clientImageMap[cid]) continue;
+  /** Step 6–7 post galleries skipped for quick-find light (saves sequential + batched posts queries). */
+  const postImagesByClient = {}
+  if (!quickFindLight) {
+    const stillNoImage = enriched.filter((i) => !resolvePublicImageUrl(i.image) && i.clientId)
+    if (stillNoImage.length > 0) {
+      const postIds = [...new Set(stillNoImage.map((i) => i.clientId))]
+      for (const cid of postIds) {
+        if (clientImageMap[cid]) continue
+        const { data: posts } = await supabase
+          .from('posts')
+          .select('post_image')
+          .eq('client_a_uuid', cid)
+          .not('post_image', 'is', null)
+          .limit(3)
+        const firstWithImage = (posts || []).find((p) => p.post_image)
+        const raw = firstWithImage?.post_image
+        if (!raw) continue
+        let url = raw
+        if (typeof raw === 'string' && raw.startsWith('[')) {
+          try {
+            const parsed = JSON.parse(raw)
+            const arr = Array.isArray(parsed) ? parsed : [parsed]
+            url = arr[0]?.url || (typeof arr[0] === 'string' ? arr[0] : raw)
+          } catch {
+            /* keep url */
+          }
+        }
+        const fullUrl = resolvePublicImageUrl(String(url))
+        if (fullUrl) clientImageMap[cid] = fullUrl
+      }
+    }
+
+    const idsWithClient = [...new Set(enriched.map((i) => i.clientId).filter(Boolean))]
+    if (idsWithClient.length > 0) {
       const { data: posts } = await supabase
         .from('posts')
-        .select('post_image')
-        .eq('client_a_uuid', cid)
+        .select('client_a_uuid, post_image')
+        .in('client_a_uuid', idsWithClient)
         .not('post_image', 'is', null)
-        .limit(3);
-      const firstWithImage = (posts || []).find((p) => p.post_image);
-      const raw = firstWithImage?.post_image;
-      if (!raw) continue;
-      let url = raw;
-      if (typeof raw === 'string' && raw.startsWith('[')) {
-        try {
-          const parsed = JSON.parse(raw);
-          const arr = Array.isArray(parsed) ? parsed : [parsed];
-          url = arr[0]?.url || (typeof arr[0] === 'string' ? arr[0] : raw);
-        } catch { /* keep url */ }
-      }
-      const fullUrl = resolvePublicImageUrl(String(url));
-      if (fullUrl) clientImageMap[cid] = fullUrl;
+        .order('created_at', { ascending: false })
+        .limit(idsWithClient.length * 3)
+      ;(posts || []).forEach((row) => {
+        if (!row.post_image) return
+        let url = row.post_image
+        if (typeof url === 'string' && url.startsWith('[')) {
+          try {
+            const parsed = JSON.parse(url)
+            url = Array.isArray(parsed) && parsed[0]?.url ? parsed[0].url : typeof parsed[0] === 'string' ? parsed[0] : url
+          } catch {
+            /* keep */
+          }
+        }
+        url = resolvePublicImageUrl(String(url))
+        if (url) {
+          if (!postImagesByClient[row.client_a_uuid]) postImagesByClient[row.client_a_uuid] = []
+          if (!postImagesByClient[row.client_a_uuid].includes(url)) postImagesByClient[row.client_a_uuid].push(url)
+        }
+      })
     }
-  }
-
-  // Step 7: Build images array (client_image + post images) for detail area diversity
-  const postImagesByClient = {};
-  const idsWithClient = [...new Set(enriched.map((i) => i.clientId).filter(Boolean))];
-  if (idsWithClient.length > 0) {
-    const { data: posts } = await supabase
-      .from('posts')
-      .select('client_a_uuid, post_image')
-      .in('client_a_uuid', idsWithClient)
-      .not('post_image', 'is', null)
-      .order('created_at', { ascending: false })
-      .limit(idsWithClient.length * 3);
-    (posts || []).forEach((row) => {
-      if (!row.post_image) return;
-      let url = row.post_image;
-      if (typeof url === 'string' && url.startsWith('[')) {
-        try {
-          const parsed = JSON.parse(url);
-          url = (Array.isArray(parsed) && parsed[0]?.url) ? parsed[0].url : (typeof parsed[0] === 'string' ? parsed[0] : url);
-        } catch { /* keep */ }
-      }
-      url = resolvePublicImageUrl(String(url));
-      if (url) {
-        if (!postImagesByClient[row.client_a_uuid]) postImagesByClient[row.client_a_uuid] = [];
-        if (!postImagesByClient[row.client_a_uuid].includes(url)) postImagesByClient[row.client_a_uuid].push(url);
-      }
-    });
   }
 
   return enriched.map((item) => {

@@ -57,19 +57,51 @@ async function parseJsonResponse(res, serviceName = 'API') {
   throw new Error(`${serviceName} returned non-JSON (${res.status}): ${text.slice(0, 80)}`);
 }
 
-async function getEmbedding(text) {
+const OPENAI_EMBED_MODEL = 'text-embedding-3-small';
+const EMBEDDING_CACHE_MAX = 128;
+const embeddingVectorCache = new Map();
+
+async function fetchEmbeddingUncached(trimmedInput) {
   const res = await fetchWithTimeout(OPENAI_EMBEDDINGS_URL, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${OPENAI_API_KEY}`,
     },
-    body: JSON.stringify({ model: 'text-embedding-3-small', input: text }),
+    body: JSON.stringify({ model: OPENAI_EMBED_MODEL, input: trimmedInput }),
   });
   const json = await parseJsonResponse(res, 'OpenAI');
   if (!res.ok) throw new Error(json?.error?.message || `OpenAI embed error (${res.status})`);
   const embedding = json?.data?.[0]?.embedding;
   if (!embedding || !Array.isArray(embedding)) throw new Error('No embedding returned');
+  return embedding;
+}
+
+function embeddingCacheKeyForText(text) {
+  const input = String(text || '').trim();
+  if (!input) return '';
+  let h = 2166136261;
+  for (let i = 0; i < input.length; i++) {
+    h ^= input.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return `${input.length}:${(h >>> 0).toString(36)}`;
+}
+
+/** Embeddings cache (LRU-ish via Map insertion order eviction) — cuts latency when persona + retrieval lines repeat */
+async function getEmbedding(text) {
+  const trimmed = String(text || '').trim();
+  if (!trimmed) throw new Error('Empty embedding input');
+  const k = embeddingCacheKeyForText(trimmed);
+  if (!k) throw new Error('Empty embedding input');
+  const hit = embeddingVectorCache.get(k);
+  if (hit) return hit;
+  const embedding = await fetchEmbeddingUncached(trimmed);
+  if (embeddingVectorCache.size >= EMBEDDING_CACHE_MAX) {
+    const oldest = embeddingVectorCache.keys().next().value;
+    if (oldest != null) embeddingVectorCache.delete(oldest);
+  }
+  embeddingVectorCache.set(k, embedding);
   return embedding;
 }
 
@@ -117,6 +149,11 @@ const RETRIEVAL_LIMITS = {
   placesTopKDefault: 20,
   placesTopKCoastal: 28,
   placesReturnMax: 24,
+  /** Single-label quick find: tighter pools = faster Pinecone round-trips without changing filters */
+  quickFindPlacesTopK: 14,
+  quickFindPlacesReturnMax: 14,
+  quickFindRestaurantsTopK: 12,
+  quickFindEventsTopK: 14,
   restaurantsTopK: 24,
   breakfastTopK: 8,
   eventsTopK: 14,
@@ -133,6 +170,33 @@ export const retrievalPersonaCacheKey = (summary) => {
   return `${t.length}:${t.slice(0, 96)}`
 }
 
+const STRUCTURED_PROFILE_ANSWER_KEYS = [
+  'homeCountry',
+  'tripLengthDays',
+  'travelParty',
+  'budgetBand',
+  'dietaryHardNos',
+  'mobilityNotes',
+  'heatSensitivity',
+  'sessionIntentDay',
+]
+
+/**
+ * Cache key for plan prefetch when structured answers change retrieval text.
+ * @param {unknown} summary
+ * @param {object} [profileAnswers]
+ */
+export const planRetrievalContextKey = (summary, profileAnswers) => {
+  const base = retrievalPersonaCacheKey(summary)
+  const a = profileAnswers && typeof profileAnswers === 'object' ? profileAnswers : {}
+  const bits = STRUCTURED_PROFILE_ANSWER_KEYS.map((k) => {
+    const v = a[k]
+    const s = v == null ? '' : String(v).trim().slice(0, 64)
+    return `${k}:${s}`
+  }).join('|')
+  return `${base}__${bits}`
+}
+
 const clipPersonaForRetrievalQuery = (summary) => {
   const t = typeof summary === 'string' ? summary.trim() : ''
   if (!t) return ''
@@ -140,14 +204,53 @@ const clipPersonaForRetrievalQuery = (summary) => {
   return `${t.slice(0, RETRIEVAL_PERSONA_CLIP).trim()}…`
 }
 
+const collectStructuredTripPairs = (answers) => {
+  const a = answers && typeof answers === 'object' ? answers : {}
+  /** @type {Array<[string, string]>} */
+  const pairs = []
+  const push = (label, raw) => {
+    const v = raw == null ? '' : String(raw).trim()
+    if (!v) return
+    pairs.push([label, v])
+  }
+  push('Home country', a.homeCountry)
+  push('Trip length (days)', a.tripLengthDays)
+  push('Travel party', a.travelParty)
+  push('Budget comfort', a.budgetBand)
+  push('Dietary & hard nos', a.dietaryHardNos)
+  push('Mobility notes', a.mobilityNotes)
+  push('Heat sensitivity', a.heatSensitivity)
+  push('Broader trip intent', a.sessionIntentDay)
+  return pairs
+}
+
+const clipStructuredAnswersForRetrieval = (answers) => {
+  const pairs = collectStructuredTripPairs(answers)
+  if (!pairs.length) return ''
+  const joined = pairs.map(([lab, val]) => `${lab}: ${val}`).join(' · ')
+  if (joined.length <= 280) return joined
+  return `${joined.slice(0, 279).trim()}…`
+}
+
 /**
  * @param {string} coreLine
  * @param {string} [profileNarrative]
+ * @param {object} [retrievalExtras]
+ * @param {object} [retrievalExtras.profileAnswers]
  */
-const buildRetrievalEmbeddingText = (coreLine, profileNarrative) => {
+const buildRetrievalEmbeddingText = (coreLine, profileNarrative, retrievalExtras = null) => {
+  const extras = retrievalExtras && typeof retrievalExtras === 'object' ? retrievalExtras : {}
   const p = clipPersonaForRetrievalQuery(profileNarrative)
-  if (!p) return coreLine
-  return `${coreLine} Traveller context: ${p}`
+  const structured = clipStructuredAnswersForRetrieval(extras.profileAnswers)
+
+  const bits = []
+  if (structured) bits.push(`Profile facts — ${structured}`)
+  const tailPieces = []
+  if (p) tailPieces.push(p)
+  if (bits.length) tailPieces.push(bits.join(' · '))
+  const tail = tailPieces.join(' · ')
+  if (!tail) return coreLine
+  return `${coreLine} Traveller context: ${tail}`
 }
 
 const COASTAL_LABEL_HINTS = ['beach', 'beaches', 'seaside', 'waterfront', 'waterfronts', 'sea', 'coast', 'corniche']
@@ -159,8 +262,8 @@ const hasCoastalPreference = (labels) => {
   return COASTAL_LABEL_HINTS.some((hint) => joined.includes(hint))
 }
 
-/** Shared text bag for ranking + “does this venue echo today’s prefs?” checks (plans, catalog repair). */
-const buildMetadataHaystackLower = (match) => {
+/** Shared text bag for ranking + “does this venue echo today’s prefs?” checks (plans, catalog repair, quick-find gates). */
+export const buildMetadataHaystackLower = (match) => {
   const meta = match?.metadata || {}
   const parts = [
     meta.place_name,
@@ -189,8 +292,8 @@ const buildMetadataHaystackLower = (match) => {
     .join(' | ')
 }
 
-/** Numeric alignment with session preference chips (≥1 means visibly on-theme vs those labels). */
-const preferenceAlignmentScore = (match, preferenceLabels) => {
+/** Numeric alignment with session preference chips (≥1 means visibly on-theme vs those labels). Exported for quick-find pin scoring. */
+export const preferenceAlignmentScore = (match, preferenceLabels) => {
   const labels = (Array.isArray(preferenceLabels) ? preferenceLabels : [])
     .map((x) => String(x || '').trim().toLowerCase())
     .filter(Boolean)
@@ -202,9 +305,17 @@ const preferenceAlignmentScore = (match, preferenceLabels) => {
   let score = 0
   for (const label of labels) {
     if (hay.includes(label)) score += 3
+    if (label.length >= 6 && label.endsWith('s') && !label.endsWith('ss')) {
+      const stem = label.slice(0, -1)
+      if (stem.length >= 5 && hay.includes(stem)) score += 1.25
+    }
     const labelParts = label.split(/[\s/&,-]+/).filter((p) => p.length >= 4)
     for (const p of labelParts) {
       if (hay.includes(p)) score += 1
+      if (p.length >= 6 && p.endsWith('s') && !p.endsWith('ss')) {
+        const st = p.slice(0, -1)
+        if (st.length >= 5 && hay.includes(st)) score += 0.35
+      }
     }
   }
 
@@ -281,72 +392,162 @@ const eventIsForTodayInBahrain = (eventMatch, todayIso = getTodayIsoInBahrain())
   return false
 }
 
+const addDaysToIsoDate = (isoDateStr, days) => {
+  const raw = String(isoDateStr || '').trim()
+  const parts = raw.split('-').map((x) => Number(x))
+  if (parts.length < 3 || parts.some((n) => Number.isNaN(n))) return raw
+  const [y, mo, d] = parts
+  const dt = new Date(Date.UTC(y, mo - 1, d))
+  dt.setUTCDate(dt.getUTCDate() + Number(days) || 0)
+  return dt.toISOString().slice(0, 10)
+}
+
+/** True if event has any parsable schedule range overlapping [windowStartIso, windowEndIso] (inclusive by date). */
+const eventOverlapsDateWindowInclusive = (eventMatch, windowStartIso, windowEndIso) => {
+  const meta = eventMatch?.metadata || {}
+  let start = normalizeToIsoDate(meta.start_date) || normalizeToIsoDate(meta.start_time)
+  let end = normalizeToIsoDate(meta.end_date) || normalizeToIsoDate(meta.end_time) || start
+  if (!start && !end) return false
+  if (!start) start = end
+  if (!end) end = start
+  return !(end < windowStartIso || start > windowEndIso)
+}
+
+const eventHasAnyScheduleField = (eventMatch) => {
+  const meta = eventMatch?.metadata || {}
+  return !!(
+    normalizeToIsoDate(meta.start_date) ||
+    normalizeToIsoDate(meta.end_date) ||
+    normalizeToIsoDate(meta.start_time) ||
+    normalizeToIsoDate(meta.end_time)
+  )
+}
+
+/**
+ * Keyword tails for single-label quick find — tightens embeddings when the broad “themes” prompt is too fuzzy.
+ * Keys match `QUICK_FIND_SUBLABELS_BY_KIND.place` in the plan screen.
+ */
+const QUICK_FIND_PLACE_EMBEDDING_HINTS = {
+  Beach: 'public beaches sandy shores waterfront corniche coastal sea swimming island access',
+  Museum: 'museums galleries exhibitions archaeology cultural heritage indoor collections',
+  Park: 'parks gardens green public spaces walking trails playgrounds',
+  Shopping: 'malls shopping centers retail souqs boutiques department stores',
+  Landmark: 'famous landmarks iconic buildings monuments photo spots signature sights',
+  'Family fun': 'family attractions kids activities playgrounds indoor play entertainment venues',
+  Scenic: 'scenic views viewpoints nature photography overlooks beautiful landscapes',
+  Historical: 'historical sites heritage forts UNESCO traditional architecture old Bahrain',
+}
+
 // ─── Step 1: Places (from preferences) ─────────────────────────────
 
 export async function fetchPlaces(preferenceLabels, retrievalOptions = {}) {
   const profileNarrative =
     typeof retrievalOptions?.profileNarrative === 'string' ? retrievalOptions.profileNarrative : ''
+  const retrievalExtras = {
+    profileAnswers:
+      retrievalOptions.profileAnswers && typeof retrievalOptions.profileAnswers === 'object'
+        ? retrievalOptions.profileAnswers
+        : {},
+  }
   try {
     const wantsCoastal = hasCoastalPreference(preferenceLabels)
+    const isQuickFindSingle =
+      retrievalOptions.quickFind === true && Array.isArray(preferenceLabels) && preferenceLabels.length === 1
+    const singlePlaceVibe = isQuickFindSingle ? String(preferenceLabels[0] || '').trim() : ''
+    const placeHint = isQuickFindSingle ? QUICK_FIND_PLACE_EMBEDDING_HINTS[singlePlaceVibe] || '' : ''
     const core =
       preferenceLabels.length > 0
-        ? `Places in Bahrain for ${preferenceLabels.join(', ')}`
+        ? isQuickFindSingle && singlePlaceVibe
+          ? `Bahrain venues and attractions that are clearly about ${singlePlaceVibe}. Prefer direct matches; avoid unrelated venue types. ${placeHint ? `Examples of fit: ${placeHint}.` : ''}`
+          : `Places in Bahrain for themes: ${preferenceLabels.join(', ')} — prefer varied venue types (culture, heritage, coastline, malls, landmarks) aligned with those themes where the index supports it`
         : 'Popular places and things to do in Bahrain'
 
-    const text = buildRetrievalEmbeddingText(core, profileNarrative)
+    const runDiversityPair = preferenceLabels.length === 0 && !wantsCoastal
 
-    const embedding = await getEmbedding(text);
+    const qfPlaces = retrievalOptions.quickFind === true
+    let places = []
+    if (runDiversityPair) {
+      const coreAlt =
+        'Heritage museums UNESCO forts art galleries traditional souqs beaches coastline scenic parks mixed Bahrain sightseeing'
+      const topK = qfPlaces ? RETRIEVAL_LIMITS.quickFindPlacesTopK : RETRIEVAL_LIMITS.placesTopKCoastal
+      const [embMain, embAlt] = await Promise.all([
+        getEmbedding(buildRetrievalEmbeddingText(core, profileNarrative, retrievalExtras)),
+        getEmbedding(buildRetrievalEmbeddingText(coreAlt, profileNarrative, retrievalExtras)),
+      ])
+      const [pMain, pAlt] = await Promise.all([
+        queryPineconeSafe(embMain, topK, {
+          record_type: { $eq: 'client' },
+          client_type: { $eq: 'place' },
+        }),
+        queryPineconeSafe(embAlt, topK, {
+          record_type: { $eq: 'client' },
+          client_type: { $eq: 'place' },
+        }),
+      ])
+      places = mergeRankedListsByRRF([pMain || [], pAlt || []], stableMatchKey, RRF_MERGE_K)
+    } else {
+      const text = buildRetrievalEmbeddingText(core, profileNarrative, retrievalExtras)
+      const embedding = await getEmbedding(text)
 
-    // First try with client_type = place
-    let places = await queryPineconeSafe(
-      embedding,
-      wantsCoastal ? RETRIEVAL_LIMITS.placesTopKCoastal : RETRIEVAL_LIMITS.placesTopKDefault,
-      {
-        record_type: { $eq: 'client' },
-        client_type: { $eq: 'place' },
-      },
-    );
+      const pfTop =
+        qfPlaces
+          ? RETRIEVAL_LIMITS.quickFindPlacesTopK
+          : wantsCoastal
+            ? RETRIEVAL_LIMITS.placesTopKCoastal
+            : RETRIEVAL_LIMITS.placesTopKDefault
+      places = await queryPineconeSafe(
+        embedding,
+        pfTop,
+        {
+          record_type: { $eq: 'client' },
+          client_type: { $eq: 'place' },
+        },
+      )
+    }
 
     // For strong coastal intent, run a second explicit coastal retrieval and merge.
-    if (wantsCoastal) {
+    /** Quick find skips the second Pinecone merge to cut latency; single query still uses coastal hints in embedding for Beach. */
+    if (wantsCoastal && !qfPlaces) {
       const coastalEmbedding = await getEmbedding(
         buildRetrievalEmbeddingText(
           'Bahrain beach, seaside, waterfront, marina, corniche, island coastal attractions and sea-view places',
           profileNarrative,
+          retrievalExtras,
         ),
       )
       const coastalPlaces = await queryPineconeSafe(coastalEmbedding, RETRIEVAL_LIMITS.placesTopKCoastal, {
         record_type: { $eq: 'client' },
         client_type: { $eq: 'place' },
       })
-      const seen = new Set()
-      places = [...places, ...coastalPlaces].filter((m) => {
-        const k = m?.id || `${m?.metadata?.place_name || ''}|${m?.score || ''}`
-        if (seen.has(k)) return false
-        seen.add(k)
-        return true
-      })
+      places = mergeRankedListsByRRF([places, coastalPlaces || []], stableMatchKey, RRF_MERGE_K)
     }
 
     // If no results, fallback: fetch without client_type filter (rely on embedding similarity)
     if (places.length === 0) {
-      const all = await queryPineconeSafe(embedding, RETRIEVAL_LIMITS.placesTopKCoastal, {
+      const fallbackEmbedding = await getEmbedding(
+        buildRetrievalEmbeddingText(core, profileNarrative, retrievalExtras),
+      )
+      const all = await queryPineconeSafe(fallbackEmbedding, RETRIEVAL_LIMITS.placesTopKCoastal, {
         record_type: { $eq: 'client' },
       });
       places = all
         .filter((m) => (m.metadata?.client_type || '').toLowerCase() !== 'restaurant')
-        .slice(0, RETRIEVAL_LIMITS.placesTopKDefault);
+        .slice(0, qfPlaces ? RETRIEVAL_LIMITS.quickFindPlacesTopK : RETRIEVAL_LIMITS.placesTopKDefault);
     }
 
     // If still nothing, just get any 8 clients from the broader pool
     if (places.length === 0) {
-      const all = await queryPineconeSafe(embedding, RETRIEVAL_LIMITS.placesTopKCoastal, {
+      const panicEmbedding = await getEmbedding(
+        buildRetrievalEmbeddingText(core, profileNarrative, retrievalExtras),
+      )
+      const all = await queryPineconeSafe(panicEmbedding, RETRIEVAL_LIMITS.placesTopKCoastal, {
         record_type: { $eq: 'client' },
       });
-      places = all.slice(0, RETRIEVAL_LIMITS.placesTopKDefault);
+      places = all.slice(0, qfPlaces ? RETRIEVAL_LIMITS.quickFindPlacesTopK : RETRIEVAL_LIMITS.placesTopKDefault);
     }
 
-    return rankPlacesByPreferenceLabels(places, preferenceLabels).slice(0, RETRIEVAL_LIMITS.placesReturnMax);
+    const pfCap = qfPlaces ? RETRIEVAL_LIMITS.quickFindPlacesReturnMax : RETRIEVAL_LIMITS.placesReturnMax
+    return rankPlacesByPreferenceLabels(places, preferenceLabels).slice(0, pfCap);
   } catch (e) {
     console.warn('[fetchPlaces] failed:', e?.message);
     return [];
@@ -387,6 +588,10 @@ const RESTAURANT_UI_TO_PINECONE_CUISINE = {
   Chinenese: 'Chinese',
   chinenese: 'Chinese',
   Thai: 'Thai',
+  thai: 'Thai',
+  'Japanese/Korean': 'Japanese',
+  Korean: 'Japanese',
+  korean: 'Japanese',
   Turkish: 'Turkish',
   turkish: 'Turkish',
   Lebanese: 'Lebanese',
@@ -402,9 +607,11 @@ const RESTAURANT_UI_TO_PINECONE_CUISINE = {
   'Fast Food': 'Fastfood',
   'fast food': 'Fastfood',
   Quick: 'Fastfood',
+  'Street food': 'Fastfood',
+  'street food': 'Fastfood',
 }
 
-const mapUiFoodLabelToPineconeCuisine = (label) => {
+export const mapUiFoodLabelToPineconeCuisine = (label) => {
   const raw = String(label ?? '').trim()
   if (!raw) return ''
   const direct = RESTAURANT_UI_TO_PINECONE_CUISINE[raw]
@@ -421,6 +628,9 @@ const expandAllowedRestaurantCuisineSet = (base) => {
   const o = new Set(base)
   if (o.has('cafe')) {
     ['coffee', 'bakery', 'patisserie', 'desserts', 'brunch', 'tea'].forEach((x) => o.add(x))
+  }
+  if (o.has('japanese')) {
+    o.add('korean')
   }
   return o
 }
@@ -445,26 +655,45 @@ const restaurantTailMatchesChosenCuisines = (match, allowedSet) => {
   return allowedSet.has(c)
 }
 
+const matchMetadataIsFoodTruck = (m) => {
+  const v =
+    m?.metadata?.isfoodtruck ?? m?.metadata?.is_food_truck ?? m?.metadata?.isFoodTruck
+  return v === true || v === 'true' || v === 1
+}
+
 export async function fetchRestaurants(foodLabels, retrievalOptions = {}) {
   const profileNarrative =
     typeof retrievalOptions?.profileNarrative === 'string' ? retrievalOptions.profileNarrative : ''
+  const retrievalExtras = {
+    profileAnswers:
+      retrievalOptions.profileAnswers && typeof retrievalOptions.profileAnswers === 'object'
+        ? retrievalOptions.profileAnswers
+        : {},
+  }
   try {
+    const singleFood =
+      retrievalOptions.quickFind === true && Array.isArray(foodLabels) && foodLabels.length === 1
+        ? String(foodLabels[0] || '').trim()
+        : ''
     const core =
       foodLabels.length > 0
-        ? `Restaurants in Bahrain serving ${foodLabels.join(', ')}`
+        ? singleFood
+          ? `Bahrain restaurants that clearly fit “${singleFood}”. Strongly prefer exact cuisine and concept matches; avoid unrelated venues.`
+          : `Restaurants in Bahrain serving ${foodLabels.join(', ')}`
         : 'Best restaurants and food spots in Bahrain'
 
-    const text = buildRetrievalEmbeddingText(core, profileNarrative)
+    const text = buildRetrievalEmbeddingText(core, profileNarrative, retrievalExtras)
 
     const embedding = await getEmbedding(text);
+    const rTop = retrievalOptions.quickFind ? RETRIEVAL_LIMITS.quickFindRestaurantsTopK : RETRIEVAL_LIMITS.restaurantsTopK
 
     const fetchByCuisineField = async (pineconeValue) => {
-      let filtered = await queryPineconeSafe(embedding, RETRIEVAL_LIMITS.restaurantsTopK, {
+      let filtered = await queryPineconeSafe(embedding, rTop, {
         client_type: { $eq: 'restaurant' },
         cuisine: { $eq: pineconeValue },
       });
       if (filtered.length === 0) {
-        filtered = await queryPineconeSafe(embedding, RETRIEVAL_LIMITS.restaurantsTopK, {
+        filtered = await queryPineconeSafe(embedding, rTop, {
           client_type: { $eq: 'restaurant' },
           cuisine_type: { $eq: pineconeValue },
         });
@@ -473,10 +702,44 @@ export async function fetchRestaurants(foodLabels, retrievalOptions = {}) {
     };
 
     if (foodLabels.length > 0) {
+      const foodTruckOnly =
+        foodLabels.length === 1 &&
+        String(foodLabels[0] ?? '')
+          .trim()
+          .toLowerCase()
+          .replace(/\s+/g, ' ') === 'food truck'
+
+      if (foodTruckOnly) {
+        const truckCore =
+          'Food trucks, mobile kitchens, street food vans, and outdoor casual food trucks in Bahrain'
+        const truckText = buildRetrievalEmbeddingText(truckCore, profileNarrative, retrievalExtras)
+        const truckEmbedding = await getEmbedding(truckText)
+        const pool =
+          (await queryPineconeSafe(truckEmbedding, rTop, {
+            client_type: { $eq: 'restaurant' },
+          })) || []
+        let trucks = pool.filter(matchMetadataIsFoodTruck)
+        if (!trucks.length) {
+          try {
+            const byFlag =
+              (await queryPineconeSafe(truckEmbedding, rTop, {
+                client_type: { $eq: 'restaurant' },
+                isfoodtruck: { $eq: true },
+              })) || []
+            trucks = byFlag.filter(matchMetadataIsFoodTruck)
+            if (!trucks.length && byFlag.length) trucks = byFlag
+          } catch {
+            /* index may not support isfoodtruck metadata filter */
+          }
+        }
+        if (trucks.length) return trucks
+        return pool.length ? pool : []
+      }
+
       const cuisineQueries = foodLabels.map((label) =>
         fetchByCuisineField(mapUiFoodLabelToPineconeCuisine(label) || label),
       )
-      const nearestQuery = queryPineconeSafe(embedding, RETRIEVAL_LIMITS.restaurantsTopK, {
+      const nearestQuery = queryPineconeSafe(embedding, rTop, {
         client_type: { $eq: 'restaurant' },
       });
       const [cuisineResults, nearest] = await Promise.all([
@@ -519,9 +782,12 @@ export async function fetchRestaurants(foodLabels, retrievalOptions = {}) {
           if (panic.length >= 12) break
         }
         if (panic.length) {
-          console.warn(
-            '[fetchRestaurants] cuisine whitelist produced 0 hits; relaxing tail (fix venue cuisine metadata)',
-          )
+          /** Quick-find uses one chip labels; facet cuisine often mismatches embeddings — fallback is intentional, not actionable in-app. */
+          if (!retrievalOptions.quickFind) {
+            console.warn(
+              '[fetchRestaurants] cuisine whitelist produced 0 hits; relaxing tail (fix venue cuisine metadata)',
+            )
+          }
           return panic
         }
       }
@@ -529,7 +795,7 @@ export async function fetchRestaurants(foodLabels, retrievalOptions = {}) {
       return combined
     }
 
-    return queryPineconeSafe(embedding, RETRIEVAL_LIMITS.restaurantsTopK, {
+    return queryPineconeSafe(embedding, rTop, {
       client_type: { $eq: 'restaurant' },
     });
   } catch (e) {
@@ -543,8 +809,18 @@ export async function fetchRestaurants(foodLabels, retrievalOptions = {}) {
 export async function fetchBreakfastSpots(retrievalOptions = {}) {
   const profileNarrative =
     typeof retrievalOptions?.profileNarrative === 'string' ? retrievalOptions.profileNarrative : ''
+  const retrievalExtras = {
+    profileAnswers:
+      retrievalOptions.profileAnswers && typeof retrievalOptions.profileAnswers === 'object'
+        ? retrievalOptions.profileAnswers
+        : {},
+  }
   try {
-    const text = buildRetrievalEmbeddingText('Breakfast cafes and bakeries in Bahrain', profileNarrative)
+    const text = buildRetrievalEmbeddingText(
+      'Breakfast cafes and bakeries in Bahrain',
+      profileNarrative,
+      retrievalExtras,
+    )
     const embedding = await getEmbedding(text);
 
     const spots = await queryPineconeSafe(embedding, RETRIEVAL_LIMITS.breakfastTopK, {
@@ -641,17 +917,30 @@ const enrichEventMatchesWithEventsTableImages = async (events) => {
 export async function fetchEvents(preferenceLabels, retrievalOptions = {}) {
   const profileNarrative =
     typeof retrievalOptions?.profileNarrative === 'string' ? retrievalOptions.profileNarrative : ''
+  const retrievalExtras = {
+    profileAnswers:
+      retrievalOptions.profileAnswers && typeof retrievalOptions.profileAnswers === 'object'
+        ? retrievalOptions.profileAnswers
+        : {},
+  }
   try {
+    const singleEvt =
+      retrievalOptions.quickFindEvents === true && Array.isArray(preferenceLabels) && preferenceLabels.length === 1
+        ? String(preferenceLabels[0] || '').trim()
+        : ''
     const core =
       preferenceLabels.length > 0
-        ? `Events in Bahrain related to ${preferenceLabels.join(', ')}`
+        ? singleEvt
+          ? `Bahrain events that clearly match “${singleEvt}” (genre, venue type, indoor/outdoor). Prefer strong topical fit.`
+          : `Events in Bahrain related to ${preferenceLabels.join(', ')}`
         : 'Popular events and activities happening in Bahrain'
 
-    const text = buildRetrievalEmbeddingText(core, profileNarrative)
+    const text = buildRetrievalEmbeddingText(core, profileNarrative, retrievalExtras)
 
     const embedding = await getEmbedding(text);
 
-    const events = await queryPineconeSafe(embedding, RETRIEVAL_LIMITS.eventsTopK, {
+    const eventsTop = retrievalOptions.quickFindEvents ? RETRIEVAL_LIMITS.quickFindEventsTopK : RETRIEVAL_LIMITS.eventsTopK
+    const events = await queryPineconeSafe(embedding, eventsTop, {
       record_type: { $eq: 'event' },
     });
 
@@ -664,7 +953,39 @@ export async function fetchEvents(preferenceLabels, retrievalOptions = {}) {
       console.log(`  → ${m.metadata?.event_name || m.metadata?.business_name} (${m.metadata?.start_time} - ${m.metadata?.end_time})`),
     )
 
-    return todaysEvents
+    if (!retrievalOptions.quickFindEvents) {
+      return todaysEvents
+    }
+
+    /** Quick find: today-first, then upcoming ~3 weeks (vector order preserved), then undated metadata. */
+    const horizonIso = addDaysToIsoDate(todayIso, 21)
+    const tierToday = []
+    const tierSoon = []
+    const tierUndated = []
+    const tierOther = []
+    for (const m of withImages) {
+      if (eventIsForTodayInBahrain(m, todayIso)) {
+        tierToday.push(m)
+        continue
+      }
+      if (!eventHasAnyScheduleField(m)) {
+        tierUndated.push(m)
+        continue
+      }
+      if (eventOverlapsDateWindowInclusive(m, todayIso, horizonIso)) {
+        tierSoon.push(m)
+        continue
+      }
+      tierOther.push(m)
+    }
+    const rankTier = (arr) =>
+      preferenceLabels?.length ? rankPlacesByPreferenceLabels(arr, preferenceLabels) : arr
+    return [
+      ...rankTier(tierToday),
+      ...rankTier(tierSoon),
+      ...rankTier(tierUndated),
+      ...rankTier(tierOther),
+    ].slice(0, RETRIEVAL_LIMITS.quickFindEventsTopK)
   } catch (e) {
     console.warn('[Events] fetchEvents failed:', e?.message);
     return [];
@@ -685,6 +1006,7 @@ export async function fetchHydratedPlanCatalogFromBackend({
   foodLabels,
   profileNarrative,
   profileActivity,
+  profileAnswers,
 }) {
   const base = getAiBackendBase()
   if (!base) return null
@@ -698,6 +1020,7 @@ export async function fetchHydratedPlanCatalogFromBackend({
         foodLabels: Array.isArray(foodLabels) ? foodLabels : [],
         profileNarrative: typeof profileNarrative === 'string' ? profileNarrative : '',
         profileActivity: Array.isArray(profileActivity) ? profileActivity : [],
+        profileAnswers: profileAnswers && typeof profileAnswers === 'object' ? profileAnswers : {},
       }),
     })
     if (!res.ok) {
@@ -731,6 +1054,10 @@ export async function resolvePlanRetrievalBuckets(preferenceLabels, foodLabels, 
   const profileActivity = Array.isArray(retrievalOptions?.profileActivity)
     ? retrievalOptions.profileActivity
     : []
+  const profileAnswers =
+    retrievalOptions.profileAnswers && typeof retrievalOptions.profileAnswers === 'object'
+      ? retrievalOptions.profileAnswers
+      : {}
   const prefs = Array.isArray(preferenceLabels) ? preferenceLabels : []
   const foods = Array.isArray(foodLabels) ? foodLabels : []
   const rag = await fetchHydratedPlanCatalogFromBackend({
@@ -738,6 +1065,7 @@ export async function resolvePlanRetrievalBuckets(preferenceLabels, foodLabels, 
     foodLabels: foods,
     profileNarrative,
     profileActivity,
+    profileAnswers,
   })
   const hasAny =
     rag &&
@@ -1010,6 +1338,39 @@ export async function fetchPineconePlacesForChat(userMessage, options = {}) {
   events.forEach((m) => add(m, 'event'));
   if (lines.length === 0) return '';
   return `ALLOWED PLACES (authoritative ground truth for this turn — you may ONLY recommend, name, or describe these venues; do not mention any other business or event by name):\n${lines.join('\n')}\n\nGROUNDING RULES:\n- When describing a venue, use ONLY information implied by its line above (name, type tag, cuisine/venue, rating/price if present, description snippet). Do not invent hours, phone numbers, awards, UNESCO claims, menu items, or prices not shown.\n- If the user names a place that does not match any line above (fuzzy match ok), say it is not in your current app results and offer to show similar listings with go_show_clients (use a sensible query + client_type).\n- If the snippet is thin, say the app has only a short blurb and they should open the venue card for full details—do not fill gaps with guesses.`;
+}
+
+const PLAN_SEARCH_PINECONE_TOP_K = 36
+
+/**
+ * Vector search across plan catalog buckets (clients + events index).
+ * Callers hydrate matches against Supabase `client` rows loaded in the modal.
+ */
+export async function fetchPlanSearchPineconeBuckets(queryText, options = {}) {
+  const text = typeof queryText === 'string' ? queryText.trim() : ''
+  if (text.length < 2) {
+    return { places: [], restaurants: [], events: [], ok: true }
+  }
+  const topK = typeof options.topK === 'number' ? Math.min(Math.max(options.topK, 4), 64) : PLAN_SEARCH_PINECONE_TOP_K
+  let embedding
+  try {
+    embedding = await getEmbedding(text)
+  } catch (e) {
+    console.warn('[fetchPlanSearchPineconeBuckets] Embedding failed:', e?.message)
+    return { places: [], restaurants: [], events: [], ok: false }
+  }
+  try {
+    const evK = Math.min(topK, 32)
+    const [places, restaurants, events] = await Promise.all([
+      queryPineconeSafe(embedding, topK, { record_type: { $eq: 'client' }, client_type: { $eq: 'place' } }),
+      queryPineconeSafe(embedding, topK, { record_type: { $eq: 'client' }, client_type: { $eq: 'restaurant' } }),
+      queryPineconeSafe(embedding, evK, { record_type: { $eq: 'event' } }),
+    ])
+    return { places, restaurants, events, ok: true }
+  } catch (e) {
+    console.warn('[fetchPlanSearchPineconeBuckets] Pinecone failed:', e?.message)
+    return { places: [], restaurants: [], events: [], ok: false }
+  }
 }
 
 // ─── Landmarks & famous buildings for AR exploration ────────────
@@ -1324,6 +1685,60 @@ export async function fetchNearbyPOIs(userLat, userLng, mode = 'all', options = 
   return withCoords;
 }
 
+/**
+ * Fetches AI-recommended AR POIs using Pinecone semantic search.
+ * Surfaces culturally/touristically relevant places beyond raw proximity.
+ * @param {number} userLat
+ * @param {number} userLng
+ * @param {number} [maxDistKm=50]
+ * @returns {Promise<Array>}
+ */
+export async function fetchPineconeARRecommended(userLat, userLng, maxDistKm = 50) {
+  try {
+    const embedding = await getEmbedding(
+      'popular tourist attractions landmarks restaurants cultural heritage spots Bahrain must visit'
+    );
+    const matches = await queryPineconeSafe(embedding, 24, {});
+    const seen = new Set();
+    return matches
+      .map((match) => {
+        const m = match.metadata || {};
+        const lat = parseFloat(m.lat || m.latitude || '');
+        const lng = parseFloat(m.long || m.longitude || m.lng || '');
+        if (isNaN(lat) || isNaN(lng)) return null;
+        const dist = haversineKm(userLat, userLng, lat, lng);
+        if (dist > maxDistKm) return null;
+        const name = m.event_name || m.business_name || m.name || m.place_name || 'Spot';
+        const key = `${name}-${lat.toFixed(4)}`;
+        if (seen.has(key)) return null;
+        seen.add(key);
+        const bear = bearingDeg(userLat, userLng, lat, lng);
+        const clientType = (m.client_type || '').toLowerCase();
+        const recType = m.record_type || '';
+        const _type = clientType === 'restaurant' ? 'restaurant' : recType === 'event' ? 'event' : 'place';
+        return {
+          id: match.id,
+          name,
+          lat,
+          lng,
+          distanceKm: dist,
+          bearing: bear,
+          metadata: m,
+          _type,
+          _isLandmark: ['UNESCO Heritage', 'Landmark', 'Museum', 'Heritage', 'Natural Wonder', 'Nature'].includes(m.category || ''),
+          _pineconeRecommended: true,
+          score: match.score ?? 0,
+        };
+      })
+      .filter(Boolean)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 8);
+  } catch (e) {
+    console.warn('[AR Pinecone] recommended fetch failed:', e?.message);
+    return [];
+  }
+}
+
 // ─── Step 4: GPT smart day plan from combined records ───────────
 
 function formatMatchForPrompt(match, idx, originLat = null, originLng = null) {
@@ -1468,6 +1883,93 @@ const dedupeSortedByScore = (arr) => {
   return out
 }
 
+/** Reciprocal rank fusion constant (pairs with rank r use weight 1/(k+r), r≥1 common in papers) */
+const RRF_MERGE_K = 61
+
+/**
+ * Merge several Pinecone-ranked lists so venues that rank well in more than one query rise to the top.
+ */
+const mergeRankedListsByRRF = (rankedLists, keyFn = stableMatchKey, rrK = RRF_MERGE_K) => {
+  const lists = Array.isArray(rankedLists)
+    ? rankedLists.map((list) => (Array.isArray(list) ? list : [])).filter((l) => l.length > 0)
+    : []
+  if (lists.length === 0) return []
+  if (lists.length === 1) return [...lists[0]]
+  const acc = new Map()
+  for (let li = 0; li < lists.length; li++) {
+    const list = lists[li]
+    for (let rank = 0; rank < list.length; rank++) {
+      const m = list[rank]
+      if (!m) continue
+      const key = keyFn(m)
+      if (!key) continue
+      const add = 1 / (rrK + rank + 1)
+      const row = acc.get(key)
+      if (!row) acc.set(key, { score: add, match: m })
+      else row.score += add
+    }
+  }
+  return [...acc.values()]
+    .sort((a, b) => {
+      if (b.score !== a.score) return b.score - a.score
+      return pineconeScore(b.match) - pineconeScore(a.match)
+    })
+    .map((x) => x.match)
+}
+
+const retrievalFacetForDiversify = (m) => {
+  const meta = m?.metadata || {}
+  const fk = pineconeBucketFromMatch(m)
+  const raw = String(
+    meta.category || meta.cuisine_type || meta.cuisine || meta.event_type || meta.type || meta.venue_type || '',
+  )
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .slice(0, 48)
+  const area = String(meta.area || meta.location || meta.vicinity || meta.region || meta.city || '')
+    .trim()
+    .toLowerCase()
+    .slice(0, 28)
+  return `${fk}:${raw || '_'}@${area || '_'}`
+}
+
+/**
+ * Re-order top picks so the catalog slice is not five near-identical malls or café rows when better variety exists later in the ranking.
+ */
+const diversifyTopMatchesGreedy = (sortedMatches, cap, maxPerFacet) => {
+  if (!cap || cap < 1) return []
+  if (!sortedMatches?.length) return []
+  const mxf = typeof maxPerFacet === 'number' && maxPerFacet > 0 ? maxPerFacet : 0
+  if (!mxf || sortedMatches.length <= 2) return sortedMatches.slice(0, cap)
+
+  const facetCounts = new Map()
+  const picked = []
+  const pickedStable = new Set()
+
+  const tryPick = (m, relaxFacetCap) => {
+    const stab = stableMatchKey(m)
+    if (!stab || pickedStable.has(stab)) return false
+    const facet = retrievalFacetForDiversify(m)
+    const c = facetCounts.get(facet) || 0
+    if (!relaxFacetCap && c >= mxf) return false
+    picked.push(m)
+    pickedStable.add(stab)
+    facetCounts.set(facet, c + 1)
+    return true
+  }
+
+  for (const m of sortedMatches) {
+    if (picked.length >= cap) break
+    tryPick(m, false)
+  }
+  for (const m of sortedMatches) {
+    if (picked.length >= cap) break
+    tryPick(m, true)
+  }
+  return picked.slice(0, cap)
+}
+
 /**
  * Compute a cluster anchor from the top-scoring matches when GPS origin is unavailable.
  * Uses the centroid of the top K geocoded hits across places+restaurants (ignores events to avoid
@@ -1510,12 +2012,19 @@ function geoFilterToCluster(bucket, anchor, radiusKm, minKeep) {
   return bucket
 }
 
+const normalizePlanRankingSpotKey = (name) =>
+  String(name || '').trim().toLowerCase().replace(/\s+/g, ' ')
+
 /**
  * Prefer high-similarity Pinecone hits across buckets so events/breakfast are not drowned out by restaurants.
  * @param {object} [options]
  * @param {string} [options.travelExplore] — 'nearby' | 'balanced' | 'wide'
  * @param {number} [options.originLat]
  * @param {number} [options.originLng]
+ * @param {string[]} [options.prefLabels]
+ * @param {string[]} [options.foodLabels]
+ * @param {Set<string>} [options.feedbackDownrankSet] — normalized venue names user disliked (thumbs down)
+ * @param {Set<string>} [options.feedbackBoostSet] — normalized venue names user liked (thumbs up)
  */
 function selectMatchesForPlan(places, restaurants, breakfastSpots, events, options = {}) {
   const tier = normalizeTravelTier(options.travelExplore)
@@ -1537,59 +2046,65 @@ function selectMatchesForPlan(places, restaurants, breakfastSpots, events, optio
   breakfastSpots = clusterBreakfast
   events = clusterEvents
 
-  /**
-   * Rank Pinecone bucket by relevance first, then apply travel tier vs user position:
-   * - nearby: closest venues first (full list)
-   * - balanced: top matches by score, then prefer closer among those (local day)
-   * - wide: top matches by score, then prefer farther among those (island-spanning)
-   * Without GPS, fall back to score-only ordering.
-   */
-  const takeBucket = (arr, cap) => {
-    const base = dedupeSortedByScore(arr)
-    if (!hasOrigin) {
-      return base.slice(0, cap)
-    }
-    const distKm = (m) => {
-      const c = coordsFromMatch(m)
-      if (!c) return null
-      return haversineKm(originLat, originLng, c.lat, c.lng)
-    }
-    if (tier === 'nearby') {
-      const scored = base.map((m) => {
-        const d = distKm(m)
-        const dk = d == null ? Number.POSITIVE_INFINITY : d
-        return { m, d: dk }
-      })
-      scored.sort((a, b) => a.d - b.d)
-      return scored.map((x) => x.m).slice(0, cap)
-    }
-    if (tier === 'balanced') {
-      const pool = base.slice(0, Math.min(base.length, cap * 3))
-      const scored = pool.map((m) => {
-        const d = distKm(m)
-        const dk = d == null ? Number.POSITIVE_INFINITY : d
-        return { m, d: dk }
-      })
-      scored.sort((a, b) => a.d - b.d)
-      return scored.map((x) => x.m).slice(0, cap)
-    }
-    if (tier === 'wide') {
-      const pool = base.slice(0, Math.min(base.length, cap * 4))
-      const scored = pool.map((m) => {
-        const d = distKm(m)
-        const dk = d == null ? -1 : d
-        return { m, d: dk }
-      })
-      scored.sort((a, b) => b.d - a.d)
-      return scored.map((x) => x.m).slice(0, cap)
-    }
-    return base.slice(0, cap)
+  const combinedPrefFoodLabels = [
+    ...(Array.isArray(options.prefLabels) ? options.prefLabels : []),
+    ...(Array.isArray(options.foodLabels) ? options.foodLabels : []),
+  ]
+  const feedbackDown =
+    options.feedbackDownrankSet instanceof Set ? options.feedbackDownrankSet : new Set()
+  const feedbackBoost = options.feedbackBoostSet instanceof Set ? options.feedbackBoostSet : new Set()
+
+  const rankingSpotKey = (m) => {
+    const meta = m?.metadata || {}
+    return normalizePlanRankingSpotKey(
+      String(
+        meta.event_name || meta.business_name || meta.name || meta.place_name || meta.title || '',
+      ).trim(),
+    )
   }
 
-  const eventsU = takeBucket(events, caps.CAP_EVENTS)
-  const breakfastU = takeBucket(breakfastSpots, caps.CAP_BREAKFAST)
-  const placesU = takeBucket(places, caps.CAP_PLACES)
-  const restaurantsU = takeBucket(restaurants, caps.CAP_RESTAURANTS)
+  /** Higher = better candidate for GPT catalog slice */
+  const compositeBucketRank = (m) => {
+    const pc = pineconeScore(m)
+    const pref =
+      combinedPrefFoodLabels.length > 0
+        ? preferenceAlignmentScore(m, combinedPrefFoodLabels)
+        : 0
+    const nk = rankingSpotKey(m)
+    const downW = nk && feedbackDown.has(nk) ? 26 : 0
+    const upW = nk && feedbackBoost.has(nk) ? 16 : 0
+    let geo = 0
+    if (hasOrigin) {
+      const c = coordsFromMatch(m)
+      if (c) {
+        const d = haversineKm(originLat, originLng, c.lat, c.lng)
+        if (!Number.isNaN(d)) {
+          if (tier === 'nearby') geo = -d * 1.12
+          else if (tier === 'balanced') geo = -d * 0.58
+          else geo = d * 0.22
+        }
+      }
+    }
+    return pc * 52 + pref * 3.4 + geo + upW - downW
+  }
+
+  const takeBucket = (arr, cap, diversifyMaxPerFacet) => {
+    const base = dedupeSortedByScore(arr)
+    const mult = tier === 'wide' ? 4 : tier === 'balanced' ? 3 : 2
+    const pool = base.slice(0, Math.min(base.length, Math.max(cap * mult, cap)))
+    const scored = pool.map((m) => ({ m, r: compositeBucketRank(m) }))
+    scored.sort((a, b) => b.r - a.r)
+    const ordered = scored.map((x) => x.m)
+    if (typeof diversifyMaxPerFacet === 'number' && diversifyMaxPerFacet > 0) {
+      return diversifyTopMatchesGreedy(ordered, cap, diversifyMaxPerFacet)
+    }
+    return ordered.slice(0, cap)
+  }
+
+  const eventsU = takeBucket(events, caps.CAP_EVENTS, 2)
+  const breakfastU = takeBucket(breakfastSpots, caps.CAP_BREAKFAST, 2)
+  const placesU = takeBucket(places, caps.CAP_PLACES, 2)
+  const restaurantsU = takeBucket(restaurants, caps.CAP_RESTAURANTS, 3)
   const merged = [...eventsU, ...breakfastU, ...placesU, ...restaurantsU]
   const seen = new Set()
   const final = []
@@ -1737,8 +2252,10 @@ const buildProfileSection = (personalization) => {
     answers &&
     (typeof answers.idealDay === 'string' || typeof answers.avoidList === 'string') &&
     ((answers.idealDay && String(answers.idealDay).trim()) || (answers.avoidList && String(answers.avoidList).trim()))
+  const structuredPairs = answers ? collectStructuredTripPairs(answers) : []
+  const hasStructured = structuredPairs.length > 0
 
-  if (!hasG && !hasA && !hasF && !hasNarrative && !hasAnswers) {
+  if (!hasG && !hasA && !hasF && !hasNarrative && !hasAnswers && !hasStructured) {
     return 'No saved onboarding profile is available — rely only on the choices below and the catalog.'
   }
   const lines = []
@@ -1750,6 +2267,13 @@ const buildProfileSection = (personalization) => {
   if (hasG) lines.push(`Lifestyle / vibe tags: ${g.join(', ')} — reflect this in reasons and pacing (relaxed vs packed, family-friendly vs nightlife, premium vs budget, etc.).`)
   if (hasA) lines.push(`Activity leanings: ${a.join(', ')} — prefer stops that lean into these themes when compatible with today’s picks.`)
   if (hasF) lines.push(`Food personality: ${f.join(', ')} — use as a soft bias for meal personality even when today’s food picker differs.`)
+  if (hasStructured) {
+    lines.push(
+      `Structured trip facts (respect when compatible with catalog — never invent venues to satisfy):\n${structuredPairs
+        .map(([lab, val]) => `- ${lab}: ${val}`)
+        .join('\n')}`,
+    )
+  }
   if (answers?.idealDay) lines.push(`Ideal day notes: ${String(answers.idealDay).trim()}`)
   if (answers?.avoidList) lines.push(`Avoid these constraints: ${String(answers.avoidList).trim()}`)
   lines.push('If today’s explicit session picks conflict with the persona, today’s picks win — but keep the day feeling custom-built for this person.')
@@ -1798,6 +2322,29 @@ const inferPreferenceSignals = (personalization) => {
     pick(['moderate'], 'moderate')
 
   return { groupType, pacePreference, budgetLevel }
+}
+
+/** Normalizes account persona for prompts: `'tourist'` or `'local'` (default). */
+export function normalizeViewerUType(raw) {
+  return String(raw || '').trim().toLowerCase() === 'tourist' ? 'tourist' : 'local'
+}
+
+const buildAudienceGuideLines = (viewerUType) => {
+  if (viewerUType === 'tourist') {
+    return [
+      '═══ AUDIENCE: VISITOR TO BAHRAIN ═══',
+      'Assume limited familiarity with neighborhoods and everyday navigation.',
+      'Keep routes geographically coherent and easy to follow; briefly orient when naming areas.',
+      'Iconic landmarks are welcome when they fit preferences; transitions should feel comfortable for a guest.',
+      'Tips may include light visitor context (timing, heat, straightforward parking hints) when it helps.',
+    ].join('\n')
+  }
+  return [
+    '═══ AUDIENCE: BAHRAIN RESIDENT (LOCAL) ═══',
+    'Assume familiarity with roads and areas — skip tourist basics unless persona or chips ask.',
+    'Prefer fresher rotations, neighborhood gems, and insider angles over repeating ultra-famous staples unless strongly requested.',
+    'Tips can stay short and practical (best window, quieter option, realistic parking expectation).',
+  ].join('\n')
 }
 
 const buildHistorySection = (personalization) => {
@@ -1987,16 +2534,57 @@ const isBreakfastLike = (row) => {
 }
 
 /**
+ * 2-opt improvement: swap pairs of edges within the free segment [start, end)
+ * to reduce total travel distance. Pinned head/tail positions are never moved.
+ * O(n³) worst-case but n ≤ 9 stops per bucket so this is negligible.
+ */
+const twoOptImprove = (stops, pinnedFirst = 0, pinnedLast = 0) => {
+  if (stops.length <= pinnedFirst + pinnedLast + 2) return stops
+  const result = stops.slice()
+  const lo = pinnedFirst       // first free index
+  const hi = result.length - pinnedLast // one past last free index
+
+  let improved = true
+  while (improved) {
+    improved = false
+    for (let i = lo; i < hi - 1; i++) {
+      for (let j = i + 1; j < hi; j++) {
+        // Edge before i: (i-1) → i  |  Edge after j: j → (j+1)
+        const prevI = coordsFromPlanRow(result[i > 0 ? i - 1 : i])
+        const nodeI = coordsFromPlanRow(result[i])
+        const nodeJ = coordsFromPlanRow(result[j])
+        const nextJ = coordsFromPlanRow(result[j + 1 < result.length ? j + 1 : j])
+        if (!prevI || !nodeI || !nodeJ || !nextJ) continue
+
+        const currentCost =
+          haversineKm(prevI.lat, prevI.lng, nodeI.lat, nodeI.lng) +
+          haversineKm(nodeJ.lat, nodeJ.lng, nextJ.lat, nextJ.lng)
+        const newCost =
+          haversineKm(prevI.lat, prevI.lng, nodeJ.lat, nodeJ.lng) +
+          haversineKm(nodeI.lat, nodeI.lng, nextJ.lat, nextJ.lng)
+
+        if (newCost < currentCost - 0.05) {
+          // Reverse the segment [i..j] to eliminate the crossing
+          const segment = result.slice(i, j + 1).reverse()
+          result.splice(i, j - i + 1, ...segment)
+          improved = true
+        }
+      }
+    }
+  }
+  return result
+}
+
+/**
  * Reorder stops inside each time bucket using nearest-neighbor from the previous
- * stop (or user origin for the first stop) so the day flows geographically.
+ * stop (or user origin for the first stop), then apply 2-opt improvement to
+ * eliminate any remaining backtracking/zig-zag patterns.
  *
  * Hard constraints preserved:
  * - Time-bucket order (Morning → Afternoon → Evening) never changes.
- * - The breakfast-style restaurant stays first in Morning.
- * - The last restaurant in Evening stays last (dinner).
- *
- * Nearest-neighbor is O(n²) but with ≤9 stops this is trivial — and it's
- * deterministic, so the LLM can't accidentally zigzag.
+ * - Breakfast-style restaurant stays first in Morning.
+ * - First restaurant in Afternoon stays first (lunch anchor).
+ * - Last restaurant in Evening stays last (dinner).
  */
 export function optimizePlanRoute(plan, originLat = null, originLng = null) {
   if (!Array.isArray(plan) || plan.length < 2) return plan
@@ -2029,6 +2617,14 @@ export function optimizePlanRoute(plan, originLat = null, originLng = null) {
       }
     }
 
+    // Pin the first restaurant in Afternoon to first slot (lunch anchor).
+    if (bucket === 'Afternoon') {
+      const lunchIdx = rows.findIndex((r) => r?.type === 'restaurant')
+      if (lunchIdx >= 0) {
+        pinnedFirst = rows.splice(lunchIdx, 1)[0]
+      }
+    }
+
     // Pin the last dinner-style restaurant to the end of Evening.
     let pinnedLast = null
     if (bucket === 'Evening') {
@@ -2040,7 +2636,7 @@ export function optimizePlanRoute(plan, originLat = null, originLng = null) {
       }
     }
 
-    // Greedy nearest-neighbor over the remaining rows.
+    // Greedy nearest-neighbor over the remaining (free) rows.
     const remaining = rows.slice()
     const picked = []
     let localCursor = cursor
@@ -2077,8 +2673,16 @@ export function optimizePlanRoute(plan, originLat = null, originLng = null) {
       if (c) localCursor = c
     }
 
-    cursor = localCursor
-    reordered.push(...picked)
+    // 2-opt pass to eliminate any remaining crossing/backtrack within the bucket.
+    const headPinned = pinnedFirst ? 1 : 0
+    const tailPinned = pinnedLast ? 1 : 0
+    const improved = twoOptImprove(picked, headPinned, tailPinned)
+
+    // Update cursor to end of this bucket for the next bucket's NN start.
+    const lastCoord = coordsFromPlanRow(improved[improved.length - 1])
+    if (lastCoord) cursor = lastCoord
+
+    reordered.push(...improved)
   }
 
   try {
@@ -2306,6 +2910,12 @@ export async function generatePlanTitleFromAI(dayPlan = [], personalization = {}
       ? personalization.profileNarrative.trim().slice(0, 260)
       : ''
 
+  const viewerUType = normalizeViewerUType(personalization.viewerUType ?? personalization.userUType)
+  const travelerTypeLine =
+    viewerUType === 'tourist'
+      ? 'Traveler type: visiting Bahrain — title should feel like a memorable trip day.'
+      : 'Traveler type: Bahrain resident — title should feel like a crisp local outing.'
+
   const systemPrompt = `You create catchy travel plan names with personality.
 Rules:
 - Output only the title text (no quotes, no markdown)
@@ -2323,6 +2933,7 @@ Rules:
 - Avoid generic names like "My Plan" or "Day Plan"`
 
   const userPrompt = `Create a short title for this Bahrain itinerary.
+${travelerTypeLine}
 The title must feel catchy and full of personality:
 ${stops.join('\n')}
 ${profileSummary ? `Traveler vibe: ${profileSummary}` : ''}`
@@ -2373,6 +2984,9 @@ ${profileSummary ? `Traveler vibe: ${profileSummary}` : ''}`
  * @param {number} [personalization.originLng]
  * @param {string[]} [personalization.recentVisitedSpots] — prior itinerary venues to avoid repeating
  * @param {string[]} [personalization.strictAvoidSpots] — hard exclusion list (never repeat)
+ * @param {string[]} [personalization.feedbackDownrankSpots] — thumbs-down venues (normalized client-side)
+ * @param {string[]} [personalization.feedbackBoostSpots] — thumbs-up venues to prefer when still in-catalog
+ * @param {'local'|'tourist'} [personalization.viewerUType] — resident vs visitor tone and itinerary bias
  */
 export async function generateDayPlan(
   places,
@@ -2397,10 +3011,24 @@ export async function generateDayPlan(
       .filter(Boolean),
   )
   const eventsForPlan = filterEventsForSessionRelevance(events, prefLabels, personalization)
+  const feedbackDownrankSet = new Set(
+    (Array.isArray(personalization.feedbackDownrankSpots) ? personalization.feedbackDownrankSpots : [])
+      .map((x) => normalizePlanRankingSpotKey(x))
+      .filter(Boolean),
+  )
+  const feedbackBoostSet = new Set(
+    (Array.isArray(personalization.feedbackBoostSpots) ? personalization.feedbackBoostSpots : [])
+      .map((x) => normalizePlanRankingSpotKey(x))
+      .filter(Boolean),
+  )
   const baseMatches = selectMatchesForPlan(places, restaurants, breakfastSpots, eventsForPlan, {
     travelExplore: travelTier,
     originLat,
     originLng,
+    prefLabels,
+    foodLabels,
+    feedbackDownrankSet,
+    feedbackBoostSet,
   })
   const strictFilteredMatches = applyStrictAvoidWithFallback(baseMatches, personalization?.strictAvoidSpots, 12)
   const limitedMatches = applyRecentHistoryDiversity(strictFilteredMatches, personalization?.recentVisitedSpots, 12)
@@ -2484,15 +3112,24 @@ export async function generateDayPlan(
   }
 
   const profileSection = buildProfileSection(personalization)
+  const viewerUType = normalizeViewerUType(personalization.viewerUType ?? personalization.userUType)
+  const audienceSection = buildAudienceGuideLines(viewerUType)
   const historySection = buildHistorySection(personalization)
   const inferred = inferPreferenceSignals(personalization)
   const travelBlock = buildTravelExploreBlock(personalization)
 
-  const systemPrompt = `You are Khalid, a friendly Bahraini local guide creating a practical, tourist-friendly full-day Bahrain itinerary.
+  const pacingAudienceLine =
+    viewerUType === 'tourist'
+      ? 'Keep pacing realistic for visitors (comfortable transitions, no rushed cross-island jumps)'
+      : 'Keep pacing efficient for a resident who knows the island (still no pointless cross-island zig-zags)'
+
+  const systemPrompt = `You are Khalid, a friendly Bahraini local guide creating a practical full-day Bahrain itinerary.
 
 You are given ${promptCatalogMatches.length} real catalog rows (places, restaurants, events). Use ONLY these rows.
 
 ${profileSection}
+
+${audienceSection}
 
 ${historySection}
 
@@ -2531,12 +3168,13 @@ Routing rules (hard constraints):
 ${originLat != null && originLng != null
   ? `- Start near user origin (${originLat.toFixed(4)}, ${originLng.toFixed(4)}). DistFromUserKm is available; keep the route tight.`
   : '- GPS unavailable: use catalog Lat/Lng and Area to keep one coherent geographic flow.'}
-- Morning: breakfast first, then nearby visit(s)
-- Afternoon: lunch, then nearby visit(s)
-- Evening: visit(s) then dinner (or dinner then short stroll if event timing requires)
-- Avoid backtracking and zig-zag routes
-- Consecutive stops should usually be within ~${Math.round((TRAVEL_TIER_GEO[travelTier]?.radiusKm || 15) * 0.6)} km
-- Prefer two nearby good options over one far option
+- Morning: breakfast first, then nearby visit(s) — all Morning stops should cluster in the same area
+- Afternoon: lunch first (anchor the afternoon location), then nearby visit(s) — all Afternoon stops cluster near lunch
+- Evening: visit(s) then dinner (or dinner then short stroll if event timing requires) — all Evening stops cluster together
+- CRITICAL: Never create a route that goes A → B → back near A → C. Each successive stop must be closer to the next destination, never doubling back
+- Consecutive stops must be within ~${Math.round((TRAVEL_TIER_GEO[travelTier]?.radiusKm || 15) * 0.6)} km of each other
+- Prefer two nearby good options over one far option — a slightly weaker venue nearby always beats a great venue far away that causes backtracking
+- Group geographically: pick spots that naturally cluster, not random island-wide scatter
 - If preference conflict occurs, prioritize geographic coherence and mention the trade-off briefly in "reason"
 
 Quality rules:
@@ -2545,7 +3183,7 @@ Quality rules:
 - Respect opening windows and event timing
 - Avoid redundant similar stops
 - Balance indoor/outdoor and budget naturally
-- Keep pacing realistic for tourists (comfortable transitions, no rushed cross-island jumps)
+- ${pacingAudienceLine}
 - Every "spot" must match a catalog name exactly (verbatim from row name)
 - Copy lat/lng exactly from that same catalog row
 - Add backupOptions: 1-2 nearby alternatives when possible
@@ -2583,7 +3221,8 @@ Return only JSON array, no markdown:
   }
 ]`;
 
-  const userMsg = `🚗 Travel willingness this session: ${travelTier} (nearby = stay local; balanced = mix; wide = island-wide when worth it).
+  const userMsg = `${viewerUType === 'tourist' ? '🧭 Visitor mode: smooth routing and light orientation when helpful.' : '🏠 Local mode: insider-feel picks; skip lengthy introductions to obvious sights.'}
+🚗 Travel willingness this session: ${travelTier} (nearby = stay local; balanced = mix; wide = island-wide when worth it).
 ${hasPref ? `🎯 Today’s activity preferences: ${prefLabels.join(', ')}` : '🎯 Today: no activity prefs — diverse mix'}
 ${hasFood ? `🍽️ Today’s food types: ${foodLabels.join(', ')} — each meal must use catalogue rows whose Cuisine line matches one of these types (no substitutes).` : hasPersonaSummary ? '🍽️ Today: open on food — personalize from persona summary' : '🍽️ Today: open on food'}
 
@@ -2849,7 +3488,13 @@ export async function enhancePlanStopAtIndex(
   const profileFood = Array.isArray(personalization.profileFood) ? personalization.profileFood.filter(Boolean) : []
   const profileNarrative =
     typeof personalization?.profileNarrative === 'string' ? personalization.profileNarrative : ''
-  const retrievalOpts = { profileNarrative }
+  const retrievalOpts = {
+    profileNarrative,
+    profileAnswers:
+      personalization.profileAnswers && typeof personalization.profileAnswers === 'object'
+        ? personalization.profileAnswers
+        : {},
+  }
 
   let fetched = []
   try {
@@ -2982,6 +3627,8 @@ export async function enhancePlanStopAtIndex(
   const placesText = capped.map((m, i) => formatMatchForPrompt(m, i)).join('\n')
   const catalogLower = catalogNameList(capped).map((n) => normalizeSpot(n))
   const profileSection = buildProfileSection(personalization)
+  const viewerUType = normalizeViewerUType(personalization.viewerUType ?? personalization.userUType)
+  const audienceSection = buildAudienceGuideLines(viewerUType)
 
   const prefLine =
     slot.type === 'place'
@@ -2993,6 +3640,8 @@ export async function enhancePlanStopAtIndex(
   const systemPrompt = `You are Khalid, a friendly Bahraini local. Pick ONE replacement stop for an existing day plan.
 
 ${profileSection}
+
+${audienceSection}
 
 ${prefLine}
 

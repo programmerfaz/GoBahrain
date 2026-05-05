@@ -56,14 +56,13 @@ import {
   generateDayPlan,
   fetchClientsWithLocation,
   enhancePlanStopAtIndex,
-  retrievalPersonaCacheKey,
+  planRetrievalContextKey,
 } from '../../services/aiPipeline'
 import { useUserPreferences } from '../../context/UserPreferencesContext'
 import { colors as themeColors } from '../../theme/designTokens'
 import styles from '../AIPlanScreen.styles'
 import { useTheme } from '../../context/ThemeContext'
 import { supabase } from '../../config/supabase'
-import { useAuth } from '../../context/AuthContext'
 import { getCommunityPalette } from '../../components/community/CommunityReviewViews'
 import {
   listSavedPlans,
@@ -134,6 +133,28 @@ import { useAIPlanScreenMiddle } from './useAIPlanScreenMiddle'
 export function useAIPlanScreenOuter() {
   const mid = useAIPlanScreenMiddle()
   const [enhancingIndices, setEnhancingIndices] = useState(() => new Set())
+  /** Top snap — surfaces Quick find buttons that sit inside the plan sheet body */
+  const snapPlanSheetFullyExpanded = useCallback(() => {
+    mid.lastSnap.current = SNAP_POINTS[0]
+    mid.setPlanSheetSnapIndex(0)
+    Animated.spring(mid.sheetAnim, {
+      toValue: SNAP_POINTS[0],
+      useNativeDriver: true,
+      tension: 80,
+      friction: 12,
+    }).start()
+  }, [mid])
+  /** Peek / minimized strip — orbit mode should stay map-forward (never full expanded sheet under orbit). */
+  const snapPlanSheetToPeek = useCallback(() => {
+    mid.lastSnap.current = SNAP_POINTS[INITIAL_SNAP_INDEX]
+    mid.setPlanSheetSnapIndex(INITIAL_SNAP_INDEX)
+    Animated.spring(mid.sheetAnim, {
+      toValue: SNAP_POINTS[INITIAL_SNAP_INDEX],
+      useNativeDriver: true,
+      tension: 80,
+      friction: 12,
+    }).start()
+  }, [mid])
   const getSelectedPreferenceLabels = useCallback(() => {
     return mid.selectedPreferences
       .map((id) => PREFERENCES.find((p) => p.id === id)?.label)
@@ -194,6 +215,7 @@ export function useAIPlanScreenOuter() {
           profileFood: mid.savedProfileFoodLabels,
           profileNarrative: mid.preferences?.profileSummary || '',
           profileAnswers: mid.preferences?.profileAnswers || {},
+          viewerUType: mid.viewerUType,
         },
       )
       const newKey = `rk-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`
@@ -228,6 +250,7 @@ export function useAIPlanScreenOuter() {
     mid.generalLabels,
     mid.activityLabels,
     mid.savedProfileFoodLabels,
+    mid.viewerUType,
     mid.colors.morning,
     mid.colors.afternoon,
     mid.colors.evening,
@@ -259,6 +282,7 @@ export function useAIPlanScreenOuter() {
       mid.setVisibleStopCount(keyed.length)
       if (keyed.length > 1) {
         mid.setQuickFindMapOnly(false)
+        mid.resetQuickFindRotationState()
       }
       mid.setCustomPlanDraftActive(false)
       mid.setShowSearchModal(false)
@@ -379,6 +403,7 @@ export function useAIPlanScreenOuter() {
 
     mid.setCustomPlanDraftActive(false);
     mid.setQuickFindMapOnly(false);
+    mid.resetQuickFindRotationState();
     mid.setShowBuildModePickerModal(false);
     mid.setLoading(true);
     mid.setPlanGenerationSuccess(false);
@@ -412,13 +437,14 @@ export function useAIPlanScreenOuter() {
       const { originLat, originLng } = await mid.resolveOriginCoordsForPlanGeneration({ preferFreshFix: true })
       mid.setLoadingStatus('Khalid is scouting live posts for standout venues…')
 
-      const prefsKey = prefLabels.join('|');
-      const personaKey = retrievalPersonaCacheKey(mid.preferences?.profileSummary)
+      const prefsKey = prefLabels.join('|')
+      const warmupKey = planRetrievalContextKey(mid.preferences?.profileSummary, mid.preferences?.profileAnswers)
       const retrievalOpts = {
         profileNarrative: mid.preferences?.profileSummary || '',
         profileActivity: mid.activityLabels,
+        profileAnswers: mid.preferences?.profileAnswers || {},
       }
-      const cached = mid.prefetchRef.current;
+      const cached = mid.prefetchRef.current
 
       let places;
       let breakfastSpots;
@@ -427,19 +453,19 @@ export function useAIPlanScreenOuter() {
 
       const hasCached =
         cached.prefsKey === prefsKey &&
-        cached.personaKey === personaKey &&
+        cached.warmupKey === warmupKey &&
         Array.isArray(cached.places) &&
         cached.places.length > 0 &&
         Array.isArray(cached.events) &&
-        cached.events.length > 0;
+        cached.events.length > 0 &&
+        Array.isArray(cached.breakfastSpots) &&
+        cached.breakfastSpots.length > 0
 
       if (hasCached) {
         places = cached.places;
         events = cached.events;
-        [restaurants, breakfastSpots] = await Promise.all([
-          fetchRestaurants(foodLabels, retrievalOpts),
-          fetchBreakfastSpots(retrievalOpts),
-        ]);
+        breakfastSpots = cached.breakfastSpots;
+        restaurants = await fetchRestaurants(foodLabels, retrievalOpts);
       } else {
         const [
           placesResult,
@@ -462,20 +488,8 @@ export function useAIPlanScreenOuter() {
       mid.setLoadingStatus('Shortlisting restaurants & experiences for you…');
       await new Promise((res) => setTimeout(res, 380));
       mid.setLoadingStatus('Khalid is crafting your perfect day…');
-      const lastSavedPlanSpots = (
-        Array.isArray(mid.savedPlansList) && Array.isArray(mid.savedPlansList[0]?.plan_data)
-          ? mid.savedPlansList[0].plan_data
-          : []
-      )
-        .map((row) => row?.spot)
-        .filter((name) => typeof name === 'string' && name.trim().length > 0)
-        .slice(-80)
-      const recentVisitedSpots = [
-        ...lastSavedPlanSpots,
-        ...(Array.isArray(mid.dayPlan) ? mid.dayPlan : []).map((row) => row?.spot),
-      ]
-        .filter((name) => typeof name === 'string' && name.trim().length > 0)
-        .slice(-80);
+      const lastSavedPlanSpots = []
+      const recentVisitedSpots = []
       const plan = await generateDayPlan(places, restaurants, breakfastSpots, events, prefLabels, foodLabels, {
         profileGeneral: mid.generalLabels,
         profileActivity: mid.activityLabels,
@@ -485,8 +499,7 @@ export function useAIPlanScreenOuter() {
         travelExplore: mid.travelExploreId,
         originLat,
         originLng,
-        strictAvoidSpots: lastSavedPlanSpots,
-        recentVisitedSpots,
+        viewerUType: mid.viewerUType,
       });
       generatedPlan = plan;
       const initialKeyedPlan = attachPlanRowKeys(plan);
@@ -543,6 +556,7 @@ export function useAIPlanScreenOuter() {
       } else {
         mid.sheetOpacity.setValue(1);
         mid.lastSnap.current = SNAP_POINTS[0];
+        mid.setPlanSheetSnapIndex(0);
         Animated.spring(mid.sheetAnim, {
           toValue: SNAP_POINTS[0],
           useNativeDriver: true,
@@ -565,6 +579,14 @@ export function useAIPlanScreenOuter() {
     mid.setBuildDayModalPhase('quickKind');
   }, [mid]);
 
+  /** Opens build modal straight into Quick AI search (kind → sub-label). Used by map sheet two-column CTA. */
+  const openQuickAiSearchModal = useCallback(() => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {})
+    mid.setQuickFindKind(null)
+    mid.setBuildDayModalPhase('quickKind')
+    mid.setShowBuildModePickerModal(true)
+  }, [mid])
+
   const handleBuildDayQuickFindSelectKind = useCallback(
     (kind) => {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
@@ -584,11 +606,7 @@ export function useAIPlanScreenOuter() {
       mid.setQuickFindKind(null);
       return;
     }
-    if (mid.buildDayModalPhase === 'quickKind') {
-      mid.setBuildDayModalPhase('menu');
-      mid.setQuickFindKind(null);
-      return;
-    }
+    /** `quickKind`, `menu`, etc. — always dismiss modal (quick search must not peel back to “Build my day” when closed from root) */
     closeBuildModePickerModal();
   }, [mid, closeBuildModePickerModal]);
 
@@ -597,6 +615,7 @@ export function useAIPlanScreenOuter() {
     mid.setBuildDayModalPhase('menu');
     mid.setQuickFindKind(null);
     mid.setQuickFindMapOnly(false);
+    mid.resetQuickFindRotationState();
     mid.setCustomPlanDraftActive(true);
     mid.setActiveSavedPlanId(null);
     mid.setSharedCollaboration(null);
@@ -608,6 +627,7 @@ export function useAIPlanScreenOuter() {
     mid.setVisiblePinCount(0);
     mid.sheetOpacity.setValue(1);
     mid.lastSnap.current = SNAP_POINTS[0];
+    mid.setPlanSheetSnapIndex(0);
     Animated.spring(mid.sheetAnim, {
       toValue: SNAP_POINTS[0],
       useNativeDriver: true,
@@ -636,10 +656,166 @@ export function useAIPlanScreenOuter() {
   const dismissQuickFindResult = useCallback(() => {
     mid.setDayPlan(null);
     mid.setQuickFindMapOnly(false);
+    mid.resetQuickFindRotationState();
+    mid.setDrawerStep(0);
     mid.setStopDetailIndex(null);
     mid.clearMarkerShowcase();
     mid.setError(null);
   }, [mid]);
+
+  const runQuickFindForLabel = useCallback(
+    async (kind, label, isRepeatSearch) => {
+      if (!kind || !label) return;
+
+      const labelNormKey = (s) =>
+        String(s || '')
+          .trim()
+          .toLowerCase()
+          .replace(/\s+/g, ' ');
+      const sameQueryAsLastSuccess =
+        kind === mid.quickFindLastKind && labelNormKey(label) === labelNormKey(mid.quickFindLastLabel)
+      /** Picker “same chip again” must skip the last pin — same as “Search again”, not only that CTA */
+      const shouldMergePriorExclusions = isRepeatSearch || sameQueryAsLastSuccess
+
+      const excludedFingerprintsForQuery = (() => {
+        if (!shouldMergePriorExclusions) return [];
+        const base = [...(mid.quickFindExcludedFingerprints || [])];
+        const bump = [...(mid.quickFindLastChosenFingerprints || [])];
+        return [...new Set([...base, ...bump])];
+      })();
+
+      if (shouldMergePriorExclusions) {
+        mid.setQuickFindExcludedFingerprints(excludedFingerprintsForQuery);
+      } else {
+        mid.setQuickFindExcludedFingerprints([]);
+        mid.setQuickFindLastChosenFingerprints([]);
+      }
+
+      mid.setError(null);
+      /** Buttons + copy live under `drawerStep === 3`; step 0 would hide Quick find CTAs entirely */
+      mid.setDrawerStep(3);
+      mid.setQuickFindMapOnly(true);
+      mid.setLoading(true);
+      mid.setLoadingStatus(
+        shouldMergePriorExclusions ? 'Finding another match for you…' : 'Sweeping Bahrain for your match…',
+      );
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
+      let quickFindOrbitMk = null;
+      try {
+        let matches = [];
+        const retrievalOpts = {
+          profileNarrative: mid.preferences?.profileSummary || '',
+          profileActivity: mid.activityLabels,
+          quickFind: kind === 'place' || kind === 'restaurant',
+          quickFindEvents: kind === 'event',
+        };
+        if (kind === 'place') {
+          matches = await fetchPlaces([label], retrievalOpts);
+        } else if (kind === 'restaurant') {
+          matches = await fetchRestaurants([label], retrievalOpts);
+        } else {
+          matches = await fetchEvents([label], retrievalOpts);
+        }
+        mid.setPineconeMatches(matches);
+        const referenceCoords = (() => {
+          const u = mid.userLocationRef?.current;
+          const uLat = Number(u?.latitude);
+          const uLng = Number(u?.longitude);
+          if (Number.isFinite(uLat) && Number.isFinite(uLng)) {
+            return { latitude: uLat, longitude: uLng };
+          }
+          const r = mid.mapRegion;
+          const rLat = Number(r?.latitude);
+          const rLng = Number(r?.longitude);
+          if (Number.isFinite(rLat) && Number.isFinite(rLng)) {
+            return { latitude: rLat, longitude: rLng };
+          }
+          return undefined;
+        })();
+        const { plan, fingerprints, stats } = await buildQuickFindSingleStopPlan(
+          matches,
+          kind,
+          mid.allPlaceMarkers,
+          label,
+          {
+            excludedFingerprints: excludedFingerprintsForQuery,
+            ...(referenceCoords ? { referenceCoords } : {}),
+          },
+        );
+        if (!plan?.length) {
+          let msg =
+            'We could not find a mappable spot for that subcategory. Try another one.';
+          if (stats.themeCount === 0 && stats.pineconeCount > 0) {
+            msg = `We could not find results that clearly match “${label}”. Try a nearby tag or search the catalog.`;
+          }
+          if (!shouldMergePriorExclusions) {
+            mid.setDayPlan(null);
+            mid.setQuickFindMapOnly(false);
+            mid.setDrawerStep(0);
+          }
+          mid.setError(null);
+          Alert.alert('Quick find', msg);
+          return;
+        }
+        /** Pool recycled after running out of new pins — restart rotation silently */
+        if (stats.cycledExclusions) mid.resetQuickFindRotationState()
+        mid.setLoadingStatus('Sharpening the best pin on your map…');
+        mid.setDayPlan(plan);
+        mid.setQuickFindLastKind(kind);
+        mid.setQuickFindLastLabel(label);
+        mid.setQuickFindLastChosenFingerprints(fingerprints || []);
+        mid.setError(null);
+        mid.setVisibleStopCount(plan.length);
+        mid.setStopDetailIndex(null);
+        snapPlanSheetToPeek()
+        const mk = buildMapMarkers(plan, mid.allPlaceMarkers).find((m) => {
+          const la = Number(m?.lat);
+          const ln = Number(m?.lng);
+          return Number.isFinite(la) && Number.isFinite(ln);
+        });
+        if (mk) {
+          quickFindOrbitMk = mk;
+          const map = mid.mapRef.current;
+          if (map) {
+            mid.setLoadingStatus('Gliding to your spot…');
+            mid.markProgrammaticMapMove(1200);
+            map.animateToRegion(
+              clampRegionToBahrain({
+                latitude: Number(mk.lat),
+                longitude: Number(mk.lng),
+                latitudeDelta: 0.032,
+                longitudeDelta: 0.032,
+              }),
+              720,
+            );
+            await new Promise((r) => setTimeout(r, 380));
+          }
+        }
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
+      } catch (e) {
+        if (!shouldMergePriorExclusions) {
+          mid.setDayPlan(null);
+          mid.setQuickFindMapOnly(false);
+          mid.setDrawerStep(0);
+        }
+        const msg = e?.message || 'Quick find failed.';
+        mid.setError(null);
+        Alert.alert('Quick find', msg);
+      } finally {
+        mid.setLoading(false);
+        mid.setLoadingStatus('');
+      }
+      if (quickFindOrbitMk) {
+        /** `loading` can still appear true this frame — bypass guard so orbit always opens after Quick find completes */
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            mid.handlePlaceMarkerPress(quickFindOrbitMk, { skipLoadGuard: true });
+          });
+        });
+      }
+    },
+    [mid, snapPlanSheetToPeek],
+  );
 
   const handleQuickFindPickSubCategory = useCallback(
     async (label) => {
@@ -654,71 +830,20 @@ export function useAIPlanScreenOuter() {
       mid.setVisiblePinCount(0);
       mid.setActiveSavedPlanId(null);
       mid.setSharedCollaboration(null);
-      mid.setError(null);
       mid.setDayPlan(null);
-      mid.setDrawerStep(0);
-      mid.setQuickFindMapOnly(true);
-      mid.setLoading(true);
-      mid.setLoadingStatus('Quick searching…');
-      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
-      try {
-        let matches = [];
-        const retrievalOpts = {
-          profileNarrative: mid.preferences?.profileSummary || '',
-          profileActivity: mid.activityLabels,
-        }
-        if (kind === 'place') {
-          matches = await fetchPlaces([label], retrievalOpts);
-        } else if (kind === 'restaurant') {
-          matches = await fetchRestaurants([label], retrievalOpts);
-        } else {
-          matches = await fetchEvents([label], retrievalOpts);
-        }
-        mid.setPineconeMatches(matches);
-        const plan = await buildQuickFindSingleStopPlan(matches, kind, mid.allPlaceMarkers, label);
-        if (!plan?.length) {
-          mid.setDayPlan(null);
-          mid.setQuickFindMapOnly(false);
-          mid.setError(null);
-          Alert.alert(
-            'Quick find',
-            'We could not find a mappable spot for that subcategory. Try another one.',
-          );
-          return;
-        }
-        mid.setDayPlan(plan);
-        mid.setError(null);
-        mid.setVisibleStopCount(plan.length);
-        const mk = buildMapMarkers(plan, mid.allPlaceMarkers).find((m) => m.lat && m.lng);
-        if (mk && mid.mapRef.current) {
-          mid.markProgrammaticMapMove(2200);
-          mid.mapRef.current.animateToRegion(
-            clampRegionToBahrain({
-              latitude: mk.lat,
-              longitude: mk.lng,
-              latitudeDelta: 0.045,
-              longitudeDelta: 0.045,
-            }),
-            720,
-          );
-        }
-        requestAnimationFrame(() => {
-          mid.setStopDetailIndex(0);
-        });
-        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
-      } catch (e) {
-        mid.setDayPlan(null);
-        mid.setQuickFindMapOnly(false);
-        const msg = e?.message || 'Quick find failed.';
-        mid.setError(null);
-        Alert.alert('Quick find', msg);
-      } finally {
-        mid.setLoading(false);
-        mid.setLoadingStatus('');
-      }
+      await runQuickFindForLabel(kind, label, false);
     },
-    [mid],
+    [mid, runQuickFindForLabel],
   );
+
+  const handleQuickFindSearchAgain = useCallback(async () => {
+    const kind = mid.quickFindLastKind;
+    const label = mid.quickFindLastLabel;
+    if (!kind || !label || !mid.quickFindMapOnly) return;
+    if (!mid.dayPlan?.length) return;
+    if (mid.loading) return;
+    await runQuickFindForLabel(kind, label, true);
+  }, [mid, runQuickFindForLabel]);
 
   useEffect(() => {
     const id = mid.sheetAnim.addListener(({ value }) => { mid.currentYRef.current = value; });
@@ -742,6 +867,7 @@ export function useAIPlanScreenOuter() {
       mid.setRevealingPins(false);
       mid.sheetOpacity.setValue(1);
       mid.lastSnap.current = SNAP_POINTS[0];
+      mid.setPlanSheetSnapIndex(0);
       mid.scheduleStaggeredStopReveal(mid.dayPlan.length);
       Animated.spring(mid.sheetAnim, {
         toValue: SNAP_POINTS[0],
@@ -772,6 +898,7 @@ export function useAIPlanScreenOuter() {
           setTimeout(() => {
             mid.setRevealingPins(false);
             mid.lastSnap.current = SNAP_POINTS[0];
+            mid.setPlanSheetSnapIndex(0);
             mid.scheduleStaggeredStopReveal(mid.dayPlan.length);
             Animated.parallel([
               Animated.timing(mid.sheetOpacity, {
@@ -899,29 +1026,70 @@ export function useAIPlanScreenOuter() {
     return () => clearTimeout(t);
   }, [mid.mapRegion, mid.isMarkerShowcaseActive, mid.showcaseMarkerMk, refreshShowcaseMorphAnchor]);
 
+  /** PanResponder captures first render’s `mid` — use refs for orbit state + snap helper */
+  const markerShowcaseActiveRef = useRef(mid.isMarkerShowcaseActive)
+  const snapPlanSheetToPeekRef = useRef(snapPlanSheetToPeek)
+  useEffect(() => {
+    markerShowcaseActiveRef.current = mid.isMarkerShowcaseActive
+  }, [mid.isMarkerShowcaseActive])
+  useEffect(() => {
+    snapPlanSheetToPeekRef.current = snapPlanSheetToPeek
+  }, [snapPlanSheetToPeek])
+
+  useEffect(() => {
+    if (!mid.isMarkerShowcaseActive) return
+    snapPlanSheetToPeek()
+  }, [mid.isMarkerShowcaseActive, snapPlanSheetToPeek])
+
+  const peekY = SNAP_POINTS[INITIAL_SNAP_INDEX]
   const panResponder = useRef(
     PanResponder.create({
       onStartShouldSetPanResponder: () => true,
       onMoveShouldSetPanResponder: (_, g) =>
         Math.abs(g.dy) > 4 && Math.abs(g.dy) > Math.abs(g.dx) * 0.72,
-      onPanResponderGrant: () => { mid.lastSnap.current = mid.currentYRef.current; },
+      onPanResponderGrant: () => {
+        if (markerShowcaseActiveRef.current) {
+          mid.lastSnap.current = peekY
+          return
+        }
+        mid.lastSnap.current = mid.currentYRef.current
+      },
       onPanResponderMove: (_, g) => {
-        const newY = mid.lastSnap.current + g.dy;
-        mid.sheetAnim.setValue(Math.max(SNAP_POINTS[0], Math.min(SNAP_POINTS[2], newY)));
+        if (markerShowcaseActiveRef.current) {
+          mid.sheetAnim.setValue(peekY)
+          return
+        }
+        const newY = mid.lastSnap.current + g.dy
+        mid.sheetAnim.setValue(Math.max(SNAP_POINTS[0], Math.min(SNAP_POINTS[2], newY)))
       },
       onPanResponderRelease: (_, g) => {
-        const currentY = mid.lastSnap.current + g.dy;
-        let targetIndex = 0;
-        let minDist = Math.abs(currentY - SNAP_POINTS[0]);
-        for (let i = 1; i < SNAP_POINTS.length; i++) {
-          const d = Math.abs(currentY - SNAP_POINTS[i]);
-          if (d < minDist) { minDist = d; targetIndex = i; }
+        if (markerShowcaseActiveRef.current) {
+          mid.lastSnap.current = peekY
+          mid.setPlanSheetSnapIndex(INITIAL_SNAP_INDEX)
+          snapPlanSheetToPeekRef.current()
+          return
         }
-        if (g.vy > 0.4) targetIndex = Math.min(2, targetIndex + 1);
-        else if (g.vy < -0.4) targetIndex = Math.max(0, targetIndex - 1);
-        const target = SNAP_POINTS[targetIndex];
-        mid.lastSnap.current = target;
-        Animated.spring(mid.sheetAnim, { toValue: target, useNativeDriver: true, tension: 80, friction: 12 }).start();
+        const currentY = mid.lastSnap.current + g.dy
+        let targetIndex = 0
+        let minDist = Math.abs(currentY - SNAP_POINTS[0])
+        for (let i = 1; i < SNAP_POINTS.length; i++) {
+          const d = Math.abs(currentY - SNAP_POINTS[i])
+          if (d < minDist) {
+            minDist = d
+            targetIndex = i
+          }
+        }
+        if (g.vy > 0.4) targetIndex = Math.min(2, targetIndex + 1)
+        else if (g.vy < -0.4) targetIndex = Math.max(0, targetIndex - 1)
+        const target = SNAP_POINTS[targetIndex]
+        mid.lastSnap.current = target
+        mid.setPlanSheetSnapIndex(targetIndex)
+        Animated.spring(mid.sheetAnim, {
+          toValue: target,
+          useNativeDriver: true,
+          tension: 80,
+          friction: 12,
+        }).start()
       },
     })
   ).current;
@@ -946,12 +1114,14 @@ export function useAIPlanScreenOuter() {
     handleRegionChangeComplete,
     handleBuildDayPickAiPlan,
     handleBuildDayPickQuickFind,
+    openQuickAiSearchModal,
     handleBuildDayQuickFindSelectKind,
     handleBuildDayQuickFindGoBack,
     handleBuildDayPickCustomPlan,
     handleBuildDayPickEnterCode,
     handleBuildDaySubmitJoinCode,
     handleQuickFindPickSubCategory,
+    handleQuickFindSearchAgain,
     dismissQuickFindResult,
     closeBuildModePickerModal,
     getSelectedPreferenceLabels,

@@ -12,6 +12,23 @@ export const PLAN_MAP_CLIENT_TYPE_FILTERS = [
 /** Quick find: pick a category then a subcategory (same three groups as map filters, without “All”). */
 export const QUICK_FIND_KIND_OPTIONS = PLAN_MAP_CLIENT_TYPE_FILTERS.filter((f) => f.id !== 'all')
 
+/** Sub-vibe labels per kind — passed into retrieval + scoring (`quickFindFromMatches`). */
+export const QUICK_FIND_SUBLABELS_BY_KIND = {
+  restaurant: [
+    'Local & Arabic',
+    'Seafood',
+    'Café',
+    'Street food',
+    'Food truck',
+    'Fast Food',
+    'Italian',
+    'Asian',
+    'Grill',
+  ],
+  place: ['Beach', 'Museum', 'Park', 'Shopping', 'Landmark', 'Family fun', 'Scenic', 'Historical'],
+  event: ['Family', 'Festival', 'Outdoor', 'Live music', 'Sports'],
+}
+
 export const { height: SCREEN_HEIGHT, width: SCREEN_WIDTH } = Dimensions.get('window')
 
 export const PLAN_TIME_SLOTS = ['Morning', 'Afternoon', 'Evening']

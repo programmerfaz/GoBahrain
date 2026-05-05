@@ -24,7 +24,7 @@ import * as Location from 'expo-location'
 import { Ionicons } from '@expo/vector-icons'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useRoute } from '@react-navigation/native'
-import { fetchNearbyPOIs, fetchEvents } from '../services/aiPipeline'
+import { fetchNearbyPOIs, fetchEvents, fetchPineconeARRecommended } from '../services/aiPipeline'
 import ClientProfileModal from '../components/ClientProfileModal'
 import { useSavedPlaces } from '../context/SavedPlacesContext'
 import { colors as themeColors } from '../theme/designTokens'
@@ -181,20 +181,45 @@ function POIMarker({ poi, x, y, onPress, isNearest, index, isBusy }) {
 
   return (
     <Animated.View style={[mk.wrap, { left: x, top: y, opacity: anim, transform: [{ scale: isNearest ? pulse : scale }] }]}>
-      <TouchableOpacity style={[mk.card, isNearest && { borderColor: `${poiColor}60` }]} onPress={() => onPress?.(poi)} activeOpacity={0.85}>
-        <View style={[mk.iconBg, { backgroundColor: `${poiColor}20` }]}>
+      {isNearest && <View style={[mk.nearestGlow, { shadowColor: poiColor }]} />}
+      <TouchableOpacity
+        style={[
+          mk.card,
+          isNearest && { borderColor: `${poiColor}70` },
+          poi._pineconeRecommended && { borderColor: 'rgba(167,139,250,0.40)' },
+        ]}
+        onPress={() => onPress?.(poi)}
+        activeOpacity={0.85}
+      >
+        <View style={[mk.iconBg, { backgroundColor: `${poiColor}22` }]}>
           <Ionicons name={icon} size={11} color={poiColor} />
         </View>
-        <Text style={mk.name} numberOfLines={1}>{poi.name}</Text>
-        <Text style={mk.dist}>{getDistText(poi.distanceKm)}</Text>
+        <View style={mk.textCol}>
+          <Text style={mk.name} numberOfLines={1}>{poi.name}</Text>
+          <Text style={mk.dist}>{getDistText(poi.distanceKm)}</Text>
+        </View>
+        {poi._pineconeRecommended && (
+          <View style={mk.aiBadge}>
+            <Ionicons name="sparkles" size={7} color="#A78BFA" />
+          </View>
+        )}
       </TouchableOpacity>
-      <View style={[mk.stem, { backgroundColor: `${poiColor}30` }]} />
+      <View style={[mk.stem, { backgroundColor: `${poiColor}35` }]} />
     </Animated.View>
   )
 }
 
 const mk = StyleSheet.create({
   wrap: { position: 'absolute', alignItems: 'center' },
+  nearestGlow: {
+    position: 'absolute',
+    top: 4, left: 4, right: 4, bottom: 4,
+    borderRadius: LUXURY.radiusMarkerPill,
+    ...Platform.select({
+      ios: { shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.5, shadowRadius: 10 },
+      android: { elevation: 0 },
+    }),
+  },
   card: {
     flexDirection: 'row', alignItems: 'center', gap: 6,
     paddingVertical: 8, paddingHorizontal: 10,
@@ -205,8 +230,15 @@ const mk = StyleSheet.create({
     ...luxuryElevated,
   },
   iconBg: { width: 20, height: 20, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
+  textCol: { flexDirection: 'column', gap: 1 },
   name: { color: '#FFF', fontSize: 10, fontWeight: '700', maxWidth: 80 },
   dist: { color: C.dimText, fontSize: 9, fontWeight: '600' },
+  aiBadge: {
+    width: 14, height: 14, borderRadius: 5,
+    backgroundColor: 'rgba(167,139,250,0.18)',
+    alignItems: 'center', justifyContent: 'center',
+    borderWidth: 1, borderColor: 'rgba(167,139,250,0.25)',
+  },
   stem: { width: 1, height: 8, opacity: 0.5 },
 })
 
@@ -265,6 +297,149 @@ const nb = StyleSheet.create({
   pill: { flexDirection: 'row', alignItems: 'center', gap: 3, backgroundColor: 'rgba(255,255,255,0.07)', paddingHorizontal: 7, paddingVertical: 2.5, borderRadius: 7 },
   pillText: { color: C.sub, fontSize: 10, fontWeight: '600' },
   closeBtn: { padding: 6, marginLeft: 2 },
+})
+
+/* ─── Path Arrow Indicator (Pokémon GO style) ─── */
+function PathArrowIndicator({ target, heading, userLat, userLng, isNavigation, style }) {
+  const pulseAnim = useRef(new Animated.Value(1)).current
+  const chevAnim = useRef(new Animated.Value(0)).current
+  const mountAnim = useRef(new Animated.Value(0)).current
+
+  useEffect(() => {
+    if (!target) {
+      Animated.timing(mountAnim, { toValue: 0, duration: 180, useNativeDriver: true }).start()
+      return
+    }
+    Animated.spring(mountAnim, { toValue: 1, damping: 14, stiffness: 110, useNativeDriver: true }).start()
+    const pulse = Animated.loop(Animated.sequence([
+      Animated.timing(pulseAnim, { toValue: 1.22, duration: 950, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
+      Animated.timing(pulseAnim, { toValue: 1, duration: 950, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
+    ]))
+    pulse.start()
+    const chev = Animated.loop(
+      Animated.timing(chevAnim, { toValue: 1, duration: 1400, easing: Easing.linear, useNativeDriver: true })
+    )
+    chev.start()
+    return () => { pulse.stop(); chev.stop() }
+  }, [target, pulseAnim, chevAnim, mountAnim])
+
+  if (!target || userLat == null || userLng == null) return null
+
+  const dLon = ((target.lng - userLng) * Math.PI) / 180
+  const y2 = Math.sin(dLon) * Math.cos((target.lat * Math.PI) / 180)
+  const x2 =
+    Math.cos((userLat * Math.PI) / 180) * Math.sin((target.lat * Math.PI) / 180) -
+    Math.sin((userLat * Math.PI) / 180) * Math.cos((target.lat * Math.PI) / 180) * Math.cos(dLon)
+  const bearing = ((Math.atan2(y2, x2) * 180) / Math.PI + 360) % 360
+  const dLat = ((target.lat - userLat) * Math.PI) / 180
+  const haA = Math.sin(dLat / 2) ** 2 + Math.cos((userLat * Math.PI) / 180) * Math.cos((target.lat * Math.PI) / 180) * Math.sin(dLon / 2) ** 2
+  const distKm = 6371 * 2 * Math.atan2(Math.sqrt(haA), Math.sqrt(1 - haA))
+  const relBearing = (bearing - heading + 360) % 360
+  const inView = Math.min(relBearing, 360 - relBearing) <= CAMERA_FOV_DEG / 2
+  const turnDeg = Math.round(relBearing > 180 ? 360 - relBearing : relBearing)
+  const turnDir = relBearing > 180 ? 'left' : 'right'
+  const statusLine = inView
+    ? 'Straight ahead'
+    : turnDeg < 20
+    ? `Slightly ${turnDir}`
+    : `Turn ${turnDeg}° ${turnDir}`
+  const poiColor = isNavigation ? C.accent : getPoiColor(target)
+
+  const chev0 = chevAnim.interpolate({ inputRange: [0, 0.25, 0.5], outputRange: [0.1, 1, 0.1], extrapolate: 'clamp' })
+  const chev1 = chevAnim.interpolate({ inputRange: [0.25, 0.5, 0.75], outputRange: [0.1, 1, 0.1], extrapolate: 'clamp' })
+  const chev2 = chevAnim.interpolate({ inputRange: [0.5, 0.75, 1.0], outputRange: [0.1, 1, 0.1], extrapolate: 'clamp' })
+
+  return (
+    <Animated.View style={[pa.wrap, style, { transform: [{ scale: mountAnim }] }]}>
+      {/* Chevron trail pointing toward destination */}
+      <View style={[pa.chevTrail, { transform: [{ rotate: `${relBearing}deg` }] }]}>
+        {[chev2, chev1, chev0].map((op, i) => (
+          <Animated.View key={i} style={{ opacity: op, marginBottom: -3 }}>
+            <Ionicons name="chevron-up" size={13} color={poiColor} />
+          </Animated.View>
+        ))}
+      </View>
+
+      {/* Pulsing ring + arrow disc */}
+      <View style={pa.discSection}>
+        <Animated.View style={[pa.ring, { borderColor: `${poiColor}28`, transform: [{ scale: pulseAnim }] }]} />
+        <Animated.View style={[pa.ringOuter, { borderColor: `${poiColor}12`, transform: [{ scale: pulseAnim.interpolate({ inputRange: [1, 1.22], outputRange: [1.3, 1.65] }) }] }]} />
+        <LinearGradient colors={[`${poiColor}28`, `${poiColor}08`]} style={pa.disc}>
+          <View style={[pa.innerDisc, { borderColor: `${poiColor}45` }]}>
+            <Ionicons
+              name="navigate"
+              size={30}
+              color={poiColor}
+              style={{ transform: [{ rotate: `${relBearing}deg` }] }}
+            />
+          </View>
+        </LinearGradient>
+      </View>
+
+      {/* Name + status + distance */}
+      <View style={pa.info}>
+        {target._pineconeRecommended && (
+          <View style={pa.aiBadge}>
+            <Ionicons name="sparkles" size={8} color="#A78BFA" />
+            <Text style={pa.aiText}>AI Pick</Text>
+          </View>
+        )}
+        <Text style={[pa.destName, { color: poiColor }]} numberOfLines={1}>{target.name}</Text>
+        <Text style={pa.statusLine}>{statusLine}</Text>
+        <View style={pa.distRow}>
+          <Text style={pa.distTxt}>{getDistText(distKm)}</Text>
+          <View style={pa.distDot} />
+          <Text style={pa.distTxt}>{getWalkingTime(distKm)}</Text>
+        </View>
+      </View>
+    </Animated.View>
+  )
+}
+
+const pa = StyleSheet.create({
+  wrap: {
+    position: 'absolute',
+    alignSelf: 'center',
+    alignItems: 'center',
+    zIndex: 8,
+  },
+  chevTrail: { flexDirection: 'column', alignItems: 'center', marginBottom: 2 },
+  discSection: { alignItems: 'center', justifyContent: 'center', width: 80, height: 80 },
+  ring: {
+    position: 'absolute',
+    width: 80, height: 80, borderRadius: 40,
+    borderWidth: 1.5,
+  },
+  ringOuter: {
+    position: 'absolute',
+    width: 80, height: 80, borderRadius: 40,
+    borderWidth: 1,
+  },
+  disc: { width: 72, height: 72, borderRadius: 36, alignItems: 'center', justifyContent: 'center' },
+  innerDisc: {
+    width: 62, height: 62, borderRadius: 31,
+    backgroundColor: 'rgba(8,10,20,0.90)',
+    borderWidth: 1.5,
+    alignItems: 'center', justifyContent: 'center',
+    ...Platform.select({
+      ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 5 }, shadowOpacity: 0.6, shadowRadius: 14 },
+      android: { elevation: 16 },
+    }),
+  },
+  info: { alignItems: 'center', marginTop: 8 },
+  aiBadge: {
+    flexDirection: 'row', alignItems: 'center', gap: 3,
+    backgroundColor: 'rgba(167,139,250,0.12)',
+    paddingHorizontal: 7, paddingVertical: 2, borderRadius: 6,
+    borderWidth: 1, borderColor: 'rgba(167,139,250,0.20)',
+    marginBottom: 3,
+  },
+  aiText: { color: '#A78BFA', fontSize: 8, fontWeight: '700' },
+  destName: { fontSize: 13, fontWeight: '800', maxWidth: 180, textAlign: 'center' },
+  statusLine: { color: C.sub, fontSize: 11, marginTop: 2 },
+  distRow: { flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 3 },
+  distTxt: { color: C.dimText, fontSize: 10, fontWeight: '600' },
+  distDot: { width: 2, height: 2, borderRadius: 1, backgroundColor: C.dimText, opacity: 0.5 },
 })
 
 /* ─── Radar Navigator ─── */
@@ -372,6 +547,84 @@ const rd = StyleSheet.create({
   centerDot: { position: 'absolute', width: 7, height: 7, borderRadius: 3.5, backgroundColor: C.accent, borderWidth: 1.5, borderColor: '#FFF' },
   northBadge: { position: 'absolute', width: 14, height: 14, borderRadius: 7, backgroundColor: `${C.accent}30`, alignItems: 'center', justifyContent: 'center' },
   northText: { color: C.accent, fontSize: 7, fontWeight: '900' },
+})
+
+/* ─── Edge POI Indicators ─── */
+function EdgePOIIndicators({ outOfViewPois, heading, width, height, onPress }) {
+  if (!outOfViewPois || outOfViewPois.length === 0) return null
+
+  const left = []
+  const right = []
+  outOfViewPois.slice(0, 6).forEach((poi) => {
+    const rel = (poi.bearing - heading + 360) % 360
+    if (rel <= 180) right.push({ poi, rel })
+    else left.push({ poi, rel })
+  })
+
+  const midY = height * 0.36
+
+  const renderGroup = (items, side) =>
+    items.slice(0, 3).map(({ poi, rel }, i) => {
+      const color = getPoiColor(poi)
+      const turnDeg = Math.round(side === 'right' ? rel : 360 - rel)
+      return (
+        <TouchableOpacity
+          key={`edge-${poi.name}-${i}`}
+          style={[ei.pill, side === 'left' ? ei.pillLeft : ei.pillRight, { borderColor: `${color}40`, marginBottom: 8 }]}
+          onPress={() => onPress?.(poi)}
+          activeOpacity={0.85}
+          accessibilityLabel={`${poi.name} ${turnDeg}° to the ${side}`}
+        >
+          {side === 'left' && <Ionicons name="chevron-back" size={10} color={color} />}
+          <View style={ei.pillContent}>
+            <Text style={[ei.pillName, { color }]} numberOfLines={1}>{poi.name}</Text>
+            <Text style={ei.pillDist}>{getDistText(poi.distanceKm)}</Text>
+          </View>
+          {side === 'right' && <Ionicons name="chevron-forward" size={10} color={color} />}
+        </TouchableOpacity>
+      )
+    })
+
+  return (
+    <>
+      {left.length > 0 && (
+        <View style={[ei.group, { left: 0, top: midY }]}>
+          {renderGroup(left, 'left')}
+        </View>
+      )}
+      {right.length > 0 && (
+        <View style={[ei.group, { right: 0, top: midY }]}>
+          {renderGroup(right, 'right')}
+        </View>
+      )}
+    </>
+  )
+}
+
+const ei = StyleSheet.create({
+  group: { position: 'absolute', zIndex: 6 },
+  pill: {
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    backgroundColor: 'rgba(8,10,20,0.86)',
+    paddingVertical: 5, paddingHorizontal: 8,
+    borderWidth: 1,
+    maxWidth: 130,
+    ...Platform.select({
+      ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.45, shadowRadius: 6 },
+      android: { elevation: 7 },
+    }),
+  },
+  pillLeft: {
+    borderTopRightRadius: 10, borderBottomRightRadius: 10,
+    borderLeftWidth: 0,
+  },
+  pillRight: {
+    borderTopLeftRadius: 10, borderBottomLeftRadius: 10,
+    borderRightWidth: 0,
+  },
+  pillContent: { flex: 1 },
+  pillName: { fontSize: 9, fontWeight: '700' },
+  pillDist: { color: C.dimText, fontSize: 8, fontWeight: '600', marginTop: 1 },
 })
 
 /* ─── POI Detail Modal ─── */
@@ -561,6 +814,7 @@ export default function ARScreen({ navigation }) {
   const [mode, setMode] = useState('all')
   const [maxDistanceKm, setMaxDistanceKm] = useState(fromExplore ? 50 : 10)
   const [showSlider, setShowSlider] = useState(false)
+  const [pineconeRecs, setPineconeRecs] = useState([])
   const headingSub = useRef(null)
 
   const [doorVisible, setDoorVisible] = useState(fromExplore)
@@ -572,13 +826,16 @@ export default function ARScreen({ navigation }) {
   const doorOpenedRef = useRef(false)
 
   const modePois = useMemo(() => {
-    if (mode === 'all') return pois
-    if (mode === 'places') return pois.filter((p) => p._type === 'place' || p._type === 'landmark' || p._isLandmark)
+    const merged = mode === 'all' || mode === 'places'
+      ? [...pois, ...pineconeRecs]
+      : pois
+    if (mode === 'all') return merged
+    if (mode === 'places') return merged.filter((p) => p._type === 'place' || p._type === 'landmark' || p._isLandmark)
     if (mode === 'restaurants') return pois.filter((p) => p._type === 'restaurant')
     if (mode === 'events') return pois.filter((p) => p._type === 'event')
     if (mode === 'saved') return pois.filter((p) => { const id = p.client_a_uuid || p.id || `${p.name}-${p.lat}-${p.lng}`; return savedIds.has(id) })
     return pois
-  }, [pois, mode, savedIds])
+  }, [pois, pineconeRecs, mode, savedIds])
 
   let basePois = modePois
   if (navigateToDest && location) {
@@ -610,9 +867,10 @@ export default function ARScreen({ navigation }) {
 
   const loadNearby = useCallback(async (lat, lng) => {
     try {
-      const [clientData, eventData] = await Promise.all([
+      const [clientData, eventData, pineconeData] = await Promise.all([
         fetchNearbyPOIs(lat, lng, 'all', { allPlaces: true }),
         fetchEvents([]).catch(() => []),
+        fetchPineconeARRecommended(lat, lng, 50).catch(() => []),
       ])
       const eventPois = eventData
         .map((ev) => {
@@ -633,6 +891,14 @@ export default function ARScreen({ navigation }) {
         .filter(Boolean)
       const seen = new Set(clientData.map((p) => `${p.name}-${p.lat?.toFixed(4)}`))
       const uniqueEvents = eventPois.filter((e) => { const key = `${e.name}-${e.lat?.toFixed(4)}`; if (seen.has(key)) return false; seen.add(key); return true })
+      // Merge Pinecone recs — deduplicate against Supabase data
+      const uniquePinecone = pineconeData.filter((p) => {
+        const key = `${p.name}-${p.lat?.toFixed(4)}`
+        if (seen.has(key)) return false
+        seen.add(key)
+        return true
+      })
+      setPineconeRecs(uniquePinecone)
       setPois([...clientData, ...uniqueEvents].sort((a, b) => a.distanceKm - b.distanceKm))
     } catch (e) {
       console.warn('[AR] fetchNearbyPOIs failed:', e?.message)
@@ -794,6 +1060,11 @@ export default function ARScreen({ navigation }) {
     : mode === 'places' ? 'No places in this direction'
     : 'Point your camera around'
 
+  // Pokemon Go arrow target: navigateTo destination takes priority, else nearest out-of-view POI
+  const arrowTarget = navigateToDest
+    ? { ...navigateToDest, _type: 'place' }
+    : nearestOutOfView || null
+
   return (
     <View style={s.container}>
       <CameraView style={StyleSheet.absoluteFill} facing="back" />
@@ -812,6 +1083,27 @@ export default function ARScreen({ navigation }) {
               />
             )
           })}
+
+          {!navigateToDest && (
+            <EdgePOIIndicators
+              outOfViewPois={basePois.filter((p) => p.distanceKm <= maxDistanceKm && !inViewIds.has(p.name + p.lat)).slice(0, 6)}
+              heading={heading}
+              width={width}
+              height={height}
+              onPress={handleOpenPOI}
+            />
+          )}
+
+          {location && arrowTarget && (
+            <PathArrowIndicator
+              target={arrowTarget}
+              heading={heading}
+              userLat={location.latitude}
+              userLng={location.longitude}
+              isNavigation={!!navigateToDest}
+              style={{ bottom: insets.bottom + 108 }}
+            />
+          )}
 
           <RadarNavigator
             heading={heading}

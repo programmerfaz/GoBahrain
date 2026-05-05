@@ -55,7 +55,15 @@ import {
   generateDayPlan,
   fetchClientsWithLocation,
   enhancePlanStopAtIndex,
+  fetchPlanSearchPineconeBuckets,
+  normalizeViewerUType,
 } from '../../services/aiPipeline'
+import {
+  blobFromRestaurantClientRow,
+  blobFromPlaceRow,
+  blobFromEventRow,
+  mergeGroupedSearchResults,
+} from './planCatalogSearchHelpers'
 import { useUserPreferences } from '../../context/UserPreferencesContext'
 import { colors as themeColors } from '../../theme/designTokens'
 import styles from '../AIPlanScreen.styles'
@@ -136,7 +144,8 @@ export function useAIPlanScreenInner() {
   const route = useRoute();
   const navigation = useNavigation();
   const { preferences, generalLabels, activityLabels, foodLabels: savedProfileFoodLabels } = useUserPreferences();
-  const { user } = useAuth();
+  const { user, profile } = useAuth();
+  const viewerUType = useMemo(() => normalizeViewerUType(profile?.user?.u_type), [profile?.user?.u_type])
 
   const mapRef = useRef(null);
   /** Latest GPS fix for map fitting and native user dot (`showsUserLocation`) */
@@ -374,56 +383,6 @@ export function useAIPlanScreenInner() {
     setShowcaseMorphAnchor(null);
   }, [clearMarkerShowcaseTimers]);
 
-  const exitMarkerShowcase = useCallback(() => {
-    clearMarkerShowcaseTimers();
-    /** Prefer the pin’s coordinates over `mapRegion` center when resetting the camera */
-    const pinLat = showcaseMarkerMk != null ? Number(showcaseMarkerMk.lat) : NaN;
-    const pinLng = showcaseMarkerMk != null ? Number(showcaseMarkerMk.lng) : NaN;
-    const hasPin = Number.isFinite(pinLat) && Number.isFinite(pinLng);
-    setIsMarkerShowcaseActive(false);
-    setShowcaseMarkerMk(null);
-    setShowcaseMorphAnchor(null);
-    const map = mapRef.current;
-    if (!map) return;
-    const r = mapRegion;
-    const centerLat = hasPin ? pinLat : r.latitude;
-    const centerLng = hasPin ? pinLng : r.longitude;
-    markProgrammaticMapMove(900);
-    if (typeof map.animateCamera === 'function') {
-      map.animateCamera(
-        Platform.OS === 'ios'
-          ? {
-              center: { latitude: centerLat, longitude: centerLng },
-              pitch: 0,
-              heading: 0,
-              altitude: 2200,
-            }
-          : {
-              center: { latitude: centerLat, longitude: centerLng },
-              pitch: 0,
-              heading: 0,
-              zoom: 12.5,
-            },
-        { duration: 650 },
-      );
-    } else {
-      map.animateToRegion(
-        clampRegionToBahrain({
-          latitude: centerLat,
-          longitude: centerLng,
-          latitudeDelta: r.latitudeDelta ?? 0.06,
-          longitudeDelta: r.longitudeDelta ?? 0.06,
-        }),
-        650,
-      );
-    }
-  }, [mapRegion, showcaseMarkerMk, markProgrammaticMapMove, clearMarkerShowcaseTimers]);
-
-  const handleMapPress = useCallback(() => {
-    if (!isMarkerShowcaseActive) return;
-    exitMarkerShowcase();
-  }, [isMarkerShowcaseActive, exitMarkerShowcase]);
-
   /** Single top-down pan to the pin — no pitch/heading orbit */
   const centerMapOnPlaceMarker = useCallback(
     (mk) => {
@@ -539,9 +498,11 @@ export function useAIPlanScreenInner() {
   const sheetAnim = useRef(new Animated.Value(SNAP_POINTS[INITIAL_SNAP_INDEX])).current;
   const lastSnap = useRef(SNAP_POINTS[INITIAL_SNAP_INDEX]);
   const currentYRef = useRef(SNAP_POINTS[INITIAL_SNAP_INDEX]);
+  /** 0 = sheet fully expanded (top snap); 2 = peek */
+  const [planSheetSnapIndex, setPlanSheetSnapIndex] = useState(INITIAL_SNAP_INDEX);
   const prefetchRef = useRef({
     prefsKey: null,
-    personaKey: null,
+    warmupKey: null,
     places: null,
     breakfastSpots: null,
     events: null,
@@ -579,6 +540,21 @@ export function useAIPlanScreenInner() {
   const [customPlanDraftActive, setCustomPlanDraftActive] = useState(false);
   /** Quick find: map-first single spot — no itinerary list, different loading copy */
   const [quickFindMapOnly, setQuickFindMapOnly] = useState(false);
+  /** Last successful quick find — enables “Search again” for same vibe */
+  const [quickFindLastKind, setQuickFindLastKind] = useState(null);
+  const [quickFindLastLabel, setQuickFindLastLabel] = useState('');
+  /** Fingerprints accumulated so repeat searches skip prior pins */
+  const [quickFindExcludedFingerprints, setQuickFindExcludedFingerprints] = useState([]);
+  /** Last shown result’s ids — merged into excluded on “Search again” */
+  const [quickFindLastChosenFingerprints, setQuickFindLastChosenFingerprints] = useState([]);
+
+  /** Call when exiting quick find for real (back dismiss, AI plan, custom plan…). Never on map taps that only close orbit showcase. */
+  const resetQuickFindRotationState = useCallback(() => {
+    setQuickFindLastKind(null);
+    setQuickFindLastLabel('');
+    setQuickFindExcludedFingerprints([]);
+    setQuickFindLastChosenFingerprints([]);
+  }, []);
   /** Opened from bottom bar Plan FAB — three build modes (+ quick find drill-down) */
   const [showBuildModePickerModal, setShowBuildModePickerModal] = useState(false);
   /** 'nearby' | 'balanced' | 'wide' — first plan modal step */
@@ -606,10 +582,12 @@ export function useAIPlanScreenInner() {
   }, [drawerStep])
 
   const handlePlaceMarkerPress = useCallback(
-    (mk) => {
+    (mk, orbitOptions = {}) => {
       clearMarkerShowcase();
       setShowcaseMarkerMk(mk);
-      const blockOrbit = loading || planGenerationSuccess || revealingPins;
+      const skipLoadGuard = orbitOptions?.skipLoadGuard === true;
+      const blockOrbit =
+        !skipLoadGuard && (loading || planGenerationSuccess || revealingPins);
       if (blockOrbit) {
         centerMapOnPlaceMarker(mk);
         return;
@@ -653,9 +631,102 @@ export function useAIPlanScreenInner() {
   const [searchModalClients, setSearchModalClients] = useState({ restaurants: [], places: [], events: [] });
   const [searchModalLoading, setSearchModalLoading] = useState(false);
   const [searchModalQuery, setSearchModalQuery] = useState('');
+  const [searchModalSemanticBuckets, setSearchModalSemanticBuckets] = useState({
+    places: [],
+    restaurants: [],
+    events: [],
+  })
+  const [searchModalSemanticSearching, setSearchModalSemanticSearching] = useState(false)
+  const [searchModalCatalogFilter, setSearchModalCatalogFilter] = useState('all')
+  const searchSemanticRequestRef = useRef(0)
+
+  const searchModalDisplayClients = useMemo(
+    () =>
+      mergeGroupedSearchResults({
+        groupedClients: searchModalClients,
+        queryTrimmed: (searchModalQuery || '').trim(),
+        semanticBuckets: searchModalSemanticBuckets,
+        useSemanticMerge:
+          (searchModalQuery || '').trim().length >= 2 && !searchModalSemanticSearching,
+      }),
+    [
+      searchModalClients,
+      searchModalQuery,
+      searchModalSemanticBuckets,
+      searchModalSemanticSearching,
+    ],
+  )
   const [enhancingIndex, setEnhancingIndex] = useState(null);
   const [visibleStopCount, setVisibleStopCount] = useState(0);
   const stopRevealTimers = useRef([]);
+
+  const exitMarkerShowcase = useCallback(() => {
+    clearMarkerShowcaseTimers();
+    /** Prefer the pin’s coordinates over `mapRegion` center when resetting the camera */
+    const pinLat = showcaseMarkerMk != null ? Number(showcaseMarkerMk.lat) : NaN;
+    const pinLng = showcaseMarkerMk != null ? Number(showcaseMarkerMk.lng) : NaN;
+    const hasPin = Number.isFinite(pinLat) && Number.isFinite(pinLng);
+    /** Quick search pins the itinerary to one row — exiting orbit must clear it or only that pin stays rendered */
+    if (quickFindMapOnly) {
+      setDayPlan(null);
+      setQuickFindMapOnly(false);
+      setStopDetailIndex(null);
+      setPineconeMatches([]);
+      setVisibleStopCount(0);
+      setRevealingPins(false);
+      setVisiblePinCount(0);
+      setDrawerStep(0);
+      setError(null);
+    }
+    setIsMarkerShowcaseActive(false);
+    setShowcaseMarkerMk(null);
+    setShowcaseMorphAnchor(null);
+    const map = mapRef.current;
+    if (!map) return;
+    const r = mapRegion;
+    const centerLat = hasPin ? pinLat : r.latitude;
+    const centerLng = hasPin ? pinLng : r.longitude;
+    markProgrammaticMapMove(900);
+    if (typeof map.animateCamera === 'function') {
+      map.animateCamera(
+        Platform.OS === 'ios'
+          ? {
+              center: { latitude: centerLat, longitude: centerLng },
+              pitch: 0,
+              heading: 0,
+              altitude: 2200,
+            }
+          : {
+              center: { latitude: centerLat, longitude: centerLng },
+              pitch: 0,
+              heading: 0,
+              zoom: 12.5,
+            },
+        { duration: 650 },
+      );
+    } else {
+      map.animateToRegion(
+        clampRegionToBahrain({
+          latitude: centerLat,
+          longitude: centerLng,
+          latitudeDelta: r.latitudeDelta ?? 0.06,
+          longitudeDelta: r.longitudeDelta ?? 0.06,
+        }),
+        650,
+      );
+    }
+  }, [
+    quickFindMapOnly,
+    mapRegion,
+    showcaseMarkerMk,
+    markProgrammaticMapMove,
+    clearMarkerShowcaseTimers,
+  ]);
+
+  const handleMapPress = useCallback(() => {
+    if (!isMarkerShowcaseActive) return;
+    exitMarkerShowcase();
+  }, [isMarkerShowcaseActive, exitMarkerShowcase]);
 
   useEffect(() => {
     if (!focusedMapClientId) return
@@ -937,46 +1008,243 @@ export function useAIPlanScreenInner() {
   const planModalOpacity = useRef(new Animated.Value(0)).current;
   const sheetOpacity = useRef(new Animated.Value(1)).current;
 
-  // Fetch all clients when search modal opens — grouped by restaurants, places, events
+  // Fetch all clients when search modal opens — grouped + joined restaurant_client / place / events for search blobs
   useEffect(() => {
-    if (!showSearchModal) return;
-    let cancelled = false;
-    setSearchModalLoading(true);
-    (async () => {
+    if (!showSearchModal) return
+    let cancelled = false
+    setSearchModalLoading(true)
+
+    const chunkUuidList = (list, chunkSize = 80) => {
+      const uniq = [...new Set((list || []).map((x) => String(x ?? '').trim()).filter(Boolean))]
+      const chunks = []
+      for (let i = 0; i < uniq.length; i += chunkSize) chunks.push(uniq.slice(i, i + chunkSize))
+      return chunks
+    }
+
+    const appendSearchBlob = (map, rawKey, blob) => {
+      const chunk = typeof blob === 'string' ? blob.trim() : ''
+      if (!chunk) return
+      const key = String(rawKey ?? '').trim()
+      if (!key) return
+      const cur = map[key]
+      map[key] = cur ? `${cur} ${chunk}` : chunk
+    }
+
+    void (async () => {
       try {
-        const { data: rows, error } = await supabase.from('client').select('*');
-        if (cancelled) return;
+        const { data: rows, error } = await supabase.from('client').select('*')
+        if (cancelled) return
         if (error || !Array.isArray(rows) || rows.length === 0) {
-          setSearchModalClients({ restaurants: [], places: [], events: [] });
-          return;
+          setSearchModalClients({ restaurants: [], places: [], events: [] })
+          return
         }
-        const restaurants = [];
-        const places = [];
-        const events = [];
+        const restaurants = []
+        const places = []
+        const eventsList = []
         rows.forEach((c) => {
-          const ct = ((c.client_type || '').toLowerCase());
+          const ct = String(c.client_type || '').toLowerCase()
           const item = {
             ...c,
             clientId: c.client_a_uuid,
             name: (c.business_name || c.name || c.business_name_ar || 'Spot').trim(),
-          };
-          if (ct === 'restaurant') restaurants.push(item);
-          else if (ct === 'event') events.push(item);
-          else places.push(item);
-        });
-        if (!cancelled) setSearchModalClients({ restaurants, places, events });
+          }
+          if (ct === 'restaurant') restaurants.push(item)
+          else if (ct === 'event') eventsList.push(item)
+          else places.push(item)
+        })
+
+        const restaurantIds = restaurants.map((r) => r.client_a_uuid || r.clientId).filter(Boolean)
+        const placeIds = places.map((p) => p.client_a_uuid || p.clientId).filter(Boolean)
+        const eventClientIds = eventsList.map((e) => e.client_a_uuid || e.clientId).filter(Boolean)
+        const eventRowUuids = eventsList.map((e) => e.event_uuid).filter(Boolean)
+
+        const rcByUuid = {}
+        try {
+          for (const chunk of chunkUuidList(restaurantIds)) {
+            if (cancelled) return
+            const { data: rcRows, error: rcErr } = await supabase
+              .from('restaurant_client')
+              .select('a_uuid, cuisine, meal_type, food_type, speciality, isfoodtruck, branch')
+              .in('a_uuid', chunk)
+            if (rcErr) {
+              console.warn('[AIPlan] restaurant_client search join:', rcErr.message)
+              break
+            }
+            for (const row of rcRows || []) {
+              const id = row?.a_uuid != null ? String(row.a_uuid) : null
+              if (id) rcByUuid[id] = row
+            }
+          }
+        } catch (e) {
+          console.warn('[AIPlan] restaurant_client join failed:', e?.message)
+        }
+
+        const placeBlobByClient = {}
+        try {
+          for (const chunk of chunkUuidList(placeIds)) {
+            if (cancelled) return
+            const { data: placeRows, error: pErr } = await supabase
+              .from('place')
+              .select(
+                'client_uuid, name, description, suitable_for, category, indoor_outdoor, entry_cost, opening_time, closing_time',
+              )
+              .in('client_uuid', chunk)
+            if (pErr) {
+              console.warn('[AIPlan] place search join:', pErr.message)
+              break
+            }
+            for (const row of placeRows || []) {
+              const cid = row?.client_uuid != null ? String(row.client_uuid) : ''
+              if (!cid) continue
+              appendSearchBlob(placeBlobByClient, cid, blobFromPlaceRow(row))
+            }
+          }
+        } catch (e) {
+          console.warn('[AIPlan] place join failed:', e?.message)
+        }
+
+        const eventsBlobByClient = {}
+        const eventsBlobByEventUuid = {}
+        try {
+          for (const chunk of chunkUuidList(eventClientIds)) {
+            if (cancelled) return
+            const { data: evRows, error: evErr } = await supabase
+              .from('events')
+              .select(
+                'event_uuid, client_a_uuid, event_name, venue, event_type, indoor_outdoor, status, start_date, end_date, start_time, end_time',
+              )
+              .in('client_a_uuid', chunk)
+            if (evErr) {
+              console.warn('[AIPlan] events search join (client_a_uuid):', evErr.message)
+              break
+            }
+            for (const row of evRows || []) {
+              const b = blobFromEventRow(row)
+              const cid = row?.client_a_uuid != null ? String(row.client_a_uuid) : ''
+              if (cid) appendSearchBlob(eventsBlobByClient, cid, b)
+              const eid = row?.event_uuid != null ? String(row.event_uuid) : ''
+              if (eid) appendSearchBlob(eventsBlobByEventUuid, eid, b)
+            }
+          }
+          for (const chunk of chunkUuidList(eventRowUuids)) {
+            if (cancelled) return
+            const { data: evRows2, error: ev2Err } = await supabase
+              .from('events')
+              .select(
+                'event_uuid, client_a_uuid, event_name, venue, event_type, indoor_outdoor, status, start_date, end_date, start_time, end_time',
+              )
+              .in('event_uuid', chunk)
+            if (ev2Err) {
+              console.warn('[AIPlan] events search join (event_uuid):', ev2Err.message)
+              break
+            }
+            for (const row of evRows2 || []) {
+              const b = blobFromEventRow(row)
+              const cid = row?.client_a_uuid != null ? String(row.client_a_uuid) : ''
+              if (cid) appendSearchBlob(eventsBlobByClient, cid, b)
+              const eid = row?.event_uuid != null ? String(row.event_uuid) : ''
+              if (eid) appendSearchBlob(eventsBlobByEventUuid, eid, b)
+            }
+          }
+        } catch (e) {
+          console.warn('[AIPlan] events join failed:', e?.message)
+        }
+
+        const eventSearchBlobForItem = (item) => {
+          const cid = String(item.client_a_uuid || item.clientId || '').trim()
+          const blobs = []
+          if (cid && eventsBlobByClient[cid]) blobs.push(eventsBlobByClient[cid])
+          const eu = item.event_uuid != null ? String(item.event_uuid) : ''
+          if (eu && eventsBlobByEventUuid[eu]) blobs.push(eventsBlobByEventUuid[eu])
+          return blobs.filter(Boolean).join(' ')
+        }
+
+        const enrichedRestaurants = restaurants.map((item) => {
+          const cid = String(item.client_a_uuid || item.clientId || '')
+          const rc = cid ? rcByUuid[cid] : null
+          return {
+            ...item,
+            _planSearchRestaurantBlob: rc ? blobFromRestaurantClientRow(rc) : '',
+            _planSearchPlaceBlob: '',
+            _planSearchEventsBlob: '',
+          }
+        })
+
+        const enrichedPlaces = places.map((item) => {
+          const cid = String(item.client_a_uuid || item.clientId || '')
+          return {
+            ...item,
+            _planSearchRestaurantBlob: '',
+            _planSearchPlaceBlob: cid ? placeBlobByClient[cid] || '' : '',
+            _planSearchEventsBlob: '',
+          }
+        })
+
+        const enrichedEvents = eventsList.map((item) => ({
+          ...item,
+          _planSearchRestaurantBlob: '',
+          _planSearchPlaceBlob: '',
+          _planSearchEventsBlob: eventSearchBlobForItem(item),
+        }))
+
+        if (!cancelled) {
+          setSearchModalClients({
+            restaurants: enrichedRestaurants,
+            places: enrichedPlaces,
+            events: enrichedEvents,
+          })
+        }
       } catch (e) {
-        if (!cancelled) setSearchModalClients({ restaurants: [], places: [], events: [] });
+        if (!cancelled) setSearchModalClients({ restaurants: [], places: [], events: [] })
       } finally {
-        if (!cancelled) setSearchModalLoading(false);
+        if (!cancelled) setSearchModalLoading(false)
       }
-    })();
-    return () => { cancelled = true; };
-  }, [showSearchModal]);
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [showSearchModal])
 
   useEffect(() => {
-    if (!showSearchModal) setSearchModalQuery('');
-  }, [showSearchModal]);
+    if (!showSearchModal) {
+      setSearchModalQuery('')
+      setSearchModalSemanticBuckets({ places: [], restaurants: [], events: [] })
+      setSearchModalSemanticSearching(false)
+      setSearchModalCatalogFilter('all')
+      searchSemanticRequestRef.current += 1
+    }
+  }, [showSearchModal])
+
+  useEffect(() => {
+    if (!showSearchModal || searchModalLoading) return
+    const q = (searchModalQuery || '').trim()
+    if (q.length < 2) {
+      searchSemanticRequestRef.current += 1
+      setSearchModalSemanticBuckets({ places: [], restaurants: [], events: [] })
+      setSearchModalSemanticSearching(false)
+      return
+    }
+    setSearchModalSemanticSearching(true)
+    const seq = ++searchSemanticRequestRef.current
+    const timer = setTimeout(() => {
+      void (async () => {
+        try {
+          const result = await fetchPlanSearchPineconeBuckets(q)
+          if (seq !== searchSemanticRequestRef.current) return
+          setSearchModalSemanticBuckets({
+            places: result.places || [],
+            restaurants: result.restaurants || [],
+            events: result.events || [],
+          })
+        } finally {
+          if (seq === searchSemanticRequestRef.current) {
+            setSearchModalSemanticSearching(false)
+          }
+        }
+      })()
+    }, 420)
+    return () => clearTimeout(timer)
+  }, [showSearchModal, searchModalLoading, searchModalQuery])
 
   // Fetch all clients with coordinates for pre-plan map markers
   useEffect(() => {
@@ -1148,5 +1416,5 @@ export function useAIPlanScreenInner() {
     }
   }, [])
 
-  return { colors, isDark, preferences, generalLabels, activityLabels, savedProfileFoodLabels, user, insets, route, navigation, mapRegion, setMapRegion, isMarkerShowcaseActive, setIsMarkerShowcaseActive, showcaseMarkerMk, setShowcaseMarkerMk, showcaseMorphAnchor, setShowcaseMorphAnchor, showcaseOrbitPostUris, activePlanMapClientFilter, setActivePlanMapClientFilter, focusedMapClientId, setFocusedMapClientId, markerMatchesFocusedClient, handleFocusClientFromSearch, drawerStep, setDrawerStep, buildDayCtaAttentionKey, selectedPreferences, setSelectedPreferences, selectedFoodCategories, setSelectedFoodCategories, customPreferenceInput, setCustomPreferenceInput, customFoodInput, setCustomFoodInput, loading, setLoading, loadingStatus, setLoadingStatus, error, setError, dayPlan, setDayPlan, pineconeMatches, setPineconeMatches, visiblePinCount, setVisiblePinCount, revealingPins, setRevealingPins, surpriseSpinning, setSurpriseSpinning, surpriseIndex, setSurpriseIndex, surprisePicked, setSurprisePicked, showPlanModal, setShowPlanModal, planModalStep, setPlanModalStep, buildDayModalPhase, setBuildDayModalPhase, quickFindKind, setQuickFindKind, customPlanDraftActive, setCustomPlanDraftActive, quickFindMapOnly, setQuickFindMapOnly, showBuildModePickerModal, setShowBuildModePickerModal, travelExploreId, setTravelExploreId, doorVisible, setDoorVisible, planGenerationSuccess, setPlanGenerationSuccess, spotPreviews, setSpotPreviews, profileClientId, setProfileClientId, stopDetailIndex, setStopDetailIndex, openingMaps, setOpeningMaps, shareCopyHint, setShareCopyHint, allPlaceMarkers, setAllPlaceMarkers, allPlaceMarkersLoading, showSearchModal, setShowSearchModal, addingPlanStop, setAddingPlanStop, searchModalClients, setSearchModalClients, searchModalLoading, setSearchModalLoading, searchModalQuery, setSearchModalQuery, enhancingIndex, setEnhancingIndex, visibleStopCount, setVisibleStopCount, savedPlansList, setSavedPlansList, savedPlansLoading, setSavedPlansLoading, activeSavedPlanId, setActiveSavedPlanId, sharedCollaboration, setSharedCollaboration, joinCodeInput, setJoinCodeInput, joinCodeBusy, setJoinCodeBusy, showSharePlanModal, setShowSharePlanModal, sharePermissionDraft, setSharePermissionDraft, shareModalBusy, setShareModalBusy, shareModalCode, setShareModalCode, savePlanBusy, setSavePlanBusy, showEditSavedPlanTitleModal, setShowEditSavedPlanTitleModal, editSavedPlanTitleId, setEditSavedPlanTitleId, editSavedPlanTitleDraft, setEditSavedPlanTitleDraft, editSavedPlanTitleBusy, setEditSavedPlanTitleBusy, mapRef, userLocation, userLocationRef, dayPlanRef, locationWatchRef, mapProgrammaticMoveRef, mapProgrammaticMoveClearTimerRef, hasInitialUserCenterRef, markerShowcaseRef, orbitSheetExtraTranslateY, sheetAnim, lastSnap, currentYRef, prefetchRef, lastPrefLabelsRef, lastFoodLabelsRef, doorLeft, doorRight, doorIconScale, doorIconOpacity, doorFade, skipOpenAnim, shareCopyHintTimerRef, stopRevealTimers, planModalBackdrop, planModalScale, planModalOpacity, sheetOpacity, stopDetailSwipeX, stopDetailSwipeRotate, stopDetailIndexSV, stopDetailSlidesLenSV, communityPalette, stopDetailSlides, stopDetailPayload, stopDetailStackPeekNext, stopDetailPanGesture, handlePlanMapClientFilterPress, markProgrammaticMapMove, clearMarkerShowcaseTimers, clearMarkerShowcase, exitMarkerShowcase, handleMapPress, centerMapOnPlaceMarker, runMarkerShowcaseOrbitForMarker, handlePlaceMarkerPress, clearStopRevealTimers, scheduleStaggeredStopReveal, handleOpenInGoogleMaps, closeStopDetailDialog, goToStopDetailIndex, handleStopDetailSwipeNext, handleStopDetailSwipePrev, refreshSavedPlans, resolveOriginCoordsForPlanGeneration, planReadOnly, planCollaboratorEdit, STOP_REVEAL_STAGGER_MS, stopDetailCardAnimatedStyle, stopDetailPeekAnimatedStyle }
+  return { colors, isDark, preferences, generalLabels, activityLabels, savedProfileFoodLabels, user, viewerUType, insets, route, navigation, mapRegion, setMapRegion, isMarkerShowcaseActive, setIsMarkerShowcaseActive, showcaseMarkerMk, setShowcaseMarkerMk, showcaseMorphAnchor, setShowcaseMorphAnchor, showcaseOrbitPostUris, activePlanMapClientFilter, setActivePlanMapClientFilter, focusedMapClientId, setFocusedMapClientId, markerMatchesFocusedClient, handleFocusClientFromSearch, drawerStep, setDrawerStep, buildDayCtaAttentionKey, selectedPreferences, setSelectedPreferences, selectedFoodCategories, setSelectedFoodCategories, customPreferenceInput, setCustomPreferenceInput, customFoodInput, setCustomFoodInput, loading, setLoading, loadingStatus, setLoadingStatus, error, setError, dayPlan, setDayPlan, pineconeMatches, setPineconeMatches, visiblePinCount, setVisiblePinCount, revealingPins, setRevealingPins, surpriseSpinning, setSurpriseSpinning, surpriseIndex, setSurpriseIndex, surprisePicked, setSurprisePicked, showPlanModal, setShowPlanModal, planModalStep, setPlanModalStep, buildDayModalPhase, setBuildDayModalPhase, quickFindKind, setQuickFindKind, customPlanDraftActive, setCustomPlanDraftActive, quickFindMapOnly, setQuickFindMapOnly, quickFindLastKind, setQuickFindLastKind, quickFindLastLabel, setQuickFindLastLabel, quickFindExcludedFingerprints, setQuickFindExcludedFingerprints, quickFindLastChosenFingerprints, setQuickFindLastChosenFingerprints, resetQuickFindRotationState, showBuildModePickerModal, setShowBuildModePickerModal, travelExploreId, setTravelExploreId, doorVisible, setDoorVisible, planGenerationSuccess, setPlanGenerationSuccess, spotPreviews, setSpotPreviews, profileClientId, setProfileClientId, stopDetailIndex, setStopDetailIndex, openingMaps, setOpeningMaps, shareCopyHint, setShareCopyHint, allPlaceMarkers, setAllPlaceMarkers, allPlaceMarkersLoading, showSearchModal, setShowSearchModal, addingPlanStop, setAddingPlanStop, searchModalClients, setSearchModalClients, searchModalLoading, setSearchModalLoading, searchModalQuery, setSearchModalQuery, searchModalDisplayClients, searchModalSemanticSearching, searchModalCatalogFilter, setSearchModalCatalogFilter, enhancingIndex, setEnhancingIndex, visibleStopCount, setVisibleStopCount, savedPlansList, setSavedPlansList, savedPlansLoading, setSavedPlansLoading, activeSavedPlanId, setActiveSavedPlanId, sharedCollaboration, setSharedCollaboration, joinCodeInput, setJoinCodeInput, joinCodeBusy, setJoinCodeBusy, showSharePlanModal, setShowSharePlanModal, sharePermissionDraft, setSharePermissionDraft, shareModalBusy, setShareModalBusy, shareModalCode, setShareModalCode, savePlanBusy, setSavePlanBusy, showEditSavedPlanTitleModal, setShowEditSavedPlanTitleModal, editSavedPlanTitleId, setEditSavedPlanTitleId, editSavedPlanTitleDraft, setEditSavedPlanTitleDraft, editSavedPlanTitleBusy, setEditSavedPlanTitleBusy, mapRef, userLocation, userLocationRef, dayPlanRef, locationWatchRef, mapProgrammaticMoveRef, mapProgrammaticMoveClearTimerRef, hasInitialUserCenterRef, markerShowcaseRef, orbitSheetExtraTranslateY, planSheetSnapIndex, setPlanSheetSnapIndex, sheetAnim, lastSnap, currentYRef, prefetchRef, lastPrefLabelsRef, lastFoodLabelsRef, doorLeft, doorRight, doorIconScale, doorIconOpacity, doorFade, skipOpenAnim, shareCopyHintTimerRef, stopRevealTimers, planModalBackdrop, planModalScale, planModalOpacity, sheetOpacity, stopDetailSwipeX, stopDetailSwipeRotate, stopDetailIndexSV, stopDetailSlidesLenSV, communityPalette, stopDetailSlides, stopDetailPayload, stopDetailStackPeekNext, stopDetailPanGesture, handlePlanMapClientFilterPress, markProgrammaticMapMove, clearMarkerShowcaseTimers, clearMarkerShowcase, exitMarkerShowcase, handleMapPress, centerMapOnPlaceMarker, runMarkerShowcaseOrbitForMarker, handlePlaceMarkerPress, clearStopRevealTimers, scheduleStaggeredStopReveal, handleOpenInGoogleMaps, closeStopDetailDialog, goToStopDetailIndex, handleStopDetailSwipeNext, handleStopDetailSwipePrev, refreshSavedPlans, resolveOriginCoordsForPlanGeneration, planReadOnly, planCollaboratorEdit, STOP_REVEAL_STAGGER_MS, stopDetailCardAnimatedStyle, stopDetailPeekAnimatedStyle }
 }

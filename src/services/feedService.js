@@ -295,6 +295,13 @@ const withTimeout = (promise, ms, fallbackValue) =>
       })
   })
 
+/** First-batch fanout guard: avoids Home stuck in loading forever if RN/Metro cold-start networking stalls one leg of Promise.all. */
+const FIRST_FEED_PARALLEL_BATCH_MS = 24000
+const rejectAfterMs = (ms, code) =>
+  new Promise((_, reject) => {
+    setTimeout(() => reject(new Error(code)), ms)
+  })
+
 /** Warm the persona cache at app start for an instant-first-feed UX. */
 export const prefetchPersonalization = async (fallbackSummary = '') => {
   await loadUserPersonalization(fallbackSummary)
@@ -643,15 +650,18 @@ export const fetchFeedPage = async ({
       foodIds: [],
       profileAnswers: {},
     }
-    const [voterId, persona, recentTags, firstPostsRes] = await Promise.all([
-      getVoterId(),
-      withTimeout(
-        loadUserPersonalization(userPersonaSummary),
-        PERSONA_FETCH_TIMEOUT_MS,
-        fallbackPersona
-      ),
-      loadRecentTags(),
-      runPostsQuery(),
+    const [voterId, persona, recentTags, firstPostsRes] = await Promise.race([
+      Promise.all([
+        getVoterId(),
+        withTimeout(
+          loadUserPersonalization(userPersonaSummary),
+          PERSONA_FETCH_TIMEOUT_MS,
+          fallbackPersona
+        ),
+        loadRecentTags(),
+        runPostsQuery(),
+      ]),
+      rejectAfterMs(FIRST_FEED_PARALLEL_BATCH_MS, 'feed_first_batch_timeout'),
     ])
 
     if (firstPostsRes.error) throw firstPostsRes.error

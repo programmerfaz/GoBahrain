@@ -55,6 +55,7 @@ import {
   fetchClientsWithLocation,
   enhancePlanStopAtIndex,
   retrievalPersonaCacheKey,
+  normalizeViewerUType,
 } from '../services/aiPipeline';
 import { useUserPreferences } from '../context/UserPreferencesContext';
 import { colors as themeColors } from '../theme/designTokens';
@@ -81,6 +82,7 @@ import { ensureImageUrl, parseStorageImageUrl, resolvePublicImageUrl } from '../
 import { gsap } from 'gsap';
 import { useGSAP } from '@gsap/react';
 import { getLuxuryCategoryStyle } from './aiPlan/planRowModel';
+import { PopIn, AnimatedOptionChip } from './aiPlan/uiAnimChips';
 
 gsap.registerPlugin(useGSAP);
 
@@ -431,32 +433,6 @@ function AiStagger({ children, delay = 0, style, entering }) {
   )
 }
 
-function PopIn({ delay = 0, trigger, children, style }) {
-  const scale = useRef(new Animated.Value(0.7)).current
-  const opacity = useRef(new Animated.Value(0)).current
-  const ty = useRef(new Animated.Value(14)).current
-
-  useEffect(() => {
-    scale.setValue(0.7)
-    opacity.setValue(0)
-    ty.setValue(14)
-    const timer = setTimeout(() => {
-      Animated.parallel([
-        Animated.spring(scale, { toValue: 1, tension: 170, friction: 8, useNativeDriver: true }),
-        Animated.timing(opacity, { toValue: 1, duration: 220, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
-        Animated.spring(ty, { toValue: 0, tension: 170, friction: 10, useNativeDriver: true }),
-      ]).start()
-    }, delay)
-    return () => clearTimeout(timer)
-  }, [trigger])
-
-  return (
-    <Animated.View style={[style, { transform: [{ scale }, { translateY: ty }], opacity }]}>
-      {children}
-    </Animated.View>
-  )
-}
-
 function PlanStepBubble({ step, children }) {
   return (
     <View style={styles.planModalPresenceLayer} key={step}>
@@ -464,82 +440,6 @@ function PlanStepBubble({ step, children }) {
     </View>
   )
 }
-
-const hexToRgba = (hex, alpha) => {
-  const raw = String(hex || '').replace('#', '')
-  const full = raw.length === 3 ? raw.split('').map((c) => c + c).join('') : raw
-  const n = parseInt(full, 16)
-  if (Number.isNaN(n) || full.length < 6) return `rgba(255,255,255,${alpha})`
-  const r = (n >> 16) & 255
-  const g = (n >> 8) & 255
-  const b = n & 255
-  return `rgba(${r},${g},${b},${alpha})`
-}
-
-function AnimatedOptionChip({ item, isSelected, onPress }) {
-  const scaleAnim = useRef(new Animated.Value(1)).current
-
-  useEffect(() => {
-    if (isSelected) {
-      Animated.spring(scaleAnim, { toValue: 1.02, tension: 260, friction: 11, useNativeDriver: true }).start()
-    } else {
-      Animated.spring(scaleAnim, { toValue: 1, tension: 230, friction: 13, useNativeDriver: true }).start()
-    }
-  }, [isSelected, scaleAnim])
-
-  return (
-    <Animated.View style={styles.pmChipWrap}>
-      <Animated.View style={{ transform: [{ scale: scaleAnim }] }}>
-      <TouchableOpacity
-        style={[
-          styles.pmChip,
-          isSelected && styles.pmChipSelected,
-          isSelected && {
-            backgroundColor: item.color,
-            borderColor: 'rgba(255,255,255,0.88)',
-            shadowColor: item.color,
-          },
-        ]}
-        activeOpacity={0.75}
-        onPress={onPress}
-        accessibilityRole="button"
-        accessibilityState={{ selected: isSelected }}
-        accessibilityLabel={item.label}
-      >
-        {isSelected && (
-          <LinearGradient
-            colors={['rgba(255,255,255,0.35)', 'rgba(255,255,255,0.06)']}
-            start={{ x: 0, y: 0 }}
-            end={{ x: 1, y: 1 }}
-            style={[StyleSheet.absoluteFill, { borderRadius: 26 }]}
-            pointerEvents="none"
-          />
-        )}
-        <View
-          style={[
-            styles.pmChipIcon,
-            isSelected && { backgroundColor: 'rgba(255,255,255,0.28)' },
-            !isSelected && { backgroundColor: hexToRgba(item.color, 0.16) },
-          ]}
-        >
-          <Ionicons name={item.icon} size={17} color={isSelected ? '#FFFFFF' : item.color} />
-        </View>
-        <Text style={[styles.pmChipText, isSelected && styles.pmChipTextSelected]}>
-          {item.label}
-        </Text>
-        <View style={styles.pmChipCheckSlot}>
-          {isSelected ? (
-            <View style={styles.pmChipCheck}>
-            <Ionicons name="checkmark" size={12} color="#FFFFFF" />
-            </View>
-          ) : null}
-        </View>
-      </TouchableOpacity>
-      </Animated.View>
-    </Animated.View>
-  )
-}
-
 
 /** Bottom inset for plan sheet / marker sheet — matches floating BottomControlBar (lifted FAB + dock) + safe area */
 const PLAN_TAB_BAR_ROW_HEIGHT = 100
@@ -3611,7 +3511,8 @@ export default function AIPlanScreen() {
   const route = useRoute();
   const navigation = useNavigation();
   const { preferences, generalLabels, activityLabels, foodLabels: savedProfileFoodLabels } = useUserPreferences();
-  const { user } = useAuth();
+  const { user, profile } = useAuth();
+  const viewerUType = useMemo(() => normalizeViewerUType(profile?.user?.u_type), [profile?.user?.u_type])
 
   const mapRef = useRef(null);
   /** Latest GPS fix for map fitting and native user dot (`showsUserLocation`) */
@@ -4661,6 +4562,7 @@ export default function AIPlanScreen() {
       } else {
         const aiTitle = await generatePlanTitleFromAI(dayPlan, {
           profileNarrative: preferences?.profileSummary || '',
+          viewerUType,
         });
         const id = await createSavedPlan({ title: aiTitle, planData: payload });
         if (id) setActiveSavedPlanId(id);
@@ -4673,7 +4575,7 @@ export default function AIPlanScreen() {
     } finally {
       setSavePlanBusy(false);
     }
-  }, [dayPlan, activeSavedPlanId, refreshSavedPlans, planReadOnly, sharedCollaboration, preferences?.profileSummary]);
+  }, [dayPlan, activeSavedPlanId, refreshSavedPlans, planReadOnly, sharedCollaboration, preferences?.profileSummary, viewerUType]);
 
   const handleOpenShareModal = useCallback(async () => {
     if (!dayPlan?.length) {
@@ -4691,6 +4593,7 @@ export default function AIPlanScreen() {
         const payload = serializePlanForStorage(dayPlan);
         const aiTitle = await generatePlanTitleFromAI(dayPlan, {
           profileNarrative: preferences?.profileSummary || '',
+          viewerUType,
         });
         planId = await createSavedPlan({
           title: aiTitle,
@@ -4713,7 +4616,7 @@ export default function AIPlanScreen() {
     } finally {
       setShareModalBusy(false);
     }
-  }, [dayPlan, activeSavedPlanId, refreshSavedPlans, planReadOnly, preferences?.profileSummary]);
+  }, [dayPlan, activeSavedPlanId, refreshSavedPlans, planReadOnly, preferences?.profileSummary, viewerUType]);
 
   const handleConfirmShareSettings = useCallback(async () => {
     if (!activeSavedPlanId) return;
@@ -4978,6 +4881,7 @@ export default function AIPlanScreen() {
                 travelExplore: 'balanced',
                 originLat,
                 originLng,
+                viewerUType,
               });
               generatedPlan = plan;
               const enriched = await enrichPlanWithClientData(plan, allMatches, allPlaceMarkers);
@@ -5034,10 +4938,9 @@ export default function AIPlanScreen() {
     sheetOpacity.setValue(1)
     setActiveSavedPlanId(null)
     setSharedCollaboration(null)
-    const seededPrefs = Array.isArray(preferences?.activityIds) ? preferences.activityIds : []
-    const seededFoods = Array.isArray(preferences?.foodIds) ? preferences.foodIds : []
-    setSelectedPreferences(seededPrefs)
-    setSelectedFoodCategories(seededFoods)
+    // Plan modal picks are session-only — independent from saved profile activity/food prefs
+    setSelectedPreferences([])
+    setSelectedFoodCategories([])
     setDayPlan(null)
     setPineconeMatches([])
     setError(null)
@@ -5046,7 +4949,7 @@ export default function AIPlanScreen() {
     setTravelExploreId('balanced')
     // Kick off a speculative prefetch the moment the modal opens so the
     // catalog for the user's saved profile is warm by the time Generate fires.
-    schedulePrefetchFromSelections(seededPrefs, seededFoods)
+    schedulePrefetchFromSelections([], [])
 
     doorLeft.setValue(-SCREEN_WIDTH / 2)
     doorRight.setValue(SCREEN_WIDTH / 2)
@@ -5330,6 +5233,7 @@ export default function AIPlanScreen() {
           profileFood: savedProfileFoodLabels,
           profileNarrative: preferences?.profileSummary || '',
           profileAnswers: preferences?.profileAnswers || {},
+          viewerUType,
         },
       )
       const newKey = `rk-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`
@@ -5381,6 +5285,7 @@ export default function AIPlanScreen() {
     colors.morning,
     colors.afternoon,
     colors.evening,
+    viewerUType,
   ])
 
   const addToPlanMode = Boolean(dayPlan?.length)
@@ -5656,6 +5561,7 @@ export default function AIPlanScreen() {
         travelExplore: travelExploreId,
         originLat,
         originLng,
+        viewerUType,
       });
       generatedPlan = plan;
       const enriched = await enrichPlanWithClientData(plan, allMatches, allPlaceMarkers);
@@ -6152,15 +6058,23 @@ export default function AIPlanScreen() {
           },
         ]}
       >
-        <View
-          style={styles.sheetDragArea}
-          {...panResponder.panHandlers}
-          hitSlop={{ top: 28, bottom: 18, left: 12, right: 12 }}
-          accessibilityRole="button"
-          accessibilityLabel="Swipe up to expand the plan, or drag down to see more map"
-        >
-          <View style={styles.grabber} />
-          <Text style={styles.sheetDragHint}>Swipe up</Text>
+        <View style={styles.sheetDragArea} pointerEvents="box-none">
+          <View
+            style={[
+              styles.sheetSwipeGripPill,
+              {
+                backgroundColor: isDark ? 'rgba(30,41,59,0.92)' : 'rgba(248,250,252,0.97)',
+                borderColor: isDark ? 'rgba(71,85,105,0.55)' : 'rgba(203,213,225,0.9)',
+              },
+            ]}
+            {...panResponder.panHandlers}
+            hitSlop={{ top: 28, bottom: 18, left: 12, right: 12 }}
+            accessibilityRole="button"
+            accessibilityLabel="Swipe up to expand the plan, or drag down to see more map"
+          >
+            <View style={[styles.grabber, { backgroundColor: isDark ? '#334155' : '#CBD5E1' }]} />
+            <Text style={[styles.sheetDragHint, { color: colors.textSecondary }]}>Swipe up</Text>
+          </View>
         </View>
 
         {/* Step 0 — Past Plans (modern hero layout) */}
@@ -6521,7 +6435,7 @@ export default function AIPlanScreen() {
                 <PlanStepBubble step={planModalStep}>
                       {/* Hero question area — step 1 travel, 2 activities, 3 food */}
                       <View style={styles.pmHero}>
-                        <PopIn delay={60} trigger={planModalStep}>
+                        <PopIn key={`modal-hero-badge-${planModalStep}`} delay={60}>
                           <View style={styles.pmStepBadge}>
                             <Text style={styles.pmStepBadgeText}>
                               {`STEP ${planModalStep} OF 3`}
@@ -6534,7 +6448,7 @@ export default function AIPlanScreen() {
                           </View>
                         </PopIn>
 
-                        <PopIn delay={140} trigger={planModalStep}>
+                        <PopIn key={`modal-hero-title-${planModalStep}`} delay={140}>
                           <Text style={styles.pmTitle}>
                             {planModalStep === 1
                               ? 'How far are you willing to travel to explore?'
@@ -6543,7 +6457,7 @@ export default function AIPlanScreen() {
                                 : 'What are you craving?'}
                           </Text>
                         </PopIn>
-                        <PopIn delay={200} trigger={planModalStep}>
+                        <PopIn key={`modal-hero-sub-${planModalStep}`} delay={200}>
                           {(!((planModalStep === 1 && travelExploreId) ||
                               (planModalStep === 2 && selectedPreferences.length > 0) ||
                               (planModalStep === 3 && selectedFoodCategories.length > 0))) ? (
@@ -6584,7 +6498,7 @@ export default function AIPlanScreen() {
                                 {TRAVEL_EXPLORE_OPTIONS.map((opt, idx) => {
                                   const selected = travelExploreId === opt.id
                                   return (
-                                    <PopIn key={opt.id} delay={280 + idx * 40} trigger={planModalStep}>
+                                    <PopIn key={`${planModalStep}-travel-${opt.id}`} delay={280 + idx * 40}>
                                       <TouchableOpacity
                                         style={[styles.pmTravelCard, selected && styles.pmTravelCardSelected]}
                                         activeOpacity={0.88}
@@ -6616,7 +6530,7 @@ export default function AIPlanScreen() {
                                           <Text style={styles.pmTravelDesc}>{opt.description}</Text>
                                         </View>
                                         {selected && (
-                                          <View style={styles.pmChipCheck}>
+                                          <View style={styles.pmTravelRowCheck}>
                                             <Ionicons name="checkmark" size={12} color="#FFFFFF" />
                                           </View>
                                         )}
@@ -6628,7 +6542,7 @@ export default function AIPlanScreen() {
                             </View>
                           ) : (
                             <View style={styles.pmChipsPanel}>
-                              <View style={styles.pmChipsGrid}>
+                              <View style={styles.pmOptionGrid}>
                                 {(() => {
                                   const items = planModalStep === 2 ? PREFERENCES : FOOD_CATEGORIES
                                   const isSelectedFn = (item) =>
@@ -6640,7 +6554,7 @@ export default function AIPlanScreen() {
                                     return planModalStep === 2 ? togglePreference(item.id) : toggleFoodCategory(item.id)
                                   }
                                   return items.map((item, idx) => (
-                                    <PopIn key={`${planModalStep}-${item.id}`} delay={280 + idx * 30} trigger={planModalStep}>
+                                    <PopIn key={`${planModalStep}-chip-${item.id}`} delay={280 + idx * 30}>
                                       <AnimatedOptionChip
                                         item={item}
                                         isSelected={isSelectedFn(item)}
@@ -6654,7 +6568,7 @@ export default function AIPlanScreen() {
                           )}
                         </ScrollView>
 
-                        <PopIn delay={500} trigger={planModalStep}>
+                        <PopIn key={`modal-hero-actions-${planModalStep}`} delay={500}>
                         <View style={styles.planModalActionRow}>
                           {planModalStep === 1 ? (
                             <>

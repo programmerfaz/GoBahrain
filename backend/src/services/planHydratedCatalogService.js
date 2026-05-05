@@ -199,6 +199,10 @@ const RESTAURANT_UI_TO_PINECONE_CUISINE = {
   Chinenese: 'Chinese',
   chinenese: 'Chinese',
   Thai: 'Thai',
+  thai: 'Thai',
+  'Japanese/Korean': 'Japanese',
+  Korean: 'Japanese',
+  korean: 'Japanese',
   Turkish: 'Turkish',
   turkish: 'Turkish',
   Lebanese: 'Lebanese',
@@ -232,6 +236,9 @@ const expandAllowedRestaurantTokens = (base) => {
   const o = new Set(base)
   if (o.has('cafe')) {
     ['coffee', 'bakery', 'patisserie', 'desserts', 'brunch', 'tea'].forEach((x) => o.add(x))
+  }
+  if (o.has('japanese')) {
+    o.add('korean')
   }
   return o
 }
@@ -293,7 +300,38 @@ const clipPersona = (s) => {
   return t.length > 720 ? `${t.slice(0, 720).trim()}…` : t
 }
 
-const withPersona = (core, personaClip) => (personaClip ? `${core} Traveller context: ${personaClip}` : core)
+const structuredAnswersSnippetHydrated = (profileAnswers) => {
+  const a = profileAnswers && typeof profileAnswers === 'object' ? profileAnswers : {}
+  const push = (label, raw, parts) => {
+    const v = raw == null ? '' : String(raw).trim()
+    if (!v) return
+    parts.push(`${label}: ${v}`)
+  }
+  const parts = []
+  push('Home country', a.homeCountry, parts)
+  push('Trip days', a.tripLengthDays, parts)
+  push('Travels as', a.travelParty, parts)
+  push('Budget', a.budgetBand, parts)
+  push('Dietary & hard nos', a.dietaryHardNos, parts)
+  push('Mobility', a.mobilityNotes, parts)
+  push('Heat sensitivity', a.heatSensitivity, parts)
+  push('Trip intent notes', a.sessionIntentDay, parts)
+  if (!parts.length) return ''
+  const joined = parts.join(' · ')
+  if (joined.length <= 280) return joined
+  return `${joined.slice(0, 279).trim()}…`
+}
+
+const buildTravellerEmbedTail = (personaClip, profileAnswers) => {
+  const structured = structuredAnswersSnippetHydrated(profileAnswers)
+  const bits = []
+  if (personaClip) bits.push(personaClip)
+  if (structured) bits.push(`Profile facts — ${structured}`)
+  if (!bits.length) return ''
+  return bits.join(' · ')
+}
+
+const embedWithTravellerContext = (core, tail) => (tail ? `${core} Traveller context: ${tail}` : core)
 
 /**
  * Pinecone retrieval (4 buckets) + Supabase hydration for AI Plan catalog.
@@ -304,8 +342,12 @@ export async function buildHydratedPlanCatalog(body = {}) {
   const profileActivityLines = Array.isArray(body.profileActivity) ? body.profileActivity : []
   const foodLabels = Array.isArray(body.foodLabels) ? body.foodLabels : []
   const profileNarrative = typeof body.profileNarrative === 'string' ? body.profileNarrative.trim() : ''
+  const profileAnswers =
+    body.profileAnswers && typeof body.profileAnswers === 'object' ? body.profileAnswers : {}
 
   const personaClip = clipPersona(profileNarrative)
+  const travellerTail = buildTravellerEmbedTail(personaClip, profileAnswers)
+  const ex = (core) => embedWithTravellerContext(core, travellerTail)
 
   const placesCore =
     preferenceLabels.length > 0
@@ -321,10 +363,10 @@ export async function buildHydratedPlanCatalog(body = {}) {
       : 'Popular events and activities happening in Bahrain'
 
   const [embPlaces, embRest, embBk, embEv] = await Promise.all([
-    createEmbedding(withPersona(placesCore, personaClip)),
-    createEmbedding(withPersona(foodsCore, personaClip)),
-    createEmbedding(withPersona('Breakfast cafes and bakeries in Bahrain', personaClip)),
-    createEmbedding(withPersona(eventsCore, personaClip)),
+    createEmbedding(ex(placesCore)),
+    createEmbedding(ex(foodsCore)),
+    createEmbedding(ex('Breakfast cafes and bakeries in Bahrain')),
+    createEmbedding(ex(eventsCore)),
   ])
 
   let breakfastRaw = normMatches(

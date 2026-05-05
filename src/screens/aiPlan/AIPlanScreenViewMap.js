@@ -11,7 +11,6 @@ import {
   TouchableOpacity,
   Pressable,
   ScrollView,
-  ActivityIndicator,
   Modal,
   KeyboardAvoidingView,
   Easing,
@@ -25,10 +24,14 @@ import Reanimated, {
   FadeOutUp,
   ZoomInEasyDown,
   ZoomOutEasyDown,
+  Easing as REasing,
+  interpolate,
   useAnimatedStyle,
   useSharedValue,
+  withRepeat,
   withSequence,
   withSpring,
+  withTiming,
 } from 'react-native-reanimated'
 import { GestureDetector } from 'react-native-gesture-handler'
 import { BlurView } from 'expo-blur'
@@ -42,7 +45,7 @@ import {
   PLAN_MAP_CLIENT_TYPE_FILTERS,
   BAHRAIN_REGION,
   SCREEN_WIDTH,
-  SNAP_POINTS,
+  INITIAL_SNAP_INDEX,
   getPlanSheetBottomPadding,
   ORBIT_DONE_BELOW_FILTER_OFFSET,
   ORBIT_VIEW_DETAILS_ABOVE_DOCK,
@@ -60,8 +63,8 @@ import { PlanDrawerLoadingPanel, PlanModalLoadingView } from './planLoadingViews
 import { AnimatedPlaceMarker } from './mapMarkerViews'
 import { OrbitClientPostsStrip } from './OrbitClientPostsStrip'
 import { MapScanningOverlay, mapMarkerFilterCategoryKey, markerMatchesPlanMapClientFilter, buildMapMarkers } from './mapOverlayAndMarkersModel'
-import { ensureImageUrl, parseStorageImageUrl, resolvePublicImageUrl } from '../../utils/imageUrl'
 import { openKhalidChat } from '../../utils/khalidChatLink'
+import { openGoogleMapsDirections } from '../../utils/googleMapsDirections'
 import {
   clampRegionToBahrain,
   formatPlanShareMessage,
@@ -160,6 +163,8 @@ const distanceKmBetween = (latA, lngA, latB, lngB) => {
   return earthKm * c
 }
 
+const PROFILE_GOLD_LIGHT = '#F3D99E'
+
 const DARK_MAP_STYLE = [
   { elementType: 'geometry', stylers: [{ color: '#111827' }] },
   { elementType: 'labels.text.fill', stylers: [{ color: '#9CA3AF' }] },
@@ -195,6 +200,13 @@ export function AIPlanScreenViewMap({ screen }) {
   const surfaceColor = screen.isDark ? '#0F172A' : '#FFFFFF'
   const subtleSurfaceColor = screen.isDark ? '#1E293B' : '#F2F2F7'
   const borderColor = screen.isDark ? '#334155' : '#CBD5E1'
+  const swipeGripPillBg = screen.isDark ? 'rgba(30,41,59,0.92)' : 'rgba(248,250,252,0.97)'
+  const swipeGripPillBorder = screen.isDark ? 'rgba(71,85,105,0.55)' : 'rgba(203,213,225,0.9)'
+  const planSheetAtTopSnap = (screen.planSheetSnapIndex ?? INITIAL_SNAP_INDEX) === 0
+  const sheetDragHintLabel = planSheetAtTopSnap ? 'Swipe down' : 'Swipe up'
+  const sheetDragHintA11y = planSheetAtTopSnap
+    ? 'Swipe down to collapse the sheet and see more map'
+    : 'Swipe up to expand the plan, or drag down to see more map'
   const iconMuted = screen.isDark ? '#94A3B8' : '#64748B'
   const iconSubtle = screen.isDark ? '#CBD5E1' : '#374151'
   const overlayColor = screen.isDark ? 'rgba(2,6,23,0.62)' : 'rgba(15,23,42,0.45)'
@@ -212,11 +224,41 @@ export function AIPlanScreenViewMap({ screen }) {
   const orbitDestLat = Number(screen.showcaseMarkerMk?.lat)
   const orbitDestLng = Number(screen.showcaseMarkerMk?.lng)
   const orbitCanOpenMaps = Number.isFinite(orbitDestLat) && Number.isFinite(orbitDestLng)
-  const orbitPlaceAiSummary = React.useMemo(() => {
-    const raw = String(screen.showcaseMarkerMk?.ai_summary || '').trim()
-    if (raw) return raw
-    return 'Khalid does not have an AI summary for this place yet.'
-  }, [screen.showcaseMarkerMk])
+  const orbitShowcaseClientId =
+    screen.showcaseMarkerMk?.clientId || screen.showcaseMarkerMk?.client_a_uuid || null
+  /** Curated venue blurb only — empty when the listing has none (chat must still answer from persona + retrieval + local knowledge). */
+  const orbitPlaceAiSummary = String(screen.showcaseMarkerMk?.ai_summary || '').trim()
+  const orbitUi = React.useMemo(() => {
+    const dark = !!screen.isDark
+    const ios = Platform.OS === 'ios'
+    const hairline = dark ? 'rgba(255,255,255,0.08)' : 'rgba(15,23,42,0.08)'
+    const glassTint = dark ? 'rgba(30,41,59,0.55)' : 'rgba(255,255,255,0.72)'
+    return {
+      dark,
+      blurTint: dark ? 'dark' : 'light',
+      blurDockInt: ios ? (dark ? 72 : 48) : dark ? 48 : 38,
+      /** Orbit chrome: map shows through frost */
+      blurChromeInt: ios ? (dark ? 78 : 58) : dark ? 52 : 42,
+      chromeFrost: dark ? 'rgba(11,17,38,0.42)' : 'rgba(248,252,255,0.48)',
+      glassBorder: dark ? 'rgba(255,255,255,0.22)' : 'rgba(255,255,255,0.92)',
+      profileHairline: hairline,
+      profileGlassTint: glassTint,
+      mapsBtnText: dark ? PROFILE_GOLD_LIGHT : '#8A6A14',
+      mapsBtnBorder: 'rgba(212,175,55,0.55)',
+      closeBg: themeColors.primary,
+      closeBorder: 'rgba(255,255,255,0.28)',
+      closeIcon: '#FFFFFF',
+      dockBaseGradColors: dark
+        ? ['rgba(15,23,42,0.72)', 'rgba(15,23,42,0.86)', 'rgba(11,14,26,0.94)']
+        : ['rgba(255,255,255,0.84)', 'rgba(247,249,252,0.94)', 'rgba(241,245,249,0.97)'],
+      dockWashGradColors: dark
+        ? [themeColors.primaryDark + '33', 'transparent']
+        : [`${themeColors.primary}14`, 'transparent'],
+      dockBorderFallback: dark ? 'rgba(255,255,255,0.4)' : 'rgba(15,23,42,0.1)',
+      titleColor: dark ? '#F8FAFC' : '#0F172A',
+      sublabelColor: dark ? '#FECACA' : themeColors.primaryDark,
+    }
+  }, [screen.isDark])
   const nearbySuggestions = React.useMemo(() => {
     if (screen.dayPlan || screen.focusedMapClientId || !Array.isArray(screen.allPlaceMarkers)) return []
     const centerLat = Number(screen.userLocation?.latitude ?? screen.mapRegion?.latitude)
@@ -262,6 +304,16 @@ export function AIPlanScreenViewMap({ screen }) {
     [nearbySuggestions, nearbyVisibleCount],
   )
   const nearbySkeletonItems = React.useMemo(() => Array.from({ length: 5 }, (_, idx) => idx), [])
+  /** Quick find with one pin: collapse plan sheet chrome while orbit is active; restore when user exits orbit */
+  const quickFindOrbitCollapsesSheet =
+    screen.quickFindMapOnly &&
+    screen.dayPlan?.length === 1 &&
+    screen.isMarkerShowcaseActive
+  /** Hide map-type filter chips only during orbit for this flow (after exit orbit, chips return) */
+  const hidePlanMapFiltersForQuickFindOrbit =
+    screen.quickFindMapOnly &&
+    screen.dayPlan?.length === 1 &&
+    screen.isMarkerShowcaseActive
 
   return (
 <>
@@ -360,202 +412,265 @@ export function AIPlanScreenViewMap({ screen }) {
         })()}
       </MapView>
 
-      {screen.isMarkerShowcaseActive ? (
-        <View
-          style={[
-            styles.markerShowcaseExitWrap,
-            { top: screen.insets.top + ORBIT_DONE_BELOW_FILTER_OFFSET },
-          ]}
-          pointerEvents="box-none"
-        >
-          <View style={styles.orbitHeaderPill}>
-            <BlurView
-              intensity={Platform.OS === 'ios' ? 82 : 48}
-              tint="dark"
-              style={StyleSheet.absoluteFill}
-            />
-            <View style={styles.orbitHeaderPillTint} pointerEvents="none" />
-            <View style={styles.orbitHeaderLeft} pointerEvents="none">
-              <View style={styles.orbitHeaderDot} />
-              {screen.showcaseMarkerMk?.spot ? (
-                <Text style={styles.orbitHeaderTitle} numberOfLines={1}>
-                  {String(screen.showcaseMarkerMk.spot)}
-                </Text>
-              ) : (
-                <Text style={styles.orbitHeaderTitle} numberOfLines={1}>
-                  Place
-                </Text>
-              )}
-            </View>
-            <TouchableOpacity
-              style={styles.orbitHeaderCloseBtn}
-              onPress={screen.exitMarkerShowcase}
-              activeOpacity={0.82}
-              accessibilityRole="button"
-              accessibilityLabel="Close place view"
-              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-            >
-              <Ionicons name="close" size={16} color="#1A120A" />
-            </TouchableOpacity>
-          </View>
-        </View>
-      ) : null}
-
       {screen.isMarkerShowcaseActive && screen.showcaseMarkerMk ? (
-        <View
-          style={[
-            styles.markerViewDetailsWrapBase,
-            styles.orbitBottomChromeWrap,
-            {
-              bottom:
-                BOTTOM_CONTROL_BAR_MAP_CLEARANCE +
-                screen.insets.bottom +
-                ORBIT_VIEW_DETAILS_ABOVE_DOCK -
-                ORBIT_BOTTOM_CHROME_PULL_DOWN,
-            },
-          ]}
-          pointerEvents="box-none"
-        >
+        <>
           <View
             style={[
-              styles.orbitPlaceUnifiedCard,
-              {
-                borderColor:
-                  typeof screen.showcaseMarkerAccent === 'string' && screen.showcaseMarkerAccent.length === 7
-                    ? `${screen.showcaseMarkerAccent}55`
-                    : 'rgba(233, 200, 119, 0.35)',
-                shadowColor: screen.showcaseMarkerAccent || '#000000',
-              },
+              styles.markerShowcaseExitWrap,
+              { top: screen.insets.top + ORBIT_DONE_BELOW_FILTER_OFFSET },
             ]}
+            pointerEvents="box-none"
           >
-            <BlurView
-              intensity={Platform.OS === 'ios' ? 82 : 56}
-              tint="dark"
-              style={StyleSheet.absoluteFill}
-            />
-            <LinearGradient
-              pointerEvents="none"
-              colors={['rgba(206,17,38,0.16)', 'rgba(13,16,28,0.88)', 'rgba(9,11,20,0.94)']}
-              locations={[0, 0.42, 1]}
-              style={StyleSheet.absoluteFill}
-            />
-            {screen.showcaseOrbitPostUris?.length > 0 ? (
-              <View style={styles.orbitBottomHighlightsWrap}>
-                <View style={styles.orbitBottomHighlightsTray}>
-                  <OrbitClientPostsStrip imageUris={screen.showcaseOrbitPostUris} accent={screen.showcaseMarkerAccent} />
+            <View style={[styles.orbitProfileChromeCard, { borderColor: orbitUi.glassBorder }]}>
+              <BlurView
+                pointerEvents="none"
+                intensity={orbitUi.blurChromeInt}
+                tint={orbitUi.blurTint}
+                style={StyleSheet.absoluteFill}
+              />
+              <View
+                pointerEvents="none"
+                style={[StyleSheet.absoluteFillObject, { backgroundColor: orbitUi.chromeFrost }]}
+              />
+              <LinearGradient
+                pointerEvents="none"
+                colors={[`${themeColors.primary}26`, `${themeColors.primary}00`]}
+                start={{ x: 0.5, y: 0 }}
+                end={{ x: 0.5, y: 1 }}
+                style={styles.orbitProfileOrbA}
+              />
+              <LinearGradient
+                pointerEvents="none"
+                colors={[`${themeColors.primaryLight}1F`, `${themeColors.primaryLight}00`]}
+                start={{ x: 0.5, y: 0 }}
+                end={{ x: 0.5, y: 1 }}
+                style={styles.orbitProfileOrbB}
+              />
+              <View style={[styles.orbitProfileOrbGold, { opacity: orbitUi.dark ? 0.1 : 0.06 }]} pointerEvents="none" />
+              <View style={styles.orbitProfileContent} pointerEvents="box-none">
+                <TouchableOpacity
+                  style={[
+                    styles.orbitProfileCloseBtn,
+                    styles.orbitProfileCloseFloating,
+                    { backgroundColor: orbitUi.closeBg, borderColor: orbitUi.closeBorder },
+                  ]}
+                  onPress={screen.exitMarkerShowcase}
+                  activeOpacity={0.82}
+                  accessibilityRole="button"
+                  accessibilityLabel="Close place view"
+                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                >
+                  <Ionicons name="close" size={18} color={orbitUi.closeIcon} />
+                </TouchableOpacity>
+
+                <Text
+                  style={[
+                    styles.orbitProfileSpotName,
+                    { color: orbitUi.titleColor },
+                    Platform.OS === 'ios' && { fontWeight: '400' },
+                  ]}
+                  numberOfLines={2}
+                  adjustsFontSizeToFit
+                  minimumFontScale={0.68}
+                  accessibilityRole="header"
+                >
+                  {screen.showcaseMarkerMk?.spot ? String(screen.showcaseMarkerMk.spot) : 'Place'}
+                </Text>
+                <View style={styles.orbitProfileNameAccentRow}>
+                  <View style={styles.orbitProfileNameAccentLine} />
+                  <View style={styles.orbitProfileNameAccentDot} />
+                  <View style={styles.orbitProfileNameAccentLine} />
+                </View>
+
+                <View style={styles.orbitProfileCtaRow}>
+                  <Pressable
+                    style={({ pressed }) => [
+                      styles.orbitProfileArBtn,
+                      pressed && styles.orbitPlaceCardCTAPressed,
+                      !orbitCanOpenMaps && { opacity: 0.45 },
+                    ]}
+                    onPress={() => {
+                      if (!orbitCanOpenMaps) return
+                      void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light)
+                      screen.navigation.navigate('AR', {
+                        navigateTo: {
+                          lat: orbitDestLat,
+                          lng: orbitDestLng,
+                          name: String(screen.showcaseMarkerMk?.spot || 'Destination'),
+                        },
+                      })
+                    }}
+                    disabled={!orbitCanOpenMaps}
+                    accessibilityRole="button"
+                    accessibilityLabel="Open in AR"
+                  >
+                    <LinearGradient
+                      colors={[themeColors.primary, themeColors.primaryLight]}
+                      start={{ x: 0, y: 0 }}
+                      end={{ x: 1, y: 1 }}
+                      style={StyleSheet.absoluteFill}
+                    />
+                    <LinearGradient
+                      colors={['rgba(255,255,255,0.28)', 'rgba(255,255,255,0)']}
+                      start={{ x: 0, y: 0 }}
+                      end={{ x: 0, y: 1 }}
+                      style={styles.orbitProfileArBtnShine}
+                    />
+                    <Ionicons name="navigate" size={15} color="#FFF" />
+                    <Text style={styles.orbitProfileArBtnText}>Open in AR</Text>
+                  </Pressable>
+                  <Pressable
+                    style={({ pressed }) => [
+                      styles.orbitProfileMapsBtn,
+                      {
+                        backgroundColor: orbitUi.profileGlassTint,
+                        borderColor: orbitUi.mapsBtnBorder,
+                      },
+                      pressed && styles.orbitPlaceCardCTAPressed,
+                      !orbitCanOpenMaps && { opacity: 0.45 },
+                    ]}
+                    onPress={() => {
+                      if (!orbitCanOpenMaps) return
+                      void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light)
+                      openGoogleMapsDirections(orbitDestLat, orbitDestLng)
+                    }}
+                    disabled={!orbitCanOpenMaps}
+                    accessibilityRole="button"
+                    accessibilityLabel="Open in Maps"
+                  >
+                    <Ionicons name="map-outline" size={15} color={orbitUi.mapsBtnText} />
+                    <Text style={[styles.orbitProfileMapsBtnText, { color: orbitUi.mapsBtnText }]}>
+                      Open in Maps
+                    </Text>
+                  </Pressable>
+                </View>
+
+                <View style={[styles.orbitProfileCtaRow, styles.orbitProfileCtaRowSecond]}>
+                  <Pressable
+                    style={({ pressed }) => [
+                      styles.orbitProfileMapsBtn,
+                      {
+                        backgroundColor: orbitUi.profileGlassTint,
+                        borderColor: orbitUi.mapsBtnBorder,
+                      },
+                      pressed && styles.orbitPlaceCardCTAPressed,
+                    ]}
+                    onPress={() => {
+                      void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light)
+                      openKhalidChat({
+                        source: 'orbit',
+                        place: String(screen.showcaseMarkerMk?.spot || 'this place'),
+                        summary: orbitPlaceAiSummary,
+                      })
+                    }}
+                    accessibilityRole="button"
+                    accessibilityLabel="Ask Khalid about this place"
+                  >
+                    <Ionicons name="sparkles-outline" size={15} color={orbitUi.mapsBtnText} />
+                    <Text style={[styles.orbitProfileMapsBtnText, { color: orbitUi.mapsBtnText }]}>Ask Khalid</Text>
+                  </Pressable>
+                  <Pressable
+                    style={({ pressed }) => [
+                      styles.orbitProfileArBtn,
+                      pressed && styles.orbitPlaceCardCTAPressed,
+                      !orbitShowcaseClientId && { opacity: 0.45 },
+                    ]}
+                    onPress={() => {
+                      void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light)
+                      if (!orbitShowcaseClientId) return
+                      screen.setProfileClientId(orbitShowcaseClientId)
+                    }}
+                    disabled={!orbitShowcaseClientId}
+                    accessibilityRole="button"
+                    accessibilityLabel="View profile"
+                  >
+                    <LinearGradient
+                      colors={[themeColors.primary, themeColors.primaryLight]}
+                      start={{ x: 0, y: 0 }}
+                      end={{ x: 1, y: 1 }}
+                      style={StyleSheet.absoluteFill}
+                    />
+                    <LinearGradient
+                      colors={['rgba(255,255,255,0.28)', 'rgba(255,255,255,0)']}
+                      start={{ x: 0, y: 0 }}
+                      end={{ x: 0, y: 1 }}
+                      style={styles.orbitProfileArBtnShine}
+                    />
+                    <Text
+                      style={styles.orbitProfileArBtnText}
+                      numberOfLines={1}
+                      adjustsFontSizeToFit
+                      minimumFontScale={0.72}
+                    >
+                      View profile
+                    </Text>
+                    <Ionicons name="chevron-forward" size={15} color="#FFF" />
+                  </Pressable>
                 </View>
               </View>
-            ) : null}
-            <View style={styles.orbitPlaceCardHeader}>
-              {screen.showcaseMarkerMk?.time ? (
-                <View style={styles.orbitPlaceCardTimeChip}>
-                  <Ionicons name="time-outline" size={11} color="#F7DFA0" />
-                  <Text style={styles.orbitPlaceCardTimeText}>
-                    {String(screen.showcaseMarkerMk.time)}
-                  </Text>
-                </View>
-              ) : null}
-            </View>
-            <View style={styles.orbitPlaceQuickActionsRow}>
-              <Pressable
-                style={({ pressed }) => [
-                  styles.orbitPlaceQuickActionBtn,
-                  pressed && styles.orbitPlaceCardCTAPressed,
-                  !orbitCanOpenMaps && { opacity: 0.45 },
-                ]}
-                onPress={() => {
-                  if (!orbitCanOpenMaps) return
-                  void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light)
-                  openGoogleMapsDirections(orbitDestLat, orbitDestLng)
-                }}
-                disabled={!orbitCanOpenMaps}
-                accessibilityRole="button"
-                accessibilityLabel="Open map directions for this place"
-              >
-                <Ionicons name="map-outline" size={16} color="#F7DFA0" />
-                <Text style={styles.orbitPlaceQuickActionLabel}>Map</Text>
-              </Pressable>
-              <Pressable
-                style={({ pressed }) => [
-                  styles.orbitPlaceQuickActionBtn,
-                  pressed && styles.orbitPlaceCardCTAPressed,
-                  !orbitCanOpenMaps && { opacity: 0.45 },
-                ]}
-                onPress={() => {
-                  if (!orbitCanOpenMaps) return
-                  void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light)
-                  screen.navigation.navigate('AR', {
-                    navigateTo: {
-                      lat: orbitDestLat,
-                      lng: orbitDestLng,
-                      name: String(screen.showcaseMarkerMk?.spot || 'Destination'),
-                    },
-                  })
-                }}
-                disabled={!orbitCanOpenMaps}
-                accessibilityRole="button"
-                accessibilityLabel="Open AR navigation for this place"
-              >
-                <Ionicons name="scan-outline" size={16} color="#F7DFA0" />
-                <Text style={styles.orbitPlaceQuickActionLabel}>AR</Text>
-              </Pressable>
-            </View>
-            <View style={styles.orbitPlacePrimaryActionsRow}>
-              <Pressable
-                style={({ pressed }) => [
-                  styles.orbitPlaceSecondaryCTA,
-                  styles.orbitPlacePrimaryActionHalf,
-                  pressed && styles.orbitPlaceCardCTAPressed,
-                ]}
-                onPress={() => {
-                  void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light)
-                  openKhalidChat({
-                    source: 'orbit',
-                    place: String(screen.showcaseMarkerMk?.spot || 'this place'),
-                    summary: orbitPlaceAiSummary,
-                  })
-                }}
-                accessibilityRole="button"
-                accessibilityLabel="Ask Khalid about this place"
-              >
-                <View style={styles.orbitPlaceSecondaryCTAInner}>
-                  <Ionicons name="sparkles-outline" size={15} color="#F7DFA0" />
-                  <Text style={styles.orbitPlaceSecondaryCTALabel}>Ask</Text>
-                </View>
-              </Pressable>
-              <Pressable
-                style={({ pressed }) => [
-                  styles.orbitPlaceCardCTA,
-                  styles.orbitPlacePrimaryActionHalf,
-                  pressed && styles.orbitPlaceCardCTAPressed,
-                ]}
-                onPress={() => {
-                  void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                  const clientId = screen.showcaseMarkerMk?.clientId || screen.showcaseMarkerMk?.client_a_uuid || null
-                  if (!clientId) return
-                  screen.setProfileClientId(clientId)
-                }}
-                accessibilityRole="button"
-                accessibilityLabel="View client profile"
-              >
-                <LinearGradient
-                  colors={['#F7DFA0', '#E9C877', '#B9892F']}
-                  start={{ x: 0, y: 0 }}
-                  end={{ x: 1, y: 1 }}
-                  style={styles.orbitPlaceCardCTAGradient}
-                >
-                  <Text style={styles.orbitPlaceCardCTALabel}>Details</Text>
-                  <Ionicons name="chevron-up" size={15} color="#1A120A" />
-                </LinearGradient>
-              </Pressable>
             </View>
           </View>
-        </View>
+
+          {screen.showcaseOrbitPostUris?.length > 0 ? (
+            <View
+              style={[
+                styles.markerViewDetailsWrapBase,
+                styles.orbitBottomChromeWrap,
+                {
+                  bottom:
+                    BOTTOM_CONTROL_BAR_MAP_CLEARANCE +
+                    screen.insets.bottom +
+                    ORBIT_VIEW_DETAILS_ABOVE_DOCK -
+                    ORBIT_BOTTOM_CHROME_PULL_DOWN,
+                },
+              ]}
+              pointerEvents="box-none"
+            >
+              <View
+                style={[
+                  styles.orbitPlaceUnifiedCard,
+                  styles.orbitFilmstripDockCard,
+                  {
+                    borderColor:
+                      typeof screen.showcaseMarkerAccent === 'string' && screen.showcaseMarkerAccent.length === 7
+                        ? `${screen.showcaseMarkerAccent}40`
+                        : orbitUi.dockBorderFallback,
+                    shadowColor: screen.showcaseMarkerAccent || themeColors.primaryDark,
+                  },
+                ]}
+              >
+                <BlurView intensity={orbitUi.blurDockInt} tint={orbitUi.blurTint} style={StyleSheet.absoluteFill} />
+                <LinearGradient
+                  pointerEvents="none"
+                  colors={orbitUi.dockBaseGradColors}
+                  locations={[0, 0.5, 1]}
+                  style={StyleSheet.absoluteFill}
+                />
+                <LinearGradient
+                  pointerEvents="none"
+                  colors={orbitUi.dockWashGradColors}
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 1, y: 0.6 }}
+                  style={StyleSheet.absoluteFill}
+                />
+                <View style={styles.orbitBottomHighlightsWrap}>
+                  <View style={[styles.orbitBottomHighlightsTray, !orbitUi.dark && styles.orbitBottomHighlightsTrayLight]}>
+                    <OrbitClientPostsStrip
+                      imageUris={screen.showcaseOrbitPostUris}
+                      accent={screen.showcaseMarkerAccent}
+                      isDark={orbitUi.dark}
+                    />
+                  </View>
+                </View>
+              </View>
+            </View>
+          ) : null}
+        </>
       ) : null}
 
       <View style={[styles.topBarWrap, { paddingTop: screen.insets.top + 2 }]} pointerEvents="box-none">
         <View style={styles.topBarBalanceSpacer} pointerEvents="none" accessibilityElementsHidden />
-        {!(screen.quickFindMapOnly && screen.dayPlan?.length === 1) ? (
+        {!hidePlanMapFiltersForQuickFindOrbit ? (
           <View style={styles.planMapFilterCenterWrap} pointerEvents="box-none">
             <View style={styles.planMapFilterOuter}>
               <View style={styles.planMapFilterTabsWrap}>
@@ -655,35 +770,48 @@ export function AIPlanScreenViewMap({ screen }) {
           <View style={styles.sheetDragArea} pointerEvents="box-none">
             <View style={styles.sheetDragAreaGripRow} pointerEvents="box-none">
               <View
-                style={styles.sheetDragAreaGripCluster}
+                style={[
+                  styles.sheetSwipeGripPill,
+                  { backgroundColor: swipeGripPillBg, borderColor: swipeGripPillBorder },
+                ]}
                 {...screen.panResponder.panHandlers}
-                hitSlop={{ top: 10, bottom: 6, left: 20, right: 20 }}
+                hitSlop={{ top: 12, bottom: 10, left: 24, right: 24 }}
                 accessibilityRole="button"
-                accessibilityLabel="Swipe up to expand the plan, or drag down to see more map"
+                accessibilityLabel={sheetDragHintA11y}
               >
                 <View style={[styles.grabber, { backgroundColor: borderColor }]} />
                 <Text style={[styles.sheetDragHint, { color: screen.colors.textSecondary }]}>
-                  Swipe up
+                  {sheetDragHintLabel}
                 </Text>
               </View>
             </View>
           </View>
         ) : (
-          <View
-            style={styles.sheetDragArea}
-            {...screen.panResponder.panHandlers}
-            hitSlop={{ top: 28, bottom: 18, left: 12, right: 12 }}
-            accessibilityRole="button"
-            accessibilityLabel="Swipe up to expand the plan, or drag down to see more map"
-          >
-            <View style={[styles.grabber, { backgroundColor: borderColor }]} />
-            <Text style={[styles.sheetDragHint, { color: screen.colors.textSecondary }]}>Swipe up</Text>
+          <View style={styles.sheetDragArea} pointerEvents="box-none">
+            <View
+              style={[
+                styles.sheetSwipeGripPill,
+                { backgroundColor: swipeGripPillBg, borderColor: swipeGripPillBorder },
+              ]}
+              {...screen.panResponder.panHandlers}
+              hitSlop={{ top: 28, bottom: 18, left: 12, right: 12 }}
+              accessibilityRole="button"
+              accessibilityLabel={sheetDragHintA11y}
+            >
+              <View style={[styles.grabber, { backgroundColor: borderColor }]} />
+              <Text style={[styles.sheetDragHint, { color: screen.colors.textSecondary }]}>{sheetDragHintLabel}</Text>
+            </View>
           </View>
         )}
 
         {/* Step 0 — Past Plans (modern hero layout) */}
         {screen.drawerStep === 0 && (
-          <View style={styles.pastPlansStepWrap}>
+          <View
+            style={[
+              styles.pastPlansStepWrap,
+              quickFindOrbitCollapsesSheet && styles.pastPlansStepWrapHiddenForQuickOrbit,
+            ]}
+          >
             <View style={[styles.sheetStep0GlassOuter, { backgroundColor: innerSoftBg, borderColor: innerBorder }]}>
               <BlurView intensity={Platform.OS === 'ios' ? 52 : 32} tint={blurTint} style={styles.planMastheadBlur} />
               <View
@@ -696,83 +824,79 @@ export function AIPlanScreenViewMap({ screen }) {
               <ScrollView style={styles.sheetStep0GlassScroll} contentContainerStyle={styles.d0ScrollContent} showsVerticalScrollIndicator={false}>
                 {screen.quickFindMapOnly && screen.loading ? (
                   <View style={{ height: 48 }} />
-                ) : screen.quickFindMapOnly && screen.dayPlan?.length === 1 ? (
-                  <Reanimated.View
-                    entering={FadeInDown.duration(260)}
-                    exiting={FadeOutUp.duration(180)}
-                    style={[styles.d0QuickFindResultWrap, { backgroundColor: innerCardBg, borderColor: innerBorder }]}
-                  >
-                    <Text style={[styles.d0BuildSectionTitle, { color: innerTextPrimary }]}>Quick find</Text>
-                    <Text style={styles.d0QuickFindSpotName} numberOfLines={3}>
-                      {screen.dayPlan[0].spot}
-                    </Text>
-                    <Text style={[styles.d0BuildHint, { marginBottom: 20, color: innerTextSecondary }]}>
-                      Found a strong match near you. Open details, or quickly try another vibe.
-                    </Text>
-                    <View style={styles.d0QuickFindActionRow}>
-                      <TouchableOpacity
-                        style={styles.d0QuickFindPrimaryBtn}
-                        activeOpacity={0.88}
-                        onPress={() => {
-                          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {})
-                          screen.goToStopDetailIndex(0)
-                        }}
-                        accessibilityRole="button"
-                        accessibilityLabel="View place details"
-                      >
-                        <Ionicons name="information-circle-outline" size={20} color="#FFFFFF" />
-                        <Text style={styles.d0QuickFindPrimaryBtnText}>View details</Text>
-                      </TouchableOpacity>
-                      <TouchableOpacity
-                        style={styles.d0QuickFindSecondaryBtn}
-                        activeOpacity={0.85}
-                        onPress={screen.dismissQuickFindResult}
-                        accessibilityRole="button"
-                        accessibilityLabel="Find another place"
-                      >
-                        <Ionicons name="refresh" size={18} color="#475569" />
-                        <Text style={styles.d0QuickFindSecondaryBtnText}>Find another</Text>
-                      </TouchableOpacity>
-                    </View>
-                  </Reanimated.View>
+                ) : quickFindOrbitCollapsesSheet ? (
+                  <View style={{ height: 1 }} accessibilityElementsHidden importantForAccessibility="no-hide-descendants" />
                 ) : (
                   <>
                     <View style={[styles.d0FixedBottomCta, { paddingHorizontal: 0, paddingTop: 0 }, screen.isMarkerShowcaseActive && styles.d0FixedBottomCtaMinimized]}>
                       {!screen.isMarkerShowcaseActive ? (
                         <Reanimated.View style={[{ width: '100%', marginBottom: 0 }, buildDayCtaPulseStyle]}>
-                          <Pressable
-                            style={({ pressed }) => [
-                              styles.d0CtaRow,
-                              pressed && { opacity: 0.93, transform: [{ scale: 0.98 }] },
-                              { marginBottom: 0 },
-                            ]}
-                            onPress={() => {
-                              void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light)
-                              screen.setShowBuildModePickerModal(true)
-                            }}
-                            accessibilityRole="button"
-                            accessibilityLabel="Build my day"
-                          >
-                            <LinearGradient
-                              colors={[themeColors.primary, '#E63950']}
-                              start={{ x: 0, y: 0 }}
-                              end={{ x: 1, y: 1 }}
-                              style={styles.d0CtaGradient}
-                            >
-                              <View style={styles.d0CtaLogoWrap}>
-                            <Image
-                              source={require('../../../assets/bahrain-flag.png')}
-                              style={styles.d0CtaLogo}
-                              accessibilityIgnoresInvertColors
-                            />
-                              </View>
-                              <View style={styles.d0CtaLeft}>
-                                <Text style={styles.d0CtaTitle}>Build my day</Text>
-                                <Text style={styles.d0CtaSub}>AI plans your perfect Bahrain day</Text>
-                              </View>
-                              <Ionicons name="chevron-forward" size={20} color="rgba(255,255,255,0.7)" />
-                            </LinearGradient>
-                          </Pressable>
+                          <View style={styles.d0CtaDualRow}>
+                            <View style={styles.d0CtaCol}>
+                              <Pressable
+                                style={({ pressed }) => [
+                                  pressed && { opacity: 0.93, transform: [{ scale: 0.98 }] },
+                                ]}
+                                onPress={() => {
+                                  void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light)
+                                  screen.setShowBuildModePickerModal(true)
+                                }}
+                                accessibilityRole="button"
+                                accessibilityLabel="Build my day"
+                              >
+                                <LinearGradient
+                                  colors={[themeColors.primary, '#E63950']}
+                                  start={{ x: 0, y: 0 }}
+                                  end={{ x: 1, y: 1 }}
+                                  style={styles.d0CtaChipRowGradient}
+                                >
+                                  <Image
+                                    source={require('../../../assets/bahrain-flag.png')}
+                                    style={styles.d0CtaChipIconImage}
+                                    accessibilityIgnoresInvertColors
+                                  />
+                                  <Text style={styles.d0CtaChipTitleLight} numberOfLines={2}>
+                                    Build my day
+                                  </Text>
+                                </LinearGradient>
+                              </Pressable>
+                            </View>
+                            <View style={[styles.d0CtaCol, styles.d0CtaColQuickShadow]}>
+                              <Pressable
+                                style={({ pressed }) => [
+                                  pressed && { opacity: 0.93, transform: [{ scale: 0.98 }] },
+                                ]}
+                                onPress={() => {
+                                  void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light)
+                                  screen.openQuickAiSearchModal()
+                                }}
+                                accessibilityRole="button"
+                                accessibilityLabel="AI search"
+                              >
+                                <View
+                                  style={[
+                                    styles.d0CtaChipRowOutlined,
+                                    screen.isDark && styles.d0CtaChipRowOutlinedDark,
+                                  ]}
+                                >
+                                  <Ionicons
+                                    name="flash-outline"
+                                    size={20}
+                                    color={screen.isDark ? '#F7DFA0' : themeColors.primary}
+                                  />
+                                  <Text
+                                    style={[
+                                      styles.d0CtaChipTitleOutlined,
+                                      screen.isDark && styles.d0CtaChipTitleOutlinedDark,
+                                    ]}
+                                    numberOfLines={2}
+                                  >
+                                    AI search
+                                  </Text>
+                                </View>
+                              </Pressable>
+                            </View>
+                          </View>
                         </Reanimated.View>
                       ) : null}
                       {!screen.isMarkerShowcaseActive && (screen.allPlaceMarkersLoading || nearbySuggestions.length) ? (
@@ -874,6 +998,7 @@ export function AIPlanScreenViewMap({ screen }) {
                   onPress={() => {
                     void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light)
                     screen.setQuickFindMapOnly(false)
+                    screen.resetQuickFindRotationState()
                     screen.setDrawerStep(0)
                     screen.setDayPlan(null)
                     screen.setError(null)
@@ -893,6 +1018,10 @@ export function AIPlanScreenViewMap({ screen }) {
                   ) : screen.error ? (
                     <Text style={[styles.drawerPageHeaderTitle, { color: innerTextPrimary }]} numberOfLines={1}>
                       Something went wrong
+                    </Text>
+                  ) : screen.quickFindMapOnly && !(screen.dayPlan?.length > 0) ? (
+                    <Text style={[styles.drawerPageHeaderTitle, { color: innerTextPrimary }]} numberOfLines={1}>
+                      Quick search
                     </Text>
                   ) : (
                     <Text style={[styles.drawerPageHeaderTitle, { color: innerTextPrimary }]} numberOfLines={1}>
@@ -967,6 +1096,32 @@ export function AIPlanScreenViewMap({ screen }) {
                       <Text style={styles.retryButtonText}>Search catalog</Text>
                     </TouchableOpacity>
                   </View>
+                ) : screen.quickFindMapOnly ? (
+                  <View style={{ alignItems: 'center', gap: 14 }}>
+                    <Text style={[styles.emptyResults, { textAlign: 'center' }]}>
+                      Quick search is idle
+                    </Text>
+                    <Text style={[styles.d0CopyHint, { textAlign: 'center', maxWidth: 320 }]}>
+                      This is not day-plan generation — go back or run AI search again.
+                    </Text>
+                    <TouchableOpacity
+                      style={styles.retryButton}
+                      activeOpacity={0.85}
+                      onPress={() => {
+                        void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light)
+                        screen.setQuickFindMapOnly(false)
+                        screen.resetQuickFindRotationState()
+                        screen.setDrawerStep(0)
+                        screen.setDayPlan(null)
+                        screen.setError(null)
+                      }}
+                      accessibilityRole="button"
+                      accessibilityLabel="Back to Build my day and AI search"
+                    >
+                      <Ionicons name="arrow-back-outline" size={20} color={themeColors.primary} />
+                      <Text style={styles.retryButtonText}>Back to sheet</Text>
+                    </TouchableOpacity>
+                  </View>
                 ) : (
                   <Text style={styles.emptyResults}>No plan generated.</Text>
                 )}
@@ -978,20 +1133,34 @@ export function AIPlanScreenViewMap({ screen }) {
               >
                 <Text style={[styles.emptyResults, { textAlign: 'center', marginBottom: 8 }]}>Your pick is on the map</Text>
                 <Text style={[styles.d0BuildHint, { textAlign: 'center', marginBottom: 18 }]}>
-                  Quick find keeps one pin — open the sheet on the home tab for build options.
+                  Pull the plan sheet up if you need more room — Search again picks a different match for the same tag.
                 </Text>
-                <TouchableOpacity
-                  style={styles.retryButton}
-                  activeOpacity={0.85}
-                  onPress={() => {
-                    screen.setDrawerStep(0)
-                  }}
-                  accessibilityRole="button"
-                  accessibilityLabel="Back to map and sheet"
-                >
-                  <Ionicons name="map-outline" size={20} color={themeColors.primary} />
-                  <Text style={styles.retryButtonText}>Back to map</Text>
-                </TouchableOpacity>
+                <View style={{ flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', gap: 12 }}>
+                  <TouchableOpacity
+                    style={[styles.retryButton, !!screen.loading && { opacity: 0.48 }]}
+                    activeOpacity={0.85}
+                    disabled={!!screen.loading}
+                    onPress={() => void screen.handleQuickFindSearchAgain()}
+                    accessibilityRole="button"
+                    accessibilityState={{ disabled: !!screen.loading }}
+                    accessibilityLabel="Search again for the same quick find tag"
+                  >
+                    <Ionicons name="refresh-outline" size={20} color={themeColors.primary} />
+                    <Text style={styles.retryButtonText}>Search again</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.retryButton}
+                    activeOpacity={0.85}
+                    onPress={() => {
+                      screen.setDrawerStep(0)
+                    }}
+                    accessibilityRole="button"
+                    accessibilityLabel="Back to map and sheet"
+                  >
+                    <Ionicons name="map-outline" size={20} color={themeColors.primary} />
+                    <Text style={styles.retryButtonText}>Back to map</Text>
+                  </TouchableOpacity>
+                </View>
               </Reanimated.View>
             ) : (
               <View style={styles.planContentFill}>
@@ -1182,24 +1351,130 @@ export function AIPlanScreenViewMap({ screen }) {
       </Animated.View>
 
       {screen.loading && screen.quickFindMapOnly ? (
-        <Reanimated.View
-          entering={FadeIn.duration(180)}
-          exiting={FadeOut.duration(160)}
-          style={styles.quickFindSearchingOverlay}
-          pointerEvents="auto"
-          accessibilityViewIsModal
-        >
-          <BlurView intensity={Platform.OS === 'ios' ? 36 : 0} tint="dark" style={StyleSheet.absoluteFill} />
-          <View style={[StyleSheet.absoluteFill, { backgroundColor: overlayColor }]} />
-          <Reanimated.View entering={ZoomInEasyDown.duration(240)} style={styles.quickFindSearchingCard}>
-            <ActivityIndicator size="large" color="#FFFFFF" />
-            <Text style={styles.quickFindSearchingTitle}>Quick searching…</Text>
-            <Text style={styles.quickFindSearchingSub}>Finding one mappable match that fits your pick</Text>
-          </Reanimated.View>
-        </Reanimated.View>
+        <QuickFindCinematicLoader
+          subtitle={typeof screen.loadingStatus === 'string' ? screen.loadingStatus : ''}
+        />
       ) : null}
 
     </>
+  )
+}
+
+/** Fullscreen cinematic quick-search chrome — map stays visible underneath; no card tray */
+function QuickFindCinematicLoader({ subtitle }) {
+  const pulse = useSharedValue(0)
+  React.useEffect(() => {
+    pulse.value = withRepeat(
+      withTiming(1, { duration: 1180, easing: REasing.bezier(0.42, 0, 0.58, 1) }),
+      -1,
+      true,
+    )
+  }, [pulse])
+
+  const beamStyle = useAnimatedStyle(() => {
+    const s = 0.22 + pulse.value * 0.88
+    return {
+      opacity: 0.52 + pulse.value * 0.43,
+      transform: [{ scaleX: s }],
+    }
+  })
+
+  const beamShimmerStyle = useAnimatedStyle(() => {
+    const x = interpolate(pulse.value, [0, 1], [-96, 96])
+    return {
+      opacity: 0.35 + pulse.value * 0.55,
+      transform: [{ translateX: x }],
+    }
+  })
+
+  const d0 = useAnimatedStyle(() => {
+    const wave = pulse.value * Math.PI * 2
+    const opacityRaw = 0.4 + 0.6 * (0.5 + 0.5 * Math.sin(wave))
+    const opacity = Math.min(1, Math.max(0.35, opacityRaw))
+    const y = Math.sin(wave + Math.PI / 2) * -8
+    return { opacity, transform: [{ translateY: y }, { scale: 0.82 + opacity * 0.22 }] }
+  })
+
+  const d1 = useAnimatedStyle(() => {
+    const wave = pulse.value * Math.PI * 2 + (Math.PI * 2) / 3
+    const opacityRaw = 0.4 + 0.6 * (0.5 + 0.5 * Math.sin(wave))
+    const opacity = Math.min(1, Math.max(0.35, opacityRaw))
+    const y = Math.sin(wave + Math.PI / 2) * -8
+    return { opacity, transform: [{ translateY: y }, { scale: 0.82 + opacity * 0.22 }] }
+  })
+
+  const d2 = useAnimatedStyle(() => {
+    const wave = pulse.value * Math.PI * 2 + (Math.PI * 4) / 3
+    const opacityRaw = 0.4 + 0.6 * (0.5 + 0.5 * Math.sin(wave))
+    const opacity = Math.min(1, Math.max(0.35, opacityRaw))
+    const y = Math.sin(wave + Math.PI / 2) * -8
+    return { opacity, transform: [{ translateY: y }, { scale: 0.82 + opacity * 0.22 }] }
+  })
+
+  const subline =
+    String(subtitle || '')
+      .trim() || 'Locating one memorable stop on your map.'
+
+  return (
+    <Reanimated.View
+      entering={FadeIn.duration(340)}
+      exiting={FadeOut.duration(420)}
+      style={styles.quickFindCinematicRoot}
+      pointerEvents="auto"
+      accessibilityViewIsModal
+      accessibilityLabel={`Quick search. ${subline}`}
+    >
+      <LinearGradient
+        pointerEvents="none"
+        colors={['rgba(0,6,22,0.06)', 'rgba(2,10,34,0.48)', 'rgba(0,0,10,0.9)', 'rgba(0,0,0,0.94)']}
+        locations={[0, 0.4, 0.74, 1]}
+        style={styles.quickFindCinematicGlow}
+      />
+      <View style={styles.quickFindCinematicCenter}>
+        <Reanimated.View
+          entering={FadeInDown.duration(520).springify().damping(20).stiffness(200).mass(0.88)}
+        >
+          <Text style={styles.quickFindCinematicEyebrow} pointerEvents="none">
+            Bahrain in motion
+          </Text>
+          <Text style={styles.quickFindCinematicTitle} pointerEvents="none">
+            Quick search
+          </Text>
+          <Text style={styles.quickFindCinematicSub} pointerEvents="none">
+            {subline}
+          </Text>
+          <View style={[styles.quickFindCinematicBeamWrap, { alignSelf: 'center' }]}>
+            <Reanimated.View style={[styles.quickFindCinematicBeam, beamStyle]}>
+              <LinearGradient
+                pointerEvents="none"
+                colors={['rgba(233,200,119,0.25)', '#E9C877', '#D4243A', '#C8102E']}
+                locations={[0, 0.35, 0.72, 1]}
+                start={{ x: 0, y: 0.5 }}
+                end={{ x: 1, y: 0.5 }}
+                style={StyleSheet.absoluteFillObject}
+              />
+            </Reanimated.View>
+            <Reanimated.View style={[styles.quickFindCinematicBeamShimmer, beamShimmerStyle]} pointerEvents="none">
+              <LinearGradient
+                colors={[
+                  'rgba(255,255,255,0)',
+                  'rgba(255,255,255,0.55)',
+                  'rgba(255,255,255,0)',
+                ]}
+                start={{ x: 0, y: 0.5 }}
+                end={{ x: 1, y: 0.5 }}
+                style={StyleSheet.absoluteFillObject}
+              />
+            </Reanimated.View>
+          </View>
+          <View style={[styles.quickFindCinematicDots, { alignSelf: 'center' }]} accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
+            <Reanimated.View style={[styles.quickFindCinematicDot, { backgroundColor: '#F7DFA0' }, d0]} />
+            <Reanimated.View style={[styles.quickFindCinematicDot, { backgroundColor: '#E9C877' }, d1]} />
+            <Reanimated.View style={[styles.quickFindCinematicDot, { backgroundColor: '#C8102E' }, d2]} />
+          </View>
+        </Reanimated.View>
+      </View>
+    </Reanimated.View>
   )
 }
 

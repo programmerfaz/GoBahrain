@@ -255,11 +255,14 @@ export default function ProfileScreen() {
         idealDay: editIdealDay.trim(),
         avoidList: editAvoidList.trim(),
       }
+      const viewerUType =
+        String(profile?.user?.u_type || '').toLowerCase() === 'tourist' ? 'tourist' : 'local'
       const profileSummary = await buildAndPersistUserPersona({
         generalIds: editGeneralIds,
         activityIds: editActivityIds,
         foodIds: editFoodIds,
         profileAnswers,
+        viewerUType,
       })
       await setPreferences({
         generalIds: editGeneralIds,
@@ -281,6 +284,14 @@ export default function ProfileScreen() {
   const userName = profile?.account?.user_name || authUser?.email?.split('@')[0] || 'User'
   const userInitial = (profile?.account?.user_name || authUser?.email || 'U').charAt(0).toUpperCase()
   const userEmail = authUser?.email ?? 'Signed in'
+  const rawPhone = profile?.account?.phone ?? authUser?.user_metadata?.phone
+  const userPhone =
+    rawPhone == null || rawPhone === ''
+      ? ''
+      : String(rawPhone).trim()
+  const accountTypeResolved =
+    profile?.account_type ?? profile?.account?.account_type ?? authUser?.user_metadata?.account_type
+  const isClientAccount = String(accountTypeResolved || '').toLowerCase() === 'client'
 
   const prefCount =
     (preferences?.generalIds?.length || 0)
@@ -378,6 +389,15 @@ export default function ProfileScreen() {
                   <Text style={[s.profileEmailLine, { color: C.textSecondary }]} numberOfLines={2}>
                     {userEmail}
                   </Text>
+                  {isClientAccount && !!userPhone && (
+                    <Text
+                      style={[s.profilePhoneLine, { color: C.textSecondary }]}
+                      numberOfLines={1}
+                      accessibilityLabel={`Phone number ${userPhone}`}
+                    >
+                      {userPhone}
+                    </Text>
+                  )}
                   <LinearGradient
                     colors={isDark ? ['rgba(230,57,80,0.22)', 'rgba(124,58,237,0.16)'] : ['rgba(200,16,46,0.12)', 'rgba(124,58,237,0.08)']}
                     start={{ x: 0, y: 0 }}
@@ -828,6 +848,7 @@ const s = StyleSheet.create({
   profileHeaderText: { flex: 1, minWidth: 0 },
   profileDisplayName: { fontSize: 18, fontWeight: '700', letterSpacing: -0.3 },
   profileEmailLine: { fontSize: 13, fontWeight: '500', marginTop: 4, lineHeight: 18 },
+  profilePhoneLine: { fontSize: 13, fontWeight: '500', marginTop: 2, lineHeight: 18 },
   profileTierPill: {
     marginTop: 10,
     alignSelf: 'flex-start',

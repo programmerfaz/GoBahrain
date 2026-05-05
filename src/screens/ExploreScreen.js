@@ -29,11 +29,13 @@ import {
 } from '../services/aiPipeline'
 import ClientProfileModal from '../components/ClientProfileModal'
 import EventDetailModal from '../components/EventDetailModal'
-import { coerceImageValueToString, resolvePublicImageUrl } from '../utils/imageUrl'
+import { supabase } from '../config/supabase'
+import { coerceImageValueToString, parseStorageImageUrl, resolvePublicImageUrl } from '../utils/imageUrl'
 import { FadeInView, ShimmerPlaceholder, AnimatedPressable, PulseView } from '../components/AnimatedUI'
 import { LUXURY, luxuryCardShadow } from '../theme/luxuryPremium'
 import { layoutContentWidth } from '../constants/webLayout'
 import { useUserPreferences } from '../context/UserPreferencesContext'
+import { useAuth } from '../context/AuthContext'
 
 const TAB_BAR_HEIGHT = Platform.OS === 'ios' ? 70 : 60
 
@@ -41,7 +43,9 @@ const AnimatedScrollView = Animated.createAnimatedComponent(ScrollView)
 
 const CARD_GAP = 12
 const AUTO_ADVANCE_MS = 4000
-const PERSONALIZED_PAGE_SIZE = 12
+/** Tiles per vertical column in “Personalized by AI” masonry (caps visual height). */
+const PERSONALIZED_MAX_ROWS_PER_COLUMN = 4
+const PERSONALIZED_MAX_HORIZONTAL_PAGES = 3
 const PERSONALIZED_ROLL_STEP_PX = 0.8
 const PERSONALIZED_ROLL_TICK_MS = 16
 
@@ -168,63 +172,41 @@ const buildCultureBooklets = ({ restaurants, places, events, mergedEventBrowseIt
   ]
 }
 
-const buildWeekendMustDo = ({ events, restaurants, places }) => {
-  const eventItems = (events || []).map((e, index) => {
-    const m = e?.metadata || {}
-    return {
-      key: `wknd-event-${e?.id || index}`,
-      title: m.event_name || 'Featured event',
-      subtitle: [m.venue, m.start_date].filter(Boolean).join(' • ') || 'Event pick from your AI feed',
-      icon: 'calendar-outline',
-      image: m.image,
-      lat: m.lat,
-      lng: m.long,
-      kind: 'event',
-      sourceEvent: e,
-    }
-  })
-
-  const placeItems = (places || []).map((p, index) => ({
-    key: `wknd-place-${p?.client_a_uuid || p?.clientId || index}`,
-    title: p?.name || p?.business_name || 'Featured place',
-    subtitle: 'Top place to visit in Bahrain this weekend',
-    icon: 'location-outline',
-    image: p?.client_image,
-    clientId: p?.client_a_uuid || p?.clientId,
-    kind: 'client',
-  }))
-
-  const foodItems = (restaurants || []).map((r, index) => ({
-    key: `wknd-food-${r?.client_a_uuid || r?.clientId || index}`,
-    title: r?.name || r?.business_name || 'Featured dining',
-    subtitle: 'Recommended restaurant from your curated list',
-    icon: 'restaurant-outline',
-    image: r?.client_image,
-    clientId: r?.client_a_uuid || r?.clientId,
-    kind: 'client',
-  }))
-
-  return [...eventItems, ...placeItems, ...foodItems].slice(0, 7)
-}
-
 const normalizePersonalizedCard = (match, fallbackType = 'place') => {
   const meta = match?.metadata || {}
-  const rawImageCandidates = [
-    meta.image,
-    meta.client_image,
-    meta.post_image,
-    meta.thumbnail,
-    meta.thumbnail_url,
-    meta.cover_image,
-    meta.banner_image,
-    meta.photo,
-    meta.image_url,
-    match?.image,
-  ]
+  const isEventMeta = fallbackType === 'event' || String(meta.record_type || '').toLowerCase() === 'event'
+  const rawImageCandidates = isEventMeta
+    ? [
+        meta.image,
+        meta.image_url,
+        meta.thumbnail_url,
+        meta.cover_image,
+        meta.client_image,
+        meta.post_image,
+        meta.thumbnail,
+        meta.photo,
+        match?.image,
+      ]
+    : [
+        meta.image_url,
+        meta.thumbnail_url,
+        meta.cover_image,
+        meta.image,
+        meta.client_image,
+        meta.post_image,
+        meta.hero_image,
+        meta.profile_image,
+        meta.banner_image,
+        meta.media_url,
+        meta.thumbnail,
+        meta.photo,
+        match?.image,
+      ]
+
   const resolvedImage =
     rawImageCandidates
-      .map((v) => resolvePublicImageUrl(v) || coerceImageValueToString(v))
-      .find(Boolean) || null
+      .map((v) => resolvePublicImageUrl(v) || parseStorageImageUrl(v))
+      .find((u) => u && String(u).trim()) || null
 
   const resolvedClientId =
     meta.client_a_uuid ||
@@ -261,6 +243,61 @@ const normalizePersonalizedCard = (match, fallbackType = 'place') => {
           }
         : null,
   }
+}
+
+const CLIENT_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+const hydrateExplorePersonalizedRailsImages = async (rails, exploreEvents) => {
+  const base = {
+    places: [...(rails.places || [])],
+    restaurants: [...(rails.restaurants || [])],
+    events: [...(rails.events || [])],
+  }
+
+  const eventById = new Map(
+    (exploreEvents || []).filter((e) => e?.id != null).map((e) => [String(e.id), e]),
+  )
+  base.events = base.events.map((c) => {
+    if (c?.image) return c
+    const id = c?.sourceEvent?.id != null ? String(c.sourceEvent.id) : ''
+    if (!id) return c
+    const ev = eventById.get(id)
+    const m = ev?.metadata || {}
+    const raw = m.image || m.image_url || m.thumbnail_url || m.cover_image || m.client_image || m.post_image
+    const url = raw ? resolvePublicImageUrl(raw) || parseStorageImageUrl(raw) : null
+    return url ? { ...c, image: url } : c
+  })
+
+  const idsNeeding = new Set()
+  for (const row of [...base.places, ...base.restaurants]) {
+    if (row?.image) continue
+    const cid = row?.clientId != null ? String(row.clientId).trim() : ''
+    if (cid && CLIENT_UUID_RE.test(cid)) idsNeeding.add(cid)
+  }
+  if (idsNeeding.size === 0) return base
+
+  const idList = [...idsNeeding].slice(0, 48)
+  const { data, error } = await supabase.from('client').select('client_a_uuid, client_image').in('client_a_uuid', idList)
+  if (error || !Array.isArray(data) || data.length === 0) return base
+
+  const byUuid = {}
+  for (const row of data) {
+    if (!row?.client_a_uuid) continue
+    const url = resolvePublicImageUrl(row.client_image) || parseStorageImageUrl(row.client_image)
+    if (url) byUuid[row.client_a_uuid] = url
+  }
+
+  const attach = (rows) =>
+    (rows || []).map((row) => {
+      if (row?.image || !row?.clientId) return row
+      const u = byUuid[String(row.clientId).trim()]
+      return u ? { ...row, image: u } : row
+    })
+
+  base.places = attach(base.places)
+  base.restaurants = attach(base.restaurants)
+
+  return base
 }
 
 function HeroAmbientLayer({ accent, isDark }) {
@@ -572,12 +609,12 @@ function LoadingSkeleton({ width: w, height: h }) {
 export default function ExploreScreen({ navigation }) {
   const { colors, isDark } = useTheme()
   const { activityLabels, foodLabels, preferences } = useUserPreferences()
+  const { profile } = useAuth()
   const insets = useSafeAreaInsets()
   const { width: winW = 375, height = 667 } = useWindowDimensions()
   const isMobile = winW < 430
   const personalizedColumnCount = winW >= 1200 ? 4 : winW >= 800 ? 3 : 2
   const editorialTitleSize = isMobile ? 18 : winW < 800 ? 22 : 27
-  const largeSectionTitleSize = isMobile ? 31 : winW < 800 ? 38 : 46
   const layoutW = layoutContentWidth(winW)
   const bottomPadding = TAB_BAR_HEIGHT + (Platform.OS === 'android' ? insets.bottom : 0)
 
@@ -600,7 +637,8 @@ export default function ExploreScreen({ navigation }) {
   const [profileClientId, setProfileClientId] = useState(null)
   const [detailEvent, setDetailEvent] = useState(null)
   const [detailSourceRect, setDetailSourceRect] = useState(null)
-  const [loading, setLoading] = useState(true)
+  const [coreExploreLoading, setCoreExploreLoading] = useState(true)
+  const [personalizedLoading, setPersonalizedLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [eventTab, setEventTab] = useState('all')
   const [activeIndex, setActiveIndex] = useState(0)
@@ -620,6 +658,13 @@ export default function ExploreScreen({ navigation }) {
   const headerTranslateY = useRef(new Animated.Value(20)).current
   const titlePop = useRef(new Animated.Value(0.88)).current
   const fillW = useRef(new Animated.Value(0)).current
+
+  const exploreHeroSubtitle = useMemo(() => {
+    if (String(profile?.user?.u_type || '').toLowerCase() === 'tourist') {
+      return 'Signature sights, flavors, and routing-friendly picks for your visit'
+    }
+    return 'Weekend energy, personalized rails, and ideas for how you actually go out'
+  }, [profile?.user?.u_type])
 
   const heroParallaxY = scrollY.interpolate({
     inputRange: [0, 180],
@@ -682,7 +727,7 @@ export default function ExploreScreen({ navigation }) {
   }, [events, eventTab])
 
   useEffect(() => {
-    if (loading || filteredEvents.length === 0 || progressTrackW <= 0) {
+    if (coreExploreLoading || filteredEvents.length === 0 || progressTrackW <= 0) {
       if (filteredEvents.length === 0) fillW.setValue(0)
       return
     }
@@ -693,9 +738,15 @@ export default function ExploreScreen({ navigation }) {
       tension: 72,
       useNativeDriver: false,
     }).start()
-  }, [activeIndex, filteredEvents.length, progressTrackW, loading, fillW])
+  }, [activeIndex, filteredEvents.length, progressTrackW, coreExploreLoading, fillW])
 
-  const loadExplore = useCallback(async () => {
+  const loadExplore = useCallback(async (opts = {}) => {
+    const isPullRefresh = opts.pullRefresh === true
+    if (!isPullRefresh) {
+      setPersonalizedLoading(true)
+    }
+
+    let exploreEventsSnapshot = []
     try {
       setLoadError(null)
       setBrowseLoadError(null)
@@ -703,7 +754,8 @@ export default function ExploreScreen({ navigation }) {
         fetchExploreEventsFromSupabase(),
         fetchBrowseClientsGrouped(),
       ])
-      setEvents(evRes.events || [])
+      exploreEventsSnapshot = Array.isArray(evRes.events) ? evRes.events : []
+      setEvents(exploreEventsSnapshot)
       setLoadError(evRes.error || null)
       setBrowseClients({
         restaurants: browseRes.restaurants || [],
@@ -711,35 +763,43 @@ export default function ExploreScreen({ navigation }) {
         events: browseRes.events || [],
       })
       setBrowseLoadError(browseRes.error || null)
+    } catch (e) {
+      console.warn('[Explore] core load failed:', e?.message)
+      setEvents([])
+      setBrowseClients({ restaurants: [], places: [], events: [] })
+      setLoadError(e?.message || 'Could not load')
+      setBrowseLoadError(e?.message || null)
+    } finally {
+      setCoreExploreLoading(false)
+    }
 
+    try {
       const profileNarrative = preferences?.profileSummary || ''
       const [pPlaces, pRestaurants, pEvents] = await Promise.all([
         fetchPlaces(activityLabels || [], { profileNarrative }),
         fetchRestaurants(foodLabels || [], { profileNarrative }),
         fetchEvents(activityLabels || [], { profileNarrative }),
       ])
-      setPersonalizedRails({
+      let rails = {
         places: (pPlaces || []).slice(0, 10).map((m) => normalizePersonalizedCard(m, 'place')),
         restaurants: (pRestaurants || []).slice(0, 10).map((m) => normalizePersonalizedCard(m, 'restaurant')),
         events: (pEvents || []).slice(0, 10).map((m) => normalizePersonalizedCard(m, 'event')),
-      })
+      }
+      rails = await hydrateExplorePersonalizedRailsImages(rails, exploreEventsSnapshot)
+      setPersonalizedRails(rails)
       setPersonalizedError(null)
     } catch (e) {
-      console.warn('[Explore] loadExplore failed:', e?.message)
-      setEvents([])
-      setBrowseClients({ restaurants: [], places: [], events: [] })
-      setLoadError(e?.message || 'Could not load')
-      setBrowseLoadError(e?.message || null)
+      console.warn('[Explore] personalized load failed:', e?.message)
       setPersonalizedRails({ places: [], restaurants: [], events: [] })
-      setPersonalizedError(e?.message || null)
+      setPersonalizedError(e?.message || 'Could not load personalized picks')
     } finally {
-      setLoading(false)
+      setPersonalizedLoading(false)
       setRefreshing(false)
     }
   }, [activityLabels, foodLabels, preferences?.profileSummary])
 
   useEffect(() => {
-    loadExplore()
+    loadExplore({ pullRefresh: false })
   }, [loadExplore])
 
   const mergedEventBrowseItems = useMemo(
@@ -756,43 +816,25 @@ export default function ExploreScreen({ navigation }) {
       }),
     [browseClients.restaurants, browseClients.places, events, mergedEventBrowseItems],
   )
-  const weekendMustDo = useMemo(
-    () =>
-      buildWeekendMustDo({
-        events,
-        restaurants: browseClients.restaurants,
-        places: browseClients.places,
-      }),
-    [events, browseClients.restaurants, browseClients.places],
-  )
-  const weekendEditorialItems = useMemo(() => {
-    const cols = winW >= 1200 ? 4 : winW >= 800 ? 3 : 2
-    const heightPattern = [1.45, 0.95, 1.1, 1.32, 0.88, 1.22, 1.04, 1.38]
-    return (weekendMustDo || []).map((item, index) => ({
-      ...item,
-      col: index % cols,
-      heightRatio: heightPattern[index % heightPattern.length],
-    }))
-  }, [weekendMustDo, winW])
-  const weekendEditorialColumns = useMemo(() => {
-    const cols = winW >= 1200 ? 4 : winW >= 800 ? 3 : 2
-    return Array.from({ length: cols }, (_, colIndex) => weekendEditorialItems.filter((x) => x.col === colIndex))
-  }, [weekendEditorialItems, winW])
   const personalizedEditorialPages = useMemo(() => {
+    const tilesPerPage = personalizedColumnCount * PERSONALIZED_MAX_ROWS_PER_COLUMN
+    const seedCap = tilesPerPage * PERSONALIZED_MAX_HORIZONTAL_PAGES
+
     const seeds = [
       ...(personalizedRails.events || []).map((item) => ({ ...item, editorialTag: 'EVENTS' })),
       ...(personalizedRails.places || []).map((item) => ({ ...item, editorialTag: 'PLACES' })),
       ...(personalizedRails.restaurants || []).map((item) => ({ ...item, editorialTag: 'DINING' })),
     ]
-      .slice(0, 24)
+      .slice(0, seedCap)
       .map((item, index) => ({
-      ...item,
-      heightRatio: masonryRatioFor(item.key, index),
-    }))
+        ...item,
+        heightRatio: masonryRatioFor(item.key, index),
+      }))
     if (seeds.length === 0) return []
     const pages = []
-    for (let i = 0; i < seeds.length; i += PERSONALIZED_PAGE_SIZE) {
-      const pageItems = seeds.slice(i, i + PERSONALIZED_PAGE_SIZE).map((it, idx) => ({
+    for (let i = 0; i < seeds.length; i += tilesPerPage) {
+      const chunk = seeds.slice(i, i + tilesPerPage)
+      const pageItems = chunk.map((it, idx) => ({
         ...it,
         col: idx % personalizedColumnCount,
       }))
@@ -946,7 +988,7 @@ export default function ExploreScreen({ navigation }) {
 
   const onRefresh = useCallback(() => {
     setRefreshing(true)
-    loadExplore()
+    loadExplore({ pullRefresh: true })
   }, [loadExplore])
 
   const handleCardPress = useCallback((item, rect) => {
@@ -1118,6 +1160,11 @@ export default function ExploreScreen({ navigation }) {
                   Explore Bahrain
                 </Animated.Text>
               </FadeInView>
+              <FadeInView delay={168} from={14} duration={480}>
+                <Text style={[s.heroSub, { color: colors.textSecondary }]} accessibilityRole="text">
+                  {exploreHeroSubtitle}
+                </Text>
+              </FadeInView>
             </View>
             <FadeInView delay={160} from={28} duration={520} style={s.heroArWrap}>
               <AnimatedPressable onPress={openAR} scaleDown={0.92} style={s.arPillPulseWrap}>
@@ -1135,7 +1182,7 @@ export default function ExploreScreen({ navigation }) {
           </View>
         </Animated.View>
 
-        {loading ? (
+        {coreExploreLoading ? (
           <View style={s.eventsSectionTopSpacer}>
             {eventsCarouselSectionHeader}
             <LoadingSkeleton width={cardWidth} height={cardHeight} />
@@ -1222,7 +1269,7 @@ export default function ExploreScreen({ navigation }) {
           </FadeInView>
         )}
 
-        {!loading && (
+        {!coreExploreLoading && (
           <FadeInView delay={120} from={14} duration={420}>
             <View style={s.browseWrap}>
               {browseLoadError ? (
@@ -1321,7 +1368,15 @@ export default function ExploreScreen({ navigation }) {
                 {personalizedError ? (
                   <Text style={[s.browseInlineError, { color: colors.error }]}>{personalizedError}</Text>
                 ) : null}
-                {personalizedEditorialPages.length === 0 ? (
+                {personalizedLoading ? (
+                  <View style={[s.personalizedSliderWrap, { paddingVertical: 4 }]}>
+                    <ShimmerPlaceholder
+                      width={Math.max(260, layoutW - 48)}
+                      height={Math.round(Math.min(height * 0.28, 240))}
+                      borderRadius={LUXURY.radiusHero}
+                    />
+                  </View>
+                ) : personalizedEditorialPages.length === 0 ? (
                   <Text style={[s.browseEmpty, { color: colors.textMuted }]}>No curated picks yet</Text>
                 ) : (
                   <View style={s.personalizedSliderWrap}>
@@ -1397,94 +1452,6 @@ export default function ExploreScreen({ navigation }) {
                         </View>
                       ))}
                     </ScrollView>
-                  </View>
-                )}
-              </View>
-
-              <View style={s.mustDoWrap}>
-                <View style={s.mustDoHeaderRow}>
-                  <View style={s.mustDoHeaderTextCol}>
-                    <Text style={[s.mustDoHeading, { color: colors.textPrimary, fontSize: largeSectionTitleSize, lineHeight: largeSectionTitleSize + 4 }]}>Experience Bahrain</Text>
-                    <Text style={[s.mustDoSubtitle, { color: colors.textSecondary }]}>
-                      An exciting adventure awaits you in Bahrain, through ancient wonders, modern marvels, bustling souqs, adrenaline-filled activities, relaxing beaches and more.
-                    </Text>
-                  </View>
-                  <TouchableOpacity
-                    activeOpacity={0.85}
-                    onPress={() => {
-                      const first = weekendMustDo?.[0]
-                      if (!first) return
-                      if (first.kind === 'event' && first.sourceEvent) {
-                        handleCardPress(first.sourceEvent, null)
-                        return
-                      }
-                      if (first.clientId) setProfileClientId(first.clientId)
-                    }}
-                    style={[
-                      s.mustDoDiscoverBtn,
-                      {
-                        borderColor: colors.border,
-                        backgroundColor: isDark ? 'rgba(255,255,255,0.04)' : '#FFFFFF',
-                      },
-                    ]}
-                  >
-                    <Text style={[s.mustDoDiscoverText, { color: colors.primary }]}>DISCOVER MORE</Text>
-                    <Ionicons name="arrow-forward" size={14} color={colors.primary} />
-                  </TouchableOpacity>
-                </View>
-                {weekendMustDo.length === 0 ? (
-                  <Text style={[s.browseEmpty, { color: colors.textMuted }]}>No weekend picks yet</Text>
-                ) : (
-                  <View style={s.mustDoEditorialGrid}>
-                    {weekendEditorialColumns.map((column, colIndex) => (
-                      <View key={`wknd-col-${colIndex}`} style={s.mustDoEditorialCol}>
-                        {column.map((item, index) => {
-                          const imageUri = resolvePublicImageUrl(item.image) || coerceImageValueToString(item.image)
-                          const tileHeight = Math.round(Math.max(160, cardHeight * item.heightRatio * 0.72))
-                          const handlePress = () => {
-                            if (item.kind === 'event' && item.sourceEvent) {
-                              handleCardPress(item.sourceEvent, null)
-                              return
-                            }
-                            if (item.clientId) setProfileClientId(item.clientId)
-                          }
-                          return (
-                            <TouchableOpacity
-                              key={item.key}
-                              activeOpacity={0.9}
-                              onPress={handlePress}
-                              style={[
-                                s.mustDoEditorialCard,
-                                {
-                                  height: tileHeight,
-                                  borderColor: isDark ? 'rgba(148,163,184,0.16)' : '#E2E8F0',
-                                  marginTop: index === 0 ? 0 : 12,
-                                },
-                              ]}
-                            >
-                              {imageUri ? (
-                                <Image source={{ uri: imageUri }} style={s.mustDoEditorialImage} resizeMode="cover" />
-                              ) : (
-                                <LinearGradient
-                                  colors={isDark ? ['#1a1520', '#2d2640', '#3d3555'] : ['#e8ecf2', '#d4dae4', '#b8c2d1']}
-                                  style={s.mustDoEditorialImage}
-                                />
-                              )}
-                              <LinearGradient
-                                colors={['rgba(0,0,0,0.04)', 'rgba(0,0,0,0.24)', 'rgba(0,0,0,0.78)']}
-                                locations={[0, 0.45, 1]}
-                                style={s.mustDoEditorialOverlay}
-                              />
-                              <View style={s.mustDoEditorialTitleWrap}>
-                                <Text style={[s.mustDoEditorialTitle, { fontSize: isMobile ? 20 : 31, lineHeight: isMobile ? 22 : 33 }]} numberOfLines={isMobile ? 3 : 4}>
-                                  {item.title}
-                                </Text>
-                              </View>
-                            </TouchableOpacity>
-                          )
-                        })}
-                      </View>
-                    ))}
                   </View>
                 )}
               </View>
@@ -1907,39 +1874,6 @@ const s = StyleSheet.create({
   bookletTitle: { fontSize: 15, fontWeight: '800', marginBottom: 4 },
   bookletSubtitle: { fontSize: 12, lineHeight: 17, marginBottom: 8 },
   bookletCount: { fontSize: 12, fontWeight: '700' },
-  mustDoWrap: { marginBottom: 28, marginTop: 2 },
-  mustDoHeaderRow: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: 14, marginBottom: 16 },
-  mustDoHeaderTextCol: { flex: 1, minWidth: 0 },
-  mustDoHeading: { fontSize: 46, fontWeight: '900', letterSpacing: -1, marginBottom: 5 },
-  mustDoSubtitle: { fontSize: 13, lineHeight: 18, maxWidth: 540 },
-  mustDoDiscoverBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    borderWidth: 1,
-    borderRadius: 18,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    marginTop: 2,
-  },
-  mustDoDiscoverText: { fontSize: 11, fontWeight: '800', letterSpacing: 0.4 },
-  mustDoEditorialGrid: { flexDirection: 'row', gap: 12, width: '100%' },
-  mustDoEditorialCol: { flex: 1, minWidth: 0 },
-  mustDoEditorialCard: {
-    borderRadius: 16,
-    borderWidth: 1,
-    overflow: 'hidden',
-    position: 'relative',
-    backgroundColor: '#0F172A',
-    ...Platform.select({
-      ios: { shadowColor: '#020617', shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.2, shadowRadius: 14 },
-      android: { elevation: 7 },
-    }),
-  },
-  mustDoEditorialImage: { width: '100%', height: '100%' },
-  mustDoEditorialOverlay: { ...StyleSheet.absoluteFillObject },
-  mustDoEditorialTitleWrap: { position: 'absolute', left: 12, right: 12, bottom: 11 },
-  mustDoEditorialTitle: { color: '#FFF', fontSize: 31, fontWeight: '900', lineHeight: 33, letterSpacing: -0.7 },
   personalizedWrap: { marginBottom: 24 },
   personalizedHeaderRow: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: 14, marginBottom: 12 },
   personalizedHeaderTextCol: { flex: 1, minWidth: 0 },

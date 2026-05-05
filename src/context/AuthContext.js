@@ -32,35 +32,43 @@ export function AuthProvider({ children }) {
 
   useEffect(() => {
     let timeoutId = null
-    const SESSION_GATE_MS = 12000
+    /**
+     * INITIAL_SESSION fires only after GoTrue initializePromise settles (recover + refresh), same gate as getSession().
+     * Do NOT use a short timer to clear loading — it lets Tabs mount while auth init still holds locks and first Supabase reads fail cold.
+     */
+    const AUTH_DEADLOCK_MS = 20000
+    let bootstrapEnded = false
+
+    const clearBootstrapTimer = () => {
+      if (timeoutId) {
+        clearTimeout(timeoutId)
+        timeoutId = null
+      }
+    }
+
+    const maybeFinishBootstrap = () => {
+      if (bootstrapEnded) return
+      bootstrapEnded = true
+      clearBootstrapTimer()
+      setAuthLoading(false)
+    }
 
     timeoutId = setTimeout(() => {
+      if (bootstrapEnded) return
       console.warn(
-        '[Auth] getSession still pending after',
-        SESSION_GATE_MS,
+        '[Auth] Auth bootstrap deadlock after',
+        AUTH_DEADLOCK_MS,
         'ms — check internet connectivity and EXPO_PUBLIC_SUPABASE_URL / EXPO_PUBLIC_SUPABASE_ANON_KEY'
       )
-      setAuthLoading(false)
-    }, SESSION_GATE_MS)
-
-    supabase.auth
-      .getSession()
-      .then(({ data: { session: s } }) => {
-        setSession(s)
-        if (s?.user?.id) fetchProfile()
-      })
-      .catch((e) => {
-        console.warn('[Auth] getSession failed', e?.message)
-        setSession(null)
-      })
-      .finally(() => {
-        if (timeoutId) clearTimeout(timeoutId)
-        setAuthLoading(false)
-      })
+      maybeFinishBootstrap()
+    }, AUTH_DEADLOCK_MS)
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       async (event, s) => {
         setSession(s);
+        if (event === 'INITIAL_SESSION') {
+          maybeFinishBootstrap()
+        }
         if (s?.user?.id) {
           const existingProfile = await fetchProfile();
           if (!existingProfile && s.user.user_metadata?.account_type) {
@@ -94,8 +102,22 @@ export function AuthProvider({ children }) {
       }
     );
 
+    supabase.auth
+      .getSession()
+      .then(({ data: { session: s } }) => {
+        setSession(s)
+        if (s?.user?.id) fetchProfile()
+      })
+      .catch((e) => {
+        console.warn('[Auth] getSession failed', e?.message)
+        setSession(null)
+      })
+      .finally(() => {
+        maybeFinishBootstrap()
+      })
+
     return () => {
-      if (timeoutId) clearTimeout(timeoutId)
+      clearBootstrapTimer()
       subscription.unsubscribe()
     }
   }, [fetchProfile]);

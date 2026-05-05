@@ -89,6 +89,8 @@ export const TRAVEL_EXPLORE_OPTIONS = [
 export const FOOD_CATEGORIES = [
   { id: 'local-arabic', label: 'Local & Arabic', icon: 'home-outline', color: M.dining },
   { id: 'asian', label: 'Asian', icon: 'layers-outline', color: M.dining },
+  { id: 'thai', label: 'Thai', icon: 'leaf-outline', color: M.success },
+  { id: 'japanese-korean', label: 'Japanese/Korean', icon: 'sparkles-outline', color: M.evening },
   { id: 'indian-pakistani', label: 'Indian/Pakistani', icon: 'flame-outline', color: M.morning },
   { id: 'italian', label: 'Italian', icon: 'pizza-outline', color: M.success },
   { id: 'american', label: 'American', icon: 'fast-food-outline', color: M.afternoon },
