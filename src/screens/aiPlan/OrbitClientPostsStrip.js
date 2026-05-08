@@ -2,6 +2,7 @@ import React, { useRef, useEffect, useMemo } from 'react'
 import { View, ScrollView, StyleSheet, Platform, Animated, Easing, Text } from 'react-native'
 import { LinearGradient } from 'expo-linear-gradient'
 import { CachedImage } from '../../components/CachedImage'
+import { FONT_POPPINS_BOLD } from '../../constants/brandFont'
 
 const ITEM_W = 98
 const ITEM_H = 116
@@ -150,7 +151,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 6,
     paddingHorizontal: 12,
-    paddingBottom: 4,
+    paddingBottom: 6,
   },
   overlineDot: {
     width: 6,
@@ -164,7 +165,8 @@ const styles = StyleSheet.create({
   },
   overlineText: {
     fontSize: 9.5,
-    fontWeight: '800',
+    lineHeight: 13,
+    fontFamily: FONT_POPPINS_BOLD,
     color: GOLD_SOFT,
     letterSpacing: 1.2,
   },
@@ -197,12 +199,14 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(15,23,42,0.16)',
   },
   reelFrame: {
-    height: ITEM_H + 12,
+    height: ITEM_H + 24,
     justifyContent: 'center',
     position: 'relative',
+    overflow: 'visible',
   },
   scrollContent: {
     paddingHorizontal: 10,
+    paddingVertical: 8,
     alignItems: 'center',
   },
   tileWrap: {

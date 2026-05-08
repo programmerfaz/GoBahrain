@@ -197,10 +197,10 @@ export function AIPlanScreenViewMap({ screen }) {
   }, [screen.drawerStep, screen.buildDayCtaAttentionKey])
 
   const blurTint = screen.isDark ? 'dark' : 'light'
-  const surfaceColor = screen.isDark ? '#0F172A' : '#FFFFFF'
-  const subtleSurfaceColor = screen.isDark ? '#1E293B' : '#F2F2F7'
+  const surfaceColor = screen.isDark ? '#000000' : '#FFFFFF'
+  const subtleSurfaceColor = screen.isDark ? '#0A0A0A' : '#F2F2F7'
   const borderColor = screen.isDark ? '#334155' : '#CBD5E1'
-  const swipeGripPillBg = screen.isDark ? 'rgba(30,41,59,0.92)' : 'rgba(248,250,252,0.97)'
+  const swipeGripPillBg = screen.isDark ? 'rgba(10,10,10,0.92)' : 'rgba(248,250,252,0.97)'
   const swipeGripPillBorder = screen.isDark ? 'rgba(71,85,105,0.55)' : 'rgba(203,213,225,0.9)'
   const planSheetAtTopSnap = (screen.planSheetSnapIndex ?? INITIAL_SNAP_INDEX) === 0
   const sheetDragHintLabel = planSheetAtTopSnap ? 'Swipe down' : 'Swipe up'
@@ -211,13 +211,13 @@ export function AIPlanScreenViewMap({ screen }) {
   const iconSubtle = screen.isDark ? '#CBD5E1' : '#374151'
   const overlayColor = screen.isDark ? 'rgba(2,6,23,0.62)' : 'rgba(15,23,42,0.45)'
   const planMapStyle = screen.isDark ? DARK_MAP_STYLE : undefined
-  const sheetBackgroundColor = screen.isDark ? '#0B1220' : '#FFFFFF'
-  const sheetStep0BackgroundColor = screen.isDark ? '#111827' : '#F2F2F7'
+  const sheetBackgroundColor = screen.isDark ? '#000000' : '#FFFFFF'
+  const sheetStep0BackgroundColor = screen.isDark ? '#0A0A0A' : '#F2F2F7'
   const sheetStep3BackgroundColor = 'transparent'
   const sheetBorderColor = screen.isDark ? '#1F2937' : 'rgba(148,163,184,0.18)'
   const sheetShadowColor = screen.isDark ? '#000000' : '#0F172A'
-  const innerCardBg = screen.isDark ? '#111827' : '#FFFFFF'
-  const innerSoftBg = screen.isDark ? '#1E293B' : '#F8FAFC'
+  const innerCardBg = screen.isDark ? '#050505' : '#FFFFFF'
+  const innerSoftBg = screen.isDark ? '#0A0A0A' : '#F8FAFC'
   const innerBorder = screen.isDark ? '#334155' : '#E2E8F0'
   const innerTextPrimary = screen.colors.textPrimary
   const innerTextSecondary = screen.colors.textSecondary
@@ -239,7 +239,7 @@ export function AIPlanScreenViewMap({ screen }) {
       blurDockInt: ios ? (dark ? 72 : 48) : dark ? 48 : 38,
       /** Orbit chrome: map shows through frost */
       blurChromeInt: ios ? (dark ? 78 : 58) : dark ? 52 : 42,
-      chromeFrost: dark ? 'rgba(11,17,38,0.42)' : 'rgba(248,252,255,0.48)',
+      chromeFrost: dark ? 'rgba(0,0,0,0.42)' : 'rgba(248,252,255,0.48)',
       glassBorder: dark ? 'rgba(255,255,255,0.22)' : 'rgba(255,255,255,0.92)',
       profileHairline: hairline,
       profileGlassTint: glassTint,
@@ -249,7 +249,7 @@ export function AIPlanScreenViewMap({ screen }) {
       closeBorder: 'rgba(255,255,255,0.28)',
       closeIcon: '#FFFFFF',
       dockBaseGradColors: dark
-        ? ['rgba(15,23,42,0.72)', 'rgba(15,23,42,0.86)', 'rgba(11,14,26,0.94)']
+        ? ['rgba(0,0,0,0.72)', 'rgba(4,4,4,0.86)', 'rgba(10,10,10,0.94)']
         : ['rgba(255,255,255,0.84)', 'rgba(247,249,252,0.94)', 'rgba(241,245,249,0.97)'],
       dockWashGradColors: dark
         ? [themeColors.primaryDark + '33', 'transparent']
@@ -721,7 +721,7 @@ export function AIPlanScreenViewMap({ screen }) {
         <TouchableOpacity
           style={[
             styles.searchButton,
-            { backgroundColor: surfaceColor, borderColor: screen.isDark ? '#1E293B' : 'transparent' },
+            { backgroundColor: surfaceColor, borderColor: screen.isDark ? '#1F1F1F' : 'transparent' },
             screen.planReadOnly && { opacity: 0.4 },
           ]}
           activeOpacity={0.8}
@@ -817,7 +817,7 @@ export function AIPlanScreenViewMap({ screen }) {
               <View
                 style={[
                   styles.planMastheadFrost,
-                  { backgroundColor: screen.isDark ? 'rgba(15,23,42,0.45)' : 'rgba(255,255,255,0.2)' },
+                  { backgroundColor: screen.isDark ? 'rgba(0,0,0,0.45)' : 'rgba(255,255,255,0.2)' },
                 ]}
                 pointerEvents="none"
               />
@@ -957,20 +957,35 @@ export function AIPlanScreenViewMap({ screen }) {
                                     {item.image ? (
                                       <Image source={{ uri: item.image }} style={styles.d0NearbyCardImage} />
                                     ) : (
-                                      <View style={[styles.d0NearbyCardFallback, { backgroundColor: screen.isDark ? '#1E293B' : '#E2E8F0' }]}>
+                                      <View style={[styles.d0NearbyCardFallback, { backgroundColor: screen.isDark ? '#0A0A0A' : '#E2E8F0' }]}>
                                         <Ionicons name="location-outline" size={16} color={iconMuted} />
                                       </View>
                                     )}
+                                    <LinearGradient
+                                      colors={['transparent', 'rgba(2,6,23,0.62)', 'rgba(2,6,23,0.88)']}
+                                      start={{ x: 0.5, y: 0 }}
+                                      end={{ x: 0.5, y: 1 }}
+                                      style={styles.d0NearbyImageOverlay}
+                                    >
+                                      <Text style={styles.d0NearbyCardTitleOnImage} numberOfLines={2}>{item.spot}</Text>
+                                      <View style={styles.d0NearbyCardMetaRow}>
+                                        <View style={styles.d0NearbyDistancePillOnImage}>
+                                          <Ionicons name="navigate-outline" size={11} color="rgba(248,250,252,0.95)" />
+                                          <Text style={styles.d0NearbyCardMetaTextOnImage} numberOfLines={1}>
+                                            {item.distanceKm < 1
+                                              ? `${Math.round(item.distanceKm * 1000)} m away`
+                                              : `${item.distanceKm.toFixed(1)} km away`}
+                                          </Text>
+                                        </View>
+                                      </View>
+                                    </LinearGradient>
                                   </View>
                                   <View style={styles.d0NearbyCardBody}>
-                                    <Text style={[styles.d0NearbyCardTitle, { color: innerTextPrimary }]} numberOfLines={2}>{item.spot}</Text>
-                                    <View style={styles.d0NearbyCardMetaRow}>
-                                      <Ionicons name="navigate-outline" size={12} color={iconMuted} />
-                                      <Text style={[styles.d0NearbyCardMetaText, { color: innerTextSecondary }]} numberOfLines={1}>
-                                        {item.distanceKm < 1
-                                          ? `${Math.round(item.distanceKm * 1000)} m away`
-                                          : `${item.distanceKm.toFixed(1)} km away`}
-                                      </Text>
+                                    <View style={[styles.d0NearbyDistancePill, { backgroundColor: screen.isDark ? 'rgba(212,175,55,0.2)' : 'rgba(212,175,55,0.14)' }]}>
+                                        <Ionicons name="navigate-outline" size={11} color={iconMuted} />
+                                        <Text style={[styles.d0NearbyCardMetaText, { color: innerTextSecondary }]} numberOfLines={1}>
+                                          View on map
+                                        </Text>
                                     </View>
                                   </View>
                                 </TouchableOpacity>
@@ -1043,7 +1058,7 @@ export function AIPlanScreenViewMap({ screen }) {
                   <View
                     style={[
                       styles.planMastheadFrost,
-                      { backgroundColor: screen.isDark ? 'rgba(15,23,42,0.45)' : 'rgba(255,255,255,0.2)' },
+                      { backgroundColor: screen.isDark ? 'rgba(0,0,0,0.45)' : 'rgba(255,255,255,0.2)' },
                     ]}
                     pointerEvents="none"
                   />

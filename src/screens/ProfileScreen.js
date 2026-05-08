@@ -13,6 +13,8 @@ import {
   Easing,
   TextInput,
   useWindowDimensions,
+  Image,
+  Linking,
 } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useNavigation, useFocusEffect } from '@react-navigation/native'
@@ -31,6 +33,13 @@ import { fetchMyCommunityPosts, getCommunityUserId } from '../services/community
 import { buildAndPersistUserPersona } from '../services/personalization'
 import { invalidatePersonalizationCache } from '../services/feedService'
 import { listSavedPlans } from '../services/savedPlans'
+import {
+  FONT_POPPINS_BOLD,
+  FONT_POPPINS_MEDIUM,
+  FONT_POPPINS_REGULAR,
+  FONT_POPPINS_SEMIBOLD,
+} from '../constants/brandFont'
+const DEFAULT_PROFILE_IMAGE = require('../../assets/pfp.png')
 
 const TILE_GAP = 10
 const TILE_COLS = 3
@@ -100,7 +109,7 @@ const settingsStyles = StyleSheet.create({
   sectionWrap: { marginBottom: 20 },
   sectionTitle: {
     fontSize: 13,
-    fontWeight: '700',
+    fontFamily: FONT_POPPINS_BOLD,
     letterSpacing: 0.2,
     marginBottom: 8,
     marginLeft: 16,
@@ -132,7 +141,7 @@ const settingsStyles = StyleSheet.create({
   },
   rowLabel: {
     fontSize: 16,
-    fontWeight: '500',
+    fontFamily: FONT_POPPINS_MEDIUM,
     flexShrink: 1,
   },
   rowRight: {
@@ -143,7 +152,7 @@ const settingsStyles = StyleSheet.create({
   },
   rowValue: {
     fontSize: 15,
-    fontWeight: '500',
+    fontFamily: FONT_POPPINS_MEDIUM,
   },
   rowChevron: {
     marginLeft: 6,
@@ -282,7 +291,6 @@ export default function ProfileScreen() {
   }
 
   const userName = profile?.account?.user_name || authUser?.email?.split('@')[0] || 'User'
-  const userInitial = (profile?.account?.user_name || authUser?.email || 'U').charAt(0).toUpperCase()
   const userEmail = authUser?.email ?? 'Signed in'
   const rawPhone = profile?.account?.phone ?? authUser?.user_metadata?.phone
   const userPhone =
@@ -333,6 +341,20 @@ export default function ProfileScreen() {
       )
   }, [colors.warning])
 
+  const handleOpenSiyahaWebsite = useCallback(async () => {
+    const url = 'https://www.siyahabh.com'
+    try {
+      const supported = await Linking.canOpenURL(url)
+      if (!supported) {
+        Alert.alert('Unable to open link', 'Please visit www.siyahabh.com in your browser.')
+        return
+      }
+      await Linking.openURL(url)
+    } catch (e) {
+      Alert.alert('Unable to open link', e?.message || 'Please try again later.')
+    }
+  }, [])
+
   const appearanceLabel = useMemo(() => {
     if (colorScheme === 'dark') return 'Dark'
     if (colorScheme === 'light') return 'Light'
@@ -368,7 +390,7 @@ export default function ProfileScreen() {
           <View style={settingsStyles.feedCardOuter}>
             <View style={[settingsStyles.feedCardInner, { backgroundColor: C.cardBg, borderColor: C.borderLight }]}>
               <View style={s.profileHeaderRow}>
-                <FadeInView delay={120} from={16} duration={420} springUp>
+                <FadeInView delay={120} from={16} duration={420} springUp style={s.profileAvatarWrap}>
                   <Animated.View style={{ opacity: avatarFade, transform: [{ scale: avatarScale }] }}>
                     <LinearGradient
                       colors={gradients.avatarRing}
@@ -377,7 +399,7 @@ export default function ProfileScreen() {
                       style={s.avatarGradientRing}
                     >
                       <View style={[s.avatarInner, { backgroundColor: C.cardBg }]}>
-                        <Text style={[s.avatarInitial, { color: C.primary }]}>{userInitial}</Text>
+                        <Image source={DEFAULT_PROFILE_IMAGE} style={s.avatarImage} resizeMode="cover" />
                       </View>
                     </LinearGradient>
                   </Animated.View>
@@ -539,7 +561,25 @@ export default function ProfileScreen() {
                 <SettingsRow icon="chatbubble-outline" iconColor={C.textSecondary} label="Contact us" value="Coming soon" C={C} />
               </FadeInView>
               <FadeInView delay={700} from={14} duration={320} springUp>
-                <SettingsRow icon="document-text-outline" iconColor={C.textSecondary} label="About SiyahaBH" value="Version info" C={C} isLast />
+                <SettingsRow
+                  icon="document-text-outline"
+                  iconColor={C.textSecondary}
+                  label="About SiyahaBH"
+                  value="siyahabh.com"
+                  onPress={handleOpenSiyahaWebsite}
+                  C={C}
+                />
+              </FadeInView>
+              <FadeInView delay={730} from={14} duration={320} springUp>
+                <SettingsRow
+                  icon="shield-checkmark-outline"
+                  iconColor={C.textSecondary}
+                  label="Privacy Policy"
+                  value="siyahabh.com"
+                  onPress={handleOpenSiyahaWebsite}
+                  C={C}
+                  isLast
+                />
               </FadeInView>
             </SettingsSection>
           </FadeInView>
@@ -712,7 +752,7 @@ export default function ProfileScreen() {
                           scaleDown={0.95}
                         >
                           <Ionicons name={p.icon} size={18} color={selected ? p.color : C.textMuted} />
-                          <Text style={[s.prefChipLabel, { color: C.textSecondary }, selected && { color: p.color, fontWeight: '700' }]} numberOfLines={2}>
+                          <Text style={[s.prefChipLabel, { color: C.textSecondary }, selected && { color: p.color, fontFamily: FONT_POPPINS_BOLD }]} numberOfLines={2}>
                             {p.label}
                           </Text>
                         </AnimatedPressable>
@@ -742,7 +782,7 @@ export default function ProfileScreen() {
                     scaleDown={0.95}
                   >
                     <Ionicons name={p.icon} size={20} color={selected ? p.color : C.textMuted} />
-                    <Text style={[s.prefChipLabel, { color: C.textSecondary }, selected && { color: p.color, fontWeight: '700' }]} numberOfLines={2}>
+                    <Text style={[s.prefChipLabel, { color: C.textSecondary }, selected && { color: p.color, fontFamily: FONT_POPPINS_BOLD }]} numberOfLines={2}>
                       {p.label}
                     </Text>
                   </AnimatedPressable>
@@ -769,7 +809,7 @@ export default function ProfileScreen() {
                     scaleDown={0.95}
                   >
                     <Ionicons name={p.icon} size={20} color={selected ? p.color : C.textMuted} />
-                    <Text style={[s.prefChipLabel, { color: C.textSecondary }, selected && { color: p.color, fontWeight: '700' }]} numberOfLines={2}>
+                    <Text style={[s.prefChipLabel, { color: C.textSecondary }, selected && { color: p.color, fontFamily: FONT_POPPINS_BOLD }]} numberOfLines={2}>
                       {p.label}
                     </Text>
                   </AnimatedPressable>
@@ -834,24 +874,35 @@ const s = StyleSheet.create({
   headerTitleWrap: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   homeHeaderTitle: {
     fontSize: 20,
-    fontWeight: '800',
+    fontFamily: FONT_POPPINS_BOLD,
     letterSpacing: -0.5,
   },
   profileHeaderRow: {
-    flexDirection: 'row',
+    flexDirection: 'column',
     alignItems: 'center',
-    gap: 14,
+    justifyContent: 'center',
+    gap: 12,
     paddingHorizontal: 14,
-    paddingTop: 14,
-    paddingBottom: 12,
+    paddingTop: 20,
+    paddingBottom: 14,
   },
-  profileHeaderText: { flex: 1, minWidth: 0 },
-  profileDisplayName: { fontSize: 18, fontWeight: '700', letterSpacing: -0.3 },
-  profileEmailLine: { fontSize: 13, fontWeight: '500', marginTop: 4, lineHeight: 18 },
-  profilePhoneLine: { fontSize: 13, fontWeight: '500', marginTop: 2, lineHeight: 18 },
+  profileAvatarWrap: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    alignSelf: 'center',
+  },
+  profileHeaderText: {
+    width: '100%',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 6,
+  },
+  profileDisplayName: { fontSize: 20, fontFamily: FONT_POPPINS_BOLD, letterSpacing: -0.3, textAlign: 'center' },
+  profileEmailLine: { fontSize: 13, fontFamily: FONT_POPPINS_MEDIUM, marginTop: 4, lineHeight: 18, textAlign: 'center' },
+  profilePhoneLine: { fontSize: 13, fontFamily: FONT_POPPINS_MEDIUM, marginTop: 2, lineHeight: 18, textAlign: 'center' },
   profileTierPill: {
     marginTop: 10,
-    alignSelf: 'flex-start',
+    alignSelf: 'center',
     borderRadius: LUXURY.radiusPill,
     borderWidth: 1,
     paddingHorizontal: 10,
@@ -862,26 +913,30 @@ const s = StyleSheet.create({
   },
   profileTierText: {
     fontSize: 11,
-    fontWeight: '800',
+    fontFamily: FONT_POPPINS_BOLD,
     letterSpacing: 0.35,
     textTransform: 'uppercase',
   },
   avatarGradientRing: {
-    width: 64,
-    height: 64,
-    borderRadius: 32,
-    padding: 2,
+    width: 86,
+    height: 86,
+    borderRadius: 43,
+    padding: 3,
     alignItems: 'center',
     justifyContent: 'center',
   },
   avatarInner: {
-    width: 60,
-    height: 60,
-    borderRadius: 30,
+    width: 80,
+    height: 80,
+    borderRadius: 40,
     alignItems: 'center',
     justifyContent: 'center',
+    overflow: 'hidden',
   },
-  avatarInitial: { fontSize: 24, fontWeight: '800' },
+  avatarImage: {
+    width: '100%',
+    height: '100%',
+  },
   statsRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -899,8 +954,8 @@ const s = StyleSheet.create({
     gap: 5,
     ...luxurySoftShadow,
   },
-  statValue: { fontSize: 17, fontWeight: '800' },
-  statLabel: { fontSize: 9, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.35 },
+  statValue: { fontSize: 17, fontFamily: FONT_POPPINS_BOLD },
+  statLabel: { fontSize: 9, fontFamily: FONT_POPPINS_BOLD, textTransform: 'uppercase', letterSpacing: 0.35 },
   profileIdentityOuter: { marginBottom: 16 },
   sectionStack: { gap: 0, paddingTop: 4 },
   ctaSection: { paddingTop: 12, paddingHorizontal: 0 },
@@ -914,7 +969,7 @@ const s = StyleSheet.create({
     borderWidth: 1.5,
     ...luxurySoftShadow,
   },
-  signOutText: { fontSize: 16, fontWeight: '700' },
+  signOutText: { fontSize: 16, fontFamily: FONT_POPPINS_BOLD },
   modalSafe: { flex: 1 },
   /** Column so the footer stays above the fold; `minHeight: 0` lets ScrollView shrink on web. */
   modalPrefsColumn: { flex: 1, minHeight: 0, width: '100%' },
@@ -928,14 +983,14 @@ const s = StyleSheet.create({
     flexShrink: 0,
   },
   modalCloseBtn: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
-  modalHeaderSaveText: { fontSize: 16, fontWeight: '700' },
-  modalTitle: { fontSize: 18, fontWeight: '700' },
+  modalHeaderSaveText: { fontSize: 16, fontFamily: FONT_POPPINS_BOLD },
+  modalTitle: { fontSize: 18, fontFamily: FONT_POPPINS_BOLD },
   modalScroll: { flex: 1, minHeight: 0 },
   modalScrollContent: { padding: 20, paddingBottom: 32 },
-  modalSectionLabel: { fontSize: 17, fontWeight: '700', marginBottom: 6 },
-  modalSectionHint: { fontSize: 13, marginBottom: 12, lineHeight: 18 },
+  modalSectionLabel: { fontSize: 17, fontFamily: FONT_POPPINS_BOLD, marginBottom: 6 },
+  modalSectionHint: { fontSize: 13, fontFamily: FONT_POPPINS_REGULAR, marginBottom: 12, lineHeight: 18 },
   modalGroupBlock: { marginBottom: 14 },
-  modalGroupLabel: { fontSize: 12, fontWeight: '600', marginBottom: 8, textTransform: 'uppercase', letterSpacing: 0.4 },
+  modalGroupLabel: { fontSize: 12, fontFamily: FONT_POPPINS_SEMIBOLD, marginBottom: 8, textTransform: 'uppercase', letterSpacing: 0.4 },
   prefChipGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -951,7 +1006,7 @@ const s = StyleSheet.create({
     borderRadius: LUXURY.radiusChip + 2,
     ...luxurySoftShadow,
   },
-  prefChipLabel: { fontSize: 12, fontWeight: '600', textAlign: 'center' },
+  prefChipLabel: { fontSize: 12, fontFamily: FONT_POPPINS_SEMIBOLD, textAlign: 'center' },
   profileTextInput: {
     minHeight: 92,
     borderRadius: 14,
@@ -960,9 +1015,9 @@ const s = StyleSheet.create({
     paddingVertical: 10,
     fontSize: 14,
     lineHeight: 20,
-    fontWeight: '500',
+    fontFamily: FONT_POPPINS_MEDIUM,
   },
-  modalHint: { fontSize: 13, marginTop: 20, lineHeight: 20 },
+  modalHint: { fontSize: 13, fontFamily: FONT_POPPINS_REGULAR, marginTop: 20, lineHeight: 20 },
   modalFooter: {
     padding: 16,
     paddingBottom: Platform.OS === 'ios' ? 34 : 16,
@@ -971,7 +1026,7 @@ const s = StyleSheet.create({
     width: '100%',
   },
   modalSaveButtonWide: { width: '100%', alignSelf: 'stretch' },
-  modalSaveBtnText: { fontSize: 16, fontWeight: '700', color: '#FFF' },
+  modalSaveBtnText: { fontSize: 16, fontFamily: FONT_POPPINS_BOLD, color: '#FFF' },
   appearanceOption: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -989,6 +1044,6 @@ const s = StyleSheet.create({
     justifyContent: 'center',
   },
   appearanceTextWrap: { flex: 1 },
-  appearanceOptionLabel: { fontSize: 16, fontWeight: '600' },
-  appearanceOptionDesc: { fontSize: 13, marginTop: 2 },
+  appearanceOptionLabel: { fontSize: 16, fontFamily: FONT_POPPINS_SEMIBOLD },
+  appearanceOptionDesc: { fontSize: 13, fontFamily: FONT_POPPINS_REGULAR, marginTop: 2 },
 })

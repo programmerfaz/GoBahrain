@@ -3,11 +3,11 @@ import { View, Text, StyleSheet } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useTheme } from '../context/ThemeContext'
 
-const SIDE = 38
+const SIDE = 44
 
 /**
  * Same safe-area + title row pattern as Home: solid background, no blur,
- * primary title (20 / 800), optional subtitle, balanced 38×38 side slots.
+ * primary title (20 / 800), optional subtitle, balanced 44×44 side slots.
  */
 export default function PageHeadingBar({
   title,

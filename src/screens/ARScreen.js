@@ -20,7 +20,10 @@ import Slider from '@react-native-community/slider'
 import { CameraView, useCameraPermissions } from 'expo-camera'
 import { BlurView } from 'expo-blur'
 import { LinearGradient } from 'expo-linear-gradient'
+import Svg, { Polygon } from 'react-native-svg'
 import * as Location from 'expo-location'
+import { Accelerometer } from 'expo-sensors'
+import * as Haptics from 'expo-haptics'
 import { Ionicons } from '@expo/vector-icons'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useRoute } from '@react-navigation/native'
@@ -31,6 +34,12 @@ import { colors as themeColors } from '../theme/designTokens'
 import { LUXURY, luxuryElevated } from '../theme/luxuryPremium'
 import { useTheme } from '../context/ThemeContext'
 import { openGoogleMapsDirections } from '../utils/googleMapsDirections'
+import {
+  FONT_POPPINS_BOLD,
+  FONT_POPPINS_MEDIUM,
+  FONT_POPPINS_REGULAR,
+  FONT_POPPINS_SEMIBOLD,
+} from '../constants/brandFont'
 
 const C = {
   accent: themeColors.primary,
@@ -76,6 +85,81 @@ const LANDMARK_HERITAGE = {
 }
 
 const CAMERA_FOV_DEG = 55
+
+const PATH_CHEVRON_COUNT = 10
+/** Base camera-plane tilt toward “floor”; device pitch adjusts on top via accelerometer */
+const GROUND_PLANE_BASE_DEG = 66
+const GROUND_PLANE_PIVOT_PX = 124
+const GROUND_PERSPECTIVE = 580
+/** Extra rotateX contributed by device tilt (degrees), clamped in effect */
+const FLOOR_PITCH_COEFF = 0.52
+const ALIGN_ANGLE_THRESHOLD_DEG = 12
+const HOLO_BLEND = Platform.OS === 'ios' ? 'screen' : 'normal'
+
+const hexToRgba = (hex, alpha) => {
+  if (!hex || typeof hex !== 'string' || !hex.startsWith('#')) return `rgba(230,57,80,${alpha})`
+  let h = hex.slice(1)
+  if (h.length === 3) h = h.split('').map((c) => c + c).join('')
+  if (h.length !== 6) return `rgba(230,57,80,${alpha})`
+  const r = parseInt(h.slice(0, 2), 16)
+  const g = parseInt(h.slice(2, 4), 16)
+  const b = parseInt(h.slice(4, 6), 16)
+  return `rgba(${r},${g},${b},${alpha})`
+}
+
+const CHEVRON_BASE_SCALE = 1.22
+
+const poiKeyOf = (p) => (p?.name != null && p?.lat != null ? `${String(p.name)}-${Number(p.lat)}` : '')
+
+/** Bearing and heading alignment toward a geographic target */
+const getNavTargeting = (target, userLat, userLng, headingDeg) => {
+  if (!target || target.lat == null || target.lng == null || userLat == null || userLng == null) return null
+  const dLon = ((target.lng - userLng) * Math.PI) / 180
+  const y2 = Math.sin(dLon) * Math.cos((target.lat * Math.PI) / 180)
+  const x2 =
+    Math.cos((userLat * Math.PI) / 180) * Math.sin((target.lat * Math.PI) / 180) -
+    Math.sin((userLat * Math.PI) / 180) * Math.cos((target.lat * Math.PI) / 180) * Math.cos(dLon)
+  const bearing = ((Math.atan2(y2, x2) * 180) / Math.PI + 360) % 360
+  const dLat = ((target.lat - userLat) * Math.PI) / 180
+  const ha = Math.sin(dLat / 2) ** 2 + Math.cos((userLat * Math.PI) / 180) * Math.cos((target.lat * Math.PI) / 180) * Math.sin(dLon / 2) ** 2
+  const distKm = 6371 * 2 * Math.atan2(Math.sqrt(ha), Math.sqrt(1 - ha))
+  const relBearing = (bearing - headingDeg + 360) % 360
+  const angleOff = Math.min(relBearing, 360 - relBearing)
+  const aligned = angleOff <= ALIGN_ANGLE_THRESHOLD_DEG
+  const inView = angleOff <= CAMERA_FOV_DEG / 2
+  return { bearing, distKm, relBearing, aligned, angleOff, inView }
+}
+
+/** When focus picked from UI without bearings, derive distance/bearing like navigate target */
+const enrichPoiBearingsFromUser = (poi, userLat, userLng) => {
+  if (!poi || poi.lat == null || poi.lng == null || userLat == null || userLng == null) return poi
+  const dLat = ((poi.lat - userLat) * Math.PI) / 180
+  const dLon = ((poi.lng - userLng) * Math.PI) / 180
+  const a2 = Math.sin(dLat / 2) ** 2 + Math.cos((userLat * Math.PI) / 180) * Math.cos((poi.lat * Math.PI) / 180) * Math.sin(dLon / 2) ** 2
+  const distKm = 6371 * 2 * Math.atan2(Math.sqrt(a2), Math.sqrt(1 - a2))
+  const y2 = Math.sin(dLon) * Math.cos((poi.lat * Math.PI) / 180)
+  const x2 =
+    Math.cos((userLat * Math.PI) / 180) * Math.sin((poi.lat * Math.PI) / 180) -
+    Math.sin((userLat * Math.PI) / 180) * Math.cos((poi.lat * Math.PI) / 180) * Math.cos(dLon)
+  const bearing = ((Math.atan2(y2, x2) * 180) / Math.PI + 360) % 360
+  return { ...poi, distanceKm: distKm, bearing }
+}
+
+const makeChevronFlowOpacity = (anim, index, count) => {
+  const depth = count <= 1 ? 1 : 0.2 + 0.8 * (index / (count - 1))
+  const lo = 0.26 + 0.32 * depth
+  const hi = 0.48 + 0.44 * depth
+  if (count <= 1) {
+    return anim.interpolate({ inputRange: [0, 0.5, 1], outputRange: [lo, hi, lo], extrapolate: 'clamp' })
+  }
+  const peak = index / (count - 1)
+  const half = 0.09
+  return anim.interpolate({
+    inputRange: [0, Math.max(0, peak - half), peak, Math.min(1, peak + half), 1],
+    outputRange: [lo, lo, hi, lo, lo],
+    extrapolate: 'clamp',
+  })
+}
 
 const getPoiColor = (poi) => {
   if (poi._isLandmark || poi._type === 'landmark') return C.landmark
@@ -146,18 +230,28 @@ function ScanningLoader() {
 }
 
 const ls = StyleSheet.create({
-  wrap: { ...StyleSheet.absoluteFillObject, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(0,0,0,0.6)' },
-  ring: { position: 'absolute', borderWidth: 1.5, borderColor: C.accent },
+  wrap: { ...StyleSheet.absoluteFillObject, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(0,0,0,0.68)' },
+  ring: { position: 'absolute', borderWidth: 1.5, borderColor: C.accent, backgroundColor: 'rgba(200,16,46,0.03)' },
   ring1: { width: 100, height: 100, borderRadius: 50 },
   ring2: { width: 140, height: 140, borderRadius: 70 },
   ring3: { width: 180, height: 180, borderRadius: 90 },
-  iconWrap: { marginBottom: 20 },
-  title: { color: '#FFF', fontSize: 17, fontWeight: '700', letterSpacing: 0.5 },
-  sub: { color: C.dimText, fontSize: 13, marginTop: 6 },
+  iconWrap: {
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 20,
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.14)',
+  },
+  title: { color: '#FFF', fontSize: 18, fontFamily: FONT_POPPINS_BOLD, letterSpacing: 0.4 },
+  sub: { color: 'rgba(255,255,255,0.68)', fontSize: 13, fontFamily: FONT_POPPINS_REGULAR, marginTop: 7 },
 })
 
 /* ─── POI Marker ─── */
-function POIMarker({ poi, x, y, onPress, isNearest, index, isBusy }) {
+function POIMarker({ poi, x, y, onPress, isNearest, index, isBusy, focused, dimmed, onMarkerLongPress }) {
   const anim = useRef(new Animated.Value(0)).current
   const pulse = useRef(new Animated.Value(1)).current
   const poiColor = getPoiColor(poi)
@@ -168,31 +262,49 @@ function POIMarker({ poi, x, y, onPress, isNearest, index, isBusy }) {
   }, [anim, index])
 
   useEffect(() => {
-    if (!isNearest) return
+    if (!isNearest && !focused) return
     const p = Animated.loop(Animated.sequence([
-      Animated.timing(pulse, { toValue: 1.06, duration: 900, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
+      Animated.timing(pulse, { toValue: 1.12, duration: 900, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
       Animated.timing(pulse, { toValue: 1, duration: 900, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
     ]))
     p.start()
     return () => p.stop()
-  }, [isNearest, pulse])
+  }, [isNearest, focused, pulse])
 
   const scale = anim.interpolate({ inputRange: [0, 1], outputRange: [0.5, 1] })
+  const scaleTransforms = [{ scale: isNearest || focused ? pulse : scale }]
+  const zIndexCol = focused ? 40 : dimmed ? 5 : isNearest ? 25 : 10
+
+  const handleMarkerLongPress = () => {
+    if (!onMarkerLongPress) return
+    if (Platform.OS !== 'web') {
+      try {
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium)
+      } catch { /* noop */ }
+    }
+    onMarkerLongPress(poi)
+  }
 
   return (
-    <Animated.View style={[mk.wrap, { left: x, top: y, opacity: anim, transform: [{ scale: isNearest ? pulse : scale }] }]}>
-      {isNearest && <View style={[mk.nearestGlow, { shadowColor: poiColor }]} />}
+    <Animated.View style={[mk.wrap, dimmed && mk.wrapDimmed, { left: x, top: y, opacity: anim, transform: scaleTransforms, zIndex: zIndexCol }]}>
+      <View pointerEvents="none" style={[mk.pinHalo, { borderColor: hexToRgba(poiColor, 0.45) }]} />
+      {(isNearest || focused) && <View style={[mk.nearestGlow, { shadowColor: poiColor }]} />}
       <TouchableOpacity
         style={[
           mk.card,
-          isNearest && { borderColor: `${poiColor}70` },
-          poi._pineconeRecommended && { borderColor: 'rgba(167,139,250,0.40)' },
+          { shadowColor: poiColor },
+          focused && { borderColor: `${C.success}aa`, borderWidth: 2 },
+          isNearest && !focused && { borderColor: `${poiColor}95` },
+          poi._pineconeRecommended && !isNearest && !focused && { borderColor: 'rgba(167,139,250,0.55)' },
         ]}
         onPress={() => onPress?.(poi)}
+        onLongPress={onMarkerLongPress ? handleMarkerLongPress : undefined}
+        delayLongPress={380}
         activeOpacity={0.85}
+        accessibilityHint={onMarkerLongPress ? 'Long press to focus on this place in AR' : undefined}
       >
-        <View style={[mk.iconBg, { backgroundColor: `${poiColor}22` }]}>
-          <Ionicons name={icon} size={11} color={poiColor} />
+        <View style={[mk.iconBg, { backgroundColor: `${poiColor}38` }]}>
+          <Ionicons name={icon} size={15} color={poiColor} />
         </View>
         <View style={mk.textCol}>
           <Text style={mk.name} numberOfLines={1}>{poi.name}</Text>
@@ -200,108 +312,115 @@ function POIMarker({ poi, x, y, onPress, isNearest, index, isBusy }) {
         </View>
         {poi._pineconeRecommended && (
           <View style={mk.aiBadge}>
-            <Ionicons name="sparkles" size={7} color="#A78BFA" />
+            <Ionicons name="sparkles" size={9} color="#A78BFA" />
           </View>
         )}
       </TouchableOpacity>
-      <View style={[mk.stem, { backgroundColor: `${poiColor}35` }]} />
+      <View style={[mk.stem, { backgroundColor: `${poiColor}90` }]} />
+      <View style={[mk.pinDot, { backgroundColor: poiColor, borderColor: 'rgba(255,255,255,0.85)' }]} />
     </Animated.View>
   )
 }
 
 const mk = StyleSheet.create({
   wrap: { position: 'absolute', alignItems: 'center' },
+  wrapDimmed: { opacity: 0.32 },
+  pinHalo: {
+    position: 'absolute',
+    top: -8,
+    left: -8,
+    right: -8,
+    bottom: 34,
+    borderRadius: LUXURY.radiusMarkerPill + 10,
+    borderWidth: 2,
+    opacity: 0.64,
+    backgroundColor: 'rgba(255,255,255,0.03)',
+  },
   nearestGlow: {
     position: 'absolute',
-    top: 4, left: 4, right: 4, bottom: 4,
-    borderRadius: LUXURY.radiusMarkerPill,
+    top: 0, left: 0, right: 0, bottom: 8,
+    borderRadius: LUXURY.radiusMarkerPill + 2,
     ...Platform.select({
-      ios: { shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.5, shadowRadius: 10 },
+      ios: { shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.72, shadowRadius: 18 },
       android: { elevation: 0 },
     }),
   },
   card: {
-    flexDirection: 'row', alignItems: 'center', gap: 6,
-    paddingVertical: 8, paddingHorizontal: 10,
-    backgroundColor: C.card,
-    borderRadius: LUXURY.radiusMarkerPill,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: C.glassBorder,
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    paddingVertical: 12, paddingHorizontal: 14,
+    backgroundColor: 'rgba(9,12,22,0.88)',
+    borderRadius: LUXURY.radiusMarkerPill + 2,
+    borderWidth: 1.5,
+    borderColor: 'rgba(255,255,255,0.18)',
     ...luxuryElevated,
+    ...Platform.select({
+      ios: { shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.42, shadowRadius: 18 },
+      android: { elevation: 12 },
+    }),
   },
-  iconBg: { width: 20, height: 20, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
-  textCol: { flexDirection: 'column', gap: 1 },
-  name: { color: '#FFF', fontSize: 10, fontWeight: '700', maxWidth: 80 },
-  dist: { color: C.dimText, fontSize: 9, fontWeight: '600' },
+  iconBg: { width: 30, height: 30, borderRadius: 12, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: 'rgba(255,255,255,0.16)' },
+  textCol: { flexDirection: 'column', gap: 2 },
+  name: { color: '#FFF', fontSize: 12, fontFamily: FONT_POPPINS_BOLD, maxWidth: 118, letterSpacing: 0.15 },
+  dist: { color: 'rgba(255,255,255,0.78)', fontSize: 11, fontFamily: FONT_POPPINS_BOLD },
   aiBadge: {
-    width: 14, height: 14, borderRadius: 5,
-    backgroundColor: 'rgba(167,139,250,0.18)',
+    width: 18, height: 18, borderRadius: 6,
+    backgroundColor: 'rgba(167,139,250,0.28)',
     alignItems: 'center', justifyContent: 'center',
-    borderWidth: 1, borderColor: 'rgba(167,139,250,0.25)',
+    borderWidth: 1.5, borderColor: 'rgba(167,139,250,0.45)',
   },
-  stem: { width: 1, height: 8, opacity: 0.5 },
+  stem: { width: 3, height: 14, opacity: 0.9, borderRadius: 2, marginTop: -1 },
+  pinDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    marginTop: -2,
+    borderWidth: 2,
+    ...Platform.select({
+      ios: { shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.55, shadowRadius: 6 },
+      android: { elevation: 4 },
+    }),
+  },
 })
 
-/* ─── Navigate Banner ─── */
-function NavigateToBanner({ destination, userLat, userLng, heading, onDismiss }) {
-  if (!destination || userLat == null || userLng == null) return null
-  const dLon = ((destination.lng - userLng) * Math.PI) / 180
-  const y2 = Math.sin(dLon) * Math.cos((destination.lat * Math.PI) / 180)
-  const x2 = Math.cos((userLat * Math.PI) / 180) * Math.sin((destination.lat * Math.PI) / 180) -
-    Math.sin((userLat * Math.PI) / 180) * Math.cos((destination.lat * Math.PI) / 180) * Math.cos(dLon)
-  const bearing = ((Math.atan2(y2, x2) * 180) / Math.PI + 360) % 360
-  const dLat = ((destination.lat - userLat) * Math.PI) / 180
-  const a = Math.sin(dLat / 2) ** 2 + Math.cos((userLat * Math.PI) / 180) * Math.cos((destination.lat * Math.PI) / 180) * Math.sin(dLon / 2) ** 2
-  const distKm = 6371 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
-  const relBearing = (bearing - heading + 360) % 360
-  const inView = Math.min(relBearing, 360 - relBearing) <= CAMERA_FOV_DEG / 2
+/* ─── Holographic ground-path chevrons (minimal nav HUD) ─── */
+function HolographicVChevron({ baseColor, depthScale, animOpacity }) {
+  const sz = CHEVRON_BASE_SCALE * depthScale
+  const w = 40 * sz
+  const h = 25 * sz
+  const peakY = 1.2 * sz
+  const leftX = w * 0.06
+  const rightX = w * 0.94
+  const baseY = h - 0.5
+  const points = `${w / 2},${peakY} ${leftX},${baseY} ${rightX},${baseY}`
+  const strokeGlow = hexToRgba(baseColor, 0.62)
+  const strokeCore = hexToRgba(baseColor, 0.96)
 
   return (
-    <View style={nb.wrap}>
-      <BlurView intensity={Platform.OS === 'ios' ? 50 : 0} tint="dark" style={nb.blur}>
-        <View style={nb.inner}>
-          <View style={nb.arrowWrap}>
-            <LinearGradient colors={[`${C.accent}25`, 'transparent']} style={StyleSheet.absoluteFill} />
-            <Ionicons name="navigate" size={28} color={C.accent} style={{ transform: [{ rotate: `${relBearing}deg` }] }} />
-          </View>
-          <View style={nb.textCol}>
-            <Text style={nb.title} numberOfLines={1}>{destination.name}</Text>
-            <Text style={nb.sub}>
-              {inView ? 'Walk toward the arrow' : `Turn ${Math.round(relBearing > 180 ? 360 - relBearing : relBearing)}° ${relBearing > 180 ? 'left' : 'right'}`}
-            </Text>
-            <View style={nb.pills}>
-              <View style={nb.pill}><Ionicons name="walk" size={11} color={C.accent} /><Text style={nb.pillText}>{getWalkingTime(distKm)}</Text></View>
-              <View style={nb.pill}><Ionicons name="navigate-outline" size={11} color={C.dimText} /><Text style={nb.pillText}>{getDistText(distKm)}</Text></View>
-            </View>
-          </View>
-          {onDismiss && (
-            <TouchableOpacity style={nb.closeBtn} onPress={onDismiss} hitSlop={12}>
-              <Ionicons name="close" size={18} color={C.dimText} />
-            </TouchableOpacity>
-          )}
-        </View>
-      </BlurView>
-    </View>
+    <Animated.View style={[pa.chevUnit, { opacity: animOpacity }]} pointerEvents="none" accessibilityElementsHidden>
+      <View
+        style={[
+          pa.chevSvgGlow,
+          {
+            width: w,
+            height: h,
+            shadowColor: baseColor,
+            ...Platform.select({
+              ios: { shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.88, shadowRadius: 11 },
+              android: { elevation: 0 },
+            }),
+          },
+        ]}
+      >
+        <Svg width={w} height={h} viewBox={`0 0 ${w} ${h}`}>
+          <Polygon points={points} fill="none" stroke={strokeGlow} strokeWidth={3.9 * sz} strokeLinejoin="miter" strokeLinecap="butt" opacity={0.68} />
+          <Polygon points={points} fill="none" stroke={strokeCore} strokeWidth={1.45 * sz} strokeLinejoin="miter" strokeLinecap="butt" opacity={0.93} />
+        </Svg>
+      </View>
+    </Animated.View>
   )
 }
 
-const nb = StyleSheet.create({
-  wrap: { position: 'absolute', top: 100, left: 12, right: 12, zIndex: 10 },
-  blur: { borderRadius: 18, overflow: 'hidden', borderWidth: 1, borderColor: `${C.accent}25` },
-  inner: { flexDirection: 'row', alignItems: 'center', padding: 12, backgroundColor: Platform.OS === 'android' ? C.glass : 'transparent' },
-  arrowWrap: { width: 48, height: 48, borderRadius: 14, alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
-  textCol: { flex: 1, marginLeft: 10 },
-  title: { color: '#FFF', fontSize: 15, fontWeight: '800', marginBottom: 2 },
-  sub: { color: C.sub, fontSize: 12 },
-  pills: { flexDirection: 'row', gap: 6, marginTop: 5 },
-  pill: { flexDirection: 'row', alignItems: 'center', gap: 3, backgroundColor: 'rgba(255,255,255,0.07)', paddingHorizontal: 7, paddingVertical: 2.5, borderRadius: 7 },
-  pillText: { color: C.sub, fontSize: 10, fontWeight: '600' },
-  closeBtn: { padding: 6, marginLeft: 2 },
-})
-
-/* ─── Path Arrow Indicator (Pokémon GO style) ─── */
-function PathArrowIndicator({ target, heading, userLat, userLng, isNavigation, style }) {
-  const pulseAnim = useRef(new Animated.Value(1)).current
+function PathArrowIndicator({ target, heading, userLat, userLng, isNavigation, style, floorPitchDeg = 0, onDismissNavigation }) {
   const chevAnim = useRef(new Animated.Value(0)).current
   const mountAnim = useRef(new Animated.Value(0)).current
 
@@ -311,86 +430,108 @@ function PathArrowIndicator({ target, heading, userLat, userLng, isNavigation, s
       return
     }
     Animated.spring(mountAnim, { toValue: 1, damping: 14, stiffness: 110, useNativeDriver: true }).start()
-    const pulse = Animated.loop(Animated.sequence([
-      Animated.timing(pulseAnim, { toValue: 1.22, duration: 950, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
-      Animated.timing(pulseAnim, { toValue: 1, duration: 950, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
-    ]))
-    pulse.start()
     const chev = Animated.loop(
-      Animated.timing(chevAnim, { toValue: 1, duration: 1400, easing: Easing.linear, useNativeDriver: true })
+      Animated.timing(chevAnim, { toValue: 1, duration: 2200, easing: Easing.linear, useNativeDriver: true })
     )
     chev.start()
-    return () => { pulse.stop(); chev.stop() }
-  }, [target, pulseAnim, chevAnim, mountAnim])
+    return () => { chev.stop() }
+  }, [target, chevAnim, mountAnim])
 
   if (!target || userLat == null || userLng == null) return null
 
-  const dLon = ((target.lng - userLng) * Math.PI) / 180
-  const y2 = Math.sin(dLon) * Math.cos((target.lat * Math.PI) / 180)
-  const x2 =
-    Math.cos((userLat * Math.PI) / 180) * Math.sin((target.lat * Math.PI) / 180) -
-    Math.sin((userLat * Math.PI) / 180) * Math.cos((target.lat * Math.PI) / 180) * Math.cos(dLon)
-  const bearing = ((Math.atan2(y2, x2) * 180) / Math.PI + 360) % 360
-  const dLat = ((target.lat - userLat) * Math.PI) / 180
-  const haA = Math.sin(dLat / 2) ** 2 + Math.cos((userLat * Math.PI) / 180) * Math.cos((target.lat * Math.PI) / 180) * Math.sin(dLon / 2) ** 2
-  const distKm = 6371 * 2 * Math.atan2(Math.sqrt(haA), Math.sqrt(1 - haA))
-  const relBearing = (bearing - heading + 360) % 360
-  const inView = Math.min(relBearing, 360 - relBearing) <= CAMERA_FOV_DEG / 2
+  const nav = getNavTargeting(target, userLat, userLng, heading)
+  if (!nav) return null
+
+  const relBearing = nav.relBearing
+  const distKm = nav.distKm
   const turnDeg = Math.round(relBearing > 180 ? 360 - relBearing : relBearing)
   const turnDir = relBearing > 180 ? 'left' : 'right'
-  const statusLine = inView
+  const statusLine = nav.aligned
+    ? 'Locked on bearing'
+    : nav.inView
     ? 'Straight ahead'
     : turnDeg < 20
     ? `Slightly ${turnDir}`
     : `Turn ${turnDeg}° ${turnDir}`
-  const poiColor = isNavigation ? C.accent : getPoiColor(target)
 
-  const chev0 = chevAnim.interpolate({ inputRange: [0, 0.25, 0.5], outputRange: [0.1, 1, 0.1], extrapolate: 'clamp' })
-  const chev1 = chevAnim.interpolate({ inputRange: [0.25, 0.5, 0.75], outputRange: [0.1, 1, 0.1], extrapolate: 'clamp' })
-  const chev2 = chevAnim.interpolate({ inputRange: [0.5, 0.75, 1.0], outputRange: [0.1, 1, 0.1], extrapolate: 'clamp' })
+  const poiBase = isNavigation ? C.accent : getPoiColor(target)
+  const poiColor = nav.aligned ? C.success : poiBase
+
+  const floorTilt = GROUND_PLANE_BASE_DEG + Math.max(-16, Math.min(26, floorPitchDeg))
+
+  const chevronOpacities = useMemo(() => (
+    Array.from({ length: PATH_CHEVRON_COUNT }, (_, i) => makeChevronFlowOpacity(chevAnim, i, PATH_CHEVRON_COUNT))
+  ), [chevAnim])
 
   return (
     <Animated.View style={[pa.wrap, style, { transform: [{ scale: mountAnim }] }]}>
-      {/* Chevron trail pointing toward destination */}
-      <View style={[pa.chevTrail, { transform: [{ rotate: `${relBearing}deg` }] }]}>
-        {[chev2, chev1, chev0].map((op, i) => (
-          <Animated.View key={i} style={{ opacity: op, marginBottom: -3 }}>
-            <Ionicons name="chevron-up" size={13} color={poiColor} />
-          </Animated.View>
-        ))}
-      </View>
-
-      {/* Pulsing ring + arrow disc */}
-      <View style={pa.discSection}>
-        <Animated.View style={[pa.ring, { borderColor: `${poiColor}28`, transform: [{ scale: pulseAnim }] }]} />
-        <Animated.View style={[pa.ringOuter, { borderColor: `${poiColor}12`, transform: [{ scale: pulseAnim.interpolate({ inputRange: [1, 1.22], outputRange: [1.3, 1.65] }) }] }]} />
-        <LinearGradient colors={[`${poiColor}28`, `${poiColor}08`]} style={pa.disc}>
-          <View style={[pa.innerDisc, { borderColor: `${poiColor}45` }]}>
-            <Ionicons
-              name="navigate"
-              size={30}
-              color={poiColor}
-              style={{ transform: [{ rotate: `${relBearing}deg` }] }}
-            />
+      <View style={pa.groundAnchor} pointerEvents="none">
+        <View style={[pa.groundTint, { borderColor: hexToRgba(poiColor, 0.06) }]} pointerEvents="none" accessibilityElementsHidden />
+        <View
+          style={[
+            pa.groundPlane,
+            HOLO_BLEND !== 'normal' && Platform.OS === 'ios' ? { mixBlendMode: HOLO_BLEND } : null,
+            {
+              transform: [
+                { perspective: GROUND_PERSPECTIVE },
+                { translateY: GROUND_PLANE_PIVOT_PX },
+                { rotateX: `${floorTilt}deg` },
+                { translateY: -GROUND_PLANE_PIVOT_PX },
+              ],
+            },
+          ]}
+        >
+          <View style={[pa.pathBearing, { transform: [{ rotateZ: `${relBearing}deg` }] }]}>
+            <View style={pa.chevronStack}>
+              {Array.from({ length: PATH_CHEVRON_COUNT }, (_, j) => {
+                const i = PATH_CHEVRON_COUNT - 1 - j
+                const op = chevronOpacities[i]
+                const t = PATH_CHEVRON_COUNT <= 1 ? 1 : i / (PATH_CHEVRON_COUNT - 1)
+                const depthScale = 0.38 + 0.62 * t
+                return (
+                  <HolographicVChevron
+                    key={`chev-${i}`}
+                    baseColor={poiColor}
+                    depthScale={depthScale}
+                    animOpacity={op}
+                  />
+                )
+              })}
+            </View>
           </View>
-        </LinearGradient>
-      </View>
-
-      {/* Name + status + distance */}
-      <View style={pa.info}>
-        {target._pineconeRecommended && (
-          <View style={pa.aiBadge}>
-            <Ionicons name="sparkles" size={8} color="#A78BFA" />
-            <Text style={pa.aiText}>AI Pick</Text>
-          </View>
-        )}
-        <Text style={[pa.destName, { color: poiColor }]} numberOfLines={1}>{target.name}</Text>
-        <Text style={pa.statusLine}>{statusLine}</Text>
-        <View style={pa.distRow}>
-          <Text style={pa.distTxt}>{getDistText(distKm)}</Text>
-          <View style={pa.distDot} />
-          <Text style={pa.distTxt}>{getWalkingTime(distKm)}</Text>
         </View>
+      </View>
+
+      <View style={pa.hud}>
+        <View style={[pa.navGlyph, { borderColor: hexToRgba(poiColor, 0.55), shadowColor: poiColor }]}>
+          <Ionicons name="navigate" size={26} color={poiColor} style={{ opacity: 0.96, transform: [{ rotate: `${relBearing}deg` }] }} />
+        </View>
+        <View style={pa.info}>
+          {target._pineconeRecommended && (
+            <View style={pa.aiBadge}>
+              <Ionicons name="sparkles" size={8} color="#A78BFA" />
+              <Text style={pa.aiText}>AI Pick</Text>
+            </View>
+          )}
+          <Text style={[pa.destName, { color: poiColor }]} numberOfLines={1}>{target.name}</Text>
+          <Text style={[pa.statusLine, nav.aligned && pa.statusAligned]}>{statusLine}</Text>
+          <View style={pa.distRow}>
+            <Text style={pa.distTxt}>{getDistText(distKm)}</Text>
+            <View style={pa.distDot} />
+            <Text style={pa.distTxt}>{getWalkingTime(distKm)}</Text>
+          </View>
+        </View>
+        {isNavigation && onDismissNavigation ? (
+          <TouchableOpacity
+            style={pa.navDismiss}
+            onPress={onDismissNavigation}
+            hitSlop={14}
+            accessibilityRole="button"
+            accessibilityLabel="Stop navigation"
+          >
+            <Ionicons name="close" size={22} color="rgba(255,255,255,0.55)" />
+          </TouchableOpacity>
+        ) : null}
       </View>
     </Animated.View>
   )
@@ -399,34 +540,83 @@ function PathArrowIndicator({ target, heading, userLat, userLng, isNavigation, s
 const pa = StyleSheet.create({
   wrap: {
     position: 'absolute',
-    alignSelf: 'center',
+    left: 0,
+    right: 0,
     alignItems: 'center',
     zIndex: 8,
   },
-  chevTrail: { flexDirection: 'column', alignItems: 'center', marginBottom: 2 },
-  discSection: { alignItems: 'center', justifyContent: 'center', width: 80, height: 80 },
-  ring: {
-    position: 'absolute',
-    width: 80, height: 80, borderRadius: 40,
-    borderWidth: 1.5,
+  groundAnchor: {
+    width: '100%',
+    minHeight: 200,
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    marginBottom: 4,
   },
-  ringOuter: {
+  groundTint: {
     position: 'absolute',
-    width: 80, height: 80, borderRadius: 40,
-    borderWidth: 1,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    height: '72%',
+    borderTopLeftRadius: 120,
+    borderTopRightRadius: 120,
+    borderWidth: StyleSheet.hairlineWidth,
+    backgroundColor: 'rgba(255,255,255,0.02)',
+    opacity: 0.5,
   },
-  disc: { width: 72, height: 72, borderRadius: 36, alignItems: 'center', justifyContent: 'center' },
-  innerDisc: {
-    width: 62, height: 62, borderRadius: 31,
-    backgroundColor: 'rgba(8,10,20,0.90)',
-    borderWidth: 1.5,
-    alignItems: 'center', justifyContent: 'center',
+  groundPlane: {
+    width: '100%',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    paddingBottom: 6,
+    minHeight: 168,
+  },
+  pathBearing: {
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    width: 312,
+    minHeight: 156,
+  },
+  chevronStack: {
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    gap: 9,
+    paddingBottom: 4,
+  },
+  chevUnit: {
+    alignItems: 'center',
+  },
+  chevSvgGlow: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  hud: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 12,
+    paddingHorizontal: 16,
+    maxWidth: 320,
+  },
+  navGlyph: {
+    width: 54,
+    height: 54,
+    borderRadius: 17,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(8,10,20,0.72)',
+    borderWidth: 2,
     ...Platform.select({
-      ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 5 }, shadowOpacity: 0.6, shadowRadius: 14 },
-      android: { elevation: 16 },
+      ios: {
+        shadowOffset: { width: 0, height: 0 },
+        shadowOpacity: 0.55,
+        shadowRadius: 14,
+      },
+      android: { elevation: 10 },
     }),
   },
-  info: { alignItems: 'center', marginTop: 8 },
+  info: { flex: 1, alignItems: 'flex-start', paddingTop: 2 },
+  navDismiss: { justifyContent: 'flex-start', paddingTop: 4, paddingLeft: 2, alignSelf: 'flex-start' },
   aiBadge: {
     flexDirection: 'row', alignItems: 'center', gap: 3,
     backgroundColor: 'rgba(167,139,250,0.12)',
@@ -434,16 +624,17 @@ const pa = StyleSheet.create({
     borderWidth: 1, borderColor: 'rgba(167,139,250,0.20)',
     marginBottom: 3,
   },
-  aiText: { color: '#A78BFA', fontSize: 8, fontWeight: '700' },
-  destName: { fontSize: 13, fontWeight: '800', maxWidth: 180, textAlign: 'center' },
-  statusLine: { color: C.sub, fontSize: 11, marginTop: 2 },
+  aiText: { color: '#A78BFA', fontSize: 8, fontFamily: FONT_POPPINS_BOLD },
+  destName: { fontSize: 15, fontFamily: FONT_POPPINS_BOLD, maxWidth: 240, letterSpacing: 0.2 },
+  statusLine: { color: C.sub, fontSize: 11, fontFamily: FONT_POPPINS_REGULAR, marginTop: 2 },
+  statusAligned: { color: C.success, fontFamily: FONT_POPPINS_BOLD },
   distRow: { flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 3 },
-  distTxt: { color: C.dimText, fontSize: 10, fontWeight: '600' },
+  distTxt: { color: C.dimText, fontSize: 10, fontFamily: FONT_POPPINS_SEMIBOLD },
   distDot: { width: 2, height: 2, borderRadius: 1, backgroundColor: C.dimText, opacity: 0.5 },
 })
 
 /* ─── Radar Navigator ─── */
-function RadarNavigator({ heading, basePois, maxDistanceKm, onSelectPoi, topOffset }) {
+function RadarNavigator({ heading, basePois, maxDistanceKm, onSelectPoi, topOffset, subdued }) {
   const sweepAnim = useRef(new Animated.Value(0)).current
   const centerPulse = useRef(new Animated.Value(1)).current
 
@@ -486,7 +677,7 @@ function RadarNavigator({ heading, basePois, maxDistanceKm, onSelectPoi, topOffs
   const sweepRotate = sweepAnim.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '360deg'] })
 
   return (
-    <View style={[rd.outer, { top: topOffset }]}>
+    <View style={[rd.outer, subdued && rd.outerSubdued, { top: topOffset }]}>
       <View style={[rd.radar, { width: SIZE, height: SIZE, borderRadius: R }]}>
         {[0.33, 0.66, 1].map((ratio, i) => {
           const s = (SIZE - PAD * 2) * ratio
@@ -523,17 +714,18 @@ function RadarNavigator({ heading, basePois, maxDistanceKm, onSelectPoi, topOffs
 
 const rd = StyleSheet.create({
   outer: { position: 'absolute', left: 12, alignItems: 'center', zIndex: 5 },
+  outerSubdued: { opacity: 0.34 },
   radar: {
-    backgroundColor: 'rgba(8,10,18,0.88)', borderWidth: 1, borderColor: C.glassBorder, overflow: 'hidden',
+    backgroundColor: 'rgba(8,10,18,0.78)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.14)', overflow: 'hidden',
     ...Platform.select({
-      ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.6, shadowRadius: 16 },
+      ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 10 }, shadowOpacity: 0.48, shadowRadius: 20 },
       android: { elevation: 14 },
     }),
   },
-  ring: { position: 'absolute', borderWidth: 1, borderColor: 'rgba(255,255,255,0.05)' },
-  crossH: { position: 'absolute', height: StyleSheet.hairlineWidth, backgroundColor: 'rgba(255,255,255,0.04)' },
-  crossV: { position: 'absolute', width: StyleSheet.hairlineWidth, backgroundColor: 'rgba(255,255,255,0.04)' },
-  fovLine: { position: 'absolute', width: 1, backgroundColor: `${C.accent}25` },
+  ring: { position: 'absolute', borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)' },
+  crossH: { position: 'absolute', height: StyleSheet.hairlineWidth, backgroundColor: 'rgba(255,255,255,0.07)' },
+  crossV: { position: 'absolute', width: StyleSheet.hairlineWidth, backgroundColor: 'rgba(255,255,255,0.07)' },
+  fovLine: { position: 'absolute', width: 1, backgroundColor: `${C.accent}38` },
   sweep: { position: 'absolute', width: 2 },
   sweepGrad: { flex: 1, width: 2, borderRadius: 1 },
   dot: {
@@ -543,10 +735,10 @@ const rd = StyleSheet.create({
       android: { elevation: 3 },
     }),
   },
-  centerGlow: { position: 'absolute', width: 14, height: 14, borderRadius: 7, backgroundColor: `${C.accent}20` },
+  centerGlow: { position: 'absolute', width: 14, height: 14, borderRadius: 7, backgroundColor: `${C.accent}28` },
   centerDot: { position: 'absolute', width: 7, height: 7, borderRadius: 3.5, backgroundColor: C.accent, borderWidth: 1.5, borderColor: '#FFF' },
   northBadge: { position: 'absolute', width: 14, height: 14, borderRadius: 7, backgroundColor: `${C.accent}30`, alignItems: 'center', justifyContent: 'center' },
-  northText: { color: C.accent, fontSize: 7, fontWeight: '900' },
+  northText: { color: C.accent, fontSize: 7, fontFamily: FONT_POPPINS_BOLD },
 })
 
 /* ─── Edge POI Indicators ─── */
@@ -605,10 +797,10 @@ const ei = StyleSheet.create({
   group: { position: 'absolute', zIndex: 6 },
   pill: {
     flexDirection: 'row', alignItems: 'center', gap: 4,
-    backgroundColor: 'rgba(8,10,20,0.86)',
-    paddingVertical: 5, paddingHorizontal: 8,
+    backgroundColor: 'rgba(8,10,20,0.78)',
+    paddingVertical: 7, paddingHorizontal: 9,
     borderWidth: 1,
-    maxWidth: 130,
+    maxWidth: 138,
     ...Platform.select({
       ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.45, shadowRadius: 6 },
       android: { elevation: 7 },
@@ -623,8 +815,8 @@ const ei = StyleSheet.create({
     borderRightWidth: 0,
   },
   pillContent: { flex: 1 },
-  pillName: { fontSize: 9, fontWeight: '700' },
-  pillDist: { color: C.dimText, fontSize: 8, fontWeight: '600', marginTop: 1 },
+  pillName: { fontSize: 9, fontFamily: FONT_POPPINS_BOLD },
+  pillDist: { color: C.dimText, fontSize: 8, fontFamily: FONT_POPPINS_SEMIBOLD, marginTop: 1 },
 })
 
 /* ─── POI Detail Modal ─── */
@@ -761,36 +953,36 @@ function POIDetailModal({ visible, poi, onClose, onRequestClose, insets, openDir
 
 const dm = StyleSheet.create({
   overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
-  card: { backgroundColor: 'rgba(16,16,22,0.97)', borderTopLeftRadius: 26, borderTopRightRadius: 26, paddingHorizontal: 20, paddingTop: 10, maxHeight: '80%', borderWidth: 1, borderBottomWidth: 0, borderColor: C.glassBorder },
-  handle: { width: 36, height: 4, borderRadius: 2, backgroundColor: 'rgba(255,255,255,0.18)', alignSelf: 'center', marginBottom: 14 },
+  card: { backgroundColor: 'rgba(13,16,27,0.98)', borderTopLeftRadius: 30, borderTopRightRadius: 30, paddingHorizontal: 20, paddingTop: 12, maxHeight: '82%', borderWidth: 1, borderBottomWidth: 0, borderColor: 'rgba(255,255,255,0.12)' },
+  handle: { width: 42, height: 4, borderRadius: 2, backgroundColor: 'rgba(255,255,255,0.24)', alignSelf: 'center', marginBottom: 16 },
   closeBtn: { position: 'absolute', top: 12, right: 16, zIndex: 1 },
   closeBtnBlur: { width: 30, height: 30, borderRadius: 15, alignItems: 'center', justifyContent: 'center', overflow: 'hidden', borderWidth: 1, borderColor: C.glassBorder },
   scroll: { marginBottom: 10 },
   header: { marginBottom: 14 },
-  typeBadge: { flexDirection: 'row', alignItems: 'center', gap: 5, alignSelf: 'flex-start', paddingHorizontal: 9, paddingVertical: 4, borderRadius: 8, marginBottom: 10, borderWidth: 1, borderColor: 'rgba(255,255,255,0.05)' },
-  typeText: { fontSize: 10, fontWeight: '800', letterSpacing: 0.4 },
-  title: { color: '#FFF', fontSize: 22, fontWeight: '800', lineHeight: 28, marginBottom: 10, letterSpacing: -0.3 },
+  typeBadge: { flexDirection: 'row', alignItems: 'center', gap: 5, alignSelf: 'flex-start', paddingHorizontal: 10, paddingVertical: 5, borderRadius: 10, marginBottom: 10, borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)' },
+  typeText: { fontSize: 10, fontFamily: FONT_POPPINS_BOLD, letterSpacing: 0.4 },
+  title: { color: '#FFF', fontSize: 22, fontFamily: FONT_POPPINS_BOLD, lineHeight: 28, marginBottom: 10, letterSpacing: -0.3 },
   metaRow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 8 },
-  metaPill: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: 'rgba(255,255,255,0.06)', paddingHorizontal: 9, paddingVertical: 4, borderRadius: 8 },
-  metaText: { color: C.sub, fontSize: 12, fontWeight: '600' },
-  infoSection: { backgroundColor: 'rgba(255,255,255,0.03)', borderRadius: 14, padding: 12, marginBottom: 12, gap: 9, borderWidth: 1, borderColor: C.glassBorder },
+  metaPill: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: 'rgba(255,255,255,0.07)', paddingHorizontal: 10, paddingVertical: 5, borderRadius: 10, borderWidth: 1, borderColor: 'rgba(255,255,255,0.06)' },
+  metaText: { color: C.sub, fontSize: 12, fontFamily: FONT_POPPINS_SEMIBOLD },
+  infoSection: { backgroundColor: 'rgba(255,255,255,0.045)', borderRadius: 16, padding: 13, marginBottom: 12, gap: 10, borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)' },
   infoRow: { flexDirection: 'row', alignItems: 'center', gap: 9 },
-  infoText: { color: C.sub, fontSize: 13, flex: 1, lineHeight: 19 },
+  infoText: { color: C.sub, fontSize: 13, fontFamily: FONT_POPPINS_REGULAR, flex: 1, lineHeight: 19 },
   heritageBox: { backgroundColor: 'rgba(251,191,36,0.06)', borderRadius: 14, padding: 12, marginBottom: 12, borderWidth: 1, borderColor: 'rgba(251,191,36,0.12)' },
   heritageHeader: { flexDirection: 'row', alignItems: 'center', gap: 5, marginBottom: 5 },
-  heritageTitle: { color: '#FBBF24', fontSize: 11, fontWeight: '800' },
-  heritageText: { color: C.sub, fontSize: 13, lineHeight: 20 },
+  heritageTitle: { color: '#FBBF24', fontSize: 11, fontFamily: FONT_POPPINS_BOLD },
+  heritageText: { color: C.sub, fontSize: 13, fontFamily: FONT_POPPINS_REGULAR, lineHeight: 20 },
   descSection: { marginBottom: 12 },
-  descLabel: { color: C.dimText, fontSize: 10, fontWeight: '700', letterSpacing: 0.4, marginBottom: 5, textTransform: 'uppercase' },
-  descText: { color: C.sub, fontSize: 13, lineHeight: 20 },
+  descLabel: { color: C.dimText, fontSize: 10, fontFamily: FONT_POPPINS_BOLD, letterSpacing: 0.4, marginBottom: 5, textTransform: 'uppercase' },
+  descText: { color: C.sub, fontSize: 13, fontFamily: FONT_POPPINS_REGULAR, lineHeight: 20 },
   actions: { gap: 10, borderTopWidth: 1, borderTopColor: C.glassBorder, paddingTop: 12 },
   primaryBtn: { borderRadius: 14, overflow: 'hidden', ...Platform.select({ ios: { shadowColor: C.accent, shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.3, shadowRadius: 8 }, android: { elevation: 5 } }) },
   primaryBtnGrad: { flexDirection: 'row', alignItems: 'center', gap: 9, paddingVertical: 14, paddingHorizontal: 18, borderRadius: 14 },
-  primaryBtnText: { color: '#FFF', fontSize: 15, fontWeight: '700', flex: 1 },
-  primaryBtnSub: { color: 'rgba(255,255,255,0.7)', fontSize: 12 },
+  primaryBtnText: { color: '#FFF', fontSize: 15, fontFamily: FONT_POPPINS_BOLD, flex: 1 },
+  primaryBtnSub: { color: 'rgba(255,255,255,0.7)', fontSize: 12, fontFamily: FONT_POPPINS_REGULAR },
   quickRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  quickBtn: { alignItems: 'center', justifyContent: 'center', paddingVertical: 9, paddingHorizontal: 12, backgroundColor: 'rgba(255,255,255,0.06)', borderRadius: 12, minWidth: 58, borderWidth: 1, borderColor: C.glassBorder },
-  quickLabel: { color: C.dimText, fontSize: 10, fontWeight: '600', marginTop: 3 },
+  quickBtn: { alignItems: 'center', justifyContent: 'center', paddingVertical: 10, paddingHorizontal: 13, backgroundColor: 'rgba(255,255,255,0.065)', borderRadius: 14, minWidth: 62, borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)' },
+  quickLabel: { color: C.dimText, fontSize: 10, fontFamily: FONT_POPPINS_SEMIBOLD, marginTop: 3 },
 })
 
 /* ─── Main Screen ─── */
@@ -816,6 +1008,10 @@ export default function ARScreen({ navigation }) {
   const [showSlider, setShowSlider] = useState(false)
   const [pineconeRecs, setPineconeRecs] = useState([])
   const headingSub = useRef(null)
+  /** Long-press a marker to isolate it; path + HUD target that POI until cleared */
+  const [focusedPoi, setFocusedPoi] = useState(null)
+  const pitchLpfRef = useRef(0)
+  const [floorPitchDeg, setFloorPitchDeg] = useState(0)
 
   const [doorVisible, setDoorVisible] = useState(fromExplore)
   const doorLeft = useRef(new Animated.Value(0)).current
@@ -937,6 +1133,36 @@ export default function ARScreen({ navigation }) {
   }, [location])
 
   useEffect(() => {
+    if (navigateToDest) setFocusedPoi(null)
+  }, [navigateToDest])
+
+  useEffect(() => {
+    if (loading || Platform.OS === 'web' || !permission?.granted) return undefined
+    let alive = true
+    let subscription
+    ;(async () => {
+      try {
+        const avail = await Accelerometer.isAvailableAsync()
+        if (!alive || !avail) return
+        Accelerometer.setUpdateInterval(48)
+        subscription = Accelerometer.addListener(({ x, y, z }) => {
+          const rad = Math.atan2(-x, Math.sqrt(y * y + z * z))
+          const rawDeg = Math.max(-55, Math.min(55, (rad * 180) / Math.PI))
+          pitchLpfRef.current = pitchLpfRef.current * 0.82 + rawDeg * 0.18
+          const add = Math.max(-16, Math.min(26, pitchLpfRef.current * FLOOR_PITCH_COEFF))
+          setFloorPitchDeg(add)
+        })
+      } catch {
+        /** sensor optional — path still uses baseline floor tilt */
+      }
+    })()
+    return () => {
+      alive = false
+      subscription?.remove?.()
+    }
+  }, [loading, permission?.granted])
+
+  useEffect(() => {
     if (!fromExplore || doorOpenedRef.current) return
     if (loading) return
     doorOpenedRef.current = true
@@ -969,13 +1195,17 @@ export default function ARScreen({ navigation }) {
     modalJustOpenedRef.current = true
     setTimeout(() => { modalJustOpenedRef.current = false }, 400)
   }, [])
+  const poiKeysMatch = useCallback((a, b) => poiKeyOf(a) !== '' && poiKeyOf(a) === poiKeyOf(b), [])
+  const handleMarkerLongPressFocus = useCallback((poi) => {
+    setFocusedPoi((prev) => (poiKeysMatch(prev, poi) ? null : poi))
+  }, [poiKeysMatch])
   const handleViewProfile = useCallback((clientId) => { setSelectedPoi(null); setProfileClientId(clientId) }, [])
 
   const getMarkerPosition = (poi) => {
     const relBearing = ((poi.bearing - heading + 360) % 360) * (Math.PI / 180)
-    const xPos = centerX + Math.sin(relBearing) * viewRadius - 65
-    const yPos = centerY - Math.cos(relBearing) * viewRadius - 35
-    return { x: Math.max(10, Math.min(width - 140, xPos)), y: Math.max(10, Math.min(height - 120, yPos)) }
+    const xPos = centerX + Math.sin(relBearing) * viewRadius - 78
+    const yPos = centerY - Math.cos(relBearing) * viewRadius - 42
+    return { x: Math.max(8, Math.min(width - 170, xPos)), y: Math.max(8, Math.min(height - 145, yPos)) }
   }
 
   const renderDoorOverlay = () => {
@@ -1012,6 +1242,22 @@ export default function ARScreen({ navigation }) {
       </Animated.View>
     )
   }
+
+  const emptyHint = mode === 'saved' ? 'Save places to see them here'
+    : mode === 'events' ? 'No events in this direction'
+    : mode === 'restaurants' ? 'No restaurants in this direction'
+    : mode === 'places' ? 'No places in this direction'
+    : 'Point your camera around'
+
+  const arrowTarget = useMemo(() => {
+    if (navigateToDest) return { ...navigateToDest, _type: navigateToDest._type ?? 'place' }
+    if (!focusedPoi || !location) return nearestOutOfView || null
+    const match =
+      basePois.find((p) => poiKeysMatch(p, focusedPoi)) ??
+      pois.find((p) => poiKeysMatch(p, focusedPoi))
+    if (match) return match
+    return enrichPoiBearingsFromUser(focusedPoi, location.latitude, location.longitude)
+  }, [navigateToDest, focusedPoi, nearestOutOfView, basePois, pois, location, poiKeysMatch])
 
   /* ─── Error / Permission States ─── */
   if (error) {
@@ -1054,37 +1300,43 @@ export default function ARScreen({ navigation }) {
     )
   }
 
-  const emptyHint = mode === 'saved' ? 'Save places to see them here'
-    : mode === 'events' ? 'No events in this direction'
-    : mode === 'restaurants' ? 'No restaurants in this direction'
-    : mode === 'places' ? 'No places in this direction'
-    : 'Point your camera around'
-
-  // Pokemon Go arrow target: navigateTo destination takes priority, else nearest out-of-view POI
-  const arrowTarget = navigateToDest
-    ? { ...navigateToDest, _type: 'place' }
-    : nearestOutOfView || null
-
   return (
     <View style={s.container}>
       <CameraView style={StyleSheet.absoluteFill} facing="back" />
+      <LinearGradient
+        pointerEvents="none"
+        colors={['rgba(0,0,0,0.62)', 'rgba(0,0,0,0.08)', 'rgba(0,0,0,0.18)', 'rgba(0,0,0,0.74)']}
+        locations={[0, 0.24, 0.62, 1]}
+        style={s.cameraVignette}
+      />
 
       {loading ? <ScanningLoader /> : (
         <>
-          {navigateToDest && location && (
-            <NavigateToBanner destination={navigateToDest} userLat={location.latitude} userLng={location.longitude} heading={heading} onDismiss={clearNavigateTo} />
-          )}
+          {focusedPoi && !navigateToDest ? (
+            <View style={fm.dim} pointerEvents="none" accessibilityElementsHidden />
+          ) : null}
           {filteredPois.map((poi, i) => {
             const { x, y } = getMarkerPosition(poi)
+            const spotFocused = poiKeysMatch(focusedPoi, poi)
+            const fadeOthers = Boolean(focusedPoi && !navigateToDest && !spotFocused)
             return (
-              <POIMarker key={`${poi.name}-${poi.lat}-${i}`} poi={poi} x={x} y={y} onPress={handleOpenPOI}
+              <POIMarker
+                key={`${poi.name}-${poi.lat}-${i}`}
+                poi={poi}
+                x={x}
+                y={y}
+                onPress={handleOpenPOI}
                 isNearest={nearestInView && nearestInView.name === poi.name && nearestInView.lat === poi.lat}
-                index={i} isBusy={getIsBusy(poi)}
+                index={i}
+                isBusy={getIsBusy(poi)}
+                focused={spotFocused}
+                dimmed={fadeOthers}
+                onMarkerLongPress={handleMarkerLongPressFocus}
               />
             )
           })}
 
-          {!navigateToDest && (
+          {!navigateToDest && !focusedPoi && (
             <EdgePOIIndicators
               outOfViewPois={basePois.filter((p) => p.distanceKm <= maxDistanceKm && !inViewIds.has(p.name + p.lat)).slice(0, 6)}
               heading={heading}
@@ -1101,7 +1353,9 @@ export default function ARScreen({ navigation }) {
               userLat={location.latitude}
               userLng={location.longitude}
               isNavigation={!!navigateToDest}
-              style={{ bottom: insets.bottom + 108 }}
+              floorPitchDeg={floorPitchDeg}
+              onDismissNavigation={navigateToDest ? clearNavigateTo : undefined}
+              style={{ bottom: insets.bottom + 92 }}
             />
           )}
 
@@ -1111,6 +1365,7 @@ export default function ARScreen({ navigation }) {
             maxDistanceKm={maxDistanceKm}
             onSelectPoi={handleOpenPOI}
             topOffset={insets.top + 56}
+            subdued={Boolean(focusedPoi && !navigateToDest)}
           />
         </>
       )}
@@ -1124,9 +1379,27 @@ export default function ARScreen({ navigation }) {
           </TouchableOpacity>
           <View style={s.headerCenter}>
             <Text style={s.headerTitle}>AR Explorer</Text>
+            {focusedPoi && !navigateToDest ? (
+              <Text style={s.headerFocusHint} numberOfLines={1}>Focus · {focusedPoi.name}</Text>
+            ) : null}
           </View>
-          <TouchableOpacity style={s.headerBtn} onPress={() => setShowSlider((v) => !v)} activeOpacity={0.8} accessibilityLabel="Toggle range slider">
-            <Ionicons name={showSlider ? 'radio' : 'radio-outline'} size={20} color={showSlider ? C.accent : '#FFF'} />
+          <TouchableOpacity
+            style={s.headerBtn}
+            onPress={() => {
+              if (focusedPoi && !navigateToDest) {
+                setFocusedPoi(null)
+                return
+              }
+              setShowSlider((v) => !v)
+            }}
+            activeOpacity={0.8}
+            accessibilityLabel={focusedPoi && !navigateToDest ? 'Exit focus mode' : 'Toggle range slider'}
+          >
+            <Ionicons
+              name={focusedPoi && !navigateToDest ? 'eye-off-outline' : showSlider ? 'radio' : 'radio-outline'}
+              size={20}
+              color={focusedPoi && !navigateToDest ? C.success : showSlider ? C.accent : '#FFF'}
+            />
           </TouchableOpacity>
         </View>
       </BlurView>
@@ -1178,6 +1451,7 @@ export default function ARScreen({ navigation }) {
           {filteredPois.length === 0 && !loading && (
             <Text style={s.hint}>
               {navigateToDest ? 'Turn toward your destination'
+                : focusedPoi ? `Focused on ${focusedPoi.name} — tap eye icon to exit or long-press a marker`
                 : nearestOutOfView ? `Turn to find ${nearestOutOfView.name}`
                 : pois.length > 0 ? emptyHint
                 : 'Scan your surroundings'}
@@ -1201,39 +1475,45 @@ export default function ARScreen({ navigation }) {
   )
 }
 
+const fm = StyleSheet.create({
+  dim: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.52)', zIndex: 4 },
+})
+
 const s = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#000' },
+  cameraVignette: { ...StyleSheet.absoluteFillObject, zIndex: 1 },
 
   errorWrap: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 32 },
   errorIcon: { width: 80, height: 80, borderRadius: 40, backgroundColor: `${C.accent}12`, alignItems: 'center', justifyContent: 'center', marginBottom: 20, borderWidth: 1, borderColor: `${C.accent}18` },
-  errorTitle: { color: '#FFF', fontSize: 20, fontWeight: '800', marginBottom: 6 },
-  errorText: { color: C.sub, fontSize: 14, textAlign: 'center', lineHeight: 21, marginBottom: 24 },
+  errorTitle: { color: '#FFF', fontSize: 20, fontFamily: FONT_POPPINS_BOLD, marginBottom: 6 },
+  errorText: { color: C.sub, fontSize: 14, fontFamily: FONT_POPPINS_REGULAR, textAlign: 'center', lineHeight: 21, marginBottom: 24 },
   errorBtnGrad: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 13, paddingHorizontal: 24, borderRadius: 14 },
-  errorBtnText: { color: '#FFF', fontSize: 15, fontWeight: '700' },
+  errorBtnText: { color: '#FFF', fontSize: 15, fontFamily: FONT_POPPINS_BOLD },
 
-  header: { position: 'absolute', top: 0, left: 0, right: 0, overflow: 'hidden', borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: C.glassBorder, paddingBottom: 8 },
-  headerBg: { ...StyleSheet.absoluteFillObject, backgroundColor: Platform.OS === 'android' ? C.glass : 'transparent' },
+  header: { position: 'absolute', top: 0, left: 10, right: 10, overflow: 'hidden', borderWidth: StyleSheet.hairlineWidth, borderColor: 'rgba(255,255,255,0.11)', borderRadius: 24, paddingBottom: 9, zIndex: 20 },
+  headerBg: { ...StyleSheet.absoluteFillObject, backgroundColor: Platform.OS === 'android' ? 'rgba(13,16,27,0.82)' : 'rgba(13,16,27,0.34)' },
   headerRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 10 },
-  headerBtn: { width: 38, height: 38, borderRadius: 12, backgroundColor: 'rgba(255,255,255,0.07)', alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: C.glassBorder },
+  headerBtn: { width: 40, height: 40, borderRadius: 14, backgroundColor: 'rgba(255,255,255,0.08)', alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: 'rgba(255,255,255,0.11)' },
   headerCenter: { flex: 1, alignItems: 'center' },
-  headerTitle: { color: '#FFF', fontSize: 16, fontWeight: '800', letterSpacing: 0.2 },
+  headerTitle: { color: '#FFF', fontSize: 16, fontFamily: FONT_POPPINS_BOLD, letterSpacing: 0.2 },
+  headerFocusHint: { color: C.success, fontSize: 10, fontFamily: FONT_POPPINS_BOLD, marginTop: 2, maxWidth: Math.min(200, DOOR_W * 0.48), textAlign: 'center' },
 
-  bottom: { position: 'absolute', left: 0, right: 0, bottom: 0 },
-  bottomBlur: { overflow: 'hidden', borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: C.glassBorder },
-  bottomBg: { ...StyleSheet.absoluteFillObject, backgroundColor: Platform.OS === 'android' ? C.glass : 'transparent' },
+  bottom: { position: 'absolute', left: 10, right: 10, bottom: 0, zIndex: 20 },
+  bottomBlur: { overflow: 'hidden', borderWidth: StyleSheet.hairlineWidth, borderColor: 'rgba(255,255,255,0.12)', borderRadius: 26 },
+  bottomBg: { ...StyleSheet.absoluteFillObject, backgroundColor: Platform.OS === 'android' ? 'rgba(13,16,27,0.88)' : 'rgba(13,16,27,0.38)' },
 
-  filterRow: { paddingHorizontal: 12, paddingTop: 8, paddingBottom: 4, gap: 6 },
-  filterChip: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingVertical: 6, paddingHorizontal: 10, borderRadius: 16, backgroundColor: 'rgba(255,255,255,0.04)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.06)' },
-  filterText: { color: C.dimText, fontSize: 11, fontWeight: '600' },
+  filterRow: { paddingHorizontal: 12, paddingTop: 10, paddingBottom: 6, gap: 7 },
+  filterChip: { flexDirection: 'row', alignItems: 'center', gap: 5, paddingVertical: 8, paddingHorizontal: 12, borderRadius: 18, backgroundColor: 'rgba(255,255,255,0.055)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)' },
+  filterText: { color: C.dimText, fontSize: 11, fontFamily: FONT_POPPINS_SEMIBOLD },
 
-  sliderWrap: { paddingHorizontal: 16, paddingTop: 2, paddingBottom: 0 },
+  sliderWrap: { paddingHorizontal: 16, paddingTop: 4, paddingBottom: 2 },
   sliderHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  sliderLabel: { color: C.dimText, fontSize: 10, fontWeight: '600' },
-  sliderPill: { backgroundColor: `${C.accent}15`, paddingHorizontal: 7, paddingVertical: 1.5, borderRadius: 5 },
-  sliderValue: { color: C.accent, fontSize: 10, fontWeight: '700' },
+  sliderLabel: { color: C.dimText, fontSize: 10, fontFamily: FONT_POPPINS_SEMIBOLD },
+  sliderPill: { backgroundColor: `${C.accent}18`, paddingHorizontal: 8, paddingVertical: 3, borderRadius: 8, borderWidth: 1, borderColor: `${C.accent}24` },
+  sliderValue: { color: C.accent, fontSize: 10, fontFamily: FONT_POPPINS_BOLD },
   slider: { width: '100%', height: 24 },
 
-  hint: { color: C.dimText, fontSize: 11, fontWeight: '500', textAlign: 'center', paddingTop: 4, paddingBottom: 6 },
+  hint: { color: 'rgba(255,255,255,0.62)', fontSize: 11, fontFamily: FONT_POPPINS_MEDIUM, textAlign: 'center', paddingTop: 6, paddingBottom: 9, paddingHorizontal: 12 },
 
   doorOverlay: { ...StyleSheet.absoluteFillObject, zIndex: 9999, elevation: 9999 },
   doorHalf: { position: 'absolute', top: 0, bottom: 0, width: DOOR_W / 2, overflow: 'hidden' },
@@ -1249,6 +1529,6 @@ const s = StyleSheet.create({
     }),
   },
   doorIconGrad: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-  doorLabel: { marginTop: 14, fontSize: 18, fontWeight: '900', color: '#FFF', letterSpacing: 3, textShadowColor: 'rgba(0,0,0,0.4)', textShadowOffset: { width: 0, height: 2 }, textShadowRadius: 6 },
-  doorSubLabel: { marginTop: 4, fontSize: 13, fontWeight: '700', color: 'rgba(255,255,255,0.7)', letterSpacing: 2, textTransform: 'uppercase' },
+  doorLabel: { marginTop: 14, fontSize: 18, fontFamily: FONT_POPPINS_BOLD, color: '#FFF', letterSpacing: 3, textShadowColor: 'rgba(0,0,0,0.4)', textShadowOffset: { width: 0, height: 2 }, textShadowRadius: 6 },
+  doorSubLabel: { marginTop: 4, fontSize: 13, fontFamily: FONT_POPPINS_BOLD, color: 'rgba(255,255,255,0.7)', letterSpacing: 2, textTransform: 'uppercase' },
 })

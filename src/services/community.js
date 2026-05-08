@@ -108,6 +108,21 @@ export async function fetchClientByQrPayload(payload) {
 }
 
 const COMMUNITY_SELECT_WITH_AUTHOR = '*, user(account(user_name))';
+const PERSONALIZED_TOPIC_BOOSTS = {
+  foodie: ['food', 'restaurant', 'cafe', 'dessert', 'brunch', 'dining'],
+  'culture-history': ['culture', 'museum', 'heritage', 'history', 'traditional', 'fort'],
+  'nature-outdoors': ['nature', 'beach', 'park', 'outdoor', 'garden', 'trail'],
+  nightlife: ['nightlife', 'bar', 'lounge', 'night', 'club'],
+  shopping: ['shopping', 'mall', 'souq', 'market', 'store'],
+  adventure: ['adventure', 'dive', 'kayak', 'jetski', 'hiking'],
+  'instagram-spots': ['instagram', 'photo', 'aesthetic', 'scenic', 'view'],
+  'local-authentic': ['local', 'authentic', 'bahraini', 'traditional', 'hidden'],
+  'family-friendly': ['family', 'kids', 'children', 'playground', 'fun'],
+  'beaches-sun': ['beach', 'sea', 'coast', 'sunset', 'island'],
+  'quiet-peaceful': ['quiet', 'peaceful', 'calm', 'serene'],
+  'social-lively': ['social', 'lively', 'crowded', 'buzz', 'vibe'],
+  'hidden-gems': ['hidden', 'gem', 'underrated', 'secret'],
+}
 
 /** Fetch client_image for community posts (batch by client_a_uuid). Converts paths to full URLs. */
 async function fetchClientImagesForPosts(rows) {
@@ -160,21 +175,78 @@ function buildTrendingKeysetOr(votes, createdAt, communityUuid) {
   return `num_of_upvote.lt.${v},and(num_of_upvote.eq.${v},created_at.lt.${ts}),and(num_of_upvote.eq.${v},created_at.eq.${ts},community_uuid.lt.${id})`
 }
 
+function buildCommunityPreferenceSignals(preferences) {
+  const generalIds = Array.isArray(preferences?.generalIds) ? preferences.generalIds : []
+  const activityIds = Array.isArray(preferences?.activityIds) ? preferences.activityIds : []
+  const foodIds = Array.isArray(preferences?.foodIds) ? preferences.foodIds : []
+  const all = [...generalIds, ...activityIds, ...foodIds]
+  if (!all.length) return { hasSignals: false, keywords: [] }
+
+  const keywords = new Set()
+  all.forEach((id) => {
+    const seeds = PERSONALIZED_TOPIC_BOOSTS[id]
+    if (Array.isArray(seeds)) {
+      seeds.forEach((k) => keywords.add(String(k).toLowerCase()))
+    } else if (typeof id === 'string' && id.trim()) {
+      keywords.add(id.toLowerCase().replace(/-/g, ' '))
+    }
+  })
+  return { hasSignals: keywords.size > 0, keywords: [...keywords] }
+}
+
+function scoreCommunityPostForPreference(post, prefSignals) {
+  const text = [
+    post.topic,
+    post.place,
+    post.body,
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase()
+
+  const matchedKeywordCount = prefSignals.keywords.reduce(
+    (acc, kw) => (kw && text.includes(kw) ? acc + 1 : acc),
+    0
+  )
+  const keywordScore = Math.min(1, matchedKeywordCount / 3)
+  const ratingScore = Math.max(0, Math.min(1, Number(post.rating ?? 0) / 5))
+  const upvoteScore = Math.min(1, Math.log10(Number(post.upvotes ?? 0) + 1) / Math.log10(101))
+  const commentScore = Math.min(1, Math.log10(Number(post.comments ?? 0) + 1) / Math.log10(41))
+
+  // Keep freshness as a light signal so old posts can still win if they strongly match preference.
+  let recencyScore = 0.4
+  if (typeof post.time === 'string') {
+    if (post.time === 'now') recencyScore = 1
+    else if (post.time.endsWith('m')) recencyScore = 0.95
+    else if (post.time.endsWith('h')) recencyScore = 0.85
+    else if (post.time.endsWith('d')) recencyScore = 0.65
+    else if (post.time.endsWith('mo')) recencyScore = 0.45
+  }
+
+  return keywordScore * 0.44 + ratingScore * 0.28 + upvoteScore * 0.12 + commentScore * 0.08 + recencyScore * 0.08
+}
+
 /**
  * One page of community posts (cursor-based; avoids loading the entire table).
- * @param {{ topicId?: string, limit?: number, cursor?: { kind: 'recent', created_at: string, community_uuid: string } | { kind: 'trending', num_of_upvote: number, created_at: string, community_uuid: string } | null }} opts
+ * @param {{ topicId?: string, limit?: number, cursor?: { kind: 'recent', created_at: string, community_uuid: string } | { kind: 'trending', num_of_upvote: number, created_at: string, community_uuid: string } | null, clientId?: string | null }} opts
  * @returns {Promise<{ posts: Array, hasMore: boolean, nextCursor: object | null }>}
  */
 export async function fetchCommunityPostsPage({
   topicId = 'all',
   limit = COMMUNITY_FEED_PAGE_SIZE,
   cursor = null,
+  clientId = null,
+  preferences = null,
 } = {}) {
   const pageLimit = Math.min(Math.max(1, Number(limit) || COMMUNITY_FEED_PAGE_SIZE), 50)
   const take = pageLimit + 1
   const isTrending = topicId === 'trending'
 
   let query = supabase.from('community').select(COMMUNITY_SELECT_WITH_AUTHOR)
+
+  if (clientId) {
+    query = query.eq('client_a_uuid', clientId)
+  }
 
   if (!isTrending && topicId && topicId !== 'all') {
     query = query.ilike('hashtags', `%${topicId}%`)
@@ -216,6 +288,13 @@ export async function fetchCommunityPostsPage({
   const posts = pageRows.map((row) => mapRowToPost(row, clientMap))
   const commentMap = await fetchCommentCountsByCommunityIds(posts.map((p) => p.id))
   const hydrated = posts.map((p) => ({ ...p, comments: commentMap[p.id] ?? p.comments ?? 0 }))
+  const prefSignals = buildCommunityPreferenceSignals(preferences)
+  const ranked = prefSignals.hasSignals
+    ? [...hydrated]
+        .map((post) => ({ ...post, __rankScore: scoreCommunityPostForPreference(post, prefSignals) }))
+        .sort((a, b) => b.__rankScore - a.__rankScore)
+        .map(({ __rankScore, ...rest }) => rest)
+    : hydrated
 
   let nextCursor = null
   const last = pageRows[pageRows.length - 1]
@@ -236,7 +315,7 @@ export async function fetchCommunityPostsPage({
     }
   }
 
-  return { posts: hydrated, hasMore, nextCursor }
+  return { posts: ranked, hasMore, nextCursor }
 }
 
 /** Count comments per post from community_comment (empty map if table missing or error). */
@@ -427,12 +506,13 @@ function formatTimeAgo(iso) {
   return `${Math.floor(sec / 2592000)}mo`;
 }
 
-const COMMENT_SELECT = 'comment_uuid, body, created_at, user_a_uuid';
+const COMMENT_SELECT = 'comment_uuid, body, created_at, user_a_uuid, user(account(user_name))';
 
 function mapCommentRow(row) {
   if (!row) return null;
+  const userName = (row.user?.account?.user_name || '').trim();
   const shortId = String(row.user_a_uuid || '').replace(/-/g, '').slice(0, 6);
-  const author = shortId ? `@${shortId}` : 'Member';
+  const author = userName ? `@${userName.replace(/\s+/g, '').toLowerCase()}` : (shortId ? `@${shortId}` : 'Member');
   return {
     id: row.comment_uuid,
     body: row.body || '',

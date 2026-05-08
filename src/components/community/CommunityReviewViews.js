@@ -24,16 +24,22 @@ import { colors as themeColors, colorsDark as themeColorsDark } from '../../them
 import { useTheme } from '../../context/ThemeContext'
 import { layoutContentWidth } from '../../constants/webLayout'
 import { PinchZoomPostImage } from '../FeedUpvoteInteractions'
+import {
+  FONT_POPPINS_BOLD,
+  FONT_POPPINS_MEDIUM,
+  FONT_POPPINS_REGULAR,
+  FONT_POPPINS_SEMIBOLD,
+} from '../../constants/brandFont'
 
 export function getCommunityPalette(isDark) {
   const tc = isDark ? themeColorsDark : themeColors
   return {
-    bg: isDark ? '#000000' : '#FFFFFF',
-    card: isDark ? '#000000' : '#FFFFFF',
+    bg: tc.background,
+    card: tc.background,
     text: isDark ? '#E7E9EA' : '#0F1419',
-    sub: isDark ? '#71767B' : '#536471',
-    muted: isDark ? '#71767B' : '#536471',
-    border: isDark ? '#2F3336' : '#EFF3F4',
+    sub: isDark ? '#C7C7CC' : '#536471',
+    muted: isDark ? '#8E8E93' : '#536471',
+    border: tc.border,
     red: tc.error,
     redSoft: tc.errorMuted,
     orange: tc.morning,
@@ -43,9 +49,9 @@ export function getCommunityPalette(isDark) {
     green: '#00BA7C',
     upvoteLight: tc.success,
     upvoteDark: isDark ? '#10B981' : '#047857',
-    chip: isDark ? '#16181C' : '#F7F9F9',
+    chip: isDark ? tc.surface : '#F7F9F9',
     chipActive: tc.textPrimary,
-    accent: isDark ? '#CBD5E1' : tc.textSecondary,
+    accent: isDark ? '#C7C7CC' : tc.textSecondary,
     warmGlow: tc.textMuted,
   }
 }
@@ -82,52 +88,121 @@ export function buildCommunityFeedStyles(C, isDark = false) {
       paddingHorizontal: 16,
     },
     cardGlassOuter: {
-      marginHorizontal: 16,
-      marginBottom: 16,
-      borderRadius: 24,
+      marginHorizontal: 12,
+      marginBottom: 8,
+      borderRadius: 16,
       overflow: 'hidden',
       borderWidth: StyleSheet.hairlineWidth,
-      borderColor: isDark ? 'rgba(148,148,158,0.32)' : 'rgba(142,142,147,0.26)',
+      borderColor: isDark ? 'rgba(148,148,158,0.22)' : 'rgba(142,142,147,0.16)',
       ...Platform.select({
         ios: {
           shadowColor: '#000000',
-          shadowOffset: { width: 0, height: 10 },
-          shadowOpacity: isDark ? 0.35 : 0.1,
-          shadowRadius: 20,
+          shadowOffset: { width: 0, height: 8 },
+          shadowOpacity: isDark ? 0.2 : 0.07,
+          shadowRadius: 16,
         },
-        android: { elevation: 5 },
+        android: { elevation: 3 },
       }),
     },
     cardGlassFrost: {
       ...StyleSheet.absoluteFillObject,
-      backgroundColor: 'rgba(255,255,255,0.78)',
+      backgroundColor: isDark ? 'rgba(18,18,20,0.92)' : 'rgba(255,255,255,0.9)',
     },
     cardGlassFrostDark: {
-      backgroundColor: 'rgba(28,28,30,0.88)',
+      backgroundColor: 'rgba(18,18,20,0.92)',
     },
     cardGlassContent: {
       position: 'relative',
       zIndex: 2,
-      paddingVertical: 14,
-      paddingHorizontal: 16,
+      paddingTop: 12,
+      paddingBottom: 10,
+      paddingHorizontal: 14,
     },
     cardInner: { flex: 1 },
-    cardClientRow: { 
-      flexDirection: 'row', 
+    // User-focused header row
+    cardUserRow: {
+      flexDirection: 'row',
+      alignItems: 'flex-start',
+      marginBottom: 8,
+    },
+    userAv: {
+      width: 36,
+      height: 36,
+      borderRadius: 18,
+      marginRight: 10,
+      overflow: 'hidden',
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    userAvImage: {
+      width: '100%',
+      height: '100%',
+      borderRadius: 18,
+    },
+    cardUserMeta: { flex: 1, minWidth: 0 },
+    cardUserNameRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 5,
+      flexWrap: 'nowrap',
+    },
+    cardUserName: {
+      fontSize: 14,
+      fontFamily: FONT_POPPINS_BOLD,
+      color: C.text,
+      flexShrink: 1,
+    },
+    cardDot: {
+      fontSize: 13,
+      fontFamily: FONT_POPPINS_REGULAR,
+      color: C.muted,
+    },
+    cardTimeText: {
+      fontSize: 11,
+      color: C.muted,
+      fontFamily: FONT_POPPINS_REGULAR,
+      flexShrink: 0,
+    },
+    cardPlaceRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 4,
+      marginTop: 2,
+      flexWrap: 'wrap',
+    },
+    cardPlaceText: {
+      fontSize: 12,
+      fontFamily: FONT_POPPINS_SEMIBOLD,
+      color: C.red,
+      flexShrink: 1,
+    },
+    cardRatingInline: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 3,
+    },
+    cardRatingNum: {
+      fontSize: 11,
+      fontFamily: FONT_POPPINS_SEMIBOLD,
+      color: C.muted,
+    },
+    // Legacy aliases kept for compat
+    cardClientRow: {
+      flexDirection: 'row',
       alignItems: 'center',
       marginBottom: 10,
     },
-    clientAv: { 
-      width: 40, 
-      height: 40, 
-      borderRadius: 20, 
-      backgroundColor: C.chip, 
-      marginRight: 12, 
+    clientAv: {
+      width: 36,
+      height: 36,
+      borderRadius: 18,
+      backgroundColor: C.chip,
+      marginRight: 10,
       overflow: 'hidden',
     },
-    clientAvPlaceholder: { 
-      alignItems: 'center', 
-      justifyContent: 'center', 
+    clientAvPlaceholder: {
+      alignItems: 'center',
+      justifyContent: 'center',
       backgroundColor: C.redSoft,
     },
     cardClientMeta: { flex: 1, minWidth: 0 },
@@ -138,9 +213,9 @@ export function buildCommunityFeedStyles(C, isDark = false) {
       flexWrap: 'wrap',
       marginBottom: 2,
     },
-    clientPlaceText: { 
-      fontSize: 15, 
-      fontWeight: '700', 
+    clientPlaceText: {
+      fontSize: 14,
+      fontFamily: FONT_POPPINS_BOLD,
       color: C.text,
       flexShrink: 0,
     },
@@ -155,113 +230,148 @@ export function buildCommunityFeedStyles(C, isDark = false) {
       paddingVertical: 0,
     },
     cardTopicPillTextSmall: {
-      fontSize: 13,
-      fontWeight: '400',
+      fontSize: 12,
+      fontFamily: FONT_POPPINS_REGULAR,
       color: C.blue,
     },
-    cardAuthorSub: { 
-      fontSize: 14, 
-      color: C.text, 
-      fontWeight: '600',
+    cardAuthorSub: {
+      fontSize: 13,
+      color: C.text,
+      fontFamily: FONT_POPPINS_SEMIBOLD,
     },
     cardTimeSuffix: {
-      fontSize: 14,
-      fontWeight: '400',
+      fontSize: 13,
+      fontFamily: FONT_POPPINS_REGULAR,
       color: C.sub,
     },
     cardRatingPill: {
       flexDirection: 'row',
       alignItems: 'center',
       gap: 3,
-      marginTop: 4,
+      marginTop: 3,
     },
-    cardRatingNum: { 
-      fontSize: 13, 
-      fontWeight: '400', 
-      marginLeft: 2, 
-      color: C.sub,
-    },
-    bodyText: { 
-      fontSize: 15, 
-      lineHeight: 22, 
+    bodyText: {
+      fontSize: 14,
+      lineHeight: 20,
       color: C.text,
-      marginBottom: 14,
-      fontWeight: '400',
+      marginBottom: 8,
+      fontFamily: FONT_POPPINS_REGULAR,
     },
-    cardTopicRow: { 
-      flexDirection: 'row', 
-      flexWrap: 'wrap', 
-      gap: 8, 
-      paddingHorizontal: 16,
-      marginBottom: 12,
+    cardTopicRow: {
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      gap: 6,
+      marginBottom: 8,
     },
-    cardTopicPill: { 
-      backgroundColor: C.chipActive + '12',
-      paddingHorizontal: 12, 
-      paddingVertical: 6, 
-      borderRadius: 12,
-      borderWidth: 1,
-      borderColor: C.chipActive + '18',
+    cardTopicPill: {
+      backgroundColor: C.blue + '10',
+      paddingHorizontal: 8,
+      paddingVertical: 3,
+      borderRadius: 8,
     },
-    cardTopicPillText: { 
-      fontSize: 12, 
-      fontWeight: '700', 
-      color: C.red,
-      letterSpacing: 0.2,
+    cardTopicPillText: {
+      fontSize: 12,
+      fontFamily: FONT_POPPINS_SEMIBOLD,
+      color: C.blue,
+      letterSpacing: 0.1,
     },
-    cardImgWrap: { 
-      overflow: 'hidden', 
-      backgroundColor: isDark ? '#0D0D0D' : '#F0F2F4', 
+    cardImgWrap: {
+      overflow: 'hidden',
+      backgroundColor: isDark ? '#0D0D0D' : '#F0F2F4',
       position: 'relative',
       width: '100%',
-      borderRadius: 18,
+      borderRadius: 14,
       borderWidth: StyleSheet.hairlineWidth,
-      borderColor: isDark ? 'rgba(255,255,255,0.08)' : C.border,
+      borderColor: isDark ? 'rgba(255,255,255,0.06)' : C.border,
     },
     cardImg: { width: '100%', height: '100%' },
     cardImgPills: {
       position: 'absolute',
-      bottom: 12,
+      bottom: 8,
       left: 0,
       right: 0,
       flexDirection: 'row',
       justifyContent: 'center',
-      gap: 6,
+      gap: 5,
     },
-    cardImgPill: { 
-      width: 6, 
-      height: 6, 
-      borderRadius: 3, 
+    cardImgPill: {
+      width: 5,
+      height: 5,
+      borderRadius: 3,
       backgroundColor: 'rgba(255,255,255,0.6)',
     },
-    cardImgPillActive: { 
-      backgroundColor: '#FFF', 
-      width: 20, 
+    cardImgPillActive: {
+      backgroundColor: '#FFF',
+      width: 16,
       borderRadius: 3,
     },
     imgCountBadge: {
       position: 'absolute',
-      bottom: 8,
-      right: 8,
-      backgroundColor: 'rgba(0,0,0,0.7)',
-      paddingHorizontal: 8,
-      paddingVertical: 4,
-      borderRadius: 10,
+      bottom: 6,
+      right: 6,
+      backgroundColor: 'rgba(0,0,0,0.65)',
+      paddingHorizontal: 7,
+      paddingVertical: 3,
+      borderRadius: 8,
       flexDirection: 'row',
       alignItems: 'center',
     },
-    imgCountText: { 
-      color: '#FFF', 
-      fontSize: 11, 
-      fontWeight: '600',
-      marginLeft: 4,
+    imgCountText: {
+      color: '#FFF',
+      fontSize: 10,
+      fontFamily: FONT_POPPINS_SEMIBOLD,
+      marginLeft: 3,
     },
+    // Flat action bar (Twitter/Reddit style)
     actions: {
       flexDirection: 'row',
-      alignItems: 'stretch',
-      gap: 8,
-      marginTop: 12,
+      alignItems: 'center',
+      gap: 0,
+      marginTop: 8,
+      paddingTop: 8,
+      borderTopWidth: StyleSheet.hairlineWidth,
+      borderTopColor: isDark ? 'rgba(255,255,255,0.08)' : 'rgba(15,20,25,0.08)',
     },
+    actionBtn: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 5,
+      minHeight: 42,
+      paddingVertical: 6,
+      paddingHorizontal: 8,
+      borderRadius: 20,
+      marginRight: 10,
+    },
+    actionBtnUpvote: {},
+    actionBtnUpvoteOn: {},
+    actionNum: {
+      fontSize: 12,
+      fontFamily: FONT_POPPINS_SEMIBOLD,
+      color: C.sub,
+    },
+    upvoteCircle: {
+      width: 36,
+      height: 36,
+      borderRadius: 18,
+      alignItems: 'center',
+      justifyContent: 'center',
+      borderWidth: 1.5,
+      borderColor: C.green,
+      backgroundColor: 'transparent',
+    },
+    upvoteCircleActive: {
+      backgroundColor: C.green,
+      borderColor: C.green,
+    },
+    actionNumOn: {
+      color: C.green,
+      fontFamily: FONT_POPPINS_BOLD,
+    },
+    actionNumMuted: {
+      color: C.muted,
+    },
+    actionSpacer: { flex: 1 },
+    // Keep pill aliases so detail modal still works
     actionPill: {
       flex: 1,
       minHeight: 46,
@@ -274,15 +384,6 @@ export function buildCommunityFeedStyles(C, isDark = false) {
       backgroundColor: C.chip,
       borderWidth: 1.5,
       borderColor: C.border + '55',
-      ...Platform.select({
-        ios: {
-          shadowColor: '#000',
-          shadowOffset: { width: 0, height: 1 },
-          shadowOpacity: 0.06,
-          shadowRadius: 3,
-        },
-        android: { elevation: 1 },
-      }),
     },
     actionPillUpvote: {
       borderColor: C.green,
@@ -294,7 +395,7 @@ export function buildCommunityFeedStyles(C, isDark = false) {
     },
     actionPillNum: {
       fontSize: 14,
-      fontWeight: '800',
+      fontFamily: FONT_POPPINS_BOLD,
       color: C.text,
       letterSpacing: -0.2,
       minWidth: 18,
@@ -305,11 +406,11 @@ export function buildCommunityFeedStyles(C, isDark = false) {
     },
     actionPillNumMuted: {
       color: C.sub,
-      fontWeight: '700',
+      fontFamily: FONT_POPPINS_BOLD,
     },
-    feed: { 
-      paddingHorizontal: 0, 
-      paddingTop: 0,
+    feed: {
+      paddingHorizontal: 0,
+      paddingTop: 10,
       paddingBottom: 110,
     },
     popOverlay: {
@@ -350,9 +451,9 @@ export function buildCommunityFeedStyles(C, isDark = false) {
       borderColor: C.border,
     },
     popHeaderAvPlaceholder: { alignItems: 'center', justifyContent: 'center', backgroundColor: C.redSoft },
-    popHeaderName: { fontSize: 16, fontWeight: '800', color: C.text, letterSpacing: -0.3 },
-    popHeaderSub: { fontSize: 12, color: C.sub, fontWeight: '500', marginTop: 2 },
-    popHeaderSubAccent: { fontWeight: '400', color: C.muted },
+    popHeaderName: { fontSize: 16, fontFamily: FONT_POPPINS_BOLD, color: C.text, letterSpacing: -0.3 },
+    popHeaderSub: { fontSize: 12, color: C.sub, fontFamily: FONT_POPPINS_MEDIUM, marginTop: 2 },
+    popHeaderSubAccent: { fontFamily: FONT_POPPINS_REGULAR, color: C.muted },
     popPlaceRatingRow: {
       flexDirection: 'row',
       alignItems: 'center',
@@ -392,13 +493,14 @@ export function buildCommunityFeedStyles(C, isDark = false) {
       paddingVertical: 4,
       borderRadius: 6,
     },
-    popImgBadgeText: { color: '#FFF', fontSize: 12, fontWeight: '700' },
+    popImgBadgeText: { color: '#FFF', fontSize: 12, fontFamily: FONT_POPPINS_BOLD },
     popBody: { paddingHorizontal: 20, paddingTop: 20 },
     popRatingWrap: { flexDirection: 'row', alignItems: 'center', gap: 4 },
-    popRatingNum: { fontSize: 13, fontWeight: '700', color: C.sub },
-    popPlaceText: { fontSize: 14, fontWeight: '700', color: C.red },
+    popRatingNum: { fontSize: 13, fontFamily: FONT_POPPINS_BOLD, color: C.sub },
+    popPlaceText: { fontSize: 14, fontFamily: FONT_POPPINS_BOLD, color: C.red },
     popReviewText: {
       fontSize: 16,
+      fontFamily: FONT_POPPINS_REGULAR,
       lineHeight: 26,
       color: C.text,
       marginTop: 16,
@@ -413,7 +515,7 @@ export function buildCommunityFeedStyles(C, isDark = false) {
       minHeight: 52,
       paddingVertical: 4,
     },
-    popUpvoteNum: { fontSize: 15, fontWeight: '800', color: C.muted },
+    popUpvoteNum: { fontSize: 15, fontFamily: FONT_POPPINS_BOLD, color: C.muted },
     likeCircle: {
       width: 40,
       height: 40,
@@ -429,7 +531,7 @@ export function buildCommunityFeedStyles(C, isDark = false) {
       borderColor: C.green,
     },
     popReplySection: { marginTop: 20, paddingTop: 16, marginBottom: 14, borderTopWidth: 1, borderTopColor: C.border + '50' },
-    popReplyTitle: { fontSize: 15, fontWeight: '800', color: C.text, marginBottom: 12 },
+    popReplyTitle: { fontSize: 15, fontFamily: FONT_POPPINS_BOLD, color: C.text, marginBottom: 12 },
     popReplyBox: {
       flexDirection: 'row',
       alignItems: 'center',
@@ -449,7 +551,12 @@ export function buildCommunityFeedStyles(C, isDark = false) {
       justifyContent: 'center',
       marginRight: 8,
     },
-    popReplyInput: { flex: 1, fontSize: 13, color: C.text, paddingVertical: 0, minHeight: 20 },
+    popReplyAvImage: {
+      width: '100%',
+      height: '100%',
+      borderRadius: 13,
+    },
+    popReplyInput: { flex: 1, fontSize: 13, fontFamily: FONT_POPPINS_REGULAR, color: C.text, paddingVertical: 0, minHeight: 20 },
     empty: { paddingVertical: 72, alignItems: 'center', paddingHorizontal: 32 },
     emptyIcon: {
       width: 80,
@@ -460,9 +567,25 @@ export function buildCommunityFeedStyles(C, isDark = false) {
       justifyContent: 'center',
       marginBottom: 20,
     },
-    emptyTitle: { fontSize: 18, fontWeight: '700', color: C.text, marginBottom: 6 },
-    emptySub: { fontSize: 15, color: C.sub, textAlign: 'center', lineHeight: 22 },
+    emptyTitle: { fontSize: 18, fontFamily: FONT_POPPINS_BOLD, color: C.text, marginBottom: 6 },
+    emptySub: { fontSize: 15, fontFamily: FONT_POPPINS_REGULAR, color: C.sub, textAlign: 'center', lineHeight: 22 },
   })
+}
+
+const DEFAULT_PROFILE_IMAGES = [
+  require('../../../assets/pfp.png'),
+  require('../../../assets/pfp2.png'),
+]
+
+const getDefaultAvatarSource = (seedValue) => {
+  const seed = String(seedValue || '').trim()
+  if (!seed) return DEFAULT_PROFILE_IMAGES[0]
+  let hash = 5381
+  for (let i = 0; i < seed.length; i += 1) {
+    hash = ((hash << 5) + hash) ^ seed.charCodeAt(i)
+  }
+  const normalized = Math.abs(hash + seed.length * 31)
+  return normalized % 4 <= 1 ? DEFAULT_PROFILE_IMAGES[0] : DEFAULT_PROFILE_IMAGES[1]
 }
 
 export function CommunityReviewCard({
@@ -470,6 +593,7 @@ export function CommunityReviewCard({
   C,
   styles: st,
   onPress,
+  onTaggedClientPress,
   onCommentPress,
   onUpvoteToggle,
   upvoteScaleAnim,
@@ -480,8 +604,9 @@ export function CommunityReviewCard({
   const { isDark } = useTheme()
   const { width: winW = 375 } = useWindowDimensions()
   const layoutW = layoutContentWidth(winW)
-  const cardWidth = useGlass ? layoutW - 64 : layoutW - 32
-  const imgSize = Math.round(cardWidth)
+  const cardWidth = useGlass ? layoutW - 48 : layoutW - 32
+  const imgW = Math.round(cardWidth)
+  const imgH = Math.round(imgW * 0.5)
   const [imageIndex, setImageIndex] = useState(0)
   const hasUpvoted = item.upvoted ?? false
   const count = item.upvotes ?? 0
@@ -532,23 +657,25 @@ export function CommunityReviewCard({
 
   const handleUpvotePress = (e) => {
     if (!onUpvoteToggle) return
-    if (!hasUpvoted) {
-      animateUpvoteBurst()
-    }
+    if (!hasUpvoted) animateUpvoteBurst()
     onUpvoteToggle(item, e)
   }
 
   const handleImageDoubleTap = (pageX, pageY) => {
     if (!onUpvoteToggle) return
-    if (!hasUpvoted) {
-      animateUpvoteBurst()
-    }
+    if (!hasUpvoted) animateUpvoteBurst()
     onUpvoteToggle(item, { nativeEvent: { pageX, pageY } })
   }
 
-  const topicIds = (item.topic || '').split(',').map((t) => t.trim()).filter(Boolean)
-  const clientProfilePic = item.client_image || null
-  const hasClientProfilePic = !!clientProfilePic
+  const handleClientPress = () => {
+    if (!item?.client_a_uuid || !onTaggedClientPress) return
+    onTaggedClientPress({
+      clientId: item.client_a_uuid,
+      businessName: item.place || null,
+    })
+  }
+
+  const avatarSource = getDefaultAvatarSource(`${item.author || item.user_a_uuid || 'user'}-${item.id || ''}`)
 
   const cardShellStyle = [
     st.card,
@@ -558,7 +685,7 @@ export function CommunityReviewCard({
   const glassLayers = (
     <>
       <BlurView
-        intensity={Platform.OS === 'ios' ? 52 : 32}
+        intensity={Platform.OS === 'ios' ? 30 : 18}
         tint={isDark ? 'dark' : 'light'}
         style={StyleSheet.absoluteFillObject}
         pointerEvents="none"
@@ -572,188 +699,196 @@ export function CommunityReviewCard({
 
   const inner = (
     <>
-        {/* Author header */}
-        <View style={st.cardClientRow}>
-          {hasClientProfilePic ? (
-            <Image source={{ uri: clientProfilePic }} style={st.clientAv} resizeMode="cover" />
-          ) : (
-            <View style={[st.clientAv, st.clientAvPlaceholder]}>
-              <Ionicons name="storefront" size={24} color={C.red} />
-            </View>
-          )}
-          <View style={st.cardClientMeta}>
-            <View style={st.placeAndTagsRow}>
-              <Text style={st.clientPlaceText} numberOfLines={1}>{item.place || 'A place in Bahrain'}</Text>
-              {topicIds.length > 0 && (
-                <View style={st.cardTopicRowInline}>
-                  {topicIds.slice(0, 2).map((tid) => (
-                    <View key={tid} style={st.cardTopicPillSmall}>
-                      <Text style={st.cardTopicPillTextSmall}>#{tid}</Text>
-                    </View>
-                  ))}
+      {/* User-focused header */}
+      <View style={st.cardUserRow}>
+        <View style={st.userAv}>
+          <Image source={avatarSource} style={st.userAvImage} resizeMode="cover" />
+        </View>
+        <View style={st.cardUserMeta}>
+          <View style={st.cardUserNameRow}>
+            <Text style={st.cardUserName} numberOfLines={1}>{item.author || 'Explorer'}</Text>
+            {item.time ? (
+              <>
+                <Text style={st.cardDot}>·</Text>
+                <Text style={st.cardTimeText}>{item.time}</Text>
+              </>
+            ) : null}
+          </View>
+          {item.place ? (
+            <View style={st.cardPlaceRow}>
+              {item.client_a_uuid && onTaggedClientPress ? (
+                <TouchableOpacity
+                  style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}
+                  activeOpacity={0.75}
+                  onPress={handleClientPress}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Open posts for ${item.place}`}
+                >
+                  <Ionicons name="location-sharp" size={11} color={C.red} />
+                  <Text style={st.cardPlaceText} numberOfLines={1}>{item.place}</Text>
+                </TouchableOpacity>
+              ) : (
+                <>
+                  <Ionicons name="location-sharp" size={11} color={C.red} />
+                  <Text style={st.cardPlaceText} numberOfLines={1}>{item.place}</Text>
+                </>
+              )}
+              {item.rating != null && item.rating > 0 && (
+                <View style={st.cardRatingInline}>
+                  <Text style={{ fontSize: 10, color: C.muted }}>·</Text>
+                  <CommunityReviewRatingStars rating={item.rating} size={10} color="#F59E0B" mutedColor={C.muted} />
+                  <Text style={st.cardRatingNum}>{Number(item.rating).toFixed(1)}</Text>
                 </View>
               )}
             </View>
-            <Text style={st.cardAuthorSub} numberOfLines={1}>
-              by {item.author}
-              {item.time ? <Text style={st.cardTimeSuffix}>{' · '}{item.time}</Text> : null}
-            </Text>
-            {item.rating != null && item.rating > 0 && (
-              <View style={st.cardRatingPill}>
-                <CommunityReviewRatingStars rating={item.rating} size={12} color="#F59E0B" mutedColor={C.muted} />
-                <Text style={st.cardRatingNum}>{Number(item.rating).toFixed(1)}</Text>
-              </View>
-            )}
-          </View>
+          ) : null}
         </View>
+      </View>
 
-        {/* Review text */}
-        <Text style={st.bodyText} numberOfLines={expandBody ? undefined : 3}>{item.body}</Text>
+      {/* Review body */}
+      <Text style={st.bodyText} numberOfLines={expandBody ? undefined : 3}>{item.body}</Text>
 
-        {/* Images - prominent and full width */}
-        {images.length > 0 && (
-          <View style={{ width: '100%', alignItems: 'center' }}>
-            <View style={[st.cardImgWrap, { width: imgSize, height: imgSize }]}>
-            {images.length === 1 ? (
-              <View style={{ width: imgSize, height: imgSize }} collapsable={false}>
-                <PinchZoomPostImage
-                  uri={images[0]}
-                  style={[st.cardImg, { width: imgSize, height: imgSize }]}
-                  resizeMode="cover"
-                  pinchEnabled
-                  onImageDoubleTap={handleImageDoubleTap}
-                />
-                <Animated.View
-                  style={[
-                    StyleSheet.absoluteFillObject,
-                    {
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      opacity: upvoteAnimOpacity,
-                      transform: [
-                        { scale: upvoteAnimScale },
-                        { translateY: upvoteAnimTranslateY },
-                      ],
-                    },
-                  ]}
-                  pointerEvents="none"
-                >
-                  <Ionicons name="arrow-up-circle" size={100} color="#FFFFFF" />
-                </Animated.View>
-              </View>
-            ) : (
-              <>
-                <GHScrollView
-                  horizontal
-                  pagingEnabled
-                  showsHorizontalScrollIndicator={false}
-                  onMomentumScrollEnd={(e) => {
-                    const i = Math.round(e.nativeEvent.contentOffset.x / imgSize)
-                    setImageIndex(i)
-                  }}
-                  onScrollEndDrag={(e) => {
-                    const i = Math.round(e.nativeEvent.contentOffset.x / imgSize)
-                    setImageIndex(i)
-                  }}
-                  style={{ width: imgSize, height: imgSize }}
-                  contentContainerStyle={{ width: imgSize * images.length }}
-                >
-                  {images.map((uri, i) => (
-                    <View key={i} style={{ width: imgSize, height: imgSize }}>
-                      <PinchZoomPostImage
-                        uri={uri}
-                        style={{ width: imgSize, height: imgSize }}
-                        resizeMode="cover"
-                        pinchEnabled={false}
-                        onImageDoubleTap={handleImageDoubleTap}
-                      />
-                    </View>
-                  ))}
-                </GHScrollView>
-                <Animated.View
-                  style={[
-                    StyleSheet.absoluteFillObject,
-                    {
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      opacity: upvoteAnimOpacity,
-                      transform: [
-                        { scale: upvoteAnimScale },
-                        { translateY: upvoteAnimTranslateY },
-                      ],
-                    },
-                  ]}
-                  pointerEvents="none"
-                >
-                  <Ionicons name="arrow-up-circle" size={100} color="#FFFFFF" />
-                </Animated.View>
-                {images.length > 1 && (
-                  <View style={st.cardImgPills}>
-                    {images.map((_, i) => (
-                      <View key={i} style={[st.cardImgPill, i === imageIndex && st.cardImgPillActive]} />
-                    ))}
-                  </View>
-                )}
-                {images.length > 1 && (
-                  <View style={st.imgCountBadge}>
-                    <Ionicons name="images" size={12} color="#FFF" />
-                    <Text style={st.imgCountText}>{imageIndex + 1}/{images.length}</Text>
-                  </View>
-                )}
-              </>
-            )}
-            </View>
-          </View>
-        )}
-
-        {/* Action bar — equal-width tappable pills */}
-        <View style={st.actions}>
-          {(() => {
-            const upvotePillBtn = (
-              <TouchableOpacity
-                style={[st.actionPill, st.actionPillUpvote, hasUpvoted && st.actionPillUpvoteOn]}
-                activeOpacity={0.88}
-                onPress={handleUpvotePress}
-                accessibilityRole="button"
-                accessibilityLabel={`Upvote, ${count}`}
-                accessibilityState={{ selected: hasUpvoted }}
+      {/* Images — 16:9-ish aspect ratio, compact */}
+      {images.length > 0 && (
+        <View style={[st.cardImgWrap, { width: imgW, height: imgH, marginBottom: 8 }]}>
+          {images.length === 1 ? (
+            <View style={{ width: imgW, height: imgH }} collapsable={false}>
+              <PinchZoomPostImage
+                uri={images[0]}
+                style={[st.cardImg, { width: imgW, height: imgH }]}
+                resizeMode="cover"
+                pinchEnabled
+                onImageDoubleTap={handleImageDoubleTap}
+              />
+              <Animated.View
+                style={[
+                  StyleSheet.absoluteFillObject,
+                  {
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    opacity: upvoteAnimOpacity,
+                    transform: [{ scale: upvoteAnimScale }, { translateY: upvoteAnimTranslateY }],
+                  },
+                ]}
+                pointerEvents="none"
               >
+                <Ionicons name="arrow-up-circle" size={80} color="#FFFFFF" />
+              </Animated.View>
+            </View>
+          ) : (
+            <>
+              <GHScrollView
+                horizontal
+                pagingEnabled
+                showsHorizontalScrollIndicator={false}
+                onMomentumScrollEnd={(e) => {
+                  const i = Math.round(e.nativeEvent.contentOffset.x / imgW)
+                  setImageIndex(i)
+                }}
+                onScrollEndDrag={(e) => {
+                  const i = Math.round(e.nativeEvent.contentOffset.x / imgW)
+                  setImageIndex(i)
+                }}
+                style={{ width: imgW, height: imgH }}
+                contentContainerStyle={{ width: imgW * images.length }}
+              >
+                {images.map((uri, i) => (
+                  <View key={i} style={{ width: imgW, height: imgH }}>
+                    <PinchZoomPostImage
+                      uri={uri}
+                      style={{ width: imgW, height: imgH }}
+                      resizeMode="cover"
+                      pinchEnabled={false}
+                      onImageDoubleTap={handleImageDoubleTap}
+                    />
+                  </View>
+                ))}
+              </GHScrollView>
+              <Animated.View
+                style={[
+                  StyleSheet.absoluteFillObject,
+                  {
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    opacity: upvoteAnimOpacity,
+                    transform: [{ scale: upvoteAnimScale }, { translateY: upvoteAnimTranslateY }],
+                  },
+                ]}
+                pointerEvents="none"
+              >
+                <Ionicons name="arrow-up-circle" size={80} color="#FFFFFF" />
+              </Animated.View>
+              {images.length > 1 && (
+                <View style={st.cardImgPills}>
+                  {images.map((_, i) => (
+                    <View key={i} style={[st.cardImgPill, i === imageIndex && st.cardImgPillActive]} />
+                  ))}
+                </View>
+              )}
+              {images.length > 1 && (
+                <View style={st.imgCountBadge}>
+                  <Ionicons name="images" size={10} color="#FFF" />
+                  <Text style={st.imgCountText}>{imageIndex + 1}/{images.length}</Text>
+                </View>
+              )}
+            </>
+          )}
+        </View>
+      )}
+
+      {/* Flat action bar */}
+      <View style={st.actions}>
+        {(() => {
+          const upvoteBtn = (
+            <TouchableOpacity
+              style={[st.actionBtn, st.actionBtnUpvote]}
+              activeOpacity={0.8}
+              onPress={handleUpvotePress}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              accessibilityRole="button"
+              accessibilityLabel={`Upvote, ${count}`}
+              accessibilityState={{ selected: hasUpvoted }}
+            >
+              <View style={[st.upvoteCircle, hasUpvoted && st.upvoteCircleActive]}>
                 <Ionicons
-                  name={hasUpvoted ? 'arrow-up-circle' : 'arrow-up'}
-                  size={20}
+                  name={hasUpvoted ? 'arrow-up-circle' : 'arrow-up-circle-outline'}
+                  size={21}
                   color={hasUpvoted ? '#FFFFFF' : C.green}
                 />
-                <Text style={[st.actionPillNum, hasUpvoted && st.actionPillNumOn]}>{count}</Text>
-              </TouchableOpacity>
-            )
-            if (upvoteScaleAnim != null) {
-              return (
-                <Animated.View style={{ flex: 1, transform: [{ scale: upvoteScaleAnim }] }}>
-                  {upvotePillBtn}
-                </Animated.View>
-              )
-            }
-            return <View style={{ flex: 1 }}>{upvotePillBtn}</View>
-          })()}
-          <TouchableOpacity
-            style={st.actionPill}
-            activeOpacity={0.88}
-            onPress={() => onCommentPress?.(item)}
-            accessibilityRole="button"
-            accessibilityLabel={`Comments, ${commentCount}`}
-          >
-            <Ionicons name="chatbubble-outline" size={20} color={C.text} />
-            <Text style={[st.actionPillNum, commentCount === 0 && st.actionPillNumMuted]}>{commentCount}</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={st.actionPill}
-            activeOpacity={0.88}
-            accessibilityRole="button"
-            accessibilityLabel="Share"
-          >
-            <Ionicons name="paper-plane-outline" size={20} color={C.text} />
-          </TouchableOpacity>
-        </View>
+              </View>
+              <Text style={[st.actionNum, hasUpvoted && st.actionNumOn]}>{count}</Text>
+            </TouchableOpacity>
+          )
+          if (upvoteScaleAnim != null) {
+            return <Animated.View style={{ transform: [{ scale: upvoteScaleAnim }] }}>{upvoteBtn}</Animated.View>
+          }
+          return upvoteBtn
+        })()}
+
+        <TouchableOpacity
+          style={st.actionBtn}
+          activeOpacity={0.8}
+          onPress={() => onCommentPress?.(item)}
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          accessibilityRole="button"
+          accessibilityLabel={`Comments, ${commentCount}`}
+        >
+          <Ionicons name="chatbubble-outline" size={17} color={C.sub} />
+          <Text style={[st.actionNum, commentCount === 0 && st.actionNumMuted]}>{commentCount}</Text>
+        </TouchableOpacity>
+
+        <View style={st.actionSpacer} />
+
+        <TouchableOpacity
+          style={st.actionBtn}
+          activeOpacity={0.8}
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          accessibilityRole="button"
+          accessibilityLabel="Share"
+        >
+          <Ionicons name="paper-plane-outline" size={17} color={C.sub} />
+        </TouchableOpacity>
+      </View>
     </>
   )
 
@@ -1108,7 +1243,7 @@ export function CommunityReviewDetailModal({
                   <Text style={st.popReplyTitle}>Replies</Text>
                   <View style={st.popReplyBox}>
                     <View style={st.popReplyAv}>
-                      <Ionicons name="person" size={14} color={C.muted} />
+                      <Image source={getDefaultAvatarSource(`${post.author || post.user_a_uuid || 'user'}-${post.id || ''}`)} style={st.popReplyAvImage} resizeMode="cover" />
                     </View>
                     <TextInput
                       ref={replyInputRef}

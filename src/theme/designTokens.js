@@ -50,17 +50,17 @@ export const colorsDark = {
   primaryDark: '#C8102E',
   primaryMuted: 'rgba(230, 57, 80, 0.2)',
 
-  background: '#0F172A',
-  surface: '#1E293B',
-  surfaceElevated: '#334155',
-  surfaceGlass: 'rgba(15, 23, 42, 0.85)',
-  border: '#334155',
-  borderLight: '#475569',
+  background: '#000000',
+  surface: '#121212',
+  surfaceElevated: '#1C1C1E',
+  surfaceGlass: 'rgba(0, 0, 0, 0.88)',
+  border: '#38383A',
+  borderLight: '#48484A',
 
   textPrimary: '#F8FAFC',
-  textSecondary: '#CBD5E1',
-  textMuted: '#94A3B8',
-  textInverse: '#0F172A',
+  textSecondary: '#C7C7CC',
+  textMuted: '#8E8E93',
+  textInverse: '#000000',
 
   success: '#10B981',
   successMuted: 'rgba(16, 185, 129, 0.2)',
@@ -78,8 +78,8 @@ export const colorsDark = {
   route: '#E63950',
   routeMuted: 'rgba(230, 57, 80, 0.3)',
 
-  shimmerBase: '#1E293B',
-  shimmerHighlight: '#334155',
+  shimmerBase: '#1C1C1E',
+  shimmerHighlight: '#2C2C2E',
 
   accent2: '#A78BFA',
   accent3: '#22D3EE',
@@ -93,16 +93,16 @@ export const gradients = {
     ? ['rgba(230,57,80,0.15)', 'rgba(230,57,80,0.05)']
     : ['rgba(200,16,46,0.08)', 'rgba(200,16,46,0.02)'],
   heroLight: ['#F8FAFC', '#EFF6FF', '#F8FAFC'],
-  heroDark: ['#0F172A', '#1A1033', '#0F172A'],
+  heroDark: ['#000000', '#0A0A0A', '#000000'],
   hero: (isDark) => isDark
-    ? ['#0F172A', '#1A1033', '#0F172A']
+    ? ['#000000', '#0A0A0A', '#000000']
     : ['#F8FAFC', '#EFF6FF', '#F8FAFC'],
   cardGlow: (isDark) => isDark
-    ? ['rgba(230,57,80,0.12)', 'rgba(15,23,42,0)']
+    ? ['rgba(230,57,80,0.12)', 'rgba(0,0,0,0)']
     : ['rgba(200,16,46,0.06)', 'rgba(248,250,252,0)'],
   avatarRing: ['#E63950', '#C8102E', '#7C3AED'],
-  onboardingBg: ['#0B1120', '#1A1033', '#0F172A'],
-  glassDark: ['rgba(30,41,59,0.8)', 'rgba(15,23,42,0.9)'],
+  onboardingBg: ['#000000', '#0A0A0A', '#000000'],
+  glassDark: ['rgba(28,28,30,0.85)', 'rgba(0,0,0,0.92)'],
   glassLight: ['rgba(255,255,255,0.9)', 'rgba(248,250,252,0.95)'],
 }
 

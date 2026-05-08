@@ -10,6 +10,7 @@ import {
   ActivityIndicator,
   Alert,
   StyleSheet,
+  Image,
 } from 'react-native'
 import { BlurView } from 'expo-blur'
 import { useNavigation, useRoute, useFocusEffect } from '@react-navigation/native'
@@ -25,6 +26,22 @@ import { UpvoteParticles } from '../components/FeedUpvoteInteractions'
 import { useCommunityUpvoteToggle } from '../hooks/useCommunityUpvoteToggle'
 import { useTheme } from '../context/ThemeContext'
 import { LUXURY, luxurySoftShadow } from '../theme/luxuryPremium'
+
+const DEFAULT_PROFILE_IMAGES = [
+  require('../../assets/pfp.png'),
+  require('../../assets/pfp2.png'),
+]
+
+const getDefaultAvatarSource = (seedValue) => {
+  const seed = String(seedValue || '').trim()
+  if (!seed) return DEFAULT_PROFILE_IMAGES[0]
+  let hash = 5381
+  for (let i = 0; i < seed.length; i += 1) {
+    hash = ((hash << 5) + hash) ^ seed.charCodeAt(i)
+  }
+  const normalized = Math.abs(hash + seed.length * 31)
+  return normalized % 4 <= 1 ? DEFAULT_PROFILE_IMAGES[0] : DEFAULT_PROFILE_IMAGES[1]
+}
 
 export default function CommunityPostDetailScreen() {
   const navigation = useNavigation()
@@ -159,11 +176,18 @@ export default function CommunityPostDetailScreen() {
         />
 
         <View style={[styles.repliesHeader, { backgroundColor: C.card, borderColor: C.border }]}>
-          <Text style={[styles.repliesTitle, { color: C.text }]}>Replies</Text>
+          <View style={styles.repliesTitleRow}>
+            <View style={[styles.repliesTitleIcon, { backgroundColor: C.redSoft }]}>
+              <Ionicons name="chatbubble-ellipses-outline" size={14} color={C.red} />
+            </View>
+            <Text style={[styles.repliesTitle, { color: C.text }]}>Replies</Text>
+          </View>
           {loadingComments ? (
             <ActivityIndicator size="small" color={C.red} />
           ) : (
-            <Text style={[styles.repliesCount, { color: C.sub }]}>{comments.length}</Text>
+            <View style={[styles.repliesCountPill, { backgroundColor: C.chip }]}>
+              <Text style={[styles.repliesCount, { color: C.sub }]}>{comments.length}</Text>
+            </View>
           )}
         </View>
 
@@ -182,9 +206,9 @@ export default function CommunityPostDetailScreen() {
               style={[styles.commentRow, { backgroundColor: C.card, borderColor: C.border }]}
             >
               <View style={[styles.commentAv, { backgroundColor: C.chip }]}>
-                <Ionicons name="person" size={16} color={C.muted} />
+                <Image source={getDefaultAvatarSource(`${c.author || 'user'}-${c.id || ''}`)} style={styles.profileAvatarImage} resizeMode="cover" />
               </View>
-              <View style={styles.commentBody}>
+              <View style={[styles.commentBody, { borderColor: C.border }]}>
                 <View style={styles.commentMeta}>
                   <Text style={[styles.commentAuthor, { color: C.text }]} numberOfLines={1}>
                     {c.author}
@@ -206,13 +230,13 @@ export default function CommunityPostDetailScreen() {
           },
         ]}
       >
-        <View style={styles.composerGlassOuter}>
+        <View style={[styles.composerGlassOuter, { borderColor: isDark ? 'rgba(255,255,255,0.12)' : 'rgba(142,142,147,0.22)' }]}>
           <BlurView intensity={Platform.OS === 'ios' ? 52 : 32} tint={isDark ? 'dark' : 'light'} style={StyleSheet.absoluteFillObject} />
           <View style={[styles.composerGlassFrost, isDark && styles.composerGlassFrostDark]} pointerEvents="none" />
           <View style={styles.composerGlassInner}>
             <View style={[styles.composerInner, { backgroundColor: isDark ? 'rgba(255,255,255,0.08)' : 'rgba(255,255,255,0.5)', borderColor: C.border }]}>
               <View style={[styles.composerAv, { backgroundColor: C.card }]}>
-                <Ionicons name="person" size={18} color={C.muted} />
+                <Image source={DEFAULT_PROFILE_IMAGES[0]} style={styles.profileAvatarImage} resizeMode="cover" />
               </View>
               <TextInput
                 ref={inputRef}
@@ -233,6 +257,7 @@ export default function CommunityPostDetailScreen() {
                   styles.sendBtn,
                   { backgroundColor: draft.trim() ? C.red : C.chip },
                 ]}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                 accessibilityRole="button"
                 accessibilityLabel="Send reply"
                 accessibilityState={{ disabled: sending || !draft.trim() }}
@@ -274,7 +299,27 @@ const styles = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     ...luxurySoftShadow,
   },
+  repliesTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  repliesTitleIcon: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   repliesTitle: { fontSize: 16, fontWeight: '800' },
+  repliesCountPill: {
+    minWidth: 28,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 999,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   repliesCount: { fontSize: 14, fontWeight: '600' },
   emptyReplies: {
     alignItems: 'center',
@@ -292,26 +337,33 @@ const styles = StyleSheet.create({
   commentRow: {
     flexDirection: 'row',
     marginHorizontal: 14,
-    marginBottom: 10,
-    paddingHorizontal: 14,
-    paddingVertical: 14,
+    marginBottom: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
     borderRadius: LUXURY.radiusMarkerPill,
     borderWidth: StyleSheet.hairlineWidth,
     ...luxurySoftShadow,
   },
   commentAv: {
-    width: 36,
-    height: 36,
-    borderRadius: LUXURY.radiusPill - 2,
+    width: 30,
+    height: 30,
+    borderRadius: 15,
     alignItems: 'center',
     justifyContent: 'center',
-    marginRight: 12,
+    marginRight: 10,
   },
-  commentBody: { flex: 1, minWidth: 0 },
-  commentMeta: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 4 },
-  commentAuthor: { fontSize: 15, fontWeight: '700', flexShrink: 1 },
-  commentTime: { fontSize: 13 },
-  commentText: { fontSize: 15, lineHeight: 21 },
+  commentBody: {
+    flex: 1,
+    minWidth: 0,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: 10,
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+  },
+  commentMeta: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 2 },
+  commentAuthor: { fontSize: 13, fontWeight: '700', flexShrink: 1 },
+  commentTime: { fontSize: 11 },
+  commentText: { fontSize: 13, lineHeight: 18 },
   composerWrap: {
     paddingHorizontal: 10,
     paddingTop: 8,
@@ -362,6 +414,11 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     marginBottom: 2,
   },
+  profileAvatarImage: {
+    width: '100%',
+    height: '100%',
+    borderRadius: 999,
+  },
   composerInput: {
     flex: 1,
     fontSize: 16,
@@ -371,9 +428,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 4,
   },
   sendBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: 2,

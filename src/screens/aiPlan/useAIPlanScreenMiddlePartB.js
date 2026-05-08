@@ -124,6 +124,7 @@ import { MapScanningOverlay, mapMarkerFilterCategoryKey, markerMatchesPlanMapCli
 
 
 export function useAIPlanScreenMiddlePartB(midA) {
+  const { isDark } = useTheme()
   const planHeaderReelScrollRef = useRef(null)
   const planHeaderReelOffsetRef = useRef(0)
   const REEL_ITEM_STEP = 74
@@ -429,11 +430,45 @@ export function useAIPlanScreenMiddlePartB(midA) {
     const rowForTitle = midA.savedPlansList.find((p) => p.id === midA.activeSavedPlanId)
     const savedTitleRaw = typeof rowForTitle?.title === 'string' ? rowForTitle.title.trim() : ''
     const primaryTitle = savedTitleRaw || titleLabel
+    const darkBackBtnStyle = isDark
+      ? {
+        backgroundColor: 'rgba(30,41,59,0.92)',
+        borderColor: 'rgba(100,116,139,0.55)',
+      }
+      : null
+    const darkTitleStyle = isDark ? { color: '#F8FAFC' } : null
+    const darkSubtitleStyle = isDark ? { color: '#AFC2DA' } : null
+    const darkDividerLineStyle = isDark ? { backgroundColor: 'rgba(100,116,139,0.55)' } : null
+    const darkDividerDotStyle = isDark ? { backgroundColor: '#E11D48' } : null
+    const darkControlTrayStyle = isDark ? { backgroundColor: '#020617' } : null
+    const darkMapBtnStyle = isDark
+      ? {
+        backgroundColor: 'rgba(30,41,59,0.92)',
+        borderColor: 'rgba(100,116,139,0.55)',
+      }
+      : null
+    const darkMapTextStyle = isDark ? { color: '#E2E8F0' } : null
+    const darkAddBtnStyle = isDark
+      ? {
+        backgroundColor: 'rgba(185,28,28,0.9)',
+        borderColor: 'rgba(248,113,113,0.55)',
+      }
+      : null
+    const darkAddTextStyle = isDark ? { color: '#FFFFFF' } : null
+    const darkShareBtnStyle = isDark
+      ? {
+        backgroundColor: 'rgba(30,41,59,0.92)',
+        borderColor: 'rgba(100,116,139,0.55)',
+      }
+      : null
+    const darkShareTextStyle = isDark ? { color: '#E2E8F0' } : null
+    const actionIconColor = isDark ? '#E2E8F0' : '#475569'
+    const addIconColor = isDark ? '#FFFFFF' : themeColors.primary
     return (
       <View style={styles.planLuxuryOverviewCard} accessibilityRole="summary">
         <View style={styles.planLuxuryOverviewAccentTop} />
         <TouchableOpacity
-          style={styles.planLuxuryOverviewBackBtnTop}
+          style={[styles.planLuxuryOverviewBackBtnTop, darkBackBtnStyle]}
           activeOpacity={0.65}
           hitSlop={{ top: 10, bottom: 10, left: 8, right: 8 }}
           onPress={() => {
@@ -449,7 +484,7 @@ export function useAIPlanScreenMiddlePartB(midA) {
           accessibilityRole="button"
           accessibilityLabel="Back to plans"
         >
-          <Ionicons name="chevron-back" size={20} color="#0F172A" />
+          <Ionicons name="chevron-back" size={20} color={isDark ? '#E2E8F0' : '#0F172A'} />
         </TouchableOpacity>
         {sharedBanner ? (
           <View style={styles.planShareBanner} accessibilityRole="text">
@@ -462,7 +497,7 @@ export function useAIPlanScreenMiddlePartB(midA) {
             <View style={styles.planLuxuryOverviewTitleBlock}>
               <View style={styles.planLuxuryOverviewTitleRow}>
                   <Text
-                    style={styles.planLuxuryOverviewTitle}
+                    style={[styles.planLuxuryOverviewTitle, darkTitleStyle]}
                     numberOfLines={2}
                     adjustsFontSizeToFit
                     minimumFontScale={0.8}
@@ -471,12 +506,12 @@ export function useAIPlanScreenMiddlePartB(midA) {
                   </Text>
               </View>
                 <View style={styles.planLuxuryOverviewDividerRow} accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
-                  <View style={styles.planLuxuryOverviewDividerLine} />
-                  <View style={styles.planLuxuryOverviewDividerDot} />
-                  <View style={styles.planLuxuryOverviewDividerLine} />
+                  <View style={[styles.planLuxuryOverviewDividerLine, darkDividerLineStyle]} />
+                  <View style={[styles.planLuxuryOverviewDividerDot, darkDividerDotStyle]} />
+                  <View style={[styles.planLuxuryOverviewDividerLine, darkDividerLineStyle]} />
                 </View>
               <Text
-                style={styles.planLuxuryOverviewSubtitle}
+                style={[styles.planLuxuryOverviewSubtitle, darkSubtitleStyle]}
                 numberOfLines={1}
                 accessibilityLabel={`${midA.dayPlan.length} stops, ${mealCount} meals`}
               >
@@ -489,11 +524,11 @@ export function useAIPlanScreenMiddlePartB(midA) {
 
           <View style={styles.planLuxuryOverviewSideSlot} />
         </View>
-        <View style={styles.planLuxuryOverviewControlTray}>
+        <View style={[styles.planLuxuryOverviewControlTray, darkControlTrayStyle]}>
           <View style={styles.planLuxuryOverviewMapRow}>
             <View style={styles.planLuxuryOverviewMapRowSplit}>
               <TouchableOpacity
-                style={[styles.planLuxuryOverviewMapBtn, styles.planLuxuryOverviewMapBtnFlex]}
+                style={[styles.planLuxuryOverviewMapBtn, styles.planLuxuryOverviewMapBtnFlex, darkMapBtnStyle]}
                 onPress={midA.handleOpenInGoogleMaps}
                 disabled={midA.openingMaps}
                 activeOpacity={0.85}
@@ -501,11 +536,11 @@ export function useAIPlanScreenMiddlePartB(midA) {
                 accessibilityLabel="Open midA.route in Google Maps"
               >
                 {midA.openingMaps ? (
-                  <ActivityIndicator size="small" color="#64748B" />
+                  <ActivityIndicator size="small" color={actionIconColor} />
                 ) : (
                   <>
-                    <Ionicons name="navigate-outline" size={19} color="#475569" />
-                    <Text style={styles.planLuxuryOverviewMapBtnText}>Maps</Text>
+                    <Ionicons name="navigate-outline" size={19} color={actionIconColor} />
+                    <Text style={[styles.planLuxuryOverviewMapBtnText, darkMapTextStyle]}>Maps</Text>
                   </>
                 )}
               </TouchableOpacity>
@@ -514,6 +549,7 @@ export function useAIPlanScreenMiddlePartB(midA) {
                   styles.planLuxuryOverviewMapBtn,
                   styles.planLuxuryOverviewMapBtnFlex,
                   styles.planLuxuryOverviewAddBtn,
+                  darkAddBtnStyle,
                   midA.planReadOnly && { opacity: 0.45 },
                 ]}
                 onPress={() => {
@@ -526,18 +562,18 @@ export function useAIPlanScreenMiddlePartB(midA) {
                 accessibilityRole="button"
                 accessibilityLabel="Add a stop from the catalog"
               >
-                <Ionicons name="add-circle-outline" size={19} color={themeColors.primary} />
-                <Text style={styles.planLuxuryOverviewAddBtnText}>Add stop</Text>
+                <Ionicons name="add-circle-outline" size={19} color={addIconColor} />
+                <Text style={[styles.planLuxuryOverviewAddBtnText, darkAddTextStyle]}>Add stop</Text>
               </TouchableOpacity>
               <TouchableOpacity
-                style={styles.planLuxuryOverviewShareBtnInline}
+                style={[styles.planLuxuryOverviewShareBtnInline, darkShareBtnStyle]}
                 activeOpacity={0.85}
                 onPress={handleOpenShareActionPickerModal}
                 accessibilityRole="button"
                 accessibilityLabel="Share plan"
               >
-                <Ionicons name="share-outline" size={18} color={themeColors.primary} />
-                <Text style={styles.planLuxuryOverviewShareBtnText}>Share</Text>
+                <Ionicons name="share-outline" size={18} color={isDark ? '#E2E8F0' : themeColors.primary} />
+                <Text style={[styles.planLuxuryOverviewShareBtnText, darkShareTextStyle]}>Share</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -556,6 +592,7 @@ export function useAIPlanScreenMiddlePartB(midA) {
     midA.shareModalBusy,
     midA.activeSavedPlanId,
     midA.savedPlansList,
+    isDark,
   ])
 
 

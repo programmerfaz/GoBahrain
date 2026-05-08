@@ -83,6 +83,7 @@ import { gsap } from 'gsap';
 import { useGSAP } from '@gsap/react';
 import { getLuxuryCategoryStyle } from './aiPlan/planRowModel';
 import { PopIn, AnimatedOptionChip } from './aiPlan/uiAnimChips';
+import { FONT_POPPINS_BOLD } from '../constants/brandFont';
 
 gsap.registerPlugin(useGSAP);
 
@@ -227,27 +228,31 @@ const resolveStopGuide = (item) => {
   }
 }
 
-const PlanGuideBlock = React.memo(function PlanGuideBlock({ item }) {
+const PlanGuideBlock = React.memo(function PlanGuideBlock({ item, isDark = false }) {
   const guide = resolveStopGuide(item)
   const hasGuide = Boolean(guide.highlight || guide.why || guide.tip)
   if (!hasGuide) return null
+  const guideHighlightStyle = isDark ? { color: '#E2E8F0' } : null
+  const guideLabelStyle = isDark ? { color: '#94A3B8' } : null
+  const guideTextStyle = isDark ? { color: '#CBD5E1' } : null
+  const guideTipStyle = isDark ? { color: '#AFC2DA' } : null
   return (
     <View style={styles.planLuxuryGuideWrap}>
       {guide.highlight ? (
-        <Text style={styles.planLuxuryStopGuideHighlight} numberOfLines={1}>
+        <Text style={[styles.planLuxuryStopGuideHighlight, guideHighlightStyle]} numberOfLines={1}>
           {guide.highlight}
         </Text>
       ) : null}
       {guide.why ? (
         <>
-          <Text style={styles.planLuxuryStopGuideLabel}>Why this stop</Text>
-          <Text style={styles.planLuxuryStopGuideText} numberOfLines={3}>
+          <Text style={[styles.planLuxuryStopGuideLabel, guideLabelStyle]}>Why this stop</Text>
+          <Text style={[styles.planLuxuryStopGuideText, guideTextStyle]} numberOfLines={3}>
             {guide.why}
           </Text>
         </>
       ) : null}
       {guide.tip ? (
-        <Text style={styles.planLuxuryStopGuideTip} numberOfLines={2}>
+        <Text style={[styles.planLuxuryStopGuideTip, guideTipStyle]} numberOfLines={2}>
           {`Tip: ${guide.tip}`}
         </Text>
       ) : null}
@@ -276,6 +281,7 @@ const PlanActionButton = React.memo(function PlanActionButton({
   disabled = false,
   variant = 'secondary',
   busy = false,
+  isDark = false,
   accessibilityLabel,
 }) {
   const scale = useRef(new Animated.Value(1)).current
@@ -290,6 +296,29 @@ const PlanActionButton = React.memo(function PlanActionButton({
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {})
     onPress()
   }, [disabled, onPress])
+  const darkBtnStyle = isDark
+    ? variant === 'primary'
+      ? {
+        backgroundColor: '#B91C1C',
+        borderColor: '#EF4444',
+      }
+      : variant === 'tertiary'
+        ? {
+          backgroundColor: 'rgba(127, 29, 29, 0.35)',
+          borderColor: 'rgba(248, 113, 113, 0.45)',
+        }
+        : {
+          backgroundColor: 'rgba(30,41,59,0.92)',
+          borderColor: 'rgba(100,116,139,0.55)',
+        }
+    : null
+  const actionFgColor = isDark
+    ? '#F8FAFC'
+    : variant === 'primary'
+      ? '#FFFFFF'
+      : variant === 'tertiary'
+        ? '#7F0D1F'
+        : '#1A120A'
   return (
     <Animated.View style={{ transform: [{ scale }], flex: 1 }}>
       <TouchableOpacity
@@ -301,6 +330,7 @@ const PlanActionButton = React.memo(function PlanActionButton({
             : variant === 'tertiary'
               ? styles.planLuxuryActionBtnTertiary
               : styles.planLuxuryActionBtnSecondary,
+          darkBtnStyle,
           disabled && styles.planLuxuryActionBtnDisabled,
         ]}
         onPress={handlePress}
@@ -312,13 +342,13 @@ const PlanActionButton = React.memo(function PlanActionButton({
         accessibilityLabel={accessibilityLabel || label}
       >
         {busy ? (
-          <ActivityIndicator size="small" color={variant === 'primary' ? '#FFFFFF' : '#1A120A'} />
+          <ActivityIndicator size="small" color={actionFgColor} />
         ) : (
           <>
             <Ionicons
               name={iconName}
               size={16}
-              color={variant === 'primary' ? '#FFFFFF' : variant === 'tertiary' ? '#7F0D1F' : '#1A120A'}
+              color={actionFgColor}
             />
             <Text
               style={[
@@ -328,6 +358,7 @@ const PlanActionButton = React.memo(function PlanActionButton({
                   : variant === 'tertiary'
                     ? styles.planLuxuryActionBtnTextTertiary
                     : styles.planLuxuryActionBtnTextSecondary,
+                isDark ? { color: actionFgColor } : null,
               ]}
             >
               {label}
@@ -2207,7 +2238,7 @@ function PlanLoadingFactStrip({ compact }) {
         <View style={styles.loadingSheetFactTextCol}>
           <Text style={styles.loadingSheetFactLabel}>Did you know?</Text>
           <Animated.View style={{ opacity: fade }}>
-            <Text style={styles.loadingSheetFactBody} numberOfLines={3}>
+            <Text style={styles.loadingSheetFactBody}>
               {fact}
             </Text>
           </Animated.View>
@@ -2224,7 +2255,7 @@ function PlanLoadingFactStrip({ compact }) {
       <View style={styles.ldFactContent}>
         <Text style={styles.ldFactLabel}>Did you know?</Text>
         <Animated.View style={{ opacity: fade }}>
-          <Text style={styles.ldFactText} numberOfLines={5}>
+          <Text style={styles.ldFactText}>
             {fact}
           </Text>
         </Animated.View>
@@ -5024,6 +5055,38 @@ export default function AIPlanScreen() {
     const rowForTitle = savedPlansList.find((p) => p.id === activeSavedPlanId)
     const savedTitleRaw = typeof rowForTitle?.title === 'string' ? rowForTitle.title.trim() : ''
     const primaryTitle = savedTitleRaw || titleLabel
+    const overviewBackBtnStyle = isDark
+      ? {
+        backgroundColor: 'rgba(30,41,59,0.92)',
+        borderColor: 'rgba(100,116,139,0.55)',
+      }
+      : null
+    const overviewIconBtnStyle = isDark
+      ? {
+        backgroundColor: 'rgba(30,41,59,0.9)',
+        borderColor: 'rgba(100,116,139,0.55)',
+      }
+      : null
+    const overviewTitleStyle = isDark ? { color: '#F8FAFC' } : null
+    const overviewContextLineStyle = isDark ? { color: '#94A3B8' } : null
+    const overviewMetaChipStyle = isDark
+      ? {
+        backgroundColor: 'rgba(30,41,59,0.72)',
+        borderColor: 'rgba(100,116,139,0.5)',
+      }
+      : null
+    const overviewMetaChipTextStyle = isDark ? { color: '#CBD5E1' } : null
+    const overviewIconColor = isDark ? '#E2E8F0' : '#1A120A'
+    const overviewControlTrayStyle = isDark ? { backgroundColor: '#020617' } : null
+    const previewCardStyle = isDark
+      ? {
+        backgroundColor: '#0F172A',
+        borderColor: 'rgba(100,116,139,0.45)',
+      }
+      : null
+    const previewTitleStyle = isDark ? { color: '#E2E8F0' } : null
+    const previewSpotStyle = isDark ? { color: '#F8FAFC' } : null
+    const previewReasonStyle = isDark ? { color: '#94A3B8' } : null
 
     return (
       <View style={styles.planLuxuryOverviewCard} accessibilityRole="summary">
@@ -5035,7 +5098,7 @@ export default function AIPlanScreen() {
         
         <View style={styles.planLuxuryOverviewHeaderRow}>
           <TouchableOpacity
-            style={styles.planLuxuryOverviewBackBtn}
+            style={[styles.planLuxuryOverviewBackBtn, overviewBackBtnStyle]}
             activeOpacity={0.8}
             onPress={() => {
               setDrawerStep(0)
@@ -5047,26 +5110,26 @@ export default function AIPlanScreen() {
             accessibilityRole="button"
             accessibilityLabel="Back to plans"
           >
-            <Ionicons name="chevron-back" size={18} color="#1A120A" />
+            <Ionicons name="chevron-back" size={18} color={overviewIconColor} />
           </TouchableOpacity>
 
           <View style={styles.planLuxuryOverviewTitleBlock}>
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-              <Text style={styles.planLuxuryOverviewTitle} numberOfLines={1}>
+              <Text style={[styles.planLuxuryOverviewTitle, overviewTitleStyle]} numberOfLines={1}>
                 {primaryTitle}
               </Text>
             </View>
-            <Text style={styles.planLuxuryOverviewContextLine} numberOfLines={1}>
+            <Text style={[styles.planLuxuryOverviewContextLine, overviewContextLineStyle]} numberOfLines={1}>
               Optimized route · personalized for you
             </Text>
             <View style={styles.planLuxuryOverviewMetaRow}>
-              <View style={styles.planLuxuryOverviewMetaChip}>
-                <Text style={styles.planLuxuryOverviewMetaChipText}>
+              <View style={[styles.planLuxuryOverviewMetaChip, overviewMetaChipStyle]}>
+                <Text style={[styles.planLuxuryOverviewMetaChipText, overviewMetaChipTextStyle]}>
                   {`${dayPlan.length} STOPS`}
                 </Text>
               </View>
-              <View style={[styles.planLuxuryOverviewMetaChip, styles.planLuxuryOverviewMetaChipGold]}>
-                <Text style={[styles.planLuxuryOverviewMetaChipText, styles.planLuxuryOverviewMetaChipGoldText]}>
+              <View style={[styles.planLuxuryOverviewMetaChip, styles.planLuxuryOverviewMetaChipGold, overviewMetaChipStyle]}>
+                <Text style={[styles.planLuxuryOverviewMetaChipText, styles.planLuxuryOverviewMetaChipGoldText, overviewMetaChipTextStyle]}>
                   {`${mealCount} MEALS`}
                 </Text>
               </View>
@@ -5076,7 +5139,7 @@ export default function AIPlanScreen() {
           <View style={styles.planLuxuryOverviewHeaderActions}>
             {!planReadOnly && (
               <TouchableOpacity
-                style={styles.planLuxuryOverviewIconBtn}
+                style={[styles.planLuxuryOverviewIconBtn, overviewIconBtnStyle]}
                 activeOpacity={0.75}
                 onPress={handleSavePlanToCloud}
                 disabled={savePlanBusy}
@@ -5084,48 +5147,48 @@ export default function AIPlanScreen() {
                 accessibilityLabel="Save plan"
               >
                 {savePlanBusy ? (
-                  <ActivityIndicator size="small" color="#1A120A" />
+                  <ActivityIndicator size="small" color={overviewIconColor} />
                 ) : (
-                  <Ionicons name="cloud-upload-outline" size={18} color="#1A120A" />
+                  <Ionicons name="cloud-upload-outline" size={18} color={overviewIconColor} />
                 )}
               </TouchableOpacity>
             )}
             {!planReadOnly && (
               <TouchableOpacity
-                style={styles.planLuxuryOverviewIconBtn}
+                style={[styles.planLuxuryOverviewIconBtn, overviewIconBtnStyle]}
                 activeOpacity={0.75}
                 onPress={handleOpenShareModal}
                 disabled={shareModalBusy}
                 accessibilityRole="button"
                 accessibilityLabel="Link and share options"
               >
-                <Ionicons name="link-outline" size={18} color="#1A120A" />
+                <Ionicons name="link-outline" size={18} color={overviewIconColor} />
               </TouchableOpacity>
             )}
             <TouchableOpacity
-              style={styles.planLuxuryOverviewIconBtn}
+              style={[styles.planLuxuryOverviewIconBtn, overviewIconBtnStyle]}
               activeOpacity={0.75}
               onPress={handleSharePlanWithFriends}
               accessibilityRole="button"
               accessibilityLabel="Share plan as text"
             >
-              <Ionicons name="share-outline" size={18} color="#1A120A" />
+              <Ionicons name="share-outline" size={18} color={overviewIconColor} />
             </TouchableOpacity>
           </View>
         </View>
 
-        <View style={styles.planLuxuryOverviewControlTray}>
-          <View style={styles.planPreviewSummaryCard} accessibilityRole="text">
-            <Text style={styles.planPreviewSummaryTitle}>Plan preview</Text>
+        <View style={[styles.planLuxuryOverviewControlTray, overviewControlTrayStyle]}>
+          <View style={[styles.planPreviewSummaryCard, previewCardStyle]} accessibilityRole="text">
+            <Text style={[styles.planPreviewSummaryTitle, previewTitleStyle]}>Plan preview</Text>
             {dayPlan.map((stop, idx) => {
               const reasonText = String(stop?.reason || '').replace(/\s+/g, ' ').trim()
               return (
                 <View key={`${stop?._planRowKey || stop?.spot || 'stop'}-${idx}`} style={styles.planPreviewSummaryItem}>
-                  <Text style={styles.planPreviewSummarySpot} numberOfLines={1}>
+                  <Text style={[styles.planPreviewSummarySpot, previewSpotStyle]} numberOfLines={1}>
                     {`${idx + 1}. ${stop?.spot || 'Stop'}`}
                   </Text>
                   {reasonText ? (
-                    <Text style={styles.planPreviewSummaryReason} numberOfLines={2}>
+                    <Text style={[styles.planPreviewSummaryReason, previewReasonStyle]} numberOfLines={2}>
                       {reasonText}
                     </Text>
                   ) : null}
@@ -5139,6 +5202,7 @@ export default function AIPlanScreen() {
                 label="ADD STOP"
                 iconName="add"
                 variant="primary"
+                isDark={isDark}
                 onPress={() => setShowSearchModal(true)}
                 accessibilityLabel="Add stop"
               />
@@ -5147,6 +5211,7 @@ export default function AIPlanScreen() {
               label="MAPS"
               iconName="map-outline"
               variant="secondary"
+              isDark={isDark}
               onPress={() => {
                 void handleOpenInGoogleMaps()
               }}
@@ -5158,6 +5223,7 @@ export default function AIPlanScreen() {
               label="SHARE"
               iconName="share-outline"
               variant="tertiary"
+              isDark={isDark}
               onPress={() => {
                 void handleSharePlanWithFriends()
               }}
@@ -5182,6 +5248,7 @@ export default function AIPlanScreen() {
     shareModalBusy,
     activeSavedPlanId,
     savedPlansList,
+    isDark,
   ])
 
   const handleCopyShareText = useCallback(async () => {
@@ -6216,11 +6283,33 @@ export default function AIPlanScreen() {
                 <Text style={styles.emptyResults}>No plan generated.</Text>
               </Reanimated.View>
             ) : (
-              <View style={styles.planContentFill}>
+              <View
+                style={[
+                  styles.planContentFill,
+                  isDark
+                    ? { backgroundColor: '#020617' }
+                    : null,
+                ]}
+              >
               {dayPlan?.length ? (
-                <View style={styles.planStickyControlBar}>
+                <View
+                  style={[
+                    styles.planStickyControlBar,
+                    isDark
+                      ? { backgroundColor: '#0F172A' }
+                      : null,
+                  ]}
+                >
                   <TouchableOpacity
-                    style={styles.planStickyControlBtn}
+                    style={[
+                      styles.planStickyControlBtn,
+                      isDark
+                        ? {
+                          backgroundColor: 'rgba(30,41,59,0.9)',
+                          borderColor: 'rgba(100,116,139,0.5)',
+                        }
+                        : null,
+                    ]}
                     activeOpacity={0.85}
                     onPress={() => {
                       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {})
@@ -6233,11 +6322,19 @@ export default function AIPlanScreen() {
                     accessibilityRole="button"
                     accessibilityLabel="Back to plans"
                   >
-                    <Ionicons name="chevron-back" size={16} color="#1A120A" />
-                    <Text style={styles.planStickyControlBtnText}>Back</Text>
+                    <Ionicons name="chevron-back" size={16} color={isDark ? '#E2E8F0' : '#1A120A'} />
+                    <Text style={[styles.planStickyControlBtnText, isDark ? { color: '#E2E8F0' } : null]}>Back</Text>
                   </TouchableOpacity>
                   <TouchableOpacity
-                    style={styles.planStickyControlBtn}
+                    style={[
+                      styles.planStickyControlBtn,
+                      isDark
+                        ? {
+                          backgroundColor: 'rgba(30,41,59,0.9)',
+                          borderColor: 'rgba(100,116,139,0.5)',
+                        }
+                        : null,
+                    ]}
                     activeOpacity={0.85}
                     onPress={() => {
                       void handleSharePlanWithFriends()
@@ -6245,8 +6342,8 @@ export default function AIPlanScreen() {
                     accessibilityRole="button"
                     accessibilityLabel="Share plan"
                   >
-                    <Ionicons name="share-outline" size={15} color="#1A120A" />
-                    <Text style={styles.planStickyControlBtnText}>Share</Text>
+                    <Ionicons name="share-outline" size={15} color={isDark ? '#E2E8F0' : '#1A120A'} />
+                    <Text style={[styles.planStickyControlBtnText, isDark ? { color: '#E2E8F0' } : null]}>Share</Text>
                   </TouchableOpacity>
                 </View>
               ) : null}
@@ -6271,6 +6368,16 @@ export default function AIPlanScreen() {
                   const isEat = item.type === 'restaurant'
                   const isEvent = item.type === 'event'
                   const accent = isEat ? themeColors.dining : isEvent ? themeColors.event : colors.morning
+                  const rowSurfaceStyle = isDark
+                    ? {
+                      backgroundColor: '#111827',
+                      borderColor: 'rgba(71, 85, 105, 0.55)',
+                    }
+                    : null
+                  const rowTitleStyle = isDark ? { color: '#F8FAFC' } : null
+                  const rowDividerStyle = isDark ? { backgroundColor: 'rgba(100, 116, 139, 0.45)' } : null
+                  const rowRatingTextStyle = isDark ? { color: '#CBD5E1' } : null
+                  const dragIconColor = isDark ? '#94A3B8' : '#AEAEB2'
                   const galleryUris = pickPlanStopGalleryUris(item, allPlaceMarkers)
                   const thumbUri = galleryUris[0] || null
                   const hasImages = !!thumbUri
@@ -6286,7 +6393,7 @@ export default function AIPlanScreen() {
                       <AnimatedStopRow isVisible={isVisible} style={styles.planRowEnterWrap}>
                         <View style={styles.planLuxuryStopBlock}>
                           <View style={[styles.planLuxuryRowLayout, isActive && styles.planLuxuryRowLayoutActive]}>
-                            <View style={[styles.planLuxuryStopSurface, isActive && styles.planLuxuryStopSurfaceActive]}>
+                            <View style={[styles.planLuxuryStopSurface, rowSurfaceStyle, isActive && styles.planLuxuryStopSurfaceActive]}>
                               <TouchableOpacity
                                 onLongPress={planReadOnly ? undefined : drag}
                                 delayLongPress={planReadOnly ? 60000 : 180}
@@ -6296,7 +6403,7 @@ export default function AIPlanScreen() {
                                 accessibilityRole="button"
                                 accessibilityLabel="Drag to reorder stop"
                               >
-                                <Ionicons name="reorder-three" size={22} color="#AEAEB2" />
+                                <Ionicons name="reorder-three" size={22} color={dragIconColor} />
                               </TouchableOpacity>
                               <Pressable
                                 style={styles.planLuxuryStopMainPress}
@@ -6319,10 +6426,10 @@ export default function AIPlanScreen() {
                                   )}
                                 </View>
                                 <View style={styles.planLuxuryStopTextCol}>
-                                  <Text style={styles.planLuxuryStopTitle} numberOfLines={2}>
+                                  <Text style={[styles.planLuxuryStopTitle, rowTitleStyle]} numberOfLines={2}>
                                     {item.spot}
                                   </Text>
-                                  <View style={styles.planLuxurySubtleDivider} />
+                                  <View style={[styles.planLuxurySubtleDivider, rowDividerStyle]} />
                                   <View style={styles.planLuxuryCategoryRow}>
                                     <View style={[styles.planLuxuryCategoryPill, { backgroundColor: category.bg }]}>
                                       <Ionicons name={category.icon} size={12} color={category.fg} />
@@ -6335,12 +6442,12 @@ export default function AIPlanScreen() {
                                       </View>
                                     ) : null}
                                   </View>
-                                  <View style={styles.planLuxurySubtleDivider} />
-                                  <PlanGuideBlock item={item} />
+                                  <View style={[styles.planLuxurySubtleDivider, rowDividerStyle]} />
+                                  <PlanGuideBlock item={item} isDark={isDark} />
                                   {item.rating != null && (
                                     <View style={styles.planLuxuryRatingRow}>
                                       <Ionicons name="star" size={12} color="#FF9F00" />
-                                      <Text style={styles.planLuxuryRatingText}>{Number(item.rating).toFixed(1)}</Text>
+                                      <Text style={[styles.planLuxuryRatingText, rowRatingTextStyle]}>{Number(item.rating).toFixed(1)}</Text>
                                     </View>
                                   )}
                                 </View>
@@ -6903,7 +7010,7 @@ export default function AIPlanScreen() {
                 accessibilityRole="button"
                 accessibilityLabel="Turn off sharing"
               >
-                <Text style={{ fontSize: 13, fontWeight: '700', color: '#DC2626' }}>Turn off sharing</Text>
+                <Text style={{ fontSize: 13, fontFamily: FONT_POPPINS_BOLD, color: '#DC2626' }}>Turn off sharing</Text>
               </TouchableOpacity>
             ) : null}
             <TouchableOpacity
@@ -6911,7 +7018,7 @@ export default function AIPlanScreen() {
               style={{ marginTop: 16, alignItems: 'center' }}
               accessibilityRole="button"
             >
-              <Text style={{ fontSize: 15, fontWeight: '700', color: '#64748B' }}>Close</Text>
+              <Text style={{ fontSize: 15, fontFamily: FONT_POPPINS_BOLD, color: '#64748B' }}>Close</Text>
             </TouchableOpacity>
           </View>
         </View>

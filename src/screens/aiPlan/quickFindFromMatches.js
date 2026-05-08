@@ -1,12 +1,14 @@
 import { buildEventMetadataFromPineconeMeta, normName } from './planMatching'
 import { enrichPlanWithClientData } from './spotPreviewPipeline'
 import { attachPlanRowKeys } from './planRowModel'
-import { parseCoordsFromPineconeMetadata } from './planGeoAndShare'
+import { parseCoordsFromPineconeMetadata, unswapLatLng } from './planGeoAndShare'
 import {
   buildMetadataHaystackLower,
   mapUiFoodLabelToPineconeCuisine,
   preferenceAlignmentScore,
+  PLACE_THEME_GATES,
 } from '../../services/aiPipeline'
+import { supabase } from '../../config/supabase'
 
 const normalizeText = (value) =>
   String(value || '')
@@ -199,25 +201,7 @@ export const buildQuickFindResultFingerprints = (pineconeMatch, enrichedPlanRow)
   return [...new Set(xs.filter(Boolean))]
 }
 
-/** Hard filters: chip must reflect real venue/event type before scoring (e.g. Museum → museums). */
-const PLACE_THEME_GATES = {
-  Museum: (hay) =>
-    /\bmuseums?\b|\bgaller(y|ies)\b|\bexhibitions?\b|\bexhibits?\b|cultural centr|cultural cent|cultural cent(e|re)s|archaeolog|fine arts|collections?\b|\bartifacts?\b/i.test(hay),
-  Beach: (hay) =>
-    /\bbeaches?\b|\b(coastal|seaside)\b|\bsea\s*front\b|\bwaterfront\b|\bcorniche\b|\bshore(line)?s?\b|\bbeach\b.*\b(access|club|park|gate|city)\b|\bsand\b.*\bbeach\b|swimming beach|karting\b.*beach|public beach|resort\b.*\bbeach\b|island resort|beach resort/i.test(hay),
-  Park: (hay) =>
-    /\bparks?\b|\bgardens?\b|\bbotan(ic|ical)|\bhiking\b|\bwalking trail(s)?\b|\bgreen\b.*\bspace|\brecreation(al)? ground|\bnational park\b/i.test(hay),
-  Shopping: (hay) =>
-    /\bmalls?\b|shopping centr|shopping complex|shopping district|\b(retail)\b|\bsouk\b|\bsouq\b|department store|boutique arcade|luxury plaza|city centre|citi centr/i.test(hay),
-  Landmark: (hay) =>
-    /\b(landmarks?|monuments?)\b|\biconic\b.*\bsight|\bhistoric\b.*\bmilestone|\boutlook tower|\bqal'?at\b|\bfort\b|tree of life|world trade centre|financial harbour/i.test(hay),
-  'Family fun': (hay) =>
-    /\bfamily\b|\bkids\b|\bchildren\b|play(area|ground)|trampolin|theme park|\b arcade\b|\bgo-kart\b|water park|\baquarium\b|edutainment|kids zone|bounce/i.test(hay),
-  Scenic: (hay) =>
-    /\bscenic\b|\bviewpoint(s)?\b|\bpanorama\b|\blovers?\b'? \b(?:walk|drive)\b|\boverlook\b|\b(observation|birds?)\s*deck\b|\bphoto(?:graphy)? spots?\b|sunset\b.*\bview/i.test(hay),
-  Historical: (hay) =>
-    /\bhistor(ic|ical)\b|\bheritage\b|\bdilmun\b|\bunesco\b|\bpearling\b|\barchaeolog|ancient\s+site(s)?|traditional\s+house|traditional\s+village|\bqal'?at\b|\bfort\b|\bmuseums?\b/i.test(hay),
-}
+// PLACE_THEME_GATES is imported from aiPipeline.js (single source of truth)
 
 /** @param {'place'|'restaurant'|'event'} kind */
 const quickFindPassThemeGate = (kind, rawLabelTrimmed, hayLower, meta) => {
@@ -521,12 +505,50 @@ export const buildQuickFindSingleStopPlan = async (
     Number.isFinite(refLat) && Number.isFinite(refLng)
       ? { lat: refLat, lng: refLng }
       : null
+
+  // Build coord map from already-loaded map markers as the base.
   const coordsMapForProximity = markerCoordByClientId(allPlaceMarkers)
+
+  // Batch-fetch coords from Supabase for ALL gated candidates so that distance
+  // sorting is accurate even for venues not yet on the map.
+  // This is the key step that enables true "closest first, second closest next" ordering.
+  if (reference && gated.length > 0) {
+    const gatedClientIds = [...new Set(
+      gated
+        .map((m) => {
+          const meta = m?.metadata || {}
+          return String(meta.client_a_uuid ?? meta.client_uuid ?? '').trim()
+        })
+        .filter(Boolean),
+    )]
+    if (gatedClientIds.length > 0) {
+      try {
+        const { data: coordRows } = await supabase
+          .from('client')
+          .select('client_a_uuid, lat, long, latitude, longitude')
+          .in('client_a_uuid', gatedClientIds)
+        for (const row of coordRows || []) {
+          if (!row.client_a_uuid) continue
+          const id = String(row.client_a_uuid).trim()
+          if (coordsMapForProximity.has(id)) continue // already have it from markers
+          const u = unswapLatLng(
+            row.lat ?? row.latitude,
+            row.long ?? row.longitude,
+          )
+          if (u) coordsMapForProximity.set(id, { lat: u.lat, lng: u.lng })
+        }
+      } catch {
+        /* non-critical — distance sort falls back to Pinecone metadata coords */
+      }
+    }
+  }
+
   const proximityCtx = reference ? { reference, markerCoordsMap: coordsMapForProximity } : null
 
   const scoreFn = (m) => getQuickFindMatchScore(m, kind, rawLabel, normalizedSubLabel, markerIds)
 
   const tryPickFromPool = async (poolIn, exclEff) => {
+    // Rank by distance first (closest to user), then by relevance score as tiebreaker.
     const ordered = rankMatchesDeterministic(poolIn, scoreFn, proximityCtx)
     for (let i = 0; i < ordered.length && i < MAX_ENRICH_ATTEMPTS; i += 1) {
       const m = ordered[i]
@@ -557,6 +579,7 @@ export const buildQuickFindSingleStopPlan = async (
 
   let picked = await tryPickFromPool(poolUse, excludedEffective)
   if (!picked && !cycledExclusions && hadExclusions && gated.length > 0) {
+    // All options exhausted — cycle back to the full gated pool (nearest first again).
     picked = await tryPickFromPool(gated, new Set())
     if (picked) {
       stats.cycledExclusions = true

@@ -72,6 +72,7 @@ import {
   pickPlanStopGalleryUris,
   pickPlanStopThumbUri,
 } from './planMatching'
+import { FONT_POPPINS_BOLD } from '../../constants/brandFont'
 const PLAN_SEARCH_FILTER_OPTIONS = [
   { id: 'all', label: 'All' },
   { id: 'restaurants', label: 'Eat' },
@@ -833,7 +834,7 @@ export function AIPlanScreenViewDialogsB({ screen }) {
                 accessibilityRole="button"
                 accessibilityLabel="Turn off sharing"
               >
-                <Text style={{ fontSize: 13, fontWeight: '700', color: '#DC2626' }}>Turn off sharing</Text>
+                <Text style={{ fontSize: 13, fontFamily: FONT_POPPINS_BOLD, color: '#DC2626' }}>Turn off sharing</Text>
               </TouchableOpacity>
             ) : null}
             <TouchableOpacity
@@ -841,7 +842,7 @@ export function AIPlanScreenViewDialogsB({ screen }) {
               style={{ marginTop: 16, alignItems: 'center' }}
               accessibilityRole="button"
             >
-              <Text style={{ fontSize: 15, fontWeight: '700', color: tertiaryTextColor }}>Close</Text>
+              <Text style={{ fontSize: 15, fontFamily: FONT_POPPINS_BOLD, color: tertiaryTextColor }}>Close</Text>
             </TouchableOpacity>
           </View>
         </View>

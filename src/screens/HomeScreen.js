@@ -21,6 +21,7 @@ import {
   RefreshControl,
   Alert,
 } from 'react-native';
+const DEFAULT_PROFILE_IMAGE = require('../../assets/pfp.png');
 
 if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
   UIManager.setLayoutAnimationEnabledExperimental(true);
@@ -50,7 +51,12 @@ import {
 } from '../services/feedService';
 import { LUXURY, luxuryCardShadow, luxurySoftShadow } from '../theme/luxuryPremium';
 import { PinchZoomPostImage, UpvoteParticles } from '../components/FeedUpvoteInteractions';
-
+import {
+  FONT_POPPINS_BOLD,
+  FONT_POPPINS_MEDIUM,
+  FONT_POPPINS_REGULAR,
+  FONT_POPPINS_SEMIBOLD,
+} from '../constants/brandFont';
 function getHomeStyles(colors) {
   const C = {
     primary: colors.primary,
@@ -108,9 +114,14 @@ function getHomeStyles(colors) {
     },
     instagramLogo: {
       fontSize: 20,
-      fontWeight: '800',
+      fontFamily: FONT_POPPINS_BOLD,
       color: C.primary,
       letterSpacing: -0.5,
+    },
+    headerProfileImage: {
+      width: 36,
+      height: 36,
+      borderRadius: 18,
     },
     headerRight: {
       flexDirection: 'row',
@@ -175,12 +186,14 @@ function getHomeStyles(colors) {
       flex: 1,
       marginLeft: 8,
       fontSize: 14,
+      fontFamily: FONT_POPPINS_REGULAR,
       color: C.textSecondary,
     },
     searchInput: {
       flex: 1,
       marginLeft: 8,
       fontSize: 14,
+      fontFamily: FONT_POPPINS_REGULAR,
       color: C.textPrimary,
       paddingVertical: Platform.OS === 'ios' ? 10 : 6,
     },
@@ -243,11 +256,11 @@ function getHomeStyles(colors) {
     filterLabel: {
       fontSize: 11,
       color: C.textSecondary,
-      fontWeight: '600',
+      fontFamily: FONT_POPPINS_SEMIBOLD,
       textAlign: 'center',
     },
     filterLabelSelected: {
-      fontWeight: '800',
+      fontFamily: FONT_POPPINS_BOLD,
       color: C.primary,
     },
     feedList: {
@@ -299,11 +312,12 @@ function getHomeStyles(colors) {
     },
     cardHeaderUsername: {
       fontSize: 14,
-      fontWeight: '700',
+      fontFamily: FONT_POPPINS_BOLD,
       color: C.textPrimary,
     },
     cardHeaderLocation: {
       fontSize: 11,
+      fontFamily: FONT_POPPINS_REGULAR,
       color: C.textSecondary,
       marginTop: 0,
     },
@@ -330,7 +344,7 @@ function getHomeStyles(colors) {
     cardFloatingBadgeText: {
       color: '#FFF',
       fontSize: 11,
-      fontWeight: '600',
+      fontFamily: FONT_POPPINS_SEMIBOLD,
     },
     cardBody: {
       padding: 12,
@@ -379,7 +393,7 @@ function getHomeStyles(colors) {
     touristInsightBadgeText: {
       color: '#FFFFFF',
       fontSize: 12,
-      fontWeight: '700',
+      fontFamily: FONT_POPPINS_BOLD,
     },
     touristInsightBody: {
       paddingHorizontal: 14,
@@ -399,7 +413,7 @@ function getHomeStyles(colors) {
       flex: 1,
       color: C.textPrimary,
       fontSize: 16,
-      fontWeight: '800',
+      fontFamily: FONT_POPPINS_BOLD,
     },
     touristInsightPill: {
       backgroundColor: C.primary + '14',
@@ -412,7 +426,7 @@ function getHomeStyles(colors) {
     touristInsightPillText: {
       color: C.primary,
       fontSize: 11,
-      fontWeight: '700',
+      fontFamily: FONT_POPPINS_BOLD,
       letterSpacing: 0.4,
     },
     actionRow: {
@@ -451,46 +465,47 @@ function getHomeStyles(colors) {
     },
     igLikesLine: {
       fontSize: 13,
-      fontWeight: '700',
+      fontFamily: FONT_POPPINS_BOLD,
       color: C.textPrimary,
       marginBottom: 4,
     },
     igCaption: {
       fontSize: 13,
+      fontFamily: FONT_POPPINS_REGULAR,
       color: C.textPrimary,
       lineHeight: 18,
     },
     igCaptionBold: {
-      fontWeight: '700',
+      fontFamily: FONT_POPPINS_BOLD,
     },
     usernameRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 2 },
-    username: { fontSize: 15, fontWeight: '600', color: C.textPrimary, marginRight: 4 },
+    username: { fontSize: 15, fontFamily: FONT_POPPINS_SEMIBOLD, color: C.textPrimary, marginRight: 4 },
     verifiedIcon: { marginLeft: 2 },
     locationRow: { flexDirection: 'row', alignItems: 'center' },
-    location: { fontSize: 12, color: C.textSecondary, marginLeft: 4 },
+    location: { fontSize: 12, fontFamily: FONT_POPPINS_REGULAR, color: C.textSecondary, marginLeft: 4 },
     openNowPill: { flexDirection: 'row', alignItems: 'center', backgroundColor: C.openNow, paddingVertical: 6, paddingHorizontal: 10, borderRadius: 8 },
     openNowDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: '#FFFFFF', marginRight: 6 },
-    openNowText: { fontSize: 12, fontWeight: '600', color: '#FFFFFF' },
+    openNowText: { fontSize: 12, fontFamily: FONT_POPPINS_SEMIBOLD, color: '#FFFFFF' },
     imageWrap: { position: 'relative', backgroundColor: C.pillBg },
-    description: { fontSize: 14, color: C.textSecondary, lineHeight: 20 },
-    moreLessLink: { fontSize: 14, color: C.primary, fontWeight: '600' },
+    description: { fontSize: 14, fontFamily: FONT_POPPINS_REGULAR, color: C.textSecondary, lineHeight: 20 },
+    moreLessLink: { fontSize: 14, fontFamily: FONT_POPPINS_SEMIBOLD, color: C.primary },
     khalidContextBanner: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 10, paddingHorizontal: 14, marginBottom: 8, backgroundColor: C.primary + '12', borderLeftWidth: 4, borderLeftColor: C.primary, borderRadius: 12, marginHorizontal: 0 },
-    khalidContextBannerText: { flex: 1, fontSize: 14, fontWeight: '600', color: C.textPrimary },
+    khalidContextBannerText: { flex: 1, fontSize: 14, fontFamily: FONT_POPPINS_SEMIBOLD, color: C.textPrimary },
     overlayRoot: { flex: 1, backgroundColor: 'transparent' },
     overlayBackdropWrap: { ...StyleSheet.absoluteFillObject },
     overlayBackdropDim: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.12)' },
     overlayContentWrap: { flex: 1, paddingHorizontal: 24, paddingTop: 72, paddingBottom: 32, alignItems: 'stretch' },
     overlayQuestionBlock: { marginBottom: 28, paddingVertical: 28, paddingHorizontal: 20, alignItems: 'center' },
     overlayQuestionInner: { alignItems: 'center', maxWidth: 320 },
-    overlayQuestionTitle: { fontSize: 36, fontWeight: '800', color: '#FFFFFF', textAlign: 'center', lineHeight: 44, letterSpacing: 1.2, marginBottom: 14, ...Platform.select({ ios: { textShadowColor: 'rgba(0,0,0,0.25)', textShadowOffset: { width: 0, height: 2 }, textShadowRadius: 8 }, android: { elevation: 2 } }) },
+    overlayQuestionTitle: { fontSize: 36, fontFamily: FONT_POPPINS_BOLD, color: '#FFFFFF', textAlign: 'center', lineHeight: 44, letterSpacing: 1.2, marginBottom: 14, ...Platform.select({ ios: { textShadowColor: 'rgba(0,0,0,0.25)', textShadowOffset: { width: 0, height: 2 }, textShadowRadius: 8 }, android: { elevation: 2 } }) },
     overlayQuestionAccent: { width: 56, height: 4, borderRadius: 2, backgroundColor: C.primary, opacity: 0.95, marginBottom: 16 },
-    overlayQuestionSub: { fontSize: 15, fontWeight: '500', color: 'rgba(255,255,255,0.88)', textAlign: 'center', letterSpacing: 0.4, lineHeight: 22 },
+    overlayQuestionSub: { fontSize: 15, fontFamily: FONT_POPPINS_MEDIUM, color: 'rgba(255,255,255,0.88)', textAlign: 'center', letterSpacing: 0.4, lineHeight: 22 },
     overlayOptionsWrap: { width: '100%', maxWidth: 400, alignSelf: 'center' },
     overlayOptionsGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 12, marginBottom: 20 },
     overlayOptionBlock: { width: '47%', minHeight: 56, backgroundColor: 'rgba(255,255,255,0.2)', borderRadius: 14, borderWidth: 1, borderColor: 'rgba(255,255,255,0.35)', justifyContent: 'center', alignItems: 'center', paddingVertical: 16, paddingHorizontal: 16 },
-    overlayOptionBlockText: { fontSize: 16, fontWeight: '600', color: '#FFFFFF' },
+    overlayOptionBlockText: { fontSize: 16, fontFamily: FONT_POPPINS_SEMIBOLD, color: '#FFFFFF' },
     overlayInputRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
-    overlayInput: { flex: 1, backgroundColor: 'rgba(255,255,255,0.2)', borderRadius: 14, paddingVertical: 16, paddingHorizontal: 18, fontSize: 16, color: '#FFFFFF', borderWidth: 1, borderColor: 'rgba(255,255,255,0.35)' },
+    overlayInput: { flex: 1, backgroundColor: 'rgba(255,255,255,0.2)', borderRadius: 14, paddingVertical: 16, paddingHorizontal: 18, fontSize: 16, fontFamily: FONT_POPPINS_REGULAR, color: '#FFFFFF', borderWidth: 1, borderColor: 'rgba(255,255,255,0.35)' },
     overlaySubmitBtn: { width: 52, height: 52, borderRadius: 14, backgroundColor: 'rgba(255,255,255,0.3)', alignItems: 'center', justifyContent: 'center' },
     pageContentWrap: { flex: 1, backgroundColor: C.screenBg },
     loadingWrap: {
@@ -543,9 +558,9 @@ function getHomeStyles(colors) {
       borderRadius: 17,
       backgroundColor: C.borderLight,
     },
-    emptyText: { marginTop: 12, fontSize: 16, color: C.textMuted, fontWeight: '500' },
+    emptyText: { marginTop: 12, fontSize: 16, fontFamily: FONT_POPPINS_MEDIUM, color: C.textMuted },
     retryBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 16, paddingVertical: 10, paddingHorizontal: 20, backgroundColor: C.primary, borderRadius: 10 },
-    retryBtnText: { fontSize: 15, color: '#fff', fontWeight: '600' },
+    retryBtnText: { fontSize: 15, fontFamily: FONT_POPPINS_SEMIBOLD, color: '#fff' },
   };
 }
 
@@ -557,7 +572,29 @@ const AI_OPTION_KEYWORDS = {
   cafes: ['cafe', 'coffee', 'café', 'latte'],
   withaview: ['view', 'terrace', 'rooftop', 'sea'],
   food: ['food', 'eat', 'restaurant', 'burger', 'pizza', 'dish', 'meal', 'cuisine'],
-};
+}
+
+const HOME_CATEGORY_KEYWORDS = {
+  restaurants: ['restaurant', 'food', 'cafe', 'dining', 'eat', 'brunch', 'meal', 'cuisine', 'bakery', 'coffee', 'pizza', 'burger'],
+  places: ['place', 'attraction', 'museum', 'park', 'beach', 'fort', 'souq', 'landmark', 'heritage', 'destination', 'viewpoint'],
+  events: ['event', 'festival', 'concert', 'show', 'workshop', 'exhibition', 'expo', 'party', 'fair', 'performance'],
+}
+
+function filterPostsByCategory(posts, categoryId) {
+  const keywords = HOME_CATEGORY_KEYWORDS[categoryId]
+  if (!keywords?.length) return posts
+
+  return posts.filter((post) => {
+    const text = [
+      post.description || '',
+      post.businessName || '',
+      post.location || '',
+      ...(Array.isArray(post.tags) ? post.tags : []),
+    ].join(' ').toLowerCase()
+
+    return keywords.some((keyword) => text.includes(keyword))
+  })
+}
 
 function matchPostToQuery(post, q) {
   const lower = q.toLowerCase().trim();
@@ -772,7 +809,7 @@ function interleaveTouristInfoCards(posts = []) {
   return out;
 }
 
-function PostCard({ item, isHighlighted = false, onHighlightDone, onUpvoteToggle, onClientPress, upvoteScaleAnim, styles, COLORS, ACTION_BUTTONS_LEFT, UPVOTE_COLOR }) {
+function PostCard({ item, isHighlighted = false, onHighlightDone, onUpvoteToggle, onClientPress, onViewReviews, upvoteScaleAnim, styles, COLORS, ACTION_BUTTONS_LEFT, UPVOTE_COLOR }) {
   const [descExpanded, setDescExpanded] = useState(false);
   const hasUpvoted = item.hasUpvoted ?? false;
   const displayUpvotes = item.upvotes ?? 0;
@@ -992,22 +1029,33 @@ function PostCard({ item, isHighlighted = false, onHighlightDone, onUpvoteToggle
                   <Ionicons name={iconName} size={isUpvote ? 22 : 24} color={iconColor} />
                 </TouchableOpacity>
               );
-              
-              return isUpvote && upvoteScaleAnim != null ? (
+
+              const animatedBtn = isUpvote && upvoteScaleAnim != null ? (
                 <Animated.View key={btn.id} style={{ transform: [{ scale: upvoteScaleAnim }] }}>
                   {btnContent}
                 </Animated.View>
               ) : (
                 <View key={btn.id}>{btnContent}</View>
-              );
+              )
+
+              return (
+                <React.Fragment key={btn.id}>
+                  {animatedBtn}
+                  {isUpvote && item.clientId ? (
+                    <TouchableOpacity
+                      style={[styles.igActionBtn, { borderColor: COLORS.primary, borderWidth: 1.5, backgroundColor: 'transparent' }]}
+                      activeOpacity={0.7}
+                      onPress={() => onViewReviews?.(item)}
+                      accessibilityRole="button"
+                      accessibilityLabel={`View community reviews for ${item.businessName || 'this venue'}`}
+                    >
+                      <Ionicons name="chatbubbles-outline" size={22} color={COLORS.primary} />
+                    </TouchableOpacity>
+                  ) : null}
+                </React.Fragment>
+              )
             })}
           </View>
-          <TouchableOpacity 
-            style={[styles.igActionBtn, { backgroundColor: 'transparent' }]} 
-            activeOpacity={0.7}
-          >
-            <Ionicons name="bookmark-outline" size={24} color={COLORS.textPrimary} />
-          </TouchableOpacity>
         </View>
         {displayUpvotes > 0 ? (
           <Text style={styles.igLikesLine}>
@@ -1199,15 +1247,15 @@ function LocationFilterChip({ selected, busy, onPress, colors }) {
             colors={[`${locColor}E6`, locColor]}
             style={styles.filterCircleGradient}
           >
-            <Ionicons name="location" size={18} color="#FFFFFF" />
+            <Ionicons name="navigate" size={18} color="#FFFFFF" />
           </LinearGradient>
         ) : (
           <View style={[styles.filterCircle, { borderColor: locColor }]}>
-            <Ionicons name="location-outline" size={16} color={locColor} />
+            <Ionicons name="navigate-outline" size={16} color={locColor} />
           </View>
         )}
         <Text style={[styles.filterLabel, selected && styles.filterLabelSelected]} numberOfLines={1}>
-          Location
+          Nearby
         </Text>
       </Animated.View>
     </TouchableOpacity>
@@ -1332,7 +1380,7 @@ export default function HomeScreen() {
   const { colors, isDark } = useTheme();
   const route = useRoute();
   const navigation = useNavigation();
-  const { profile } = useAuth();
+  const { profile, session } = useAuth();
   const { preferences } = useUserPreferences();
   const { isAwaitingHomeOpen, notifyHomeReady } = useDoorTransition();
 
@@ -1355,10 +1403,11 @@ export default function HomeScreen() {
 
   const CATEGORIES = useMemo(() => [
     { id: 'all', label: 'For you', icon: 'sparkles', color: colors.primary },
-    { id: 'nearby', label: 'Nearby', icon: 'navigate', color: colors.success },
     { id: 'popular', label: 'Popular', icon: 'flame', color: colors.morning },
     { id: 'recent', label: 'New', icon: 'time', color: colors.afternoon },
-    { id: 'photos', label: 'Photos', icon: 'images', color: colors.primary },
+    { id: 'restaurants', label: 'Restaurants', icon: 'restaurant', color: colors.primary },
+    { id: 'places', label: 'Places', icon: 'location', color: colors.success },
+    { id: 'events', label: 'Events', icon: 'calendar', color: colors.morning },
   ], [colors]);
 
   const ACTION_BUTTONS_LEFT = useMemo(() => [
@@ -1421,17 +1470,15 @@ export default function HomeScreen() {
   const lastScrollY = useRef(0);
   const headerTranslateY = useRef(new Animated.Value(0)).current;
   const headerVisibleRef = useRef(true);
-  // Reserve space so first post is not covered. Must match header: paddingTop (4) + title row (44) + search (52) + filters row + buffer
+  // Reserve space so first post is not covered. Must match header: paddingTop (4) + title row (44) + filters row + buffer
   const FILTERS_SECTION_EXPANDED_HEIGHT = 96;
   const HEADER_TITLE_ROW_HEIGHT = 44;
-  const SEARCH_BAR_HEIGHT = 52; // searchHeight outputRange max
   const HEADER_TOP_PADDING = 4;
-  const HEADER_BOTTOM_BUFFER = 20; // extra space below header before first post
+  const HEADER_BOTTOM_BUFFER = 20;
   const headerBarHeight =
     insets.top +
     HEADER_TOP_PADDING +
     HEADER_TITLE_ROW_HEIGHT +
-    (searchExpanded ? SEARCH_BAR_HEIGHT : 0) +
     (filtersExpanded ? FILTERS_SECTION_EXPANDED_HEIGHT : 0) +
     HEADER_BOTTOM_BUFFER;
   const khalidCommandRef = useRef(null);
@@ -1500,6 +1547,10 @@ export default function HomeScreen() {
     setFiltersExpanded((prev) => !prev);
   }, []);
 
+  const handleOpenProfile = useCallback(() => {
+    navigation.navigate('Profile', { screen: 'ProfileMain' });
+  }, [navigation]);
+
   // Page entrance: short timing-only motion (springs + long fades fight scroll)
   useEffect(() => {
     if (!loading) {
@@ -1547,9 +1598,7 @@ export default function HomeScreen() {
       result = filterPostsBySearch(result, searchQuery);
     }
 
-    if (selectedCategory === 'photos') {
-      result = result.filter((p) => Boolean(p.imageUri));
-    }
+    result = filterPostsByCategory(result, selectedCategory)
 
     // Sort by distance if location mode is active
     if (locationModeActive && userPosition?.latitude && userPosition?.longitude) {
@@ -1998,6 +2047,19 @@ export default function HomeScreen() {
                 setSelectedClientId(post.clientId);
               }
             }}
+            onViewReviews={(post) => {
+              if (post?.clientId) {
+                navigation.navigate('Community', {
+                  screen: 'CommunityMain',
+                  params: {
+                    clientFilter: {
+                      clientId: post.clientId,
+                      businessName: post.businessName || null,
+                    },
+                  },
+                })
+              }
+            }}
             upvoteScaleAnim={upvoteAnimations[item.id].scale}
             styles={styles}
             COLORS={COLORS}
@@ -2015,6 +2077,7 @@ export default function HomeScreen() {
       UPVOTE_COLOR,
       handleUpvoteToggle,
       upvoteAnimations,
+      navigation,
     ],
   );
 
@@ -2558,59 +2621,21 @@ export default function HomeScreen() {
               <Text style={styles.instagramLogo}>Home</Text>
             </View>
             <View style={styles.headerRight}>
-              <TouchableOpacity
-                style={[styles.headerIconBtn, searchExpanded && styles.headerIconBtnActive]}
-                activeOpacity={0.7}
-                onPress={toggleSearch}
-                accessibilityRole="button"
-                accessibilityLabel={searchExpanded ? "Close search" : "Search"}
-              >
-                <Ionicons
-                  name={searchExpanded ? "close-outline" : "search-outline"}
-                  size={20}
-                  color={searchExpanded ? '#FFFFFF' : COLORS.textSecondary}
-                />
-              </TouchableOpacity>
+              {session?.user ? (
+                <TouchableOpacity
+                  style={styles.headerIconBtn}
+                  activeOpacity={0.7}
+                  onPress={handleOpenProfile}
+                  accessibilityRole="button"
+                  accessibilityLabel="Open profile"
+                >
+                  <Image source={DEFAULT_PROFILE_IMAGE} style={styles.headerProfileImage} resizeMode="cover" />
+                </TouchableOpacity>
+              ) : (
+                <View accessibilityElementsHidden style={{ width: 44, height: 44 }} />
+              )}
             </View>
           </View>
-
-          <Animated.View 
-            style={[
-              styles.searchBarContainer, 
-              { 
-                height: searchHeight,
-                opacity: searchOpacity,
-                overflow: 'hidden'
-              }
-            ]}
-          >
-            <View style={styles.searchBar}>
-              <Ionicons name="search-outline" size={20} color={COLORS.textSecondary} />
-              <TextInput
-                ref={searchInputRef}
-                style={styles.searchInput}
-                placeholder="Search places, food, tags…"
-                placeholderTextColor={COLORS.textMuted}
-                value={searchQuery}
-                onChangeText={setSearchQuery}
-                returnKeyType="search"
-                onSubmitEditing={() => {
-                  if (filteredPosts.length > 0 && flatListRef.current) {
-                    smoothScrollToIndex(0, () => setHighlightedPostId(filteredPosts[0].id));
-                  }
-                }}
-              />
-              {searchQuery.length > 0 ? (
-                <TouchableOpacity
-                  onPress={() => { setSearchQuery(''); setHighlightedPostId(null); }}
-                  hitSlop={8}
-                  style={styles.searchClearBtn}
-                >
-                  <Ionicons name="close-circle" size={20} color={COLORS.textMuted} />
-                </TouchableOpacity>
-              ) : null}
-            </View>
-          </Animated.View>
 
           <Animated.View
             collapsable={false}
@@ -2630,22 +2655,25 @@ export default function HomeScreen() {
               contentContainerStyle={styles.filtersScroll}
               style={[styles.filtersScrollView, { height: FILTERS_SECTION_EXPANDED_HEIGHT }]}
             >
-              <LocationFilterChip
-                selected={locationModeActive}
-                busy={locationUpdating}
-                onPress={handleUpdateLocation}
-                colors={colors}
-              />
               {CATEGORIES.map((cat) => {
                 const selected = selectedCategory === cat.id;
                 return (
-                <CategoryChip
-                  key={cat.id}
-                  cat={cat}
-                  selected={selected}
-                  onPress={() => setSelectedCategory(cat.id)}
-                  colors={colors}
-                />
+                <React.Fragment key={cat.id}>
+                  <CategoryChip
+                    cat={cat}
+                    selected={selected}
+                    onPress={() => setSelectedCategory(cat.id)}
+                    colors={colors}
+                  />
+                  {cat.id === 'all' ? (
+                    <LocationFilterChip
+                      selected={locationModeActive}
+                      busy={locationUpdating}
+                      onPress={handleUpdateLocation}
+                      colors={colors}
+                    />
+                  ) : null}
+                </React.Fragment>
                 );
               })}
             </ScrollView>
@@ -2712,9 +2740,7 @@ export default function HomeScreen() {
         <View style={styles.loadingWrap}>
           <Ionicons name="images-outline" size={48} color={COLORS.textMuted} />
           <Text style={styles.emptyText}>
-            {selectedCategory === 'photos'
-              ? 'No posts with a photo in your feed yet'
-              : 'Nothing matches this filter right now'}
+            Nothing matches this filter right now
           </Text>
           <TouchableOpacity
             style={styles.retryBtn}
@@ -2755,13 +2781,13 @@ export default function HomeScreen() {
             loadingMore && hasMore ? (
               <View style={{ paddingVertical: 30, alignItems: 'center' }}>
                 <ActivityIndicator size="large" color={COLORS.primary} />
-                <Text style={{ marginTop: 12, fontSize: 14, color: COLORS.textMuted }}>
+                <Text style={{ marginTop: 12, fontSize: 14, fontFamily: FONT_POPPINS_REGULAR, color: COLORS.textMuted }}>
                   Loading more posts...
                 </Text>
               </View>
             ) : !hasMore && posts.length > 0 ? (
               <View style={{ paddingVertical: 30, alignItems: 'center' }}>
-                <Text style={{ fontSize: 14, color: COLORS.textMuted }}>
+                <Text style={{ fontSize: 14, fontFamily: FONT_POPPINS_REGULAR, color: COLORS.textMuted }}>
                   You've reached the end!
                 </Text>
               </View>

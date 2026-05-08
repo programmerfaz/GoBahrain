@@ -13,6 +13,19 @@ export const generateShareCode = () => {
 
 export const normalizeShareCode = (code) => String(code || '').trim().toUpperCase()
 
+let lastCommunityFeedPlanIds = []
+
+const shuffleArray = (items) => {
+  const arr = Array.isArray(items) ? [...items] : []
+  for (let i = arr.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(Math.random() * (i + 1))
+    const tmp = arr[i]
+    arr[i] = arr[j]
+    arr[j] = tmp
+  }
+  return arr
+}
+
 export const serializePlanForStorage = (dayPlan) => {
   if (!Array.isArray(dayPlan)) return []
   return dayPlan.map((stop) => {
@@ -114,6 +127,51 @@ export const enableSharingForPlan = async (planId, sharePermission) => {
 
 export const disableSharingForPlan = async (planId) => {
   await updateSavedPlan(planId, { shareCode: null })
+}
+
+/**
+ * Fetch recently shared plans for the "Loved by People" community feed.
+ * Uses the fetch_community_feed_plans RPC (SECURITY DEFINER) to bypass
+ * per-user RLS — only returns plans the owner explicitly shared.
+ *
+ * Returns an array of raw saved_plan rows: { id, title, plan_data, owner_id, updated_at, created_at }
+ */
+export const fetchCommunityFeedPlans = async (limit = 12, opts = {}) => {
+  const requestedLimit = Number.isFinite(limit) ? Math.max(1, Math.floor(limit)) : 12
+  const poolSize = Number.isFinite(opts?.poolSize) ? Math.max(requestedLimit, Math.floor(opts.poolSize)) : Math.max(requestedLimit, 48)
+  const avoidRepeat = opts?.avoidRepeat !== false
+
+  const { data, error } = await supabase.rpc('fetch_community_feed_plans', { p_limit: poolSize })
+  if (error) {
+    console.warn('[savedPlans] fetchCommunityFeedPlans:', error.message)
+    return []
+  }
+  if (!data) return []
+  const parsed = typeof data === 'string' ? JSON.parse(data) : data
+  if (!Array.isArray(parsed) || parsed.length === 0) return []
+
+  const shuffled = shuffleArray(parsed)
+  if (!avoidRepeat || lastCommunityFeedPlanIds.length === 0) {
+    const firstBatch = shuffled.slice(0, requestedLimit)
+    lastCommunityFeedPlanIds = firstBatch.map((plan) => plan?.id).filter(Boolean)
+    return firstBatch
+  }
+
+  const seen = new Set(lastCommunityFeedPlanIds)
+  const unseenPlans = []
+  const seenPlans = []
+  shuffled.forEach((plan) => {
+    const pid = plan?.id
+    if (!pid || !seen.has(pid)) {
+      unseenPlans.push(plan)
+      return
+    }
+    seenPlans.push(plan)
+  })
+
+  const nextBatch = [...unseenPlans, ...seenPlans].slice(0, requestedLimit)
+  lastCommunityFeedPlanIds = nextBatch.map((plan) => plan?.id).filter(Boolean)
+  return nextBatch
 }
 
 export const fetchSharedPlanByCode = async (rawCode) => {

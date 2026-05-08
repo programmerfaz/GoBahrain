@@ -33,21 +33,20 @@ export const { height: SCREEN_HEIGHT, width: SCREEN_WIDTH } = Dimensions.get('wi
 
 export const PLAN_TIME_SLOTS = ['Morning', 'Afternoon', 'Evening']
 
-/** Bottom inset for plan sheet / marker sheet — matches floating BottomControlBar (lifted FAB + dock) + safe area */
-export const PLAN_TAB_BAR_ROW_HEIGHT = 100
+/** Bottom inset for plan sheet / marker sheet — approx. default `BottomTabBar` row + padding */
+export const PLAN_TAB_BAR_ROW_HEIGHT = 72
 /**
- * Map orbit / full-screen map: clearance from the **screen bottom** to float controls so they sit
- * fully **above** `BottomControlBar` (dock + `FAB_FLOAT_LIFT` + center FAB). Larger than
- * `PLAN_TAB_BAR_ROW_HEIGHT` because the bar’s visual stack is taller than the dock row alone.
+ * Map orbit / full-screen map: clearance from the **screen bottom** for floating controls above
+ * the stock bottom tab bar (+ safe area).
  */
-export const BOTTOM_CONTROL_BAR_MAP_CLEARANCE = 200
+export const BOTTOM_CONTROL_BAR_MAP_CLEARANCE = 120
 /** Map orbit mode: filmstrip vertical anchor (fraction of screen height from top) */
 export const ORBIT_SLIDER_TOP_FRACTION = 0.22
 /**
  * Orbit “Done” — `top` offset added to safe-area top so the pill sits centered, just under the
  * map filter row (`topBarWrap` + chip row ~52–56pt + bar padding).
  */
-export const ORBIT_DONE_BELOW_FILTER_OFFSET = 72
+export const ORBIT_DONE_BELOW_FILTER_OFFSET = 150
 /** Extra gap above the tab bar stack for the “View details” pill (orbit mode) */
 export const ORBIT_VIEW_DETAILS_ABOVE_DOCK = 0
 /**

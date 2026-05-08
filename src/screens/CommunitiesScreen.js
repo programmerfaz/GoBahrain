@@ -24,7 +24,7 @@ import { FlatList as GHFlatList } from 'react-native-gesture-handler';
 
 const AnimatedGHFlatList = Animated.createAnimatedComponent(GHFlatList)
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useRoute } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { BlurView } from 'expo-blur';
 import * as ImagePicker from 'expo-image-picker';
@@ -44,14 +44,21 @@ import { UpvoteParticles } from '../components/FeedUpvoteInteractions';
 import { useCommunityUpvoteToggle } from '../hooks/useCommunityUpvoteToggle';
 import { colors as themeColors, colorsDark as themeColorsDark } from '../theme/designTokens'
 import { useTheme } from '../context/ThemeContext'
+import { useAuth } from '../context/AuthContext'
+import { useUserPreferences } from '../context/UserPreferencesContext'
 import { layoutContentWidth } from '../constants/webLayout'
+import {
+  FONT_POPPINS_BOLD,
+  FONT_POPPINS_MEDIUM,
+  FONT_POPPINS_REGULAR,
+  FONT_POPPINS_SEMIBOLD,
+} from '../constants/brandFont'
 import {
   getCommunityPalette,
   buildCommunityFeedStyles,
   CommunityReviewCard,
 } from '../components/community/CommunityReviewViews'
-
-let C = getCommunityPalette(false)
+const DEFAULT_PROFILE_IMAGE = require('../../assets/pfp.png')
 
 // Community page top filter: All, Trending + hashtags (no AI chip — AI results show temporarily until another filter is tapped)
 const TOPICS = [
@@ -62,10 +69,11 @@ const TOPICS = [
   { id: 'events', label: 'Events' },
   { id: 'beaches', label: 'Beaches' },
   { id: 'culture', label: 'Culture' },
-  { id: 'nightlife', label: 'Nightlife' },
   { id: 'family', label: 'Family' },
   { id: 'tips', label: 'Tips' },
 ];
+const PRIMARY_TOPICS = TOPICS.slice(0, 2)
+const SECONDARY_TOPICS = TOPICS.slice(2)
 
 // Create post — Select topic: only these 8, multiple select
 const CREATE_POST_TOPICS = [
@@ -74,7 +82,6 @@ const CREATE_POST_TOPICS = [
   { id: 'events', label: 'Events' },
   { id: 'beaches', label: 'Beaches' },
   { id: 'culture', label: 'Culture' },
-  { id: 'nightlife', label: 'Nightlife' },
   { id: 'family', label: 'Family' },
   { id: 'tips', label: 'Tips' },
 ];
@@ -101,6 +108,7 @@ const TOPIC_FILTER_ICONS = {
 function CommunityLoadingShimmer({ scrollable = true }) {
   const { isDark } = useTheme()
   const palette = useMemo(() => getCommunityPalette(isDark), [isDark])
+  const s = useMemo(() => buildCommunitiesScreenStyles(palette, isDark), [palette, isDark])
   const { width: winW = 375 } = useWindowDimensions();
   const layoutW = layoutContentWidth(winW);
   const cardWidth = layoutW - 64;
@@ -140,48 +148,49 @@ function CommunityLoadingShimmer({ scrollable = true }) {
           ]}
         >
           <BlurView
-            intensity={Platform.OS === 'ios' ? 52 : 32}
+            intensity={Platform.OS === 'ios' ? 30 : 18}
             tint={isDark ? 'dark' : 'light'}
             style={StyleSheet.absoluteFillObject}
             pointerEvents="none"
           />
           <View
-            style={[s.skeletonGlassFrost, isDark && s.skeletonGlassFrostDark]}
+            style={s.skeletonGlassFrost}
             pointerEvents="none"
           />
           <View style={s.skeletonGlassInner}>
-            <View style={{ paddingHorizontal: 16, paddingTop: 14, paddingBottom: 12 }}>
-              <View style={s.cardAuthorRow}>
-                <SkeletonBox style={s.skeletonAvatar} width={44} height={44} />
-                <View style={{ flex: 1, marginLeft: 12 }}>
-                  <SkeletonBox width="50%" height={16} />
-                  <SkeletonBox width="35%" height={12} style={{ marginTop: 6 }} />
+            {/* User row */}
+            <View style={{ paddingHorizontal: 14, paddingTop: 12, paddingBottom: 8 }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                <SkeletonBox style={s.skeletonAvatar} width={36} height={36} />
+                <View style={{ flex: 1, marginLeft: 10 }}>
+                  <SkeletonBox width="42%" height={13} />
+                  <SkeletonBox width="55%" height={11} style={{ marginTop: 5 }} />
                 </View>
               </View>
             </View>
-            <View style={{ height: imgH, width: '100%' }}>
-              <Animated.View style={[StyleSheet.absoluteFill, s.skeletonImage, { opacity }]} />
-            </View>
-            <View style={{ paddingHorizontal: 16 }}>
-              <SkeletonBox width="100%" height={14} style={{ marginTop: 14, marginBottom: 6 }} />
-              <SkeletonBox width="85%" height={14} style={{ marginBottom: 6 }} />
-              <SkeletonBox width="60%" height={14} style={{ marginBottom: 14 }} />
-              <View style={{ flexDirection: 'row', gap: 8, marginBottom: 12 }}>
-                <SkeletonBox width={70} height={24} style={{ borderRadius: 12 }} />
-                <SkeletonBox width={60} height={24} style={{ borderRadius: 12 }} />
+            {/* Body lines */}
+            <View style={{ paddingHorizontal: 14, paddingBottom: 8 }}>
+              <SkeletonBox width="100%" height={13} style={{ marginBottom: 5 }} />
+              <SkeletonBox width="78%" height={13} style={{ marginBottom: 10 }} />
+              {/* Image */}
+              <View style={{ height: imgH, width: '100%', borderRadius: 12, overflow: 'hidden', marginBottom: 8 }}>
+                <Animated.View style={[StyleSheet.absoluteFill, s.skeletonImage, { opacity }]} />
               </View>
-              <View style={{ 
-                flexDirection: 'row', 
-                gap: 24, 
-                paddingTop: 12, 
-                paddingBottom: 16, 
-                borderTopWidth: 1, 
-                borderTopColor: palette.border + '40',
-                marginTop: 4,
+              {/* Tags */}
+              <View style={{ flexDirection: 'row', gap: 6, marginBottom: 8 }}>
+                <SkeletonBox width={54} height={20} style={{ borderRadius: 8 }} />
+                <SkeletonBox width={46} height={20} style={{ borderRadius: 8 }} />
+              </View>
+              {/* Action row */}
+              <View style={{
+                flexDirection: 'row',
+                gap: 14,
+                paddingTop: 8,
+                borderTopWidth: StyleSheet.hairlineWidth,
+                borderTopColor: palette.border + '60',
               }}>
-                <SkeletonBox width={60} height={22} />
-                <SkeletonBox width={50} height={22} />
-                <SkeletonBox width={30} height={22} />
+                <SkeletonBox width={52} height={16} />
+                <SkeletonBox width={42} height={16} />
               </View>
             </View>
           </View>
@@ -221,6 +230,10 @@ const COMMUNITY_PREFETCH_SCROLL_PROGRESS = 0.75
 const SCAN_BOX_SIZE = 240;
 
 function QRScannerModal({ visible, onClose, onScanned }) {
+  const { isDark } = useTheme()
+  const palette = useMemo(() => getCommunityPalette(isDark), [isDark])
+  const s = useMemo(() => buildCommunitiesScreenStyles(palette, isDark), [palette, isDark])
+  const C = palette
   const [permission, requestPermission] = useCameraPermissions();
   const lastScanned = useRef(null);
   const insets = useSafeAreaInsets();
@@ -308,6 +321,8 @@ function QRScannerModal({ visible, onClose, onScanned }) {
 
 function CreatePostModal({ visible, onClose, onPosted, initialPlace, initialClientUuid }) {
   const { isDark } = useTheme();
+  const C = useMemo(() => getCommunityPalette(isDark), [isDark])
+  const s = useMemo(() => buildCommunitiesScreenStyles(C, isDark), [C, isDark])
   const insets = useSafeAreaInsets();
   const [body, setBody] = useState('');
   const [place, setPlace] = useState('');
@@ -419,6 +434,27 @@ function CreatePostModal({ visible, onClose, onPosted, initialPlace, initialClie
   const hasTopic = selectedTopicIds.length > 0 || customHashtag.trim().replace(/^#+/, '').length > 0;
   const canPost = body.trim().length > 0 && place.trim().length > 0 && hasTopic && rating > 0;
 
+  const ratingPhrase = useMemo(() => {
+    const r = rating
+    if (r <= 0) return ''
+    if (r <= 1) return 'Needs improvement'
+    if (r <= 2) return 'Could be better'
+    if (r <= 3) return 'It was fine'
+    if (r <= 4) return 'Really enjoyed it'
+    return 'Absolutely loved it'
+  }, [rating])
+
+  const progressSteps = useMemo(
+    () => [
+      { ok: place.trim().length > 0 },
+      { ok: rating > 0 },
+      { ok: body.trim().length > 0 },
+      { ok: hasTopic },
+    ],
+    [place, rating, body, hasTopic],
+  )
+  const progressCount = progressSteps.filter((x) => x.ok).length
+
   const selectClient = (client) => {
     setPlace(client.business_name);
     setSelectedClientUuid(client.client_a_uuid);
@@ -433,34 +469,65 @@ function CreatePostModal({ visible, onClose, onPosted, initialPlace, initialClie
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
         <View style={s.createGlassShell}>
-          <BlurView intensity={Platform.OS === 'ios' ? 52 : 32} tint={isDark ? 'dark' : 'light'} style={StyleSheet.absoluteFillObject} />
-          <View style={[s.createGlassFrost, isDark && s.createGlassFrostDark]} pointerEvents="none" />
+          <BlurView intensity={Platform.OS === 'ios' ? 38 : 24} tint={isDark ? 'dark' : 'light'} style={StyleSheet.absoluteFillObject} />
+          <View style={s.createGlassFrost} pointerEvents="none" />
           <View style={s.createGlassInner}>
         <View style={s.createHeader}>
-          <TouchableOpacity onPress={handleClose} disabled={posting} style={s.createHeaderBtn} activeOpacity={0.7}>
-            <Ionicons name="close" size={24} color={C.text} />
+          <TouchableOpacity
+            onPress={handleClose}
+            disabled={posting}
+            style={s.createHeaderBtn}
+            activeOpacity={0.7}
+            accessibilityRole="button"
+            accessibilityLabel="Close"
+          >
+            <Ionicons name="close" size={21} color={C.text} />
           </TouchableOpacity>
           <View style={s.createHeaderCenter}>
-            <Text style={s.createTitle}>Add a Review</Text>
-            <Text style={s.createSubtitle}>Share your experience in Bahrain</Text>
+            <Text style={s.createTitle}>New review</Text>
+            <Text style={s.createSubtitle}>
+              {canPost ? 'Ready to post' : `${progressCount}/4 complete`}
+            </Text>
           </View>
-          <TouchableOpacity onPress={handlePost} disabled={!canPost || posting} activeOpacity={0.8} style={[s.postBtn, canPost && s.postBtnActive]}>
+          <TouchableOpacity
+            onPress={handlePost}
+            disabled={!canPost || posting}
+            activeOpacity={0.8}
+            style={[s.postBtn, canPost && s.postBtnActive]}
+            accessibilityRole="button"
+            accessibilityLabel={canPost ? 'Publish review' : 'Complete all sections to post'}
+            hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}
+          >
             {posting ? <ActivityIndicator size="small" color="#FFF" /> : <Text style={[s.postBtnText, canPost && s.postBtnTextActive]}>Post</Text>}
           </TouchableOpacity>
         </View>
 
         <ScrollView
           style={{ flex: 1 }}
-          contentContainerStyle={[s.createScroll, { paddingBottom: insets.bottom + 28 }]}
+          contentContainerStyle={[s.createScroll, { paddingBottom: insets.bottom + 22 }]}
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
         >
+          <View style={s.createProgressRow} accessibilityLabel={`Form progress: ${progressCount} of 4 sections complete`}>
+            {progressSteps.map((step, i) => (
+              <View
+                key={`p-${i}`}
+                style={[s.createProgressChunk, step.ok && s.createProgressChunkOn]}
+                accessibilityElementsHidden
+                importantForAccessibility="no"
+              />
+            ))}
+          </View>
+
           {/* 1. Place or venue */}
           <View style={s.createCard}>
             <View style={s.createCardHeader}>
-              <Ionicons name="location" size={20} color={C.red} />
+              <View style={s.createIconPill}>
+                <Ionicons name="location" size={15} color={C.red} />
+              </View>
               <Text style={s.createCardTitle}>Where did you go?</Text>
             </View>
+            <Text style={s.createFieldHint}>Type a name or pick a place from the app for a link to the venue.</Text>
             <View style={s.placeInputRow}>
               <TextInput
                 style={s.placeInput}
@@ -469,8 +536,14 @@ function CreatePostModal({ visible, onClose, onPosted, initialPlace, initialClie
                 value={place}
                 onChangeText={(t) => { setPlace(t); setSelectedClientUuid(null); }}
               />
-              <TouchableOpacity style={s.fromAppBtn} onPress={() => setShowClientPicker(true)} activeOpacity={0.8}>
-                <Ionicons name="search" size={18} color={C.red} />
+              <TouchableOpacity
+                style={s.fromAppBtn}
+                onPress={() => setShowClientPicker(true)}
+                activeOpacity={0.8}
+                accessibilityRole="button"
+                accessibilityLabel="Browse venues from the app"
+              >
+                <Ionicons name="search" size={16} color={C.red} />
                 <Text style={s.fromAppBtnText}>Browse</Text>
               </TouchableOpacity>
             </View>
@@ -479,53 +552,81 @@ function CreatePostModal({ visible, onClose, onPosted, initialPlace, initialClie
           {/* 2. Rating */}
           <View style={s.createCard}>
             <View style={s.createCardHeader}>
-              <Ionicons name="star" size={20} color="#B45309" />
+              <View style={[s.createIconPill, s.createIconPillAmber]}>
+                <Ionicons name="star" size={15} color="#B45309" />
+              </View>
               <Text style={s.createCardTitle}>How was it?</Text>
             </View>
             <View style={s.starsRow}>
               {[1, 2, 3, 4, 5].map((n) => (
                 <View key={n} style={s.starTouchWrap}>
-                  <TouchableOpacity style={s.starHalf} activeOpacity={0.8} onPress={() => { const v = n - 0.5; setRating(rating === v ? 0 : v); }} />
-                  <TouchableOpacity style={s.starHalf} activeOpacity={0.8} onPress={() => setRating(rating === n ? 0 : n)} />
+                  <TouchableOpacity
+                    style={s.starHalf}
+                    activeOpacity={0.8}
+                    accessibilityLabel={`${n - 0.5} stars`}
+                    onPress={() => {
+                      const v = n - 0.5
+                      setRating(rating === v ? 0 : v)
+                    }}
+                  />
+                  <TouchableOpacity
+                    style={s.starHalf}
+                    activeOpacity={0.8}
+                    accessibilityLabel={`${n} stars`}
+                    onPress={() => setRating(rating === n ? 0 : n)}
+                  />
                   <View pointerEvents="none" style={s.starIconOverlay}>
-                    <Ionicons name={rating >= n ? 'star' : rating >= n - 0.5 ? 'star-half' : 'star-outline'} size={36} color="#B45309" />
+                    <Ionicons name={rating >= n ? 'star' : rating >= n - 0.5 ? 'star-half' : 'star-outline'} size={28} color="#B45309" />
                   </View>
                 </View>
               ))}
-              {rating > 0 && <Text style={s.starsLabel}>{rating % 1 === 0 ? `${rating}.0` : rating.toFixed(1)}</Text>}
+              {rating > 0 && (
+                <View style={s.starsMeta}>
+                  <Text style={s.starsLabel}>{rating % 1 === 0 ? `${rating}.0` : rating.toFixed(1)}</Text>
+                  <Text style={s.starsVerbal}>{ratingPhrase}</Text>
+                </View>
+              )}
             </View>
           </View>
 
           {/* 3. Your post */}
           <View style={s.createCard}>
             <View style={s.createCardHeader}>
-              <Ionicons name="chatbubble-ellipses" size={20} color={C.red} />
+              <View style={s.createIconPill}>
+                <Ionicons name="chatbubble-ellipses" size={15} color={C.red} />
+              </View>
               <Text style={s.createCardTitle}>Your review</Text>
             </View>
             <TextInput
               style={s.createTextInput}
-              placeholder="What did you discover? Share tips, highlights, or must-trys..."
+              placeholder="What stood out? Tips, must-tries, or who you would bring along…"
               placeholderTextColor={C.muted}
               value={body}
               onChangeText={setBody}
               multiline
               maxLength={500}
+              textAlignVertical="top"
             />
-            <View style={s.charCountRow}><Text style={s.charCount}>{body.length}/500</Text></View>
+            <View style={s.charCountRow}>
+              <Text style={[s.charCount, body.length >= 450 && s.charCountWarn]}>{body.length}/500</Text>
+            </View>
           </View>
 
           {/* 4. Photos */}
           <View style={s.createCard}>
             <View style={s.createCardHeader}>
-              <Ionicons name="images" size={20} color={C.red} />
+              <View style={s.createIconPill}>
+                <Ionicons name="images" size={15} color={C.red} />
+              </View>
               <Text style={s.createCardTitle}>Photos</Text>
               <Text style={s.photoCountBadge}>{imageEntries.length}/2</Text>
             </View>
+            <Text style={s.createFieldHint}>Optional · up to 2 images help others picture the visit.</Text>
             <View style={s.photoRow}>
               {imageEntries.length === 0 ? (
                 <TouchableOpacity style={s.photoAddSingle} onPress={pickImage} activeOpacity={0.7}>
                   <View style={s.photoAddIconWrap}>
-                    <Ionicons name="add" size={28} color={C.red} />
+                    <Ionicons name="add" size={22} color={C.red} />
                   </View>
                   <Text style={s.photoAddText}>Add up to 2 photos</Text>
                   <Text style={s.photoAddHint}>Tap to choose from library</Text>
@@ -537,7 +638,7 @@ function CreatePostModal({ visible, onClose, onPosted, initialPlace, initialClie
                       <View style={s.photoThumb}>
                         <Image source={{ uri: imageEntries[0].uri }} style={s.photoThumbImg} resizeMode="cover" />
                         <TouchableOpacity style={s.photoRemove} onPress={() => removeImage(0)}>
-                          <Ionicons name="close" size={18} color="#FFF" />
+                          <Ionicons name="close" size={16} color="#FFF" />
                         </TouchableOpacity>
                       </View>
                     ) : null}
@@ -548,12 +649,12 @@ function CreatePostModal({ visible, onClose, onPosted, initialPlace, initialClie
                       <View style={s.photoThumb}>
                         <Image source={{ uri: imageEntries[1].uri }} style={s.photoThumbImg} resizeMode="cover" />
                         <TouchableOpacity style={s.photoRemove} onPress={() => removeImage(1)}>
-                          <Ionicons name="close" size={18} color="#FFF" />
+                          <Ionicons name="close" size={16} color="#FFF" />
                         </TouchableOpacity>
                       </View>
                     ) : (
                       <TouchableOpacity style={s.photoAdd} onPress={pickImage} activeOpacity={0.7}>
-                        <Ionicons name="add" size={24} color={C.red} />
+                        <Ionicons name="add" size={20} color={C.red} />
                         <Text style={s.photoAddText}>Add</Text>
                       </TouchableOpacity>
                     )}
@@ -566,16 +667,18 @@ function CreatePostModal({ visible, onClose, onPosted, initialPlace, initialClie
           {/* 5. Hashtags */}
           <View style={s.createCard}>
             <View style={s.createCardHeader}>
-              <Ionicons name="pricetags" size={20} color={C.red} />
+              <View style={s.createIconPill}>
+                <Ionicons name="pricetags" size={15} color={C.red} />
+              </View>
               <Text style={s.createCardTitle}>Tags</Text>
             </View>
-            <Text style={s.createCardDesc}>Help others find your review</Text>
+            <Text style={s.createCardDesc}>Pick one or more topics, or add your own — helps others discover your post.</Text>
             <View style={s.topicGrid}>
               {CREATE_POST_TOPICS.map((t) => {
                 const on = selectedTopicIds.includes(t.id);
                 return (
                   <TouchableOpacity key={t.id} style={[s.topicChip, on && s.topicChipOn]} onPress={() => toggleTopic(t.id)} activeOpacity={0.8}>
-                    <Ionicons name={CREATE_POST_TOPIC_ICONS[t.id] || 'pricetag-outline'} size={18} color={on ? C.red : C.sub} />
+                    <Ionicons name={CREATE_POST_TOPIC_ICONS[t.id] || 'pricetag-outline'} size={15} color={on ? C.red : C.sub} />
                     <Text style={[s.topicChipLabel, on && s.topicChipLabelOn]}>{t.label}</Text>
                   </TouchableOpacity>
                 );
@@ -597,8 +700,20 @@ function CreatePostModal({ visible, onClose, onPosted, initialPlace, initialClie
             </View>
           </View>
 
-          {!canPost && (body.length > 0 || place.length > 0 || selectedTopicIds.length > 0) && (
-            <Text style={s.createHint}>Fill in place, rating, review text, and at least one tag to post.</Text>
+          {!canPost && (body.length > 0 || place.length > 0 || selectedTopicIds.length > 0 || rating > 0) && (
+            <View style={s.createChecklist}>
+              {[
+                { ok: place.trim().length > 0, text: 'Venue or place' },
+                { ok: rating > 0, text: 'Star rating' },
+                { ok: body.trim().length > 0, text: 'Review text' },
+                { ok: hasTopic, text: 'At least one tag' },
+              ].map((row) => (
+                <View key={row.text} style={s.createChecklistRow}>
+                  <Ionicons name={row.ok ? 'checkmark-circle' : 'ellipse-outline'} size={17} color={row.ok ? C.green : C.muted} />
+                  <Text style={[s.createChecklistText, row.ok && s.createChecklistTextDone]}>{row.text}</Text>
+                </View>
+              ))}
+            </View>
           )}
         </ScrollView>
           </View>
@@ -655,7 +770,7 @@ const FAB_MENU_OPTIONS = [
   { id: 'scan', label: 'Scan', icon: 'scan-outline', position: 'left', variant: 'scan' },
 ];
 
-function FabButton({ expanded, onPress }) {
+function FabButton({ expanded, onPress, commStyles: st }) {
   const rotateAnim = useRef(new Animated.Value(0)).current;
   useEffect(() => {
     Animated.timing(rotateAnim, {
@@ -668,7 +783,7 @@ function FabButton({ expanded, onPress }) {
   const rotate = rotateAnim.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '45deg'] });
   return (
     <TouchableOpacity onPress={onPress} activeOpacity={0.85}>
-      <Animated.View style={[s.fab, { transform: [{ rotate }] }]}>
+      <Animated.View style={[st.fab, { transform: [{ rotate }] }]}>
         <Ionicons name="add" size={28} color="#FFF" />
       </Animated.View>
     </TouchableOpacity>
@@ -696,7 +811,7 @@ function FabOptionIconWriting({ icon, expanded }) {
   );
 }
 
-function FabOptionIconScanning({ icon, expanded }) {
+function FabOptionIconScanning({ icon, expanded, commStyles: st }) {
   const scanLine = useRef(new Animated.Value(0)).current;
   useEffect(() => {
     if (!expanded) return;
@@ -711,18 +826,18 @@ function FabOptionIconScanning({ icon, expanded }) {
   }, [expanded]);
   const translateY = scanLine.interpolate({ inputRange: [0, 1], outputRange: [0, 28] });
   return (
-    <View style={s.fabOptionIconWrap}>
+    <View style={st.fabOptionIconWrap}>
       <Ionicons name={icon} size={22} color="#FFF" />
       {expanded && (
-        <Animated.View style={[s.fabOptionScanLine, { transform: [{ translateY }] }]} pointerEvents="none">
-          <View style={s.fabOptionScanLineInner} />
+        <Animated.View style={[st.fabOptionScanLine, { transform: [{ translateY }] }]} pointerEvents="none">
+          <View style={st.fabOptionScanLineInner} />
         </Animated.View>
       )}
     </View>
   );
 }
 
-function RevolverFabOverlay({ expanded, onClose }) {
+function RevolverFabOverlay({ expanded, onClose, commStyles: st }) {
   const opacity = useRef(new Animated.Value(0)).current;
   useEffect(() => {
     Animated.timing(opacity, {
@@ -732,7 +847,7 @@ function RevolverFabOverlay({ expanded, onClose }) {
     }).start();
   }, [expanded]);
   return (
-    <Animated.View style={[s.fabOverlay, s.fabOverlayDim, { opacity }]} pointerEvents={expanded ? 'auto' : 'none'}>
+    <Animated.View style={[st.fabOverlay, st.fabOverlayDim, { opacity }]} pointerEvents={expanded ? 'auto' : 'none'}>
       <TouchableWithoutFeedback onPress={onClose}>
         <View style={StyleSheet.absoluteFill} />
       </TouchableWithoutFeedback>
@@ -740,7 +855,7 @@ function RevolverFabOverlay({ expanded, onClose }) {
   );
 }
 
-function RevolverFabOptions({ expanded, onOptionPress, children }) {
+function RevolverFabOptions({ expanded, onOptionPress, children, commStyles: st }) {
   const optionAnims = useRef(FAB_MENU_OPTIONS.map(() => new Animated.Value(0))).current;
 
   useEffect(() => {
@@ -769,29 +884,29 @@ function RevolverFabOptions({ expanded, onOptionPress, children }) {
     const scale = optionAnims[index].interpolate({ inputRange: [0, 1], outputRange: [0.3, 1] });
     const translateY = optionAnims[index].interpolate({ inputRange: [0, 1], outputRange: [8, 0] });
     const isPost = opt.variant === 'post';
-    const btnStyle = isPost ? s.fabOptionBtnPost : s.fabOptionBtnScan;
-    const textStyle = isPost ? s.fabOptionTextPost : s.fabOptionTextScan;
+    const btnStyle = isPost ? st.fabOptionBtnPost : st.fabOptionBtnScan;
+    const textStyle = isPost ? st.fabOptionTextPost : st.fabOptionTextScan;
     return (
       <Animated.View
         pointerEvents={expanded ? 'auto' : 'none'}
-        style={[s.fabOptionAbsolute, style, { opacity: optionAnims[index], transform: [{ scale }, { translateY }] }]}
+        style={[st.fabOptionAbsolute, style, { opacity: optionAnims[index], transform: [{ scale }, { translateY }] }]}
       >
-        <TouchableOpacity style={[s.fabRadialOptionBtn, btnStyle]} onPress={() => onOptionPress(opt.id)} activeOpacity={0.85}>
+        <TouchableOpacity style={[st.fabRadialOptionBtn, btnStyle]} onPress={() => onOptionPress(opt.id)} activeOpacity={0.85}>
           {isPost ? (
             <FabOptionIconWriting icon={opt.icon} expanded={expanded} />
           ) : (
-            <FabOptionIconScanning icon={opt.icon} expanded={expanded} />
+            <FabOptionIconScanning icon={opt.icon} expanded={expanded} commStyles={st} />
           )}
-          <Text style={[s.fabRadialOptionText, textStyle]}>{opt.label}</Text>
+          <Text style={[st.fabRadialOptionText, textStyle]}>{opt.label}</Text>
         </TouchableOpacity>
       </Animated.View>
     );
   };
 
   return (
-    <View style={s.fabMenuLayout}>
-      {topOpt && <OptionBtn opt={topOpt} index={FAB_MENU_OPTIONS.indexOf(topOpt)} style={s.fabOptionTop} />}
-      {leftOpt && <OptionBtn opt={leftOpt} index={FAB_MENU_OPTIONS.indexOf(leftOpt)} style={s.fabOptionLeft} />}
+    <View style={st.fabMenuLayout}>
+      {topOpt && <OptionBtn opt={topOpt} index={FAB_MENU_OPTIONS.indexOf(topOpt)} style={st.fabOptionTop} />}
+      {leftOpt && <OptionBtn opt={leftOpt} index={FAB_MENU_OPTIONS.indexOf(leftOpt)} style={st.fabOptionLeft} />}
       {children}
     </View>
   );
@@ -838,9 +953,12 @@ const CommunityFeedCardWrapper = ({ itemId, index, children }) => {
 
 export default function CommunitiesScreen() {
   const navigation = useNavigation()
-  const { isDark } = useTheme()
+  const route = useRoute()
+  const { isDark, colors } = useTheme()
+  const { session } = useAuth()
+  const { preferences } = useUserPreferences()
   const palette = useMemo(() => getCommunityPalette(isDark), [isDark])
-  C = palette
+  const s = useMemo(() => buildCommunitiesScreenStyles(palette, isDark), [palette, isDark])
   const feedStyles = useMemo(() => buildCommunityFeedStyles(palette, isDark), [palette, isDark])
   const insets = useSafeAreaInsets()
   const [posts, setPosts] = useState([]);
@@ -850,6 +968,7 @@ export default function CommunitiesScreen() {
   const [nextCursor, setNextCursor] = useState(null);
   const [hasMore, setHasMore] = useState(true);
   const [activeTopic, setActiveTopic] = useState('all');
+  const [activeClientFilter, setActiveClientFilter] = useState(null);
   const [showCreate, setShowCreate] = useState(false);
   const [showScanner, setShowScanner] = useState(false);
   const [scanInitialPlace, setScanInitialPlace] = useState(null);
@@ -881,6 +1000,14 @@ export default function CommunitiesScreen() {
     nextCursorRef.current = nextCursor
   }, [nextCursor])
 
+  useEffect(() => {
+    const clientFilter = route.params?.clientFilter
+    if (clientFilter?.clientId) {
+      setActiveClientFilter({ clientId: clientFilter.clientId, businessName: clientFilter.businessName || null })
+      setActiveTopic('all')
+    }
+  }, [route.params?.clientFilter])
+
   const handleHeaderBarLayout = useCallback((event) => {
     const h = event.nativeEvent.layout.height
     if (h <= 0) return
@@ -903,15 +1030,15 @@ export default function CommunitiesScreen() {
             const viewH = layoutMeasurement?.height ?? 0
             if (contentH > 1 && viewH > 1) {
               const maxScrollY = contentH - viewH
-              const s = pagingRef.current
-              const canLoad = s.hasMore && !s.loadingMore && !s.loading && !s.refreshing
+              const paging = pagingRef.current
+              const canLoad = paging.hasMore && !paging.loadingMore && !paging.loading && !paging.refreshing
               if (canLoad) {
                 if (maxScrollY <= 8) {
-                  s.loadMore()
+                  paging.loadMore()
                 } else {
                   const progress = y / maxScrollY
                   if (progress >= COMMUNITY_PREFETCH_SCROLL_PROGRESS) {
-                    s.loadMore()
+                    paging.loadMore()
                   }
                 }
               }
@@ -946,6 +1073,7 @@ export default function CommunitiesScreen() {
     if (append) appendInFlightRef.current = true
 
     const topicSnapshot = activeTopic
+    const clientIdSnapshot = activeClientFilter?.clientId ?? null
     const cursor = append && !isRefresh ? nextCursorRef.current : null
 
     try {
@@ -962,6 +1090,8 @@ export default function CommunitiesScreen() {
         topicId: topicSnapshot,
         limit: COMMUNITY_FEED_PAGE_SIZE,
         cursor,
+        clientId: clientIdSnapshot,
+        preferences,
       })
 
       if (topicSnapshot !== activeTopicRef.current) return
@@ -995,14 +1125,14 @@ export default function CommunitiesScreen() {
       setLoadingMore(false)
       if (append) appendInFlightRef.current = false
     }
-  }, [activeTopic])
+  }, [activeTopic, activeClientFilter, preferences])
 
   useEffect(() => {
     setNextCursor(null)
     setHasMore(true)
     nextCursorRef.current = null
     fetchCommunityPage({ append: false, isRefresh: false })
-  }, [activeTopic, fetchCommunityPage])
+  }, [activeTopic, activeClientFilter, fetchCommunityPage])
 
   const handleLoadMore = useCallback(() => {
     if (loadingMore || !hasMore || loading || refreshing || appendInFlightRef.current) return
@@ -1017,7 +1147,36 @@ export default function CommunitiesScreen() {
     lastScrollY.current = 0
     headerVisibleRef.current = true
     headerTranslateY.setValue(0)
-  }, [activeTopic])
+  }, [activeTopic, activeClientFilter])
+
+  const handleClearClientFilter = useCallback(() => {
+    setActiveClientFilter(null)
+  }, [])
+
+  const handleOpenProfile = useCallback(() => {
+    navigation.navigate('Profile', { screen: 'ProfileMain' })
+  }, [navigation])
+
+  const communityHeadingRightSlot = useMemo(() => {
+    if (!session?.user) return undefined
+    return (
+      <TouchableOpacity
+        style={[s.communityProfileHeaderBtn, { backgroundColor: palette.bg, borderColor: palette.border }]}
+        activeOpacity={0.7}
+        onPress={handleOpenProfile}
+        accessibilityRole="button"
+        accessibilityLabel="Open profile"
+      >
+        <Image source={DEFAULT_PROFILE_IMAGE} style={s.communityProfileHeaderImage} resizeMode="cover" />
+      </TouchableOpacity>
+    )
+  }, [
+    session?.user,
+    s,
+    palette.bg,
+    palette.border,
+    handleOpenProfile,
+  ])
 
   const {
     handleUpvoteToggle,
@@ -1045,6 +1204,12 @@ export default function CommunitiesScreen() {
     navigation.navigate('CommunityPostDetail', { post, focusComposer: true });
   }, [navigation]);
 
+  const handleTaggedClientPress = useCallback(({ clientId, businessName }) => {
+    if (!clientId) return
+    setActiveClientFilter({ clientId, businessName: businessName || null })
+    setActiveTopic('all')
+  }, [])
+
   pagingRef.current = {
     hasMore,
     loadingMore,
@@ -1066,13 +1231,37 @@ export default function CommunitiesScreen() {
         >
           <PageHeadingBar
             title="Community"
-            subtitle="Discover Bahrain together"
             backgroundColor={palette.bg}
+            rightSlot={communityHeadingRightSlot}
           />
           <View style={s.communityFilterOuter}>
+            <View style={s.filterPrimaryRow}>
+              {PRIMARY_TOPICS.map((t) => {
+                const on = activeTopic === t.id;
+                const iconName = TOPIC_FILTER_ICONS[t.id] || 'ellipse-outline';
+                return (
+                  <TouchableOpacity
+                    key={t.id}
+                    style={[s.filterPrimaryChip, on && s.filterPrimaryChipOn]}
+                    onPress={() => setActiveTopic(t.id)}
+                    activeOpacity={0.85}
+                    accessibilityRole="button"
+                    accessibilityLabel={t.label}
+                    accessibilityState={{ selected: on }}
+                  >
+                    <Ionicons
+                      name={iconName}
+                      size={17}
+                      color={on ? '#FFF' : palette.sub}
+                    />
+                    <Text style={[s.filterPrimaryChipLabel, on && s.filterPrimaryChipLabelOn]}>{t.label}</Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
             <View style={s.filterTabsWrap}>
               <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.filterScroll}>
-                {TOPICS.map((t) => {
+                {SECONDARY_TOPICS.map((t) => {
                   const on = activeTopic === t.id;
                   const iconName = TOPIC_FILTER_ICONS[t.id] || 'ellipse-outline';
                   return (
@@ -1088,14 +1277,32 @@ export default function CommunitiesScreen() {
                     >
                       <Ionicons
                         name={iconName}
-                        size={22}
+                        size={16}
                         color={on ? '#FFF' : palette.sub}
                       />
+                      <Text style={[s.filterChipLabel, on && s.filterChipLabelOn]}>{t.label}</Text>
                     </TouchableOpacity>
                   );
                 })}
               </ScrollView>
             </View>
+            {activeClientFilter ? (
+              <View style={s.clientFilterBanner}>
+                <Ionicons name="storefront-outline" size={14} color={palette.accent || palette.red} style={{ marginRight: 6 }} />
+                <Text style={[s.clientFilterBannerText, { color: palette.text }]} numberOfLines={1}>
+                  {activeClientFilter.businessName || 'Selected venue'}
+                </Text>
+                <TouchableOpacity
+                  onPress={handleClearClientFilter}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  accessibilityRole="button"
+                  accessibilityLabel="Clear venue filter"
+                  style={s.clientFilterClearBtn}
+                >
+                  <Ionicons name="close-circle" size={16} color={palette.sub} />
+                </TouchableOpacity>
+              </View>
+            ) : null}
           </View>
         </Animated.View>
 
@@ -1110,6 +1317,7 @@ export default function CommunitiesScreen() {
                 C={palette}
                 styles={feedStyles}
                 onPress={handleOpenPost}
+                onTaggedClientPress={handleTaggedClientPress}
                 onCommentPress={handleOpenPostComments}
                 onUpvoteToggle={onCommunityUpvoteToggle}
                 upvoteScaleAnim={getUpvoteScaleAnim(item.id)}
@@ -1131,18 +1339,17 @@ export default function CommunitiesScreen() {
               refreshing={refreshing}
               onRefresh={handleRefresh}
               {...(Platform.OS === 'android' ? { progressViewOffset: headerBarHeight } : {})}
-              colors={[C.red]}
+              colors={[palette.red]}
             />
           }
           ListFooterComponent={
             loadingMore && hasMore ? (
-              <View style={{ paddingVertical: 28, alignItems: 'center' }}>
-                <ActivityIndicator size="large" color={palette.accent || C.red} />
-                <Text style={{ marginTop: 10, fontSize: 14, color: palette.sub }}>Loading more…</Text>
+              <View style={{ paddingBottom: 24 }}>
+                <CommunityLoadingShimmer scrollable={false} />
               </View>
             ) : !hasMore && posts.length > 0 ? (
               <View style={{ paddingVertical: 28, alignItems: 'center' }}>
-                <Text style={{ fontSize: 14, color: palette.sub }}>End of feed</Text>
+                <Text style={{ fontSize: 14, fontFamily: FONT_POPPINS_REGULAR, color: palette.sub }}>End of feed</Text>
               </View>
             ) : null
           }
@@ -1152,7 +1359,7 @@ export default function CommunitiesScreen() {
             ) : (
               <View style={feedStyles.empty}>
                 <View style={feedStyles.emptyIcon}>
-                  <Ionicons name="people" size={48} color={C.red} />
+                  <Ionicons name="people" size={48} color={palette.red} />
                 </View>
                 <Text style={feedStyles.emptyTitle}>No reviews yet</Text>
                 <Text style={feedStyles.emptySub}>Be the first to share your experience and help build our community</Text>
@@ -1162,17 +1369,18 @@ export default function CommunitiesScreen() {
         />
       </View>
 
-      <RevolverFabOverlay expanded={fabExpanded} onClose={() => setFabExpanded(false)} />
+      <RevolverFabOverlay expanded={fabExpanded} onClose={() => setFabExpanded(false)} commStyles={s} />
       <View style={[s.fabContainer, { bottom: fabBottom }]} pointerEvents="box-none">
         <RevolverFabOptions
           expanded={fabExpanded}
+          commStyles={s}
           onOptionPress={(id) => {
             setFabExpanded(false);
             if (id === 'post') setShowCreate(true);
             if (id === 'scan') setShowScanner(true);
           }}
         >
-          <FabButton expanded={fabExpanded} onPress={() => setFabExpanded((v) => !v)} />
+          <FabButton expanded={fabExpanded} onPress={() => setFabExpanded((v) => !v)} commStyles={s} />
         </RevolverFabOptions>
       </View>
 
@@ -1195,13 +1403,14 @@ export default function CommunitiesScreen() {
       <UpvoteParticles
         visible={particlesVisible}
         position={particlePosition}
-        accentColor={C.green}
+        accentColor={palette.green}
       />
     </ScreenContainer>
   );
 }
 
-const s = StyleSheet.create({
+function buildCommunitiesScreenStyles(C, isDark = false) {
+  return StyleSheet.create({
   screen: { backgroundColor: C.bg },
   communityFeedRoot: {
     flex: 1,
@@ -1218,6 +1427,28 @@ const s = StyleSheet.create({
       default: {},
     }),
   },
+  communityProfileHeaderBtn: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1.5,
+    ...Platform.select({
+      ios: {
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 1 },
+        shadowOpacity: isDark ? 0.35 : 0.06,
+        shadowRadius: 2,
+      },
+      android: { elevation: 2 },
+    }),
+  },
+  communityProfileHeaderImage: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+  },
   communityFilterOuter: {
     paddingHorizontal: 10,
     paddingBottom: 6,
@@ -1229,6 +1460,38 @@ const s = StyleSheet.create({
   filterTabsWrap: {
     paddingBottom: 4,
     overflow: 'hidden',
+  },
+  filterPrimaryRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginHorizontal: 10,
+    marginBottom: 8,
+  },
+  filterPrimaryChip: {
+    flex: 1,
+    minHeight: 44,
+    borderRadius: 14,
+    borderWidth: 1.5,
+    borderColor: C.border,
+    backgroundColor: C.bg,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+  },
+  filterPrimaryChipOn: {
+    backgroundColor: C.red,
+    borderColor: C.red,
+  },
+  filterPrimaryChipLabel: {
+    fontSize: 13,
+    fontFamily: FONT_POPPINS_SEMIBOLD,
+    color: C.sub,
+  },
+  filterPrimaryChipLabelOn: {
+    color: '#FFF',
+    fontFamily: FONT_POPPINS_BOLD,
   },
   filterScroll: {
     paddingLeft: 10,
@@ -1242,9 +1505,10 @@ const s = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    width: 48,
-    height: 48,
-    borderRadius: 24,
+    gap: 6,
+    minHeight: 38,
+    paddingHorizontal: 12,
+    borderRadius: 18,
     backgroundColor: C.bg,
     borderWidth: 1.5,
     borderColor: C.border,
@@ -1252,7 +1516,7 @@ const s = StyleSheet.create({
       ios: {
         shadowColor: '#000',
         shadowOffset: { width: 0, height: 1 },
-        shadowOpacity: 0.06,
+        shadowOpacity: isDark ? 0.35 : 0.06,
         shadowRadius: 2,
       },
       android: { elevation: 2 },
@@ -1266,36 +1530,69 @@ const s = StyleSheet.create({
       android: { elevation: 4 },
     }),
   },
+  filterChipLabel: {
+    fontSize: 12,
+    fontFamily: FONT_POPPINS_SEMIBOLD,
+    color: C.sub,
+  },
+  filterChipLabelOn: {
+    color: '#FFF',
+    fontFamily: FONT_POPPINS_BOLD,
+  },
+  clientFilterBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginHorizontal: 10,
+    marginBottom: 6,
+    marginTop: 2,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 20,
+    backgroundColor: C.card || C.bg,
+    borderWidth: 1,
+    borderColor: C.border,
+    alignSelf: 'flex-start',
+    maxWidth: '90%',
+  },
+  clientFilterBannerText: {
+    fontSize: 13,
+    fontFamily: FONT_POPPINS_SEMIBOLD,
+    flex: 1,
+    flexShrink: 1,
+  },
+  clientFilterClearBtn: {
+    marginLeft: 6,
+  },
   feed: { paddingHorizontal: 16, paddingBottom: 110 },
   feedHeader: { paddingTop: 18, paddingBottom: 14 },
-  feedHeaderTitle: { fontSize: 18, fontWeight: '800', color: C.text, marginBottom: 4 },
-  feedHeaderSub: { fontSize: 14, color: C.muted, fontWeight: '500' },
+  feedHeaderTitle: { fontSize: 18, fontFamily: FONT_POPPINS_BOLD, color: C.text, marginBottom: 4 },
+  feedHeaderSub: { fontSize: 14, color: C.muted, fontFamily: FONT_POPPINS_MEDIUM },
   loadingWrap: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingVertical: 60 },
   loaderScroll: { flex: 1 },
   loaderContent: { paddingTop: 12, paddingBottom: 40 },
   skeletonGlassOuter: {
-    marginHorizontal: 16,
-    marginBottom: 14,
-    borderRadius: 22,
+    marginHorizontal: 12,
+    marginBottom: 8,
+    borderRadius: 18,
     overflow: 'hidden',
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: 'rgba(142,142,147,0.22)',
+    borderColor: isDark ? 'rgba(148,148,158,0.28)' : 'rgba(142,142,147,0.2)',
     ...Platform.select({
       ios: {
         shadowColor: '#000000',
-        shadowOffset: { width: 0, height: 12 },
-        shadowOpacity: 0.08,
-        shadowRadius: 22,
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.06,
+        shadowRadius: 10,
       },
-      android: { elevation: 4 },
+      android: { elevation: 2 },
     }),
   },
   skeletonGlassFrost: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(255,255,255,0.78)',
+    backgroundColor: isDark ? 'rgba(18,18,20,0.92)' : 'rgba(255,255,255,0.9)',
   },
   skeletonGlassFrostDark: {
-    backgroundColor: 'rgba(28,28,30,0.88)',
+    backgroundColor: 'rgba(18,18,20,0.92)',
   },
   skeletonGlassInner: {
     position: 'relative',
@@ -1305,7 +1602,7 @@ const s = StyleSheet.create({
     backgroundColor: C.chip,
     borderRadius: 8,
   },
-  skeletonAvatar: { borderRadius: 22 },
+  skeletonAvatar: { borderRadius: 18 },
   skeletonImage: {
     backgroundColor: C.chip,
   },
@@ -1313,31 +1610,31 @@ const s = StyleSheet.create({
     backgroundColor: C.card,
     paddingVertical: 12,
     borderBottomWidth: 1,
-    borderBottomColor: 'rgba(0,0,0,0.08)',
+    borderBottomColor: isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)',
   },
   cardInner: { flex: 1, paddingHorizontal: 0, paddingVertical: 0 },
   cardAuthorRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 10 },
   av: { width: 38, height: 38, borderRadius: 19, backgroundColor: C.chip, marginRight: 10 },
   avPlaceholder: { alignItems: 'center', justifyContent: 'center', backgroundColor: C.chip },
-  avInitial: { fontSize: 15, fontWeight: '800', color: C.text },
+  avInitial: { fontSize: 15, fontFamily: FONT_POPPINS_BOLD, color: C.text },
   cardMeta: { flex: 1, minWidth: 0 },
-  authorText: { fontSize: 14, fontWeight: '700', color: C.text },
+  authorText: { fontSize: 14, fontFamily: FONT_POPPINS_BOLD, color: C.text },
   cardPlaceRow: { flexDirection: 'row', alignItems: 'center', gap: 3, marginTop: 2 },
-  cardPlaceText: { fontSize: 12, fontWeight: '600', color: C.red },
+  cardPlaceText: { fontSize: 12, fontFamily: FONT_POPPINS_SEMIBOLD, color: C.red },
   cardClientRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 12 },
   clientAv: { width: 48, height: 48, borderRadius: 24, backgroundColor: C.chip, marginRight: 12, overflow: 'hidden' },
   clientAvPlaceholder: { alignItems: 'center', justifyContent: 'center', backgroundColor: C.red + '18' },
   cardClientMeta: { flex: 1, minWidth: 0 },
-  clientPlaceText: { fontSize: 16, fontWeight: '700', color: C.text, marginBottom: 2 },
-  cardAuthorSub: { fontSize: 12, color: C.sub, fontWeight: '500', marginTop: 2 },
+  clientPlaceText: { fontSize: 16, fontFamily: FONT_POPPINS_BOLD, color: C.text, marginBottom: 2 },
+  cardAuthorSub: { fontSize: 12, color: C.sub, fontFamily: FONT_POPPINS_MEDIUM, marginTop: 2 },
   cardRatingPill: {
     flexDirection: 'row', alignItems: 'center', gap: 4,
   },
-  cardRatingNum: { fontSize: 12, fontWeight: '600', marginLeft: 2, color: C.sub },
-  bodyText: { fontSize: 14, lineHeight: 21, color: C.text, marginBottom: 10 },
+  cardRatingNum: { fontSize: 12, fontFamily: FONT_POPPINS_SEMIBOLD, marginLeft: 2, color: C.sub },
+  bodyText: { fontSize: 14, fontFamily: FONT_POPPINS_REGULAR, lineHeight: 21, color: C.text, marginBottom: 10 },
   cardTopicRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginBottom: 10 },
   cardTopicPill: { backgroundColor: C.chip, paddingHorizontal: 10, paddingVertical: 4, borderRadius: 10 },
-  cardTopicPillText: { fontSize: 12, fontWeight: '600', color: C.sub },
+  cardTopicPillText: { fontSize: 12, fontFamily: FONT_POPPINS_SEMIBOLD, color: C.sub },
   cardImgWrap: { overflow: 'hidden', backgroundColor: C.chip, position: 'relative', borderRadius: 12, marginBottom: 12 },
   cardImg: { width: '100%', height: '100%' },
   cardImgSplitRow: { flexDirection: 'row', width: '100%', height: '100%' },
@@ -1353,15 +1650,15 @@ const s = StyleSheet.create({
     position: 'absolute', bottom: 8, right: 8,
     backgroundColor: 'rgba(0,0,0,0.55)', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12,
   },
-  imgCountText: { color: '#FFF', fontSize: 12, fontWeight: '700' },
+  imgCountText: { color: '#FFF', fontSize: 12, fontFamily: FONT_POPPINS_BOLD },
   ratingOnImg: {
     position: 'absolute', top: 8, right: 8, flexDirection: 'row', alignItems: 'center', gap: 4,
     backgroundColor: 'rgba(0,0,0,0.5)', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8,
   },
-  ratingOnImgNum: { fontSize: 12, fontWeight: '700', color: '#FFF' },
+  ratingOnImgNum: { fontSize: 12, fontFamily: FONT_POPPINS_BOLD, color: '#FFF' },
   actions: { flexDirection: 'row', alignItems: 'center', gap: 20, marginTop: 10, paddingTop: 10 },
   actionBtn: { flexDirection: 'row', alignItems: 'center', gap: 5 },
-  actionNum: { fontSize: 13, fontWeight: '600', color: C.muted },
+  actionNum: { fontSize: 13, fontFamily: FONT_POPPINS_SEMIBOLD, color: C.muted },
   fabOverlay: {
     position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 0,
   },
@@ -1421,7 +1718,7 @@ const s = StyleSheet.create({
       android: {},
     }),
   },
-  fabRadialOptionText: { fontSize: 15, fontWeight: '800', color: '#FFF', letterSpacing: 0.2 },
+  fabRadialOptionText: { fontSize: 15, fontFamily: FONT_POPPINS_BOLD, color: '#FFF', letterSpacing: 0.2 },
   fabOptionTextPost: {},
   fabOptionTextScan: {},
   fabOptionIconWrap: { position: 'relative', overflow: 'hidden', width: 22, height: 22, alignItems: 'center', justifyContent: 'center' },
@@ -1451,13 +1748,13 @@ const s = StyleSheet.create({
   scannerPlaceholder: {
     flex: 1, backgroundColor: C.bg, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 24,
   },
-  scannerPermissionText: { fontSize: 16, color: C.text, textAlign: 'center', marginBottom: 24 },
+  scannerPermissionText: { fontSize: 16, fontFamily: FONT_POPPINS_REGULAR, color: C.text, textAlign: 'center', marginBottom: 24 },
   scannerPermissionBtn: {
     backgroundColor: C.red, paddingVertical: 14, paddingHorizontal: 24, borderRadius: 14, marginBottom: 12,
   },
-  scannerPermissionBtnText: { fontSize: 16, fontWeight: '700', color: '#FFF' },
+  scannerPermissionBtnText: { fontSize: 16, fontFamily: FONT_POPPINS_BOLD, color: '#FFF' },
   scannerCloseBtn: { padding: 12 },
-  scannerCloseText: { fontSize: 16, fontWeight: '600', color: C.sub },
+  scannerCloseText: { fontSize: 16, fontFamily: FONT_POPPINS_SEMIBOLD, color: C.sub },
   scannerOverlay: {
     position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, flex: 1,
   },
@@ -1479,7 +1776,7 @@ const s = StyleSheet.create({
     position: 'absolute', left: 0, right: 0, top: 0,
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 8,
   },
-  scannerHint: { fontSize: 14, color: 'rgba(255,255,255,0.95)', fontWeight: '600', flex: 1, textAlign: 'center' },
+  scannerHint: { fontSize: 14, color: 'rgba(255,255,255,0.95)', fontFamily: FONT_POPPINS_SEMIBOLD, flex: 1, textAlign: 'center' },
   empty: { paddingVertical: 80, alignItems: 'center', paddingHorizontal: 32 },
   emptyIcon: {
     width: 96, height: 96, borderRadius: 48, backgroundColor: C.redSoft,
@@ -1496,8 +1793,8 @@ const s = StyleSheet.create({
       },
     }),
   },
-  emptyTitle: { fontSize: 20, fontWeight: '800', color: C.text, marginBottom: 8, letterSpacing: -0.3 },
-  emptySub: { fontSize: 15, color: C.sub, textAlign: 'center', lineHeight: 22, fontWeight: '500' },
+  emptyTitle: { fontSize: 20, fontFamily: FONT_POPPINS_BOLD, color: C.text, marginBottom: 8, letterSpacing: -0.3 },
+  emptySub: { fontSize: 15, color: C.sub, textAlign: 'center', lineHeight: 22, fontFamily: FONT_POPPINS_MEDIUM },
   // Popup
   popOverlay: {
     flex: 1,
@@ -1506,7 +1803,7 @@ const s = StyleSheet.create({
     paddingHorizontal: 24,
   },
   popCard: {
-    backgroundColor: '#FFFFFF',
+    backgroundColor: isDark ? C.card : '#FFFFFF',
     borderRadius: 18,
     overflow: 'hidden',
     shadowColor: '#000',
@@ -1522,9 +1819,9 @@ const s = StyleSheet.create({
   popHeaderLeft: { flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 },
   popHeaderAv: { width: 40, height: 40, borderRadius: 10, backgroundColor: C.chip, overflow: 'hidden' },
   popHeaderAvPlaceholder: { alignItems: 'center', justifyContent: 'center', backgroundColor: C.red + '18' },
-  popHeaderAvLetter: { fontSize: 14, fontWeight: '800', color: C.red },
-  popHeaderName: { fontSize: 15, fontWeight: '700', color: C.text },
-  popHeaderSub: { fontSize: 12, color: C.sub, fontWeight: '500', marginTop: 1 },
+  popHeaderAvLetter: { fontSize: 14, fontFamily: FONT_POPPINS_BOLD, color: C.red },
+  popHeaderName: { fontSize: 15, fontFamily: FONT_POPPINS_BOLD, color: C.text },
+  popHeaderSub: { fontSize: 12, color: C.sub, fontFamily: FONT_POPPINS_MEDIUM, marginTop: 1 },
   popPlaceRatingRow: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8, marginBottom: 12,
   },
@@ -1540,19 +1837,19 @@ const s = StyleSheet.create({
     position: 'absolute', top: 10, left: 10, flexDirection: 'row', alignItems: 'center', gap: 4,
     backgroundColor: 'rgba(0,0,0,0.5)', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6,
   },
-  popImgBadgeText: { color: '#FFF', fontSize: 12, fontWeight: '700' },
+  popImgBadgeText: { color: '#FFF', fontSize: 12, fontFamily: FONT_POPPINS_BOLD },
   popBody: { paddingHorizontal: 18, paddingTop: 16 },
   popRatingWrap: { flexDirection: 'row', alignItems: 'center', gap: 4 },
-  popRatingNum: { fontSize: 13, fontWeight: '600', color: C.sub },
-  popPlaceText: { fontSize: 13, fontWeight: '600', color: C.red },
+  popRatingNum: { fontSize: 13, fontFamily: FONT_POPPINS_SEMIBOLD, color: C.sub },
+  popPlaceText: { fontSize: 13, fontFamily: FONT_POPPINS_SEMIBOLD, color: C.red },
   popReviewText: {
-    fontSize: 15, lineHeight: 24, color: C.text, marginTop: 14,
+    fontSize: 15, fontFamily: FONT_POPPINS_REGULAR, lineHeight: 24, color: C.text, marginTop: 14,
   },
   popUpvoteRow: { marginTop: 12 },
   popUpvoteBtn: { flexDirection: 'row', alignItems: 'center', gap: 5 },
-  popUpvoteNum: { fontSize: 14, fontWeight: '600', color: C.muted },
+  popUpvoteNum: { fontSize: 14, fontFamily: FONT_POPPINS_SEMIBOLD, color: C.muted },
   popReplySection: { marginTop: 14, paddingTop: 12, marginBottom: 14, borderTopWidth: 1, borderTopColor: C.border },
-  popReplyTitle: { fontSize: 14, fontWeight: '700', color: C.text, marginBottom: 8 },
+  popReplyTitle: { fontSize: 14, fontFamily: FONT_POPPINS_BOLD, color: C.text, marginBottom: 8 },
   popReplyBox: {
     flexDirection: 'row', alignItems: 'center', backgroundColor: C.bg,
     paddingVertical: 8, paddingHorizontal: 10, borderRadius: 10,
@@ -1562,36 +1859,36 @@ const s = StyleSheet.create({
     width: 26, height: 26, borderRadius: 13, backgroundColor: C.chip,
     alignItems: 'center', justifyContent: 'center', marginRight: 8,
   },
-  popReplyInput: { flex: 1, fontSize: 13, color: C.text, paddingVertical: 0, minHeight: 20 },
-  popReplyPlaceholder: { flex: 1, fontSize: 13, color: C.muted },
-  // Create — warm color scheme
-  createRoot: { flex: 1, backgroundColor: '#F5F5F4' },
+  popReplyInput: { flex: 1, fontSize: 13, fontFamily: FONT_POPPINS_REGULAR, color: C.text, paddingVertical: 0, minHeight: 20 },
+  popReplyPlaceholder: { flex: 1, fontSize: 13, fontFamily: FONT_POPPINS_REGULAR, color: C.muted },
+  // Create — light: warm stone; dark: neutral black surfaces
+  createRoot: { flex: 1, backgroundColor: isDark ? C.bg : '#F0F0EE' },
   createGlassShell: {
     flex: 1,
     minHeight: 0,
-    marginHorizontal: 10,
-    marginTop: 4,
-    marginBottom: 10,
-    borderRadius: 26,
+    marginHorizontal: 4,
+    marginTop: 0,
+    marginBottom: 4,
+    borderRadius: 18,
     overflow: 'hidden',
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: 'rgba(142,142,147,0.22)',
+    borderColor: isDark ? 'rgba(255,255,255,0.1)' : 'rgba(142,142,147,0.18)',
     ...Platform.select({
       ios: {
         shadowColor: '#000000',
-        shadowOffset: { width: 0, height: 14 },
-        shadowOpacity: 0.08,
-        shadowRadius: 28,
+        shadowOffset: { width: 0, height: 8 },
+        shadowOpacity: isDark ? 0.28 : 0.06,
+        shadowRadius: 16,
       },
-      android: { elevation: 5 },
+      android: { elevation: 3 },
     }),
   },
   createGlassFrost: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(255,255,255,0.78)',
+    backgroundColor: isDark ? 'rgba(28,28,30,0.9)' : 'rgba(255,255,255,0.78)',
   },
   createGlassFrostDark: {
-    backgroundColor: 'rgba(28,28,30,0.88)',
+    backgroundColor: 'rgba(28,28,30,0.9)',
   },
   createGlassInner: {
     flex: 1,
@@ -1601,101 +1898,179 @@ const s = StyleSheet.create({
   },
   createHeader: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    paddingHorizontal: 16, paddingVertical: 12, paddingTop: 14,
+    paddingHorizontal: 12, paddingVertical: 8, paddingTop: 6,
     backgroundColor: 'transparent',
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: isDark ? 'rgba(255,255,255,0.09)' : 'rgba(0,0,0,0.07)',
   },
-  createHeaderBtn: { padding: 8, marginLeft: -8 },
-  createHeaderCenter: { flex: 1, alignItems: 'center', justifyContent: 'center', marginHorizontal: 8 },
-  createTitle: { fontSize: 18, fontWeight: '800', color: '#1C1917', letterSpacing: -0.3 },
-  createSubtitle: { fontSize: 12, color: '#78716C', marginTop: 2, fontWeight: '500' },
+  createHeaderBtn: { padding: 6, marginLeft: -6 },
+  createHeaderCenter: { flex: 1, alignItems: 'center', justifyContent: 'center', marginHorizontal: 4 },
+  createTitle: { fontSize: 15, fontFamily: FONT_POPPINS_BOLD, color: isDark ? C.text : '#1C1917', letterSpacing: -0.2 },
+  createSubtitle: { fontSize: 11, color: isDark ? C.muted : '#78716C', marginTop: 2, fontFamily: FONT_POPPINS_SEMIBOLD },
   postBtn: {
-    paddingVertical: 10, paddingHorizontal: 22, borderRadius: 22,
-    backgroundColor: '#E7E5E4', minWidth: 72, alignItems: 'center',
+    paddingVertical: 7, paddingHorizontal: 14, borderRadius: 18,
+    backgroundColor: isDark ? C.chip : '#E7E5E4', minWidth: 64, alignItems: 'center', justifyContent: 'center',
   },
   postBtnActive: { backgroundColor: C.red },
-  postBtnText: { fontSize: 15, fontWeight: '700', color: '#A8A29E' },
+  postBtnText: { fontSize: 14, fontFamily: FONT_POPPINS_BOLD, color: isDark ? C.muted : '#A8A29E' },
   postBtnTextActive: { color: '#FFF' },
-  createScroll: { paddingHorizontal: 16, paddingTop: 20 },
+  createScroll: { paddingHorizontal: 12, paddingTop: 10 },
+  createProgressRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    marginBottom: 12,
+  },
+  createProgressChunk: {
+    flex: 1,
+    height: 3,
+    borderRadius: 2,
+    backgroundColor: isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.07)',
+  },
+  createProgressChunkOn: {
+    backgroundColor: C.red,
+  },
   createCard: {
-    backgroundColor: '#FFF', borderRadius: 16, padding: 20, marginBottom: 16,
+    backgroundColor: isDark ? '#1C1C1E' : '#FFF', borderRadius: 14, padding: 12, marginBottom: 10,
     ...Platform.select({
-      ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.06, shadowRadius: 8 },
-      android: { elevation: 2 },
+      ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: isDark ? 0.28 : 0.05, shadowRadius: 6 },
+      android: { elevation: 1 },
     }),
   },
-  createCardHeader: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 14 },
-  createCardTitle: { fontSize: 16, fontWeight: '700', color: '#1C1917', flex: 1 },
-  createCardDesc: { fontSize: 13, color: '#78716C', marginBottom: 12, lineHeight: 18 },
+  createCardHeader: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 6 },
+  createIconPill: {
+    width: 30, height: 30, borderRadius: 10,
+    backgroundColor: isDark ? 'rgba(230,57,80,0.18)' : 'rgba(200,16,46,0.1)',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  createIconPillAmber: {
+    backgroundColor: isDark ? 'rgba(180,83,9,0.22)' : 'rgba(180,83,9,0.12)',
+  },
+  createFieldHint: {
+    fontSize: 11,
+    fontFamily: FONT_POPPINS_REGULAR,
+    lineHeight: 15,
+    color: C.muted,
+    marginBottom: 8,
+    marginTop: -1,
+  },
+  createCardTitle: { fontSize: 14, fontFamily: FONT_POPPINS_BOLD, color: isDark ? C.text : '#1C1917', flex: 1 },
+  createCardDesc: { fontSize: 12, fontFamily: FONT_POPPINS_REGULAR, color: isDark ? C.sub : '#78716C', marginBottom: 10, lineHeight: 16 },
   createTextInput: {
-    fontSize: 16, lineHeight: 24, color: '#1C1917',
-    minHeight: 100, textAlignVertical: 'top', paddingTop: 14, paddingBottom: 14,
-    backgroundColor: '#FAFAF9', borderRadius: 12, borderWidth: 1, borderColor: '#E7E5E4',
-    paddingHorizontal: 14,
+    fontSize: 15, fontFamily: FONT_POPPINS_REGULAR, lineHeight: 22, color: isDark ? C.text : '#1C1917',
+    minHeight: 88, textAlignVertical: 'top', paddingTop: 10, paddingBottom: 10,
+    backgroundColor: isDark ? '#121212' : '#FAFAF9', borderRadius: 12, borderWidth: 1, borderColor: isDark ? C.border : '#E7E5E4',
+    paddingHorizontal: 12,
   },
   charCountRow: { flexDirection: 'row', justifyContent: 'flex-end', marginTop: 6 },
-  charCount: { fontSize: 12, color: '#78716C' },
-  createHint: { fontSize: 13, color: '#78716C', textAlign: 'center', marginBottom: 24, paddingHorizontal: 16, lineHeight: 18 },
+  charCount: { fontSize: 11, fontFamily: FONT_POPPINS_MEDIUM, color: isDark ? C.sub : '#78716C' },
+  charCountWarn: { color: C.orange },
+  createHint: { fontSize: 13, fontFamily: FONT_POPPINS_REGULAR, color: isDark ? C.sub : '#78716C', textAlign: 'center', marginBottom: 24, paddingHorizontal: 16, lineHeight: 18 },
+  createChecklist: {
+    marginTop: 4,
+    marginBottom: 14,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 12,
+    backgroundColor: isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.04)',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.06)',
+    gap: 7,
+  },
+  createChecklistRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  createChecklistText: { flex: 1, fontSize: 13, fontFamily: FONT_POPPINS_MEDIUM, color: C.muted },
+  createChecklistTextDone: { color: C.sub, fontFamily: FONT_POPPINS_SEMIBOLD },
   placeInputRow: {
     flexDirection: 'row', alignItems: 'center',
-    backgroundColor: '#FAFAF9', borderRadius: 12, borderWidth: 1, borderColor: '#E7E5E4', overflow: 'hidden',
+    backgroundColor: isDark ? '#121212' : '#FAFAF9', borderRadius: 10, borderWidth: 1, borderColor: isDark ? C.border : '#E7E5E4', overflow: 'hidden',
   },
-  placeInput: { flex: 1, fontSize: 16, color: '#1C1917', paddingVertical: 14, paddingHorizontal: 14 },
+  placeInput: { flex: 1, fontSize: 15, fontFamily: FONT_POPPINS_REGULAR, color: isDark ? C.text : '#1C1917', paddingVertical: 10, paddingHorizontal: 12 },
   fromAppBtn: {
-    flexDirection: 'row', alignItems: 'center', gap: 6,
-    paddingVertical: 12, paddingHorizontal: 16, backgroundColor: '#FEF2F2', borderLeftWidth: 1, borderLeftColor: '#E7E5E4',
+    flexDirection: 'row', alignItems: 'center', gap: 5,
+    paddingVertical: 9, paddingHorizontal: 12,
+    backgroundColor: isDark ? 'rgba(230,57,80,0.14)' : '#FEF2F2',
+    borderLeftWidth: 1, borderLeftColor: isDark ? C.border : '#E7E5E4',
   },
-  fromAppBtnText: { fontSize: 14, fontWeight: '700', color: C.red },
-  starsRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
-  starTouchWrap: { width: 40, height: 40, flexDirection: 'row', position: 'relative' },
-  starHalf: { width: 20, height: 40 },
+  fromAppBtnText: { fontSize: 13, fontFamily: FONT_POPPINS_BOLD, color: C.red },
+  starsRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 0, flexWrap: 'wrap', rowGap: 8,
+  },
+  starTouchWrap: { width: 34, height: 34, flexDirection: 'row', position: 'relative' },
+  starHalf: { width: 17, height: 34 },
   starIconOverlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, alignItems: 'center', justifyContent: 'center' },
-  starsLabel: { fontSize: 17, fontWeight: '800', color: '#B45309', marginLeft: 10 },
-  topicGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginBottom: 14 },
-  topicChip: {
-    flexDirection: 'row', alignItems: 'center', gap: 6,
-    paddingVertical: 10, paddingHorizontal: 14, borderRadius: 12,
-    backgroundColor: '#FAFAF9', borderWidth: 1.5, borderColor: '#E7E5E4',
+  starsMeta: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 6,
+    marginLeft: 2,
+    flexShrink: 1,
+    minWidth: 0,
   },
-  topicChipOn: { backgroundColor: '#FEF2F2', borderColor: C.red },
-  topicChipLabel: { fontSize: 13, fontWeight: '600', color: '#57534E' },
-  topicChipLabelOn: { color: C.red, fontWeight: '700' },
+  starsLabel: {
+    fontSize: 15,
+    fontFamily: FONT_POPPINS_BOLD,
+    color: '#B45309',
+    letterSpacing: -0.2,
+  },
+  starsVerbal: {
+    fontSize: 12,
+    fontFamily: FONT_POPPINS_SEMIBOLD,
+    color: isDark ? C.sub : '#57534E',
+    flexShrink: 1,
+  },
+  topicGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 10 },
+  topicChip: {
+    flexDirection: 'row', alignItems: 'center', gap: 5,
+    paddingVertical: 7, paddingHorizontal: 11, borderRadius: 10,
+    backgroundColor: isDark ? '#121212' : '#FAFAF9', borderWidth: 1.5, borderColor: isDark ? C.border : '#E7E5E4',
+  },
+  topicChipOn: {
+    backgroundColor: isDark ? 'rgba(230,57,80,0.2)' : '#FEF2F2',
+    borderColor: C.red,
+  },
+  topicChipLabel: { fontSize: 12, fontFamily: FONT_POPPINS_SEMIBOLD, color: isDark ? C.sub : '#57534E' },
+  topicChipLabelOn: { color: C.red, fontFamily: FONT_POPPINS_BOLD },
   customHashtagRow: {
     flexDirection: 'row', alignItems: 'center',
-    backgroundColor: '#FAFAF9', borderRadius: 12, borderWidth: 1.5, borderColor: '#E7E5E4',
-    paddingVertical: 12, paddingHorizontal: 14,
+    backgroundColor: isDark ? '#121212' : '#FAFAF9', borderRadius: 10, borderWidth: 1.5, borderColor: isDark ? C.border : '#E7E5E4',
+    paddingVertical: 9, paddingHorizontal: 12,
   },
-  customHashtagPrefix: { fontSize: 15, fontWeight: '600', color: C.muted, marginRight: 4 },
-  customHashtagInput: { flex: 1, fontSize: 15, color: '#1C1917', paddingVertical: 0, minWidth: 0 },
-  customHashtagCount: { fontSize: 12, color: C.muted, marginLeft: 8 },
-  photoRow: { flexDirection: 'row', height: 128, alignItems: 'stretch' },
+  customHashtagPrefix: { fontSize: 14, fontFamily: FONT_POPPINS_SEMIBOLD, color: C.muted, marginRight: 4 },
+  customHashtagInput: { flex: 1, fontSize: 14, fontFamily: FONT_POPPINS_REGULAR, color: isDark ? C.text : '#1C1917', paddingVertical: 0, minWidth: 0 },
+  customHashtagCount: { fontSize: 12, fontFamily: FONT_POPPINS_REGULAR, color: C.muted, marginLeft: 8 },
+  photoRow: { flexDirection: 'row', height: 96, alignItems: 'stretch' },
   photoAddSingle: {
-    width: '100%', height: 128, borderRadius: 14,
-    borderWidth: 2, borderStyle: 'dashed', borderColor: '#D6D3D1',
-    alignItems: 'center', justifyContent: 'center', gap: 8,
-    backgroundColor: '#FAFAF9',
+    width: '100%', height: 96, borderRadius: 12,
+    borderWidth: 2, borderStyle: 'dashed', borderColor: isDark ? '#48484A' : '#D6D3D1',
+    alignItems: 'center', justifyContent: 'center', gap: 5,
+    backgroundColor: isDark ? '#121212' : '#FAFAF9',
   },
   photoAddIconWrap: {
-    width: 52, height: 52, borderRadius: 26, backgroundColor: '#FEF2F2', alignItems: 'center', justifyContent: 'center',
+    width: 40, height: 40, borderRadius: 20,
+    backgroundColor: isDark ? 'rgba(230,57,80,0.2)' : '#FEF2F2',
+    alignItems: 'center', justifyContent: 'center',
   },
-  photoAddText: { fontSize: 14, fontWeight: '600', color: '#57534E' },
-  photoAddHint: { fontSize: 12, color: '#78716C' },
-  photoCountBadge: { fontSize: 12, fontWeight: '700', color: C.muted, marginLeft: 'auto' },
+  photoAddText: { fontSize: 13, fontFamily: FONT_POPPINS_SEMIBOLD, color: isDark ? C.sub : '#57534E' },
+  photoAddHint: { fontSize: 11, fontFamily: FONT_POPPINS_REGULAR, color: isDark ? C.sub : '#78716C' },
+  photoCountBadge: { fontSize: 11, fontFamily: FONT_POPPINS_BOLD, color: C.muted, marginLeft: 'auto' },
   photoHalf: { flex: 1 },
-  photoGap: { width: 12 },
+  photoGap: { width: 8 },
   photoThumb: {
-    width: '100%', height: '100%', borderRadius: 14, overflow: 'hidden', backgroundColor: '#E7E5E4', position: 'relative',
+    width: '100%', height: '100%', borderRadius: 12, overflow: 'hidden',
+    backgroundColor: isDark ? '#2C2C2E' : '#E7E5E4', position: 'relative',
   },
   photoThumbImg: { width: '100%', height: '100%' },
   photoRemove: {
-    position: 'absolute', top: 8, right: 8,
-    width: 28, height: 28, borderRadius: 14, backgroundColor: 'rgba(0,0,0,0.55)',
+    position: 'absolute', top: 6, right: 6,
+    width: 26, height: 26, borderRadius: 13, backgroundColor: 'rgba(0,0,0,0.55)',
     alignItems: 'center', justifyContent: 'center',
   },
   photoAdd: {
-    width: '100%', height: '100%', borderRadius: 14,
-    borderWidth: 2, borderStyle: 'dashed', borderColor: '#D6D3D1',
+    width: '100%', height: '100%', borderRadius: 12,
+    borderWidth: 2, borderStyle: 'dashed', borderColor: isDark ? '#48484A' : '#D6D3D1',
     alignItems: 'center', justifyContent: 'center', gap: 4,
-    backgroundColor: '#FAFAF9',
+    backgroundColor: isDark ? '#121212' : '#FAFAF9',
   },
   // Picker
   pickerOverlay: {
@@ -1713,13 +2088,13 @@ const s = StyleSheet.create({
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
     paddingHorizontal: 20, paddingVertical: 16, borderBottomWidth: 1, borderBottomColor: C.border,
   },
-  pickerTitle: { fontSize: 18, fontWeight: '800', color: C.text },
+  pickerTitle: { fontSize: 18, fontFamily: FONT_POPPINS_BOLD, color: C.text },
   pickerSearchWrap: {
     flexDirection: 'row', alignItems: 'center', gap: 8,
     marginHorizontal: 16, marginVertical: 12, paddingVertical: 10, paddingHorizontal: 14,
     borderRadius: 14, backgroundColor: C.bg, borderWidth: 1, borderColor: C.border,
   },
-  pickerSearchInput: { flex: 1, fontSize: 15, color: C.text },
+  pickerSearchInput: { flex: 1, fontSize: 15, fontFamily: FONT_POPPINS_REGULAR, color: C.text },
   pickerLoading: { padding: 32, alignItems: 'center' },
   pickerItem: {
     flexDirection: 'row', alignItems: 'center', gap: 12,
@@ -1730,6 +2105,7 @@ const s = StyleSheet.create({
     width: 36, height: 36, borderRadius: 12, backgroundColor: C.bg,
     alignItems: 'center', justifyContent: 'center',
   },
-  pickerItemText: { flex: 1, fontSize: 15, fontWeight: '600', color: C.text },
-  pickerEmpty: { padding: 28, fontSize: 15, color: C.muted, textAlign: 'center' },
-});
+  pickerItemText: { flex: 1, fontSize: 15, fontFamily: FONT_POPPINS_SEMIBOLD, color: C.text },
+  pickerEmpty: { padding: 28, fontSize: 15, fontFamily: FONT_POPPINS_REGULAR, color: C.muted, textAlign: 'center' },
+  })
+}

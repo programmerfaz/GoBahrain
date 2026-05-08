@@ -11,8 +11,10 @@ export function AuthProvider({ children }) {
   const [session, setSession] = useState(null);
   const [profile, setProfile] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
+  const [profileLoading, setProfileLoading] = useState(false);
 
   const fetchProfile = useCallback(async () => {
+    setProfileLoading(true);
     try {
       const { data, error } = await supabase.rpc('get_my_profile');
       if (error) {
@@ -27,6 +29,8 @@ export function AuthProvider({ children }) {
       console.warn('[Auth] fetchProfile error', e?.message);
       setProfile(null);
       return null;
+    } finally {
+      setProfileLoading(false);
     }
   }, []);
 
@@ -189,6 +193,13 @@ export function AuthProvider({ children }) {
     }
   }, []);
 
+  const ownerProfileDisabledRaw =
+    profile?.account?.owner_profile_disabled ??
+    profile?.owner_profile_disabled ??
+    false
+  const isOwnerProfileDisabled =
+    ownerProfileDisabledRaw === true || ownerProfileDisabledRaw === 'true'
+
   const value = {
     session,
     user: session?.user ?? null,
@@ -199,6 +210,8 @@ export function AuthProvider({ children }) {
     ensureProfileAfterSignUp,
     signOut,
     isAuthenticated: !!session,
+    isOwnerProfileDisabled,
+    profileLoading,
   };
 
   return (

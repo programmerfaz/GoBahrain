@@ -26,7 +26,13 @@ import { LUXURY, luxurySoftShadow } from '../theme/luxuryPremium';
 import { useTheme } from '../context/ThemeContext';
 import { resolvePublicImageUrl } from '../utils/imageUrl';
 import { CachedImage } from './CachedImage';
-import { BRAND_WORDMARK_FONT } from '../constants/brandFont';
+import {
+  BRAND_WORDMARK_FONT,
+  FONT_POPPINS_BOLD,
+  FONT_POPPINS_MEDIUM,
+  FONT_POPPINS_REGULAR,
+  FONT_POPPINS_SEMIBOLD,
+} from '../constants/brandFont';
 import { openGoogleMapsDirections } from '../utils/googleMapsDirections';
 
 const PROFILE_TAB_POSTS = 'posts';
@@ -468,13 +474,13 @@ const pvStyles = StyleSheet.create({
   },
   headerBusiness: {
     fontSize: 15,
-    fontWeight: '700',
+    fontFamily: FONT_POPPINS_BOLD,
     color: '#FFF',
     letterSpacing: 0.2,
   },
   headerCount: {
     fontSize: 12.5,
-    fontWeight: '800',
+    fontFamily: FONT_POPPINS_BOLD,
     color: '#FFFFFF',
     letterSpacing: 0.35,
   },
@@ -545,11 +551,12 @@ const pvStyles = StyleSheet.create({
   cardHeaderInfo: { flex: 1, minWidth: 0 },
   cardHeaderUsername: {
     fontSize: 14,
-    fontWeight: '700',
+    fontFamily: FONT_POPPINS_BOLD,
     color: '#0F172A',
   },
   cardHeaderLocation: {
     fontSize: 11,
+    fontFamily: FONT_POPPINS_REGULAR,
     color: '#64748B',
     marginTop: 1,
   },
@@ -591,20 +598,22 @@ const pvStyles = StyleSheet.create({
   },
   dateText: {
     fontSize: 11,
-    fontWeight: '700',
+    fontFamily: FONT_POPPINS_BOLD,
     color: GOLD_LIGHT,
     letterSpacing: 0.5,
   },
   description: {
     fontSize: 13,
+    fontFamily: FONT_POPPINS_REGULAR,
     lineHeight: 18,
     color: '#0F172A',
   },
   descriptionName: {
-    fontWeight: '700',
+    fontFamily: FONT_POPPINS_BOLD,
   },
   emptyDescription: {
     fontSize: 13,
+    fontFamily: FONT_POPPINS_REGULAR,
     lineHeight: 18,
     color: '#64748B',
     fontStyle: 'italic',
@@ -1020,7 +1029,7 @@ function getModalStyles(C, isDark) {
     sheetHandleHint: {
       marginTop: 5,
       fontSize: 11,
-      fontWeight: '600',
+      fontFamily: FONT_POPPINS_SEMIBOLD,
       color: C.textSecondary,
       letterSpacing: 0.2,
     },
@@ -1054,18 +1063,18 @@ function getModalStyles(C, isDark) {
       borderWidth: StyleSheet.hairlineWidth,
       borderColor: isDark ? 'rgba(255,255,255,0.18)' : 'rgba(15,23,42,0.08)',
     },
-    clientProfileHeaderTitle: { flex: 1, fontSize: 15, fontWeight: '700', color: C.textPrimary, textAlign: 'center', letterSpacing: 0.2 },
+    clientProfileHeaderTitle: { flex: 1, fontSize: 15, fontFamily: FONT_POPPINS_BOLD, color: C.textPrimary, textAlign: 'center', letterSpacing: 0.2 },
     clientProfileHeaderPlaceholder: { width: 42, height: 42 },
     clientProfileLoading: { flex: 1, justifyContent: 'center', alignItems: 'center', gap: 14 },
-    clientProfileLoadingText: { fontSize: 14, color: C.textSecondary },
+    clientProfileLoadingText: { fontSize: 14, fontFamily: FONT_POPPINS_REGULAR, color: C.textSecondary },
     skeletonCard: { marginHorizontal: 14, marginTop: 100, padding: 16, borderRadius: LUXURY.radiusCardSheet, backgroundColor: surface, ...luxurySoftShadow },
     skeletonAvatar: { width: 96, height: 96, borderRadius: 48, backgroundColor: C.pillBg, alignSelf: 'center' },
     skeletonLine: { height: 12, borderRadius: 6, backgroundColor: C.pillBg, marginTop: 8 },
     skeletonLineShort: { width: '60%' },
     clientProfileError: { flex: 1, justifyContent: 'center', alignItems: 'center', gap: 14, paddingHorizontal: 28 },
-    clientProfileErrorText: { fontSize: 14, color: C.textSecondary, textAlign: 'center' },
+    clientProfileErrorText: { fontSize: 14, fontFamily: FONT_POPPINS_REGULAR, color: C.textSecondary, textAlign: 'center' },
     clientProfileRetryBtn: { marginTop: 8, paddingVertical: 12, paddingHorizontal: 24, borderRadius: 12, overflow: 'hidden', alignItems: 'center', justifyContent: 'center' },
-    clientProfileRetryBtnText: { fontSize: 14, fontWeight: '700', color: '#FFFFFF' },
+    clientProfileRetryBtnText: { fontSize: 14, fontFamily: FONT_POPPINS_BOLD, color: '#FFFFFF' },
 
     /* ===================  HERO  =================== */
     heroWrap: {
@@ -1179,7 +1188,7 @@ function getModalStyles(C, isDark) {
     },
     nameFallback: {
       fontSize: 26,
-      fontWeight: '800',
+      fontFamily: FONT_POPPINS_BOLD,
       color: C.textPrimary,
       textAlign: 'center',
       letterSpacing: -0.5,
@@ -1211,7 +1220,7 @@ function getModalStyles(C, isDark) {
     },
     subCategoryText: {
       fontSize: 10.5,
-      fontWeight: '700',
+      fontFamily: FONT_POPPINS_BOLD,
       color: C.textSecondary,
       letterSpacing: 2.5,
       textTransform: 'uppercase',
@@ -1237,7 +1246,7 @@ function getModalStyles(C, isDark) {
     },
     ratingHeroText: {
       fontSize: 13,
-      fontWeight: '800',
+      fontFamily: FONT_POPPINS_BOLD,
       color: isDark ? GOLD_LIGHT : '#8A6A14',
       letterSpacing: 0.3,
     },
@@ -1247,7 +1256,7 @@ function getModalStyles(C, isDark) {
       marginTop: 10,
       marginHorizontal: 22,
       fontSize: 10.5,
-      fontWeight: '800',
+      fontFamily: FONT_POPPINS_BOLD,
       color: C.textMuted,
       letterSpacing: 2,
       textTransform: 'uppercase',
@@ -1272,7 +1281,7 @@ function getModalStyles(C, isDark) {
     },
     chipText: {
       fontSize: 12,
-      fontWeight: '700',
+      fontFamily: FONT_POPPINS_BOLD,
       color: C.textPrimary,
       letterSpacing: 0.1,
     },
@@ -1315,7 +1324,7 @@ function getModalStyles(C, isDark) {
     },
     bioLabel: {
       fontSize: 11,
-      fontWeight: '800',
+      fontFamily: FONT_POPPINS_BOLD,
       letterSpacing: 1.1,
       textTransform: 'uppercase',
       color: isDark ? GOLD_LIGHT : '#8A6A14',
@@ -1324,7 +1333,7 @@ function getModalStyles(C, isDark) {
       fontSize: 14.5,
       color: C.textPrimary,
       lineHeight: 23,
-      fontWeight: '600',
+      fontFamily: FONT_POPPINS_SEMIBOLD,
       letterSpacing: 0,
     },
     bioToggleBtn: {
@@ -1335,7 +1344,7 @@ function getModalStyles(C, isDark) {
     },
     bioToggleText: {
       fontSize: 12.5,
-      fontWeight: '800',
+      fontFamily: FONT_POPPINS_BOLD,
       color: C.primary,
       letterSpacing: 0.2,
     },
@@ -1398,13 +1407,13 @@ function getModalStyles(C, isDark) {
     },
     openingStatusText: {
       fontSize: 10,
-      fontWeight: '800',
+      fontFamily: FONT_POPPINS_BOLD,
       letterSpacing: 0.6,
       textTransform: 'uppercase',
     },
     timingsTopLabel: {
       fontSize: 11,
-      fontWeight: '800',
+      fontFamily: FONT_POPPINS_BOLD,
       letterSpacing: 1.1,
       textTransform: 'uppercase',
       color: isDark ? GOLD_LIGHT : '#8A6A14',
@@ -1412,7 +1421,7 @@ function getModalStyles(C, isDark) {
     timingsTopValue: {
       textAlign: 'center',
       fontSize: 15,
-      fontWeight: '800',
+      fontFamily: FONT_POPPINS_BOLD,
       lineHeight: 20,
       color: C.textPrimary,
     },
@@ -1491,7 +1500,7 @@ function getModalStyles(C, isDark) {
         android: { elevation: 6 },
       }),
     },
-    arBtnText: { fontSize: 14, fontWeight: '800', color: '#FFF', letterSpacing: 0.4 },
+    arBtnText: { fontSize: 14, fontFamily: FONT_POPPINS_BOLD, color: '#FFF', letterSpacing: 0.4 },
     arBtnShine: {
       position: 'absolute',
       top: 0,
@@ -1518,7 +1527,7 @@ function getModalStyles(C, isDark) {
     },
     mapsBtnText: {
       fontSize: 14,
-      fontWeight: '800',
+      fontFamily: FONT_POPPINS_BOLD,
       color: isDark ? GOLD_LIGHT : '#8A6A14',
       letterSpacing: 0.4,
     },
@@ -1549,7 +1558,7 @@ function getModalStyles(C, isDark) {
       gap: 7,
       paddingVertical: 14,
     },
-    tabText: { fontSize: 12, fontWeight: '700', color: C.textMuted, letterSpacing: 1.2, textTransform: 'uppercase' },
+    tabText: { fontSize: 12, fontFamily: FONT_POPPINS_BOLD, color: C.textMuted, letterSpacing: 1.2, textTransform: 'uppercase' },
     tabTextActive: { color: C.textPrimary },
     tabBadge: {
       paddingVertical: 2,
@@ -1558,7 +1567,7 @@ function getModalStyles(C, isDark) {
       backgroundColor: isDark ? 'rgba(255,255,255,0.08)' : 'rgba(15,23,42,0.06)',
     },
     tabBadgeActive: { backgroundColor: C.primary },
-    tabBadgeText: { fontSize: 10, fontWeight: '800', color: C.textMuted },
+    tabBadgeText: { fontSize: 10, fontFamily: FONT_POPPINS_BOLD, color: C.textMuted },
     tabBadgeTextActive: { color: '#FFF' },
     tabContent: { flex: 1, backgroundColor: C.screenBg },
 
@@ -1575,7 +1584,7 @@ function getModalStyles(C, isDark) {
       borderColor: hairline,
       borderStyle: 'dashed',
     },
-    emptyText: { fontSize: 13, color: C.textMuted, fontWeight: '600', letterSpacing: 0.3 },
+    emptyText: { fontSize: 13, color: C.textMuted, fontFamily: FONT_POPPINS_SEMIBOLD, letterSpacing: 0.3 },
 
     /* ===================  GRID  =================== */
     gridWrap: { alignSelf: 'stretch' },
@@ -1632,21 +1641,21 @@ function getModalStyles(C, isDark) {
       borderWidth: StyleSheet.hairlineWidth,
       borderColor: 'rgba(255,255,255,0.18)',
     },
-    reviewRatingPillNum: { fontSize: 14, fontWeight: '800', color: '#FFFFFF', marginLeft: 2 },
+    reviewRatingPillNum: { fontSize: 14, fontFamily: FONT_POPPINS_BOLD, color: '#FFFFFF', marginLeft: 2 },
     reviewTextBlock: { paddingHorizontal: 18, paddingTop: 14, paddingBottom: 16, gap: 10 },
-    reviewBodyPrimary: { fontSize: 16, fontWeight: '500', color: C.textPrimary, lineHeight: 25, letterSpacing: -0.25 },
+    reviewBodyPrimary: { fontSize: 16, fontFamily: FONT_POPPINS_MEDIUM, color: C.textPrimary, lineHeight: 25, letterSpacing: -0.25 },
     reviewPlaceRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
     reviewPlaceRowMuted: { marginTop: 4 },
-    reviewPlaceText: { flex: 1, fontSize: 13, fontWeight: '600', color: C.textSecondary },
-    reviewPlaceTextMuted: { flex: 1, fontSize: 13, color: C.textSecondary, lineHeight: 19 },
+    reviewPlaceText: { flex: 1, fontSize: 13, fontFamily: FONT_POPPINS_SEMIBOLD, color: C.textSecondary },
+    reviewPlaceTextMuted: { flex: 1, fontSize: 13, fontFamily: FONT_POPPINS_REGULAR, color: C.textSecondary, lineHeight: 19 },
     reviewNoImage: { paddingHorizontal: 20, paddingTop: 18, paddingBottom: 20, position: 'relative', overflow: 'hidden' },
     reviewNoImageAccent: { position: 'absolute', left: 0, right: 0, top: 0, height: 4, borderTopLeftRadius: 22, borderTopRightRadius: 22 },
     reviewRatingInline: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 10 },
-    reviewRatingInlineNum: { fontSize: 17, fontWeight: '800', color: GOLD, marginLeft: 4 },
+    reviewRatingInlineNum: { fontSize: 17, fontFamily: FONT_POPPINS_BOLD, color: GOLD, marginLeft: 4 },
     reviewQuoteRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 12 },
     reviewQuoteIcon: { marginTop: 3 },
-    reviewBodyFeatured: { flex: 1, fontSize: 17, fontWeight: '600', color: C.textPrimary, lineHeight: 26, letterSpacing: -0.35 },
-    reviewNoTextHint: { fontSize: 14, color: C.textMuted, fontStyle: 'italic', lineHeight: 20 },
+    reviewBodyFeatured: { flex: 1, fontSize: 17, fontFamily: FONT_POPPINS_SEMIBOLD, color: C.textPrimary, lineHeight: 26, letterSpacing: -0.35 },
+    reviewNoTextHint: { fontSize: 14, fontFamily: FONT_POPPINS_REGULAR, color: C.textMuted, fontStyle: 'italic', lineHeight: 20 },
 
     /* ===================  NEARBY  =================== */
     nearbySection: {
@@ -1685,7 +1694,7 @@ function getModalStyles(C, isDark) {
     nearbyEyebrow: {
       marginHorizontal: 18,
       fontSize: 10.5,
-      fontWeight: '800',
+      fontFamily: FONT_POPPINS_BOLD,
       color: C.textMuted,
       letterSpacing: 2,
       textTransform: 'uppercase',
@@ -1712,13 +1721,14 @@ function getModalStyles(C, isDark) {
     },
     nearbyTitle: {
       fontSize: 18,
-      fontWeight: '800',
+      fontFamily: FONT_POPPINS_BOLD,
       color: C.textPrimary,
       letterSpacing: -0.2,
     },
     nearbySubtitle: {
       marginHorizontal: 18,
       fontSize: 13,
+      fontFamily: FONT_POPPINS_REGULAR,
       color: C.textSecondary,
       marginBottom: 14,
       lineHeight: 19,
@@ -1729,7 +1739,7 @@ function getModalStyles(C, isDark) {
       marginTop: 8,
       marginBottom: 8,
       fontSize: 11.5,
-      fontWeight: '800',
+      fontFamily: FONT_POPPINS_BOLD,
       letterSpacing: 1.2,
       textTransform: 'uppercase',
       color: C.textMuted,
@@ -1773,7 +1783,7 @@ function getModalStyles(C, isDark) {
     },
     nearbyCardTitle: {
       fontSize: 14,
-      fontWeight: '700',
+      fontFamily: FONT_POPPINS_BOLD,
       color: C.textPrimary,
       letterSpacing: 0.1,
     },
@@ -1785,6 +1795,7 @@ function getModalStyles(C, isDark) {
     nearbyCardMetaText: {
       flex: 1,
       fontSize: 12,
+      fontFamily: FONT_POPPINS_REGULAR,
       color: C.textSecondary,
     },
     nearbyLoadingRow: {
@@ -1806,6 +1817,7 @@ function getModalStyles(C, isDark) {
     },
     nearbyEmptyText: {
       fontSize: 12.5,
+      fontFamily: FONT_POPPINS_REGULAR,
       color: C.textMuted,
       textAlign: 'center',
     },

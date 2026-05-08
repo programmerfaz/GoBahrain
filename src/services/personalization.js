@@ -12,12 +12,13 @@ const pickLabels = (ids, list) =>
 const findGeneralPreference = (id) => GENERAL_PREFERENCES.find((p) => p.id === id)
 
 const groupGeneralIdsByCategory = (ids) => {
-  const out = { companion: [], pace: [], budget: [], interests: [], planning: [], timing: [] }
-  for (const id of (Array.isArray(ids) ? ids : [])) {
+  const out = {}
+  for (const id of Array.isArray(ids) ? ids : []) {
     const def = findGeneralPreference(id)
     if (!def) continue
-    if (!out[def.group]) out[def.group] = []
-    out[def.group].push(def.label)
+    const g = def.group
+    if (!out[g]) out[g] = []
+    out[g].push(def.label)
   }
   return out
 }
@@ -27,31 +28,31 @@ const groupGeneralIdsByCategory = (ids) => {
  * activity ids (from PREFERENCES). This keeps personalization useful even when
  * onboarding questions are profile-focused and independent from plan modal picks.
  */
+/** Maps GENERAL_PREFERENCES ids → PREFERENCES ids (plan activity chips). Must use real ids from `constants/preferences` PREFERENCES. */
 const INTEREST_TO_ACTIVITY_MAP = {
-  'culture-history': ['cultural', 'historical'],
-  'nature-outdoors': ['nature'],
+  'culture-history': ['culture', 'historical'],
+  'nature-outdoors': ['nature', 'parks'],
   foodie: [],
-  nightlife: ['leisure'],
-  shopping: ['sightseeing'],
-  'relaxation-wellness': ['leisure'],
-  adventure: ['adventure'],
-  'instagram-spots': ['instagram'],
-  'local-authentic': ['cultural', 'historical'],
-  'family-friendly': ['leisure'],
-  'art-museums': ['cultural'],
-  'beaches-sun': ['nature'],
-  'quiet-peaceful': ['leisure'],
-  'social-lively': [],
-  'hidden-gems': ['sightseeing'],
-  'pace-relaxed': ['leisure', 'scenic', 'nature'],
-  'pace-balanced': ['sightseeing', 'cultural', 'nature'],
-  'pace-packed': ['adventure', 'instagram', 'sightseeing'],
-  'plan-structured': ['historical', 'cultural'],
-  'plan-flexible': ['leisure', 'nature'],
-  'plan-mix': ['sightseeing', 'leisure'],
-  'time-early': ['nature', 'scenic'],
-  'time-afternoon': ['sightseeing', 'cultural'],
-  'time-late': ['leisure', 'instagram'],
+  nightlife: ['fun'],
+  shopping: ['shopping'],
+  adventure: ['fun', 'nature'],
+  'instagram-spots': ['art', 'waterfronts', 'beaches'],
+  'local-authentic': ['culture', 'historical'],
+  'family-friendly': ['fun', 'parks'],
+  'art-museums': ['art', 'culture'],
+  'beaches-sun': ['beaches', 'waterfronts'],
+  'quiet-peaceful': ['parks', 'nature'],
+  'social-lively': ['fun', 'shopping'],
+  'hidden-gems': ['culture', 'nature'],
+  'pace-relaxed': ['parks', 'nature'],
+  'pace-balanced': ['culture', 'nature', 'shopping'],
+  'pace-packed': ['fun', 'beaches', 'shopping'],
+  'plan-structured': ['historical', 'culture'],
+  'plan-flexible': ['nature', 'parks'],
+  'plan-mix': ['culture', 'fun'],
+  'time-early': ['nature', 'parks'],
+  'time-afternoon': ['culture', 'historical'],
+  'time-late': ['fun', 'shopping'],
 }
 
 export const deriveActivityIdsFromInterestIds = (ids) => {
@@ -65,10 +66,15 @@ export const deriveActivityIdsFromInterestIds = (ids) => {
 
 const buildFallbackSummary = ({ grouped, activityLabels, foodLabels, profileAnswers, viewerUType = 'local' }) => {
   const parts = []
-  if (grouped.companion.length) parts.push(`Usually travels as: ${grouped.companion.join(' / ')}`)
-  if (grouped.pace.length) parts.push(`Ideal day pace: ${grouped.pace.join(' / ')}`)
-  if (grouped.budget.length) parts.push(`Budget comfort: ${grouped.budget.join(' / ')}`)
-  if (grouped.interests.length) parts.push(`Experiences they love: ${grouped.interests.slice(0, 6).join(', ')}`)
+  const c = (k) => (grouped[k] && grouped[k].length ? grouped[k] : [])
+  if (c('companion').length) parts.push(`Usually travels as: ${c('companion').join(' / ')}`)
+  if (c('coach_focus').length)
+    parts.push(`Primary goal for AI / personalized help: ${c('coach_focus').join(' / ')}`)
+  if (c('pace').length) parts.push(`Ideal day pace: ${c('pace').join(' / ')}`)
+  if (c('budget').length) parts.push(`Budget comfort: ${c('budget').join(' / ')}`)
+  if (c('life_lens').length) parts.push(`Bahrain day-to-day context: ${c('life_lens').join(' / ')}`)
+  if (c('choose_style').length) parts.push(`How they choose spots: ${c('choose_style').join(' / ')}`)
+  if (c('interests').length) parts.push(`Experiences they love: ${c('interests').slice(0, 6).join(', ')}`)
   if (activityLabels.length) parts.push(`Activity leanings: ${activityLabels.slice(0, 4).join(', ')}`)
   if (foodLabels.length) parts.push(`Food personality: ${foodLabels.slice(0, 4).join(', ')}`)
   if (profileAnswers?.idealDay) parts.push(`Ideal day notes: ${String(profileAnswers.idealDay).trim()}`)
@@ -137,21 +143,26 @@ export async function generateUserPersonaSummary({
     'You are a senior personalization strategist for a travel app in Bahrain.',
     'Given a user\'s onboarding answers, write ONE rich, third-person profile paragraph (50-70 words) that feels like a real friend describing them.',
     audienceInstruction,
-    'Cover: who they travel with, the pace/energy they like, spending comfort, the 2–3 experience themes that matter most, food personality, and what they probably want to feel by the end of a great day.',
+    'Emphasize personality: companionship habits; what they want the AI assistant to prioritize; how settled they are in Bahrain and when they typically go out (when stated); pace and spending comfort.',
+    'If optional interest/food/activity lists are provided and non-empty, weave them in lightly. If they are empty, do NOT invent preferred venue types — the user selects those later when building a plan.',
     'Write in present tense. Use warm, specific language ("This traveler loves…"). No bullet lists. No headings. No hedging.',
     'End with one short sentence that states the vibe their perfect Bahrain day should deliver — this sentence will guide later itinerary generation.',
   ].join(' ')
 
+  const ug = (k) => ((grouped[k] && grouped[k].length) ? grouped[k].join(', ') : 'unspecified')
   const userPrompt = [
     `Local or visitor: ${vt === 'tourist' ? 'Visitor / tourist' : 'Local resident'}`,
-    `Companion: ${grouped.companion.join(', ') || 'unspecified'}`,
-    `Pace preference: ${grouped.pace.join(', ') || 'unspecified'}`,
-    `Budget comfort: ${grouped.budget.join(', ') || 'unspecified'}`,
-    `Core interests / experiences: ${grouped.interests.join(', ') || 'unspecified'}`,
-    `Planning style: ${grouped.planning.join(', ') || 'unspecified'}`,
-    `Timing preference: ${grouped.timing.join(', ') || 'unspecified'}`,
-    `Activity leanings: ${activityLabels.join(', ') || 'unspecified'}`,
-    `Food personality: ${foodLabels.join(', ') || 'unspecified'}`,
+    `Companion: ${ug('companion')}`,
+    `Primary goal for AI assistance (coach focus): ${ug('coach_focus')}`,
+    `Pace preference: ${ug('pace')}`,
+    `Budget comfort: ${ug('budget')}`,
+    `Bahrain day-to-day context (timing, familiarity): ${ug('life_lens')}`,
+    `How they choose where to go (optional): ${ug('choose_style')}`,
+    `Core interests / experiences (optional): ${ug('interests')}`,
+    `Planning style: ${ug('planning')}`,
+    `Timing preference: ${ug('timing')}`,
+    `Activity leanings (optional; plan-time picks): ${activityLabels.join(', ') || 'unspecified'}`,
+    `Food personality (optional; plan-time picks): ${foodLabels.join(', ') || 'unspecified'}`,
     `Free-text ideal day: ${profileAnswers?.idealDay ? String(profileAnswers.idealDay) : 'none'}`,
     `Free-text avoid list: ${profileAnswers?.avoidList ? String(profileAnswers.avoidList) : 'none'}`,
     `Home country: ${profileAnswers?.homeCountry ? String(profileAnswers.homeCountry) : 'unspecified'}`,

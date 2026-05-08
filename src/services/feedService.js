@@ -80,6 +80,20 @@ const RECENCY_HALFLIFE_HOURS = 64
  * Keep short & high-signal; lowercased.
  */
 const INTEREST_KEYWORDS = {
+  'focus-discover': ['hidden', 'discover', 'new', 'underrated', 'gem', 'local', 'secret'],
+  'focus-dayflow': ['itinerary', 'route', 'day', 'plan', 'flow', 'timing'],
+  'focus-people': ['guide', 'picks', 'curated', 'shortlist', 'worth', 'honest', 'roundup', 'best'],
+  'focus-host': ['birthday', 'anniversary', 'celebrate', 'milestone', 'special', 'visitor', 'visiting', 'guest'],
+  'focus-shake': ['routine', 'try', 'different', 'fresh', 'change'],
+  'lens-exploring': ['new', 'first', 'exploring', 'discover', 'guide', 'tip'],
+  'lens-local': ['local', 'resident', 'neighborhood', 'rotation', 'insider'],
+  'lens-weekends': ['weekend', 'friday', 'saturday', 'sunday', 'off'],
+  'lens-evenings': ['evening', 'night', 'after', 'hours', 'late'],
+  'lens-between': ['travel', 'abroad', 'split', 'back', 'visit'],
+  'choose-research': ['guide', 'review', 'planned', 'itinerary'],
+  'choose-circle': ['recommend', 'local', 'word', 'tip', 'friend'],
+  'choose-mood': ['mood', 'whatever', 'felt', 'impulse'],
+  'choose-blend': ['sometimes', 'mix', 'balance', 'both'],
   foodie: ['food', 'restaurant', 'eat', 'dish', 'cuisine', 'meal', 'dining', 'chef', 'kitchen', 'brunch'],
   'culture-history': ['culture', 'heritage', 'museum', 'mosque', 'history', 'traditional', 'souq', 'fort'],
   'nature-outdoors': ['nature', 'park', 'beach', 'outdoor', 'garden', 'desert', 'island', 'trail'],
@@ -809,7 +823,8 @@ export const fetchFeedPage = async ({
         clientImage,
         tags,
         rating,
-        priceRange: priceRange != null ? `${priceRange} BHD` : '',
+        // Use the price range exactly as stored in the DB (already includes currency if needed).
+        priceRange: priceRange != null && String(priceRange).trim() ? String(priceRange).trim() : '',
         verified: false,
         location: '',
         distance: '',

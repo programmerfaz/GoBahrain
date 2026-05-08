@@ -1,7 +1,13 @@
 import { Dimensions, Platform, StyleSheet } from 'react-native'
 import { colors as themeColors } from '../theme/designTokens'
 import { LUXURY, luxuryCardShadow, luxuryElevated, luxurySoftShadow } from '../theme/luxuryPremium'
-import { BRAND_WORDMARK_FONT } from '../constants/brandFont'
+import {
+  BRAND_WORDMARK_FONT,
+  FONT_POPPINS_BOLD,
+  FONT_POPPINS_MEDIUM,
+  FONT_POPPINS_REGULAR,
+  FONT_POPPINS_SEMIBOLD,
+} from '../constants/brandFont'
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window')
 
@@ -189,7 +195,7 @@ const styles = StyleSheet.create({
   },
   planMapsSearchHintText: {
     fontSize: 13,
-    fontWeight: '500',
+    fontFamily: FONT_POPPINS_MEDIUM,
     color: '#5F6368',
     paddingHorizontal: 16,
     paddingTop: 4,
@@ -232,7 +238,7 @@ const styles = StyleSheet.create({
   searchModalAddingOverlayText: {
     marginTop: 14,
     fontSize: 15,
-    fontWeight: '700',
+    fontFamily: FONT_POPPINS_BOLD,
     color: '#64748B',
   },
   searchModalAddingOverlayDark: {
@@ -249,7 +255,7 @@ const styles = StyleSheet.create({
   },
   searchModalHeading: {
     fontSize: 20,
-    fontWeight: '800',
+    fontFamily: FONT_POPPINS_BOLD,
     color: '#0F172A',
     letterSpacing: -0.3,
     textAlign: 'center',
@@ -257,7 +263,7 @@ const styles = StyleSheet.create({
   searchModalSubheading: {
     marginTop: 6,
     fontSize: 14,
-    fontWeight: '600',
+    fontFamily: FONT_POPPINS_SEMIBOLD,
     color: '#64748B',
     textAlign: 'center',
     lineHeight: 20,
@@ -318,7 +324,7 @@ const styles = StyleSheet.create({
   searchModalLoadingText: {
     fontSize: 15,
     color: '#64748B',
-    fontWeight: '500',
+    fontFamily: FONT_POPPINS_MEDIUM,
   },
   searchModalScroll: { flex: 1 },
   searchModalContent: {
@@ -344,13 +350,13 @@ const styles = StyleSheet.create({
   },
   searchModalSectionTitle: {
     fontSize: 15,
-    fontWeight: '800',
+    fontFamily: FONT_POPPINS_BOLD,
     letterSpacing: 0.2,
   },
   searchModalEmpty: {
     fontSize: 14,
     color: '#94A3B8',
-    fontWeight: '500',
+    fontFamily: FONT_POPPINS_MEDIUM,
     fontStyle: 'italic',
   },
   searchModalHorizontalContent: {
@@ -382,7 +388,7 @@ const styles = StyleSheet.create({
   },
   searchModalClientName: {
     fontSize: 11,
-    fontWeight: '600',
+    fontFamily: FONT_POPPINS_SEMIBOLD,
     color: '#334155',
     textAlign: 'center',
     marginTop: 6,
@@ -427,7 +433,7 @@ const styles = StyleSheet.create({
   },
   searchModalHintText: {
     fontSize: 12,
-    fontWeight: '600',
+    fontFamily: FONT_POPPINS_SEMIBOLD,
     color: '#64748B',
     paddingHorizontal: 20,
     marginBottom: 10,
@@ -475,7 +481,7 @@ const styles = StyleSheet.create({
   },
   searchModalFilterChipLabel: {
     fontSize: 13,
-    fontWeight: '700',
+    fontFamily: FONT_POPPINS_BOLD,
     color: '#475569',
   },
   searchModalFilterChipLabelDark: {
@@ -500,7 +506,7 @@ const styles = StyleSheet.create({
   },
   searchModalSmartBadgeLabel: {
     fontSize: 10,
-    fontWeight: '800',
+    fontFamily: FONT_POPPINS_BOLD,
     letterSpacing: 0.3,
     textTransform: 'uppercase',
   },
@@ -512,7 +518,7 @@ const styles = StyleSheet.create({
   },
   searchModalGlobalEmptyTitle: {
     fontSize: 17,
-    fontWeight: '800',
+    fontFamily: FONT_POPPINS_BOLD,
     color: '#334155',
     textAlign: 'center',
     letterSpacing: -0.2,
@@ -522,7 +528,7 @@ const styles = StyleSheet.create({
   },
   searchModalGlobalEmptySub: {
     fontSize: 14,
-    fontWeight: '600',
+    fontFamily: FONT_POPPINS_SEMIBOLD,
     color: '#94A3B8',
     textAlign: 'center',
     lineHeight: 21,
@@ -602,7 +608,7 @@ const styles = StyleSheet.create({
   sheetDragHint: {
     marginTop: 0,
     fontSize: 9,
-    fontWeight: '800',
+    fontFamily: FONT_POPPINS_BOLD,
     color: '#94A3B8',
     letterSpacing: 0.55,
     textTransform: 'uppercase',
@@ -709,7 +715,7 @@ const styles = StyleSheet.create({
   d0CtaChipTitleLight: {
     flexShrink: 1,
     fontSize: 14,
-    fontWeight: '900',
+    fontFamily: FONT_POPPINS_BOLD,
     color: '#FFFFFF',
     letterSpacing: -0.35,
     textAlign: 'center',
@@ -735,7 +741,7 @@ const styles = StyleSheet.create({
   d0CtaChipTitleOutlined: {
     flexShrink: 1,
     fontSize: 14,
-    fontWeight: '900',
+    fontFamily: FONT_POPPINS_BOLD,
     letterSpacing: -0.35,
     color: themeColors.primary,
     textAlign: 'center',
@@ -776,14 +782,14 @@ const styles = StyleSheet.create({
   d0CtaLeft: { flex: 1 },
   d0CtaTitle: {
     fontSize: 18,
-    fontWeight: '900',
+    fontFamily: FONT_POPPINS_BOLD,
     color: '#FFF',
     letterSpacing: -0.4,
     marginBottom: 2,
   },
   d0CtaSub: {
     fontSize: 13,
-    fontWeight: '500',
+    fontFamily: FONT_POPPINS_MEDIUM,
     color: 'rgba(255,255,255,0.8)',
   },
   d0CtaArrow: {
@@ -803,7 +809,7 @@ const styles = StyleSheet.create({
   },
   d0SectionTitle: {
     fontSize: 16,
-    fontWeight: '800',
+    fontFamily: FONT_POPPINS_BOLD,
     color: '#0F172A',
     letterSpacing: -0.3,
   },
@@ -823,26 +829,26 @@ const styles = StyleSheet.create({
   },
   d0BuildBackLabel: {
     fontSize: 14,
-    fontWeight: '700',
+    fontFamily: FONT_POPPINS_BOLD,
     color: '#0F172A',
   },
   d0BuildSectionTitle: {
     fontSize: 20,
-    fontWeight: '900',
+    fontFamily: FONT_POPPINS_BOLD,
     color: '#0F172A',
     letterSpacing: -0.4,
     marginBottom: 4,
   },
   d0BuildHint: {
     fontSize: 13,
-    fontWeight: '600',
+    fontFamily: FONT_POPPINS_SEMIBOLD,
     color: '#64748B',
     lineHeight: 18,
     marginBottom: 12,
   },
   d0SheetFabHint: {
     fontSize: 14,
-    fontWeight: '600',
+    fontFamily: FONT_POPPINS_SEMIBOLD,
     color: '#64748B',
     lineHeight: 20,
     marginBottom: 14,
@@ -872,7 +878,7 @@ const styles = StyleSheet.create({
   },
   d0NearbyEyebrow: {
     fontSize: 10,
-    fontWeight: '700',
+    fontFamily: FONT_POPPINS_BOLD,
     letterSpacing: 1.2,
     textTransform: 'uppercase',
     marginBottom: 6,
@@ -897,43 +903,53 @@ const styles = StyleSheet.create({
   },
   d0NearbyTitle: {
     fontSize: 16,
-    fontWeight: '800',
+    fontFamily: FONT_POPPINS_BOLD,
     letterSpacing: -0.3,
   },
   d0NearbySubtitle: {
     marginTop: 2,
     fontSize: 12,
-    fontWeight: '500',
+    fontFamily: FONT_POPPINS_MEDIUM,
     letterSpacing: 0.1,
   },
   d0NearbyScrollContent: {
-    paddingRight: 6,
+    paddingRight: 10,
+    paddingBottom: 2,
   },
   d0NearbyCard: {
-    width: 162,
-    borderRadius: 14,
+    width: 188,
+    borderRadius: 16,
     borderWidth: 1,
-    padding: 8,
-    marginRight: 10,
+    padding: 7,
+    marginRight: 12,
     ...Platform.select({
       ios: {
-        shadowOffset: { width: 0, height: 8 },
-        shadowOpacity: 0.12,
-        shadowRadius: 14,
+        shadowOffset: { width: 0, height: 10 },
+        shadowOpacity: 0.14,
+        shadowRadius: 16,
       },
-      android: { elevation: 4 },
+      android: { elevation: 5 },
     }),
   },
   d0NearbyCardImageWrap: {
     width: '100%',
-    height: 82,
-    borderRadius: 11,
+    height: 146,
+    borderRadius: 13,
     overflow: 'hidden',
     marginBottom: 8,
   },
   d0NearbyCardImage: {
     width: '100%',
     height: '100%',
+  },
+  d0NearbyImageOverlay: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    paddingHorizontal: 10,
+    paddingTop: 24,
+    paddingBottom: 10,
   },
   d0NearbyCardSkeleton: {
     overflow: 'hidden',
@@ -959,22 +975,60 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   d0NearbyCardBody: {
-    minHeight: 48,
+    minHeight: 30,
+    justifyContent: 'center',
   },
   d0NearbyCardTitle: {
-    fontSize: 13,
-    fontWeight: '700',
-    lineHeight: 17,
-    marginBottom: 6,
+    fontSize: 14,
+    fontFamily: FONT_POPPINS_BOLD,
+    lineHeight: 19,
+    marginBottom: 10,
+  },
+  d0NearbyCardTitleOnImage: {
+    fontSize: 14,
+    fontFamily: FONT_POPPINS_BOLD,
+    lineHeight: 18,
+    color: '#FFFFFF',
+    marginBottom: 8,
+    textShadowColor: 'rgba(2,6,23,0.5)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 2,
   },
   d0NearbyCardMetaRow: {
     flexDirection: 'row',
     alignItems: 'center',
+  },
+  d0NearbyDistancePill: {
+    flexDirection: 'row',
+    alignItems: 'center',
     gap: 4,
+    borderRadius: 999,
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+    maxWidth: '100%',
+  },
+  d0NearbyDistancePillOnImage: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    borderRadius: 999,
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+    backgroundColor: 'rgba(15,23,42,0.42)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.24)',
+    maxWidth: '100%',
   },
   d0NearbyCardMetaText: {
-    fontSize: 12,
-    fontWeight: '600',
+    fontSize: 11,
+    fontFamily: FONT_POPPINS_SEMIBOLD,
+    lineHeight: 14,
+  },
+  d0NearbyCardMetaTextOnImage: {
+    fontSize: 11,
+    fontFamily: FONT_POPPINS_SEMIBOLD,
+    lineHeight: 14,
+    color: '#F8FAFC',
   },
   d0QuickFindResultWrap: {
     width: '100%',
@@ -984,7 +1038,7 @@ const styles = StyleSheet.create({
   },
   d0QuickFindSpotName: {
     fontSize: 22,
-    fontWeight: '900',
+    fontFamily: FONT_POPPINS_BOLD,
     color: '#0F172A',
     letterSpacing: -0.4,
     marginBottom: 4,
@@ -1007,7 +1061,7 @@ const styles = StyleSheet.create({
   },
   d0QuickFindPrimaryBtnText: {
     fontSize: 16,
-    fontWeight: '800',
+    fontFamily: FONT_POPPINS_BOLD,
     color: '#FFFFFF',
   },
   d0QuickFindSecondaryBtn: {
@@ -1024,7 +1078,7 @@ const styles = StyleSheet.create({
   },
   d0QuickFindSecondaryBtnText: {
     fontSize: 15,
-    fontWeight: '700',
+    fontFamily: FONT_POPPINS_BOLD,
     color: '#475569',
   },
   quickFindCinematicRoot: {
@@ -1043,7 +1097,7 @@ const styles = StyleSheet.create({
   },
   quickFindCinematicEyebrow: {
     fontSize: 12,
-    fontWeight: '800',
+    fontFamily: FONT_POPPINS_BOLD,
     letterSpacing: 3.2,
     color: '#F4D78C',
     textTransform: 'uppercase',
@@ -1055,7 +1109,7 @@ const styles = StyleSheet.create({
   },
   quickFindCinematicTitle: {
     fontSize: 34,
-    fontWeight: '900',
+    fontFamily: FONT_POPPINS_BOLD,
     letterSpacing: -0.85,
     color: '#FFFFFF',
     textAlign: 'center',
@@ -1063,11 +1117,10 @@ const styles = StyleSheet.create({
     textShadowColor: 'rgba(0,0,0,0.75)',
     textShadowOffset: { width: 0, height: 2 },
     textShadowRadius: 12,
-    ...(Platform.OS === 'android' ? { fontFamily: 'sans-serif-black' } : {}),
   },
   quickFindCinematicSub: {
     fontSize: 16,
-    fontWeight: '600',
+    fontFamily: FONT_POPPINS_SEMIBOLD,
     color: 'rgba(255,255,255,0.95)',
     textAlign: 'center',
     lineHeight: 24,
@@ -1123,7 +1176,7 @@ const styles = StyleSheet.create({
   },
   d0SectionCountText: {
     fontSize: 12,
-    fontWeight: '800',
+    fontFamily: FONT_POPPINS_BOLD,
     color: '#64748B',
   },
   d0PlanCard: {
@@ -1170,8 +1223,8 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   d0PlanInfo: { flex: 1 },
-  d0PlanName: { fontSize: 15, fontWeight: '700', color: '#0F172A', marginBottom: 2 },
-  d0PlanMeta: { fontSize: 13, color: '#94A3B8', fontWeight: '500' },
+  d0PlanName: { fontSize: 15, fontFamily: FONT_POPPINS_BOLD, color: '#0F172A', marginBottom: 2 },
+  d0PlanMeta: { fontSize: 13, color: '#94A3B8', fontFamily: FONT_POPPINS_MEDIUM },
   d0ShareRow: {
     flexDirection: 'row',
     gap: 10,
@@ -1191,13 +1244,13 @@ const styles = StyleSheet.create({
   },
   d0ShareBtnText: {
     fontSize: 13,
-    fontWeight: '700',
+    fontFamily: FONT_POPPINS_BOLD,
     color: '#64748B',
   },
   d0CopyHint: {
     textAlign: 'center',
     fontSize: 13,
-    fontWeight: '800',
+    fontFamily: FONT_POPPINS_BOLD,
     color: themeColors.primary,
     marginTop: 8,
   },
@@ -1211,7 +1264,7 @@ const styles = StyleSheet.create({
   },
   d0JoinLabel: {
     fontSize: 13,
-    fontWeight: '800',
+    fontFamily: FONT_POPPINS_BOLD,
     color: '#0F172A',
     marginBottom: 8,
   },
@@ -1229,7 +1282,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#E2E8F0',
     fontSize: 15,
-    fontWeight: '700',
+    fontFamily: FONT_POPPINS_BOLD,
     color: '#0F172A',
     letterSpacing: 1,
   },
@@ -1241,7 +1294,7 @@ const styles = StyleSheet.create({
   },
   d0JoinBtnText: {
     fontSize: 14,
-    fontWeight: '800',
+    fontFamily: FONT_POPPINS_BOLD,
     color: '#FFFFFF',
   },
   planShareBanner: {
@@ -1256,7 +1309,7 @@ const styles = StyleSheet.create({
   },
   planShareBannerText: {
     fontSize: 13,
-    fontWeight: '600',
+    fontFamily: FONT_POPPINS_SEMIBOLD,
     color: '#64748B',
     textAlign: 'center',
     letterSpacing: 0.15,
@@ -1278,7 +1331,7 @@ const styles = StyleSheet.create({
   },
   sharePlanModalTitle: {
     fontSize: 18,
-    fontWeight: '800',
+    fontFamily: FONT_POPPINS_BOLD,
     color: '#0F172A',
     marginBottom: 6,
   },
@@ -1298,7 +1351,7 @@ const styles = StyleSheet.create({
   },
   sharePlanModalCode: {
     fontSize: 20,
-    fontWeight: '900',
+    fontFamily: FONT_POPPINS_BOLD,
     letterSpacing: 3,
     color: '#0F172A',
     textAlign: 'center',
@@ -1322,7 +1375,7 @@ const styles = StyleSheet.create({
   },
   sharePlanModalPermChipText: {
     fontSize: 13,
-    fontWeight: '800',
+    fontFamily: FONT_POPPINS_BOLD,
     color: '#64748B',
   },
   sharePlanModalActions: {
@@ -1341,7 +1394,7 @@ const styles = StyleSheet.create({
   },
   sharePlanModalBtnText: {
     fontSize: 14,
-    fontWeight: '800',
+    fontFamily: FONT_POPPINS_BOLD,
     color: '#FFFFFF',
   },
   sharePlanModalBtnTextDark: {
@@ -1356,7 +1409,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#E2E8F0',
     fontSize: 16,
-    fontWeight: '700',
+    fontFamily: FONT_POPPINS_BOLD,
     color: '#0F172A',
     marginBottom: 16,
   },
@@ -1401,14 +1454,14 @@ const styles = StyleSheet.create({
   },
   planPreviewSummaryTitle: {
     fontSize: 12,
-    fontWeight: '800',
+    fontFamily: FONT_POPPINS_BOLD,
     color: '#1A120A',
     letterSpacing: 0.3,
     textTransform: 'uppercase',
   },
   planPreviewSummarySpot: {
     fontSize: 12,
-    fontWeight: '700',
+    fontFamily: FONT_POPPINS_BOLD,
     color: '#1A120A',
     flex: 1,
   },
@@ -1446,7 +1499,7 @@ const styles = StyleSheet.create({
   },
   planSummaryHeaderTitle: {
     fontSize: 12,
-    fontWeight: '900',
+    fontFamily: FONT_POPPINS_BOLD,
     color: '#1A120A',
     letterSpacing: 0.35,
     textTransform: 'uppercase',
@@ -1477,7 +1530,7 @@ const styles = StyleSheet.create({
   },
   planPreviewSummaryIndex: {
     fontSize: 11,
-    fontWeight: '900',
+    fontFamily: FONT_POPPINS_BOLD,
     color: themeColors.primary,
     letterSpacing: 0.25,
   },
@@ -1494,7 +1547,7 @@ const styles = StyleSheet.create({
   },
   planPreviewSummaryMetaPillText: {
     fontSize: 10,
-    fontWeight: '800',
+    fontFamily: FONT_POPPINS_BOLD,
     color: themeColors.primary,
     letterSpacing: 0.25,
   },
@@ -1506,7 +1559,7 @@ const styles = StyleSheet.create({
   },
   planPreviewSummaryMetaPillAltText: {
     fontSize: 10,
-    fontWeight: '700',
+    fontFamily: FONT_POPPINS_BOLD,
     color: '#475569',
     letterSpacing: 0.2,
   },
@@ -1548,7 +1601,7 @@ const styles = StyleSheet.create({
   },
   planLuxuryActionBtnText: {
     fontSize: 12.5,
-    fontWeight: '900',
+    fontFamily: FONT_POPPINS_BOLD,
     letterSpacing: 0.2,
   },
   planLuxuryActionBtnTextPrimary: {
@@ -1580,7 +1633,7 @@ const styles = StyleSheet.create({
   },
   savePlanHeaderBtnText: {
     fontSize: 12,
-    fontWeight: '900',
+    fontFamily: FONT_POPPINS_BOLD,
     color: '#E9C877',
     letterSpacing: 0.6,
   },
@@ -1625,7 +1678,7 @@ const styles = StyleSheet.create({
   drawerPageHeaderSpacer: { width: 48, height: 48 },
   drawerPageHeaderTitle: {
     fontSize: 16,
-    fontWeight: '800',
+    fontFamily: FONT_POPPINS_BOLD,
     color: '#0F172A',
     letterSpacing: -0.35,
     textAlign: 'center',
@@ -1633,7 +1686,7 @@ const styles = StyleSheet.create({
   drawerPageHeaderMeta: {
     marginTop: 2,
     fontSize: 11,
-    fontWeight: '600',
+    fontFamily: FONT_POPPINS_SEMIBOLD,
     color: '#94A3B8',
     textAlign: 'center',
     letterSpacing: 0.15,
@@ -1652,7 +1705,7 @@ const styles = StyleSheet.create({
   gridTileIcon: {
     width: 36, height: 36, borderRadius: 10, alignItems: 'center', justifyContent: 'center', marginBottom: 6,
   },
-  gridTileLabel: { fontSize: 12, fontWeight: '600', color: '#334155', textAlign: 'center' },
+  gridTileLabel: { fontSize: 12, fontFamily: FONT_POPPINS_SEMIBOLD, color: '#334155', textAlign: 'center' },
 
   fixedButtonWrap: {
     paddingHorizontal: 24,
@@ -1666,7 +1719,7 @@ const styles = StyleSheet.create({
     ...Platform.select({ ios: { shadowColor: themeColors.primary, shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.18, shadowRadius: 8 }, android: { elevation: 4 } }),
   },
   continueButtonDisabled: { backgroundColor: '#E2E8F0' },
-  continueButtonText: { fontSize: 16, fontWeight: '700', color: '#FFFFFF' },
+  continueButtonText: { fontSize: 16, fontFamily: FONT_POPPINS_BOLD, color: '#FFFFFF' },
 
   // Generate button (food)
   generateButton: {
@@ -1675,7 +1728,7 @@ const styles = StyleSheet.create({
     ...Platform.select({ ios: { shadowColor: themeColors.primary, shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.18, shadowRadius: 8 }, android: { elevation: 4 } }),
   },
   generateButtonDisabled: { opacity: 0.8 },
-  generateButtonText: { fontSize: 16, fontWeight: '700', color: '#FFFFFF' },
+  generateButtonText: { fontSize: 16, fontFamily: FONT_POPPINS_BOLD, color: '#FFFFFF' },
 
   // ── Results (step 3) — tinted canvas so new layout is obvious vs plain white ──
   resultsScroll: {
@@ -1696,7 +1749,7 @@ const styles = StyleSheet.create({
   },
   planListEndFooterText: {
     fontSize: 12,
-    fontWeight: '600',
+    fontFamily: FONT_POPPINS_SEMIBOLD,
     color: '#64748B',
     lineHeight: 17,
     textAlign: 'center',
@@ -1800,13 +1853,13 @@ const styles = StyleSheet.create({
   },
   planTimeChipText: {
     fontSize: 10,
-    fontWeight: '800',
+    fontFamily: FONT_POPPINS_BOLD,
     color: '#FFFFFF',
     letterSpacing: 0.3,
   },
   planRowSpotTitle: {
     fontSize: 14,
-    fontWeight: '800',
+    fontFamily: FONT_POPPINS_BOLD,
     color: '#0F172A',
     letterSpacing: -0.2,
   },
@@ -1818,7 +1871,7 @@ const styles = StyleSheet.create({
   },
   planRowRatingInlineText: {
     fontSize: 12,
-    fontWeight: '700',
+    fontFamily: FONT_POPPINS_BOLD,
     color: '#64748B',
   },
   planRowEnhanceBtn: {
@@ -1833,7 +1886,7 @@ const styles = StyleSheet.create({
   },
   planRowEnhanceBtnText: {
     fontSize: 10,
-    fontWeight: '800',
+    fontFamily: FONT_POPPINS_BOLD,
     color: themeColors.primary,
     textAlign: 'center',
     lineHeight: 13,
@@ -1856,7 +1909,7 @@ const styles = StyleSheet.create({
   },
   planLuxuryOverviewEyebrow: {
     fontSize: 10,
-    fontWeight: '800',
+    fontFamily: FONT_POPPINS_BOLD,
     color: '#64748B',
     letterSpacing: 1.1,
     textTransform: 'uppercase',
@@ -1930,7 +1983,7 @@ const styles = StyleSheet.create({
   },
   planLuxuryOverviewMapBtnText: {
     fontSize: 12.5,
-    fontWeight: '900',
+    fontFamily: FONT_POPPINS_BOLD,
     color: '#7F0D1F',
     letterSpacing: 0.2,
   },
@@ -1948,7 +2001,7 @@ const styles = StyleSheet.create({
   },
   planLuxuryOverviewAddBtnText: {
     fontSize: 12.5,
-    fontWeight: '900',
+    fontFamily: FONT_POPPINS_BOLD,
     color: '#7A0E1E',
     letterSpacing: 0.28,
     textTransform: 'uppercase',
@@ -1989,7 +2042,7 @@ const styles = StyleSheet.create({
   },
   planLuxuryDayPillText: {
     fontSize: 11,
-    fontWeight: '800',
+    fontFamily: FONT_POPPINS_BOLD,
     color: '#FFFFFF',
     letterSpacing: 0.2,
   },
@@ -2012,7 +2065,7 @@ const styles = StyleSheet.create({
   planLuxuryOverviewContextLine: {
     marginTop: 2,
     fontSize: 10.5,
-    fontWeight: '700',
+    fontFamily: FONT_POPPINS_BOLD,
     color: '#64748B',
     letterSpacing: 0.3,
   },
@@ -2039,7 +2092,7 @@ const styles = StyleSheet.create({
   planLuxuryOverviewSubtitle: {
     marginTop: 0,
     fontSize: 10,
-    fontWeight: '700',
+    fontFamily: FONT_POPPINS_BOLD,
     textAlign: 'center',
     color: '#3A4355',
     lineHeight: 13,
@@ -2062,7 +2115,7 @@ const styles = StyleSheet.create({
   },
   planLuxuryOverviewShareBtnText: {
     fontSize: 12.5,
-    fontWeight: '900',
+    fontFamily: FONT_POPPINS_BOLD,
     color: '#7F0D1F',
     letterSpacing: 0.2,
   },
@@ -2084,7 +2137,7 @@ const styles = StyleSheet.create({
   },
   planLuxuryOverviewMetaChipText: {
     fontSize: 10.5,
-    fontWeight: '800',
+    fontFamily: FONT_POPPINS_BOLD,
     color: '#334155',
     letterSpacing: 0.7,
     textTransform: 'uppercase',
@@ -2112,7 +2165,7 @@ const styles = StyleSheet.create({
   },
   planLuxuryReelLabel: {
     fontSize: 10,
-    fontWeight: '800',
+    fontFamily: FONT_POPPINS_BOLD,
     color: '#64748B',
     letterSpacing: 1,
     textTransform: 'uppercase',
@@ -2239,13 +2292,13 @@ const styles = StyleSheet.create({
   },
   planLuxuryStopGuideHighlight: {
     fontSize: 11.5,
-    fontWeight: '800',
+    fontFamily: FONT_POPPINS_BOLD,
     color: '#1E293B',
     letterSpacing: 0.1,
   },
   planLuxuryStopGuideLabel: {
     fontSize: 9.5,
-    fontWeight: '800',
+    fontFamily: FONT_POPPINS_BOLD,
     color: '#64748B',
     textTransform: 'uppercase',
     letterSpacing: 0.5,
@@ -2253,7 +2306,7 @@ const styles = StyleSheet.create({
   },
   planLuxuryStopTitle: {
     fontSize: 14,
-    fontWeight: '800',
+    fontFamily: FONT_POPPINS_BOLD,
     color: '#1A120A',
     letterSpacing: -0.2,
     lineHeight: 18,
@@ -2269,7 +2322,7 @@ const styles = StyleSheet.create({
     color: '#475569',
     lineHeight: 16,
     marginTop: 1,
-    fontWeight: '600',
+    fontFamily: FONT_POPPINS_SEMIBOLD,
   },
   planLuxuryRowFlashOverlay: {
     ...StyleSheet.absoluteFillObject,
@@ -2277,7 +2330,7 @@ const styles = StyleSheet.create({
     borderRadius: 18,
   },
   planLuxuryStopGuideTextStrong: {
-    fontWeight: '800',
+    fontFamily: FONT_POPPINS_BOLD,
     color: '#273447',
   },
   planLuxuryStopGuideTextExpanded: {
@@ -2293,7 +2346,7 @@ const styles = StyleSheet.create({
   },
   planLuxuryReasonToggleText: {
     fontSize: 11,
-    fontWeight: '800',
+    fontFamily: FONT_POPPINS_BOLD,
     color: themeColors.primary,
     letterSpacing: 0.15,
   },
@@ -2308,7 +2361,7 @@ const styles = StyleSheet.create({
   },
   planLuxuryCategoryPillText: {
     fontSize: 9,
-    fontWeight: '800',
+    fontFamily: FONT_POPPINS_BOLD,
     letterSpacing: 0.4,
     textTransform: 'uppercase',
   },
@@ -2333,7 +2386,7 @@ const styles = StyleSheet.create({
   },
   planLuxuryUserPickPillText: {
     fontSize: 10,
-    fontWeight: '800',
+    fontFamily: FONT_POPPINS_BOLD,
     color: '#059669',
     letterSpacing: 0.2,
   },
@@ -2351,7 +2404,7 @@ const styles = StyleSheet.create({
   },
   planLuxuryVenueTagFoodTruckText: {
     fontSize: 10,
-    fontWeight: '800',
+    fontFamily: FONT_POPPINS_BOLD,
     color: '#B45309',
     letterSpacing: 0.2,
   },
@@ -2369,7 +2422,7 @@ const styles = StyleSheet.create({
   },
   planLuxuryVenueTagSnackFocusText: {
     fontSize: 10,
-    fontWeight: '800',
+    fontFamily: FONT_POPPINS_BOLD,
     color: '#0369A1',
     letterSpacing: 0.2,
   },
@@ -2387,7 +2440,7 @@ const styles = StyleSheet.create({
   },
   planLuxuryVenueTagSnackMenuText: {
     fontSize: 10,
-    fontWeight: '800',
+    fontFamily: FONT_POPPINS_BOLD,
     color: '#4338CA',
     letterSpacing: 0.2,
   },
@@ -2399,7 +2452,7 @@ const styles = StyleSheet.create({
   },
   planLuxuryRatingText: {
     fontSize: 12,
-    fontWeight: '700',
+    fontFamily: FONT_POPPINS_BOLD,
     color: '#8E8E93',
   },
   planLuxuryEnhanceBtnWrap: {
@@ -2472,7 +2525,7 @@ const styles = StyleSheet.create({
   planLuxuryEnhanceBtnText: {
     marginTop: 1,
     fontSize: 9.5,
-    fontWeight: '900',
+    fontFamily: FONT_POPPINS_BOLD,
     color: '#FFFFFF',
     letterSpacing: 0.5,
     textTransform: 'uppercase',
@@ -2551,7 +2604,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  loadingSpotPreviewName: { fontSize: 10, fontWeight: '600', color: '#64748B', marginTop: 4, textAlign: 'center' },
+  loadingSpotPreviewName: { fontSize: 10, fontFamily: FONT_POPPINS_SEMIBOLD, color: '#64748B', marginTop: 4, textAlign: 'center' },
   loadingSheetFactStrip: {
     width: '100%',
     flexDirection: 'row',
@@ -2580,7 +2633,7 @@ const styles = StyleSheet.create({
   },
   loadingSheetFactLabel: {
     fontSize: 10,
-    fontWeight: '900',
+    fontFamily: FONT_POPPINS_BOLD,
     color: themeColors.primary,
     letterSpacing: 0.6,
     textTransform: 'uppercase',
@@ -2588,7 +2641,7 @@ const styles = StyleSheet.create({
   },
   loadingSheetFactBody: {
     fontSize: 12,
-    fontWeight: '600',
+    fontFamily: FONT_POPPINS_SEMIBOLD,
     color: '#475569',
     lineHeight: 17,
   },
@@ -2607,7 +2660,7 @@ const styles = StyleSheet.create({
   },
   loadingBumpTitle: {
     fontSize: 17,
-    fontWeight: '800',
+    fontFamily: FONT_POPPINS_BOLD,
     color: '#0F172A',
     textAlign: 'center',
     marginBottom: 4,
@@ -2616,7 +2669,7 @@ const styles = StyleSheet.create({
   loadingBumpSub: {
     fontSize: 13,
     color: '#64748B',
-    fontWeight: '600',
+    fontFamily: FONT_POPPINS_SEMIBOLD,
     marginBottom: 18,
   },
   loadingBumpSteps: { gap: 10, width: '100%', paddingHorizontal: 4 },
@@ -2635,19 +2688,19 @@ const styles = StyleSheet.create({
     backgroundColor: themeColors.primary,
     borderColor: themeColors.primary,
   },
-  loadingBumpStepText: { fontSize: 13, fontWeight: '600', color: '#64748B' },
-  loadingBumpStepTextDone: { color: '#0F172A', fontWeight: '700' },
+  loadingBumpStepText: { fontSize: 13, fontFamily: FONT_POPPINS_SEMIBOLD, color: '#64748B' },
+  loadingBumpStepTextDone: { color: '#0F172A', fontFamily: FONT_POPPINS_BOLD },
   loadingPulse: {
     width: 96, height: 96, borderRadius: 48, backgroundColor: themeColors.primaryMuted,
     alignItems: 'center', justifyContent: 'center', marginBottom: 28,
     borderWidth: 2, borderColor: themeColors.primaryMuted,
   },
-  loadingTitle: { fontSize: 24, fontWeight: '800', color: '#0F172A', marginBottom: 8, letterSpacing: -0.4 },
-  loadingSubtext: { fontSize: 16, color: '#475569', textAlign: 'center', marginBottom: 36, fontWeight: '600' },
+  loadingTitle: { fontSize: 24, fontFamily: FONT_POPPINS_BOLD, color: '#0F172A', marginBottom: 8, letterSpacing: -0.4 },
+  loadingSubtext: { fontSize: 16, color: '#475569', textAlign: 'center', marginBottom: 36, fontFamily: FONT_POPPINS_SEMIBOLD },
   loadingSteps: { gap: 18, width: '100%', paddingHorizontal: 12 },
   loadingStepRow: { flexDirection: 'row', alignItems: 'center', gap: 16 },
   loadingDot: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center' },
-  loadingStepText: { fontSize: 16, color: '#334155', fontWeight: '600' },
+  loadingStepText: { fontSize: 16, color: '#334155', fontFamily: FONT_POPPINS_SEMIBOLD },
 
   // Error
   errorWrap: { paddingHorizontal: 24, flex: 1, justifyContent: 'center' },
@@ -2668,8 +2721,8 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     marginBottom: 16,
   },
-  errorTitle: { fontSize: 18, fontWeight: '800', color: '#991B1B', marginBottom: 8 },
-  errorText: { fontSize: 15, color: '#B91C1C', fontWeight: '600', lineHeight: 22, textAlign: 'center' },
+  errorTitle: { fontSize: 18, fontFamily: FONT_POPPINS_BOLD, color: '#991B1B', marginBottom: 8 },
+  errorText: { fontSize: 15, color: '#B91C1C', fontFamily: FONT_POPPINS_SEMIBOLD, lineHeight: 22, textAlign: 'center' },
   retryButton: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -2682,8 +2735,8 @@ const styles = StyleSheet.create({
     borderColor: themeColors.primary,
     backgroundColor: themeColors.primaryMuted,
   },
-  retryButtonText: { fontSize: 16, fontWeight: '700', color: themeColors.primary },
-  emptyResults: { fontSize: 15, color: '#64748B', textAlign: 'center', paddingVertical: 32, fontWeight: '500' },
+  retryButtonText: { fontSize: 16, fontFamily: FONT_POPPINS_BOLD, color: themeColors.primary },
+  emptyResults: { fontSize: 15, color: '#64748B', textAlign: 'center', paddingVertical: 32, fontFamily: FONT_POPPINS_MEDIUM },
 
   successIconCircle: {
     width: 64,
@@ -2734,7 +2787,7 @@ const styles = StyleSheet.create({
   },
   planStickyControlBtnText: {
     fontSize: 12,
-    fontWeight: '800',
+    fontFamily: FONT_POPPINS_BOLD,
     color: '#1A120A',
     letterSpacing: 0.2,
   },
@@ -2797,30 +2850,30 @@ const styles = StyleSheet.create({
   },
   planMastheadTitleStrong: {
     fontSize: 17,
-    fontWeight: '900',
+    fontFamily: FONT_POPPINS_BOLD,
     color: '#0F172A',
     letterSpacing: -0.45,
   },
   planMastheadTitleSoft: {
     fontSize: 16,
-    fontWeight: '700',
+    fontFamily: FONT_POPPINS_BOLD,
     color: '#64748B',
     letterSpacing: -0.35,
   },
   planMastheadMetaLine: {
     marginTop: 3,
     fontSize: 12,
-    fontWeight: '600',
+    fontFamily: FONT_POPPINS_SEMIBOLD,
     letterSpacing: 0.05,
   },
   planMastheadMetaEm: {
     fontSize: 12,
-    fontWeight: '800',
+    fontFamily: FONT_POPPINS_BOLD,
     color: themeColors.primary,
   },
   planMastheadMetaSep: {
     fontSize: 12,
-    fontWeight: '600',
+    fontFamily: FONT_POPPINS_SEMIBOLD,
     color: '#94A3B8',
   },
   planMastheadActions: {
@@ -2831,7 +2884,7 @@ const styles = StyleSheet.create({
   },
   iv2Eyebrow: {
     fontSize: 10,
-    fontWeight: '800',
+    fontFamily: FONT_POPPINS_BOLD,
     color: '#94a3b8',
     letterSpacing: 1.4,
     textTransform: 'uppercase',
@@ -2839,19 +2892,19 @@ const styles = StyleSheet.create({
   iv2Headline: {
     marginTop: 4,
     fontSize: 24,
-    fontWeight: '800',
+    fontFamily: FONT_POPPINS_BOLD,
     letterSpacing: -0.65,
     lineHeight: 28,
   },
   iv2HeadlineLead: {
     color: '#0f172a',
-    fontWeight: '900',
+    fontFamily: FONT_POPPINS_BOLD,
     letterSpacing: -0.65,
     fontSize: 24,
   },
   iv2HeadlineTrail: {
     color: '#64748b',
-    fontWeight: '700',
+    fontFamily: FONT_POPPINS_BOLD,
     fontSize: 22,
     letterSpacing: -0.45,
   },
@@ -2864,26 +2917,26 @@ const styles = StyleSheet.create({
   },
   iv2StatsEm: {
     fontSize: 17,
-    fontWeight: '900',
+    fontFamily: FONT_POPPINS_BOLD,
     color: themeColors.primary,
     letterSpacing: -0.4,
   },
   iv2StatsWord: {
     fontSize: 13,
-    fontWeight: '600',
+    fontFamily: FONT_POPPINS_SEMIBOLD,
     color: '#64748b',
     marginRight: 2,
   },
   iv2StatsSep: {
     fontSize: 14,
-    fontWeight: '500',
+    fontFamily: FONT_POPPINS_MEDIUM,
     color: '#cbd5e1',
     marginHorizontal: 2,
   },
   iv2Hint: {
     marginTop: 10,
     fontSize: 11,
-    fontWeight: '600',
+    fontFamily: FONT_POPPINS_SEMIBOLD,
     color: '#94a3b8',
     lineHeight: 15,
   },
@@ -2907,7 +2960,7 @@ const styles = StyleSheet.create({
   },
   iv2MapOutlineText: {
     fontSize: 14,
-    fontWeight: '800',
+    fontFamily: FONT_POPPINS_BOLD,
     color: themeColors.primary,
     letterSpacing: 0.15,
   },
@@ -2934,7 +2987,7 @@ const styles = StyleSheet.create({
   iv2CopyToast: {
     marginTop: 6,
     fontSize: 11,
-    fontWeight: '800',
+    fontFamily: FONT_POPPINS_BOLD,
     color: themeColors.primary,
     letterSpacing: 0.3,
   },
@@ -2966,14 +3019,14 @@ const styles = StyleSheet.create({
   },
   iv2SectionGridTitle: {
     fontSize: 15,
-    fontWeight: '800',
+    fontFamily: FONT_POPPINS_BOLD,
     color: '#0f172a',
     letterSpacing: -0.25,
   },
   iv2SectionGridMeta: {
     marginTop: 1,
     fontSize: 11,
-    fontWeight: '600',
+    fontFamily: FONT_POPPINS_SEMIBOLD,
     color: '#94a3b8',
     letterSpacing: 0.1,
   },
@@ -3032,7 +3085,7 @@ const styles = StyleSheet.create({
   },
   iv2GridTileNumBadgeText: {
     fontSize: 13,
-    fontWeight: '900',
+    fontFamily: FONT_POPPINS_BOLD,
     color: '#FFFFFF',
   },
   iv2GridTileRating: {
@@ -3046,7 +3099,7 @@ const styles = StyleSheet.create({
   },
   iv2GridTileRatingText: {
     fontSize: 10,
-    fontWeight: '800',
+    fontFamily: FONT_POPPINS_BOLD,
     color: '#0f172a',
   },
   iv2GridTileBottom: {
@@ -3061,7 +3114,7 @@ const styles = StyleSheet.create({
   },
   iv2GridTileSpot: {
     fontSize: 13,
-    fontWeight: '800',
+    fontFamily: FONT_POPPINS_BOLD,
     color: '#FFFFFF',
     letterSpacing: -0.2,
     lineHeight: 17,
@@ -3157,7 +3210,7 @@ const styles = StyleSheet.create({
   },
   stopDialogExploreBadgeText: {
     fontSize: 12,
-    fontWeight: '700',
+    fontFamily: FONT_POPPINS_BOLD,
     color: '#FFFFFF',
     letterSpacing: 0.3,
   },
@@ -3169,7 +3222,7 @@ const styles = StyleSheet.create({
   },
   stopDialogExploreNumber: {
     fontSize: 38,
-    fontWeight: '900',
+    fontFamily: FONT_POPPINS_BOLD,
     color: 'rgba(255,255,255,0.12)',
     letterSpacing: -2,
   },
@@ -3185,7 +3238,7 @@ const styles = StyleSheet.create({
   },
   stopDialogExploreTitle: {
     fontSize: 22,
-    fontWeight: '900',
+    fontFamily: FONT_POPPINS_BOLD,
     color: '#FFFFFF',
     lineHeight: 28,
     letterSpacing: -0.45,
@@ -3216,7 +3269,7 @@ const styles = StyleSheet.create({
   stopDialogExploreInfoText: {
     fontSize: 12,
     color: 'rgba(255,255,255,0.9)',
-    fontWeight: '600',
+    fontFamily: FONT_POPPINS_SEMIBOLD,
     maxWidth: 160,
   },
   stopDialogExploreGrad: {
@@ -3276,7 +3329,7 @@ const styles = StyleSheet.create({
   },
   stopDialogStackBackTitle: {
     fontSize: 13,
-    fontWeight: '800',
+    fontFamily: FONT_POPPINS_BOLD,
     color: '#FFFFFF',
     letterSpacing: -0.25,
     lineHeight: 17,
@@ -3375,7 +3428,7 @@ const styles = StyleSheet.create({
   },
   stopDialogUnifiedActionBtnText: {
     fontSize: 11,
-    fontWeight: '800',
+    fontFamily: FONT_POPPINS_BOLD,
     color: themeColors.primary,
     textAlign: 'center',
     lineHeight: 14,
@@ -3417,7 +3470,7 @@ const styles = StyleSheet.create({
   },
   stopDialogLuxuryRatingValue: {
     fontSize: 12,
-    fontWeight: '800',
+    fontFamily: FONT_POPPINS_BOLD,
     color: '#636366',
     letterSpacing: -0.15,
   },
@@ -3444,7 +3497,7 @@ const styles = StyleSheet.create({
   },
   stopDialogLuxuryCategoryPillText: {
     fontSize: 10,
-    fontWeight: '800',
+    fontFamily: FONT_POPPINS_BOLD,
     letterSpacing: 0.15,
   },
   stopDialogLuxurySectionCard: {
@@ -3483,14 +3536,14 @@ const styles = StyleSheet.create({
   stopDialogLuxurySectionTitle: {
     flex: 1,
     fontSize: 16,
-    fontWeight: '700',
+    fontFamily: FONT_POPPINS_BOLD,
     color: '#1C1917',
     letterSpacing: -0.45,
     lineHeight: 20,
   },
   stopDialogLuxuryBody: {
     fontSize: 14,
-    fontWeight: '400',
+    fontFamily: FONT_POPPINS_REGULAR,
     color: '#57534E',
     lineHeight: 22,
     letterSpacing: -0.1,
@@ -3522,7 +3575,7 @@ const styles = StyleSheet.create({
   },
   stopDialogLuxuryNotesTagText: {
     fontSize: 10,
-    fontWeight: '800',
+    fontFamily: FONT_POPPINS_BOLD,
     color: '#FFFFFF',
     letterSpacing: 0.6,
     textTransform: 'uppercase',
@@ -3531,7 +3584,7 @@ const styles = StyleSheet.create({
     flexShrink: 1,
     minWidth: 0,
     fontSize: 13,
-    fontWeight: '600',
+    fontFamily: FONT_POPPINS_SEMIBOLD,
     color: '#A16207',
     letterSpacing: -0.2,
   },
@@ -3557,7 +3610,7 @@ const styles = StyleSheet.create({
   },
   stopDialogLuxuryPillText: {
     fontSize: 11,
-    fontWeight: '800',
+    fontFamily: FONT_POPPINS_BOLD,
     color: '#3C3C43',
     letterSpacing: 0.05,
   },
@@ -3591,7 +3644,7 @@ const styles = StyleSheet.create({
   },
   stopDialogSpotTitle: {
     fontSize: 17,
-    fontWeight: '800',
+    fontFamily: FONT_POPPINS_BOLD,
     color: '#0f172a',
     letterSpacing: -0.35,
     lineHeight: 21,
@@ -3604,7 +3657,7 @@ const styles = StyleSheet.create({
   },
   stopDialogRatingText: {
     fontSize: 14,
-    fontWeight: '800',
+    fontFamily: FONT_POPPINS_BOLD,
     color: '#475569',
   },
   stopDialogClose: {
@@ -3614,7 +3667,7 @@ const styles = StyleSheet.create({
   },
   stopDialogSectionLabel: {
     fontSize: 11,
-    fontWeight: '800',
+    fontFamily: FONT_POPPINS_BOLD,
     color: '#94a3b8',
     letterSpacing: 1.4,
     textTransform: 'uppercase',
@@ -3631,7 +3684,7 @@ const styles = StyleSheet.create({
   },
   stopDialogDescText: {
     fontSize: 16,
-    fontWeight: '600',
+    fontFamily: FONT_POPPINS_SEMIBOLD,
     color: '#334155',
     lineHeight: 24,
   },
@@ -3663,7 +3716,7 @@ const styles = StyleSheet.create({
   },
   stopDialogBtnPrimaryText: {
     fontSize: 15,
-    fontWeight: '800',
+    fontFamily: FONT_POPPINS_BOLD,
     color: '#FFFFFF',
   },
   stopDialogBtnGhost: {
@@ -3673,7 +3726,7 @@ const styles = StyleSheet.create({
   },
   stopDialogBtnGhostText: {
     fontSize: 14,
-    fontWeight: '800',
+    fontFamily: FONT_POPPINS_BOLD,
     color: themeColors.primary,
   },
 
@@ -3689,7 +3742,7 @@ const styles = StyleSheet.create({
   iv2FooterText: {
     flex: 1,
     fontSize: 11,
-    fontWeight: '600',
+    fontFamily: FONT_POPPINS_SEMIBOLD,
     color: '#94a3b8',
     lineHeight: 16,
     letterSpacing: 0.15,
@@ -3705,8 +3758,8 @@ const styles = StyleSheet.create({
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
     paddingHorizontal: 28, paddingTop: 26, paddingBottom: 22,
   },
-  bpLabel: { fontSize: 12, fontWeight: '800', color: '#64748B', letterSpacing: 1.6 },
-  bpValue: { fontSize: 28, fontWeight: '800', color: '#0F172A', marginTop: 6, letterSpacing: -0.5 },
+  bpLabel: { fontSize: 12, fontFamily: FONT_POPPINS_BOLD, color: '#64748B', letterSpacing: 1.6 },
+  bpValue: { fontSize: 28, fontFamily: FONT_POPPINS_BOLD, color: '#0F172A', marginTop: 6, letterSpacing: -0.5 },
   bpDivider: {
     width: 52, height: 52, borderRadius: 26, borderWidth: 2, borderColor: 'rgba(200,16,46,0.15)',
     backgroundColor: 'rgba(200,16,46,0.08)', alignItems: 'center', justifyContent: 'center',
@@ -3720,15 +3773,15 @@ const styles = StyleSheet.create({
   },
   bpBudgetWrap: { alignItems: 'center' },
   bpBudgetRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 8 },
-  bpBudgetTitle: { fontSize: 12, fontWeight: '800', color: '#475569', letterSpacing: 1.2, textTransform: 'uppercase' },
-  bpBudgetAmount: { fontSize: 30, fontWeight: '900', color: themeColors.primary, letterSpacing: 0.5 },
-  bpBudgetSub: { fontSize: 14, color: '#64748B', marginTop: 6, fontWeight: '600' },
+  bpBudgetTitle: { fontSize: 12, fontFamily: FONT_POPPINS_BOLD, color: '#475569', letterSpacing: 1.2, textTransform: 'uppercase' },
+  bpBudgetAmount: { fontSize: 30, fontFamily: FONT_POPPINS_BOLD, color: themeColors.primary, letterSpacing: 0.5 },
+  bpBudgetSub: { fontSize: 14, color: '#64748B', marginTop: 6, fontFamily: FONT_POPPINS_SEMIBOLD },
   bpAdviceWrap: {
     flexDirection: 'row', alignItems: 'flex-start', gap: 12,
     backgroundColor: '#FFFBEB', borderTopWidth: 1, borderTopColor: '#FDE68A',
     paddingHorizontal: 26, paddingVertical: 20, borderBottomLeftRadius: 24, borderBottomRightRadius: 24,
   },
-  bpAdviceText: { fontSize: 15, color: '#92400E', lineHeight: 22, flex: 1, fontStyle: 'italic', fontWeight: '600' },
+  bpAdviceText: { fontSize: 15, color: '#92400E', lineHeight: 22, flex: 1, fontStyle: 'italic', fontFamily: FONT_POPPINS_SEMIBOLD },
 
   // ── Itinerary list (flat rows + iv2 masthead / sections) ──
   bumpItinSection: { marginBottom: 14 },
@@ -3746,7 +3799,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     marginRight: 10,
   },
-  bumpItinNumText: { fontSize: 12, fontWeight: '800', color: '#FFFFFF' },
+  bumpItinNumText: { fontSize: 12, fontFamily: FONT_POPPINS_BOLD, color: '#FFFFFF' },
   bumpItinThumbWrap: {
     position: 'relative',
     width: 50,
@@ -3776,9 +3829,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 2,
   },
-  bumpItinRatingPillText: { fontSize: 9, fontWeight: '800', color: '#0F172A' },
+  bumpItinRatingPillText: { fontSize: 9, fontFamily: FONT_POPPINS_BOLD, color: '#0F172A' },
   bumpItinSummary: { flex: 1, minWidth: 0 },
-  bumpItinName: { fontSize: 15, fontWeight: '800', color: '#0F172A', marginBottom: 3, letterSpacing: -0.2 },
+  bumpItinName: { fontSize: 15, fontFamily: FONT_POPPINS_BOLD, color: '#0F172A', marginBottom: 3, letterSpacing: -0.2 },
   bumpItinReason: { fontSize: 12, color: '#64748B', lineHeight: 16 },
   bumpItinActionRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 6 },
   bumpItinActionIcon: { padding: 2 },
@@ -3833,13 +3886,13 @@ const styles = StyleSheet.create({
   bumpItinExpandedBtnPrimary: {
     backgroundColor: themeColors.primary,
   },
-  bumpItinExpandedBtnPrimaryText: { fontSize: 13, fontWeight: '700', color: '#FFFFFF' },
+  bumpItinExpandedBtnPrimaryText: { fontSize: 13, fontFamily: FONT_POPPINS_BOLD, color: '#FFFFFF' },
   bumpItinExpandedBtnSecondary: {
     backgroundColor: 'rgba(200,16,46,0.08)',
     borderWidth: 1,
     borderColor: 'rgba(200,16,46,0.2)',
   },
-  bumpItinExpandedBtnSecondaryText: { fontSize: 13, fontWeight: '600', color: themeColors.primary },
+  bumpItinExpandedBtnSecondaryText: { fontSize: 13, fontFamily: FONT_POPPINS_SEMIBOLD, color: themeColors.primary },
 
   // ── Itinerary section (legacy) ──
   itinSection: { marginBottom: 16 },
@@ -3852,9 +3905,9 @@ const styles = StyleSheet.create({
     width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center',
   },
   secBannerText: { flex: 1, marginLeft: 16 },
-  secBannerTitle: { fontSize: 21, fontWeight: '800', letterSpacing: -0.3 },
-  secBannerSub: { fontSize: 14, fontWeight: '600', opacity: 0.85, marginTop: 2 },
-  secBannerCount: { fontSize: 14, fontWeight: '700' },
+  secBannerTitle: { fontSize: 21, fontFamily: FONT_POPPINS_BOLD, letterSpacing: -0.3 },
+  secBannerSub: { fontSize: 14, fontFamily: FONT_POPPINS_SEMIBOLD, opacity: 0.85, marginTop: 2 },
+  secBannerCount: { fontSize: 14, fontFamily: FONT_POPPINS_BOLD },
 
   // ── Destination row (number + card) ──
   destRow: { flexDirection: 'row', paddingLeft: 6 },
@@ -3863,7 +3916,7 @@ const styles = StyleSheet.create({
   destNumCircle: {
     width: 32, height: 32, borderRadius: 16, alignItems: 'center', justifyContent: 'center', zIndex: 2,
   },
-  destNum: { fontSize: 14, fontWeight: '800', color: '#FFFFFF' },
+  destNum: { fontSize: 14, fontFamily: FONT_POPPINS_BOLD, color: '#FFFFFF' },
   destConnector: { flex: 1, width: 2, borderRadius: 1, marginTop: 8 },
 
   // Card
@@ -3876,20 +3929,20 @@ const styles = StyleSheet.create({
     flexDirection: 'row', alignItems: 'center', gap: 10,
     paddingHorizontal: 16, paddingVertical: 10,
   },
-  destStripText: { fontSize: 11, fontWeight: '800', letterSpacing: 1.2 },
+  destStripText: { fontSize: 11, fontFamily: FONT_POPPINS_BOLD, letterSpacing: 1.2 },
   destBody: {
     flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingTop: 14, paddingBottom: 10,
   },
   destIconBox: {
     width: 48, height: 48, borderRadius: 16, alignItems: 'center', justifyContent: 'center', marginRight: 16,
   },
-  destName: { flex: 1, fontSize: 18, fontWeight: '700', color: '#0F172A', lineHeight: 24 },
+  destName: { flex: 1, fontSize: 18, fontFamily: FONT_POPPINS_BOLD, color: '#0F172A', lineHeight: 24 },
   destReasonWrap: {
     flexDirection: 'row', marginHorizontal: 16, marginBottom: 18, marginTop: 8,
     backgroundColor: '#FFFBEB', borderRadius: 16, padding: 16, gap: 12,
   },
   destReasonQuote: { marginTop: 2 },
-  destReasonText: { flex: 1, fontSize: 15, color: '#78350F', lineHeight: 22, fontStyle: 'italic', fontWeight: '600' },
+  destReasonText: { flex: 1, fontSize: 15, color: '#78350F', lineHeight: 22, fontStyle: 'italic', fontFamily: FONT_POPPINS_SEMIBOLD },
   destARBtn: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -3901,7 +3954,7 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(200,16,46,0.08)',
     borderRadius: 12,
   },
-  destARBtnText: { fontSize: 14, fontWeight: '700', color: themeColors.primary },
+  destARBtnText: { fontSize: 14, fontFamily: FONT_POPPINS_BOLD, color: themeColors.primary },
 
   // ── Passport stamp footer (legacy) ──
   stampFooter: { alignItems: 'center', marginTop: 28, paddingBottom: 12 },
@@ -3910,9 +3963,9 @@ const styles = StyleSheet.create({
     alignItems: 'center', justifyContent: 'center', marginBottom: 16,
     borderStyle: 'dashed',
   },
-  stampTop: { fontSize: 10, fontWeight: '800', color: themeColors.primary, letterSpacing: 2 },
-  stampBottom: { fontSize: 9, fontWeight: '700', color: themeColors.primary, letterSpacing: 1.5, marginTop: 2 },
-  stampTagline: { fontSize: 16, fontWeight: '600', color: '#475569', fontStyle: 'italic' },
+  stampTop: { fontSize: 10, fontFamily: FONT_POPPINS_BOLD, color: themeColors.primary, letterSpacing: 2 },
+  stampBottom: { fontSize: 9, fontFamily: FONT_POPPINS_BOLD, color: themeColors.primary, letterSpacing: 1.5, marginTop: 2 },
+  stampTagline: { fontSize: 16, fontFamily: FONT_POPPINS_SEMIBOLD, color: '#475569', fontStyle: 'italic' },
 
   // ── Map pins (legacy, kept for reference) ──
   mapPinWrap: { alignItems: 'center' },
@@ -3922,13 +3975,13 @@ const styles = StyleSheet.create({
     paddingHorizontal: 9, paddingVertical: 6, borderRadius: 16,
     shadowColor: '#0F172A', shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.2, shadowRadius: 6, elevation: 6,
   },
-  mapPinNum: { fontSize: 12, fontWeight: '800', color: '#FFFFFF' },
+  mapPinNum: { fontSize: 12, fontFamily: FONT_POPPINS_BOLD, color: '#FFFFFF' },
   mapPinLabel: {
     maxWidth: 120, paddingHorizontal: 8, paddingVertical: 5, borderRadius: 10, borderWidth: 1.5,
     backgroundColor: '#FFFFFF',
     shadowColor: '#0F172A', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.15, shadowRadius: 4, elevation: 4,
   },
-  mapPinLabelText: { fontSize: 12, fontWeight: '700' },
+  mapPinLabelText: { fontSize: 12, fontFamily: FONT_POPPINS_BOLD },
   mapPinArrow: {
     alignSelf: 'center', width: 0, height: 0,
     borderLeftWidth: 6, borderRightWidth: 6, borderTopWidth: 8,
@@ -4009,7 +4062,7 @@ const styles = StyleSheet.create({
   },
   animatedMarkerBadgeText: {
     fontSize: 9,
-    fontWeight: '800',
+    fontFamily: FONT_POPPINS_BOLD,
     color: '#FFF',
     letterSpacing: -0.1,
   },
@@ -4025,7 +4078,7 @@ const styles = StyleSheet.create({
   },
   animatedMarkerLabelText: {
     fontSize: 11,
-    fontWeight: '700',
+    fontFamily: FONT_POPPINS_BOLD,
     letterSpacing: -0.15,
   },
   markerShowcaseExitWrap: {
@@ -4184,7 +4237,7 @@ const styles = StyleSheet.create({
   },
   orbitProfileArBtnText: {
     fontSize: 11.5,
-    fontWeight: '800',
+    fontFamily: FONT_POPPINS_BOLD,
     color: '#FFFFFF',
     letterSpacing: 0.2,
   },
@@ -4205,7 +4258,7 @@ const styles = StyleSheet.create({
   },
   orbitProfileMapsBtnText: {
     fontSize: 11.5,
-    fontWeight: '800',
+    fontFamily: FONT_POPPINS_BOLD,
     letterSpacing: 0.2,
   },
   orbitPlaceCardCTAPressed: {
@@ -4230,7 +4283,7 @@ const styles = StyleSheet.create({
   },
   markerShowcaseExitBtnText: {
     fontSize: 15,
-    fontWeight: '700',
+    fontFamily: FONT_POPPINS_BOLD,
     letterSpacing: 0.35,
   },
 
@@ -4279,7 +4332,7 @@ const styles = StyleSheet.create({
   },
   /** Orbit: bottom filmstrip-only dock (photos). */
   orbitFilmstripDockCard: {
-    paddingBottom: 10,
+    paddingBottom: 14,
     borderRadius: LUXURY.radiusCard,
     ...luxurySoftShadow,
     ...Platform.select({
@@ -4303,16 +4356,17 @@ const styles = StyleSheet.create({
     paddingBottom: 4,
   },
   orbitBottomHighlightsWrap: {
-    paddingTop: 6,
+    paddingTop: 4,
     paddingHorizontal: 8,
-    paddingBottom: 2,
+    paddingBottom: 6,
   },
   orbitBottomHighlightsTray: {
     borderRadius: LUXURY.radiusChip,
-    overflow: 'hidden',
+    overflow: 'visible',
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: 'rgba(255,255,255,0.18)',
     backgroundColor: 'rgba(248,250,252,0.045)',
+    marginBottom: 4,
   },
   orbitBottomHighlightsTrayLight: {
     borderColor: 'rgba(15,23,42,0.1)',
@@ -4342,7 +4396,7 @@ const styles = StyleSheet.create({
   },
   markerViewDetailsPillText: {
     fontSize: 15,
-    fontWeight: '700',
+    fontFamily: FONT_POPPINS_BOLD,
     letterSpacing: 0.2,
   },
 
@@ -4470,7 +4524,7 @@ const styles = StyleSheet.create({
   },
   markerDetailTitle: {
     fontSize: 24,
-    fontWeight: '800',
+    fontFamily: FONT_POPPINS_BOLD,
     letterSpacing: -0.5,
     color: '#0F172A',
     marginBottom: 10,
@@ -4493,25 +4547,25 @@ const styles = StyleSheet.create({
   },
   markerDetailTypeChipText: {
     fontSize: 13,
-    fontWeight: '800',
+    fontFamily: FONT_POPPINS_BOLD,
     letterSpacing: 0.1,
   },
   markerDetailTimeText: {
     fontSize: 14,
-    fontWeight: '700',
+    fontFamily: FONT_POPPINS_BOLD,
     color: '#64748B',
   },
   markerDetailReason: {
     fontSize: 15,
     lineHeight: 22,
-    fontWeight: '500',
+    fontFamily: FONT_POPPINS_MEDIUM,
     color: '#475569',
     marginBottom: 18,
   },
   markerDetailHint: {
     fontSize: 14,
     lineHeight: 21,
-    fontWeight: '500',
+    fontFamily: FONT_POPPINS_MEDIUM,
     color: '#64748B',
     marginBottom: 18,
   },
@@ -4540,7 +4594,7 @@ const styles = StyleSheet.create({
   },
   markerDetailBtnText: {
     fontSize: 15,
-    fontWeight: '800',
+    fontFamily: FONT_POPPINS_BOLD,
     letterSpacing: 0.15,
   },
 
@@ -4574,7 +4628,7 @@ const styles = StyleSheet.create({
   },
   markerDetailFeedLoadingText: {
     fontSize: 13,
-    fontWeight: '600',
+    fontFamily: FONT_POPPINS_SEMIBOLD,
     color: '#64748B',
     letterSpacing: 0.2,
   },
@@ -4590,13 +4644,13 @@ const styles = StyleSheet.create({
   },
   markerDetailSectionTitle: {
     fontSize: 17,
-    fontWeight: '800',
+    fontFamily: FONT_POPPINS_BOLD,
     letterSpacing: -0.35,
     color: '#0F172A',
   },
   markerDetailSectionSub: {
     fontSize: 12,
-    fontWeight: '600',
+    fontFamily: FONT_POPPINS_SEMIBOLD,
     color: '#94A3B8',
     letterSpacing: 0.35,
     textTransform: 'uppercase',
@@ -4637,7 +4691,7 @@ const styles = StyleSheet.create({
     right: 8,
     bottom: 8,
     fontSize: 11,
-    fontWeight: '700',
+    fontFamily: FONT_POPPINS_BOLD,
     color: '#FFFFFF',
     letterSpacing: -0.1,
     textShadowColor: 'rgba(0,0,0,0.55)',
@@ -4663,7 +4717,7 @@ const styles = StyleSheet.create({
   },
   markerDetailReviewScore: {
     fontSize: 14,
-    fontWeight: '800',
+    fontFamily: FONT_POPPINS_BOLD,
     color: '#B45309',
     letterSpacing: 0.2,
   },
@@ -4682,7 +4736,7 @@ const styles = StyleSheet.create({
     flex: 1,
     fontSize: 14,
     lineHeight: 21,
-    fontWeight: '500',
+    fontFamily: FONT_POPPINS_MEDIUM,
     color: '#334155',
   },
   markerDetailReviewPlaceRow: {
@@ -4697,13 +4751,13 @@ const styles = StyleSheet.create({
   markerDetailReviewPlace: {
     flex: 1,
     fontSize: 12,
-    fontWeight: '600',
+    fontFamily: FONT_POPPINS_SEMIBOLD,
     color: '#64748B',
   },
   markerDetailEmptyFeed: {
     fontSize: 13,
     lineHeight: 20,
-    fontWeight: '500',
+    fontFamily: FONT_POPPINS_MEDIUM,
     color: '#94A3B8',
     fontStyle: 'italic',
     marginTop: 8,
@@ -4818,13 +4872,13 @@ const styles = StyleSheet.create({
   },
   markerBottomSheetHeroTypeText: {
     fontSize: 12,
-    fontWeight: '800',
+    fontFamily: FONT_POPPINS_BOLD,
     color: '#FFFFFF',
     letterSpacing: 0.2,
   },
   markerBottomSheetHeroTitle: {
     fontSize: 22,
-    fontWeight: '900',
+    fontFamily: FONT_POPPINS_BOLD,
     color: '#FFFFFF',
     letterSpacing: -0.5,
     lineHeight: 28,
@@ -4840,7 +4894,7 @@ const styles = StyleSheet.create({
   },
   markerBottomSheetHeroTimeText: {
     fontSize: 14,
-    fontWeight: '700',
+    fontFamily: FONT_POPPINS_BOLD,
     color: 'rgba(255,255,255,0.95)',
   },
   markerBottomSheetReasonCard: {
@@ -4861,7 +4915,7 @@ const styles = StyleSheet.create({
   },
   markerBottomSheetReasonTitle: {
     fontSize: 14,
-    fontWeight: '800',
+    fontFamily: FONT_POPPINS_BOLD,
     color: '#0F172A',
     letterSpacing: -0.2,
   },
@@ -4872,7 +4926,7 @@ const styles = StyleSheet.create({
     fontSize: 14,
     lineHeight: 22,
     color: '#475569',
-    fontWeight: '500',
+    fontFamily: FONT_POPPINS_MEDIUM,
   },
   markerBottomSheetActions: {
     paddingHorizontal: 14,
@@ -4881,7 +4935,7 @@ const styles = StyleSheet.create({
   },
   markerBottomSheetActionsHeading: {
     fontSize: 12,
-    fontWeight: '800',
+    fontFamily: FONT_POPPINS_BOLD,
     color: '#94A3B8',
     letterSpacing: 1.2,
     textTransform: 'uppercase',
@@ -4912,7 +4966,7 @@ const styles = StyleSheet.create({
   },
   markerBottomSheetActionGradientLabel: {
     fontSize: 12,
-    fontWeight: '800',
+    fontFamily: FONT_POPPINS_BOLD,
     color: '#FFFFFF',
     letterSpacing: 0.2,
   },
@@ -5062,8 +5116,8 @@ const styles = StyleSheet.create({
     }),
   },
   bumpHeaderTextWrap: { flex: 1 },
-  bumpHeaderTitle: { fontSize: 15, fontWeight: '700', color: '#0F172A' },
-  bumpHeaderAddress: { fontSize: 13, color: '#64748B', marginTop: 2, fontWeight: '500' },
+  bumpHeaderTitle: { fontSize: 15, fontFamily: FONT_POPPINS_BOLD, color: '#0F172A' },
+  bumpHeaderAddress: { fontSize: 13, color: '#64748B', marginTop: 2, fontFamily: FONT_POPPINS_MEDIUM },
   bumpBottomCardWrap: {
     position: 'absolute',
     left: 16,
@@ -5088,7 +5142,7 @@ const styles = StyleSheet.create({
   },
   bumpBottomCardEta: {
     fontSize: 17,
-    fontWeight: '800',
+    fontFamily: FONT_POPPINS_BOLD,
     color: '#FFFFFF',
     letterSpacing: -0.3,
   },
@@ -5096,7 +5150,7 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: 'rgba(255,255,255,0.9)',
     marginTop: 2,
-    fontWeight: '600',
+    fontFamily: FONT_POPPINS_SEMIBOLD,
   },
   bumpBottomCardStop: {
     paddingHorizontal: 16,
@@ -5105,7 +5159,7 @@ const styles = StyleSheet.create({
   },
   bumpBottomCardStopText: {
     fontSize: 13,
-    fontWeight: '700',
+    fontFamily: FONT_POPPINS_BOLD,
     color: '#FFFFFF',
   },
   bumpBottomCardExpand: {
@@ -5124,7 +5178,7 @@ const styles = StyleSheet.create({
   },
   bumpBottomCardExpandText: {
     fontSize: 14,
-    fontWeight: '700',
+    fontFamily: FONT_POPPINS_BOLD,
     color: '#0F172A',
     flex: 1,
   },
@@ -5143,23 +5197,23 @@ const styles = StyleSheet.create({
   spotDetailStep: {
     width: 34, height: 34, borderRadius: 12, alignItems: 'center', justifyContent: 'center', marginRight: 14, marginTop: 2,
   },
-  spotDetailStepText: { fontSize: 15, fontWeight: '900', color: '#FFF' },
+  spotDetailStepText: { fontSize: 15, fontFamily: FONT_POPPINS_BOLD, color: '#FFF' },
   spotDetailNameWrap: { flex: 1, marginRight: 10 },
-  spotDetailName: { fontSize: 18, fontWeight: '800', color: '#0F172A', lineHeight: 24, marginBottom: 8 },
+  spotDetailName: { fontSize: 18, fontFamily: FONT_POPPINS_BOLD, color: '#0F172A', lineHeight: 24, marginBottom: 8 },
   spotDetailTags: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   spotDetailTag: {
     flexDirection: 'row', alignItems: 'center', gap: 5,
     paddingHorizontal: 10, paddingVertical: 4, borderRadius: 10,
   },
-  spotDetailTagText: { fontSize: 12, fontWeight: '700' },
+  spotDetailTagText: { fontSize: 12, fontFamily: FONT_POPPINS_BOLD },
   spotDetailDot: { fontSize: 14, color: '#E2E8F0' },
-  spotDetailTime: { fontSize: 13, fontWeight: '600', color: '#94A3B8' },
+  spotDetailTime: { fontSize: 13, fontFamily: FONT_POPPINS_SEMIBOLD, color: '#94A3B8' },
   spotDetailReason: { fontSize: 15, color: '#475569', lineHeight: 22, marginBottom: 16 },
   spotDetailBtn: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
     paddingVertical: 15, borderRadius: 16,
   },
-  spotDetailBtnText: { fontSize: 16, fontWeight: '700', color: '#FFF' },
+  spotDetailBtnText: { fontSize: 16, fontFamily: FONT_POPPINS_BOLD, color: '#FFF' },
 
   // ── Plan modal (Home AI design) ──
   planModalRoot: { flex: 1, backgroundColor: 'transparent' },
@@ -5197,7 +5251,7 @@ const styles = StyleSheet.create({
   },
   buildModeLuxuryEyebrow: {
     fontSize: 10,
-    fontWeight: '800',
+    fontFamily: FONT_POPPINS_BOLD,
     letterSpacing: 1.1,
     color: '#F7DFA0',
   },
@@ -5210,7 +5264,7 @@ const styles = StyleSheet.create({
   },
   buildModeStandaloneTitle: {
     fontSize: 28,
-    fontWeight: '800',
+    fontFamily: FONT_POPPINS_BOLD,
     color: '#FFFFFF',
     textAlign: 'center',
     letterSpacing: -0.3,
@@ -5219,7 +5273,7 @@ const styles = StyleSheet.create({
     marginTop: 6,
     marginBottom: 20,
     fontSize: 13,
-    fontWeight: '600',
+    fontFamily: FONT_POPPINS_SEMIBOLD,
     color: 'rgba(255,255,255,0.84)',
     textAlign: 'center',
   },
@@ -5269,14 +5323,14 @@ const styles = StyleSheet.create({
   },
   buildModeStandaloneButtonTextLight: {
     fontSize: 15,
-    fontWeight: '800',
+    fontFamily: FONT_POPPINS_BOLD,
     color: '#FFFFFF',
     letterSpacing: 0.2,
     textAlign: 'center',
   },
   buildModeStandaloneButtonText: {
     fontSize: 15,
-    fontWeight: '800',
+    fontFamily: FONT_POPPINS_BOLD,
     color: '#F8FAFC',
     letterSpacing: 0.2,
     textAlign: 'center',
@@ -5305,7 +5359,7 @@ const styles = StyleSheet.create({
   },
   buildModeQuickChipText: {
     fontSize: 13,
-    fontWeight: '700',
+    fontFamily: FONT_POPPINS_BOLD,
     color: '#F8FAFC',
     textAlign: 'center',
   },
@@ -5328,7 +5382,7 @@ const styles = StyleSheet.create({
     color: '#F8FAFC',
     paddingHorizontal: 12,
     fontSize: 14,
-    fontWeight: '700',
+    fontFamily: FONT_POPPINS_BOLD,
     letterSpacing: 0.6,
   },
   buildModeJoinOpenBtn: {
@@ -5344,7 +5398,7 @@ const styles = StyleSheet.create({
   buildModeJoinOpenBtnText: {
     color: '#FFFFFF',
     fontSize: 15,
-    fontWeight: '800',
+    fontFamily: FONT_POPPINS_BOLD,
     letterSpacing: 0.2,
   },
   /** Glass luxury shell — blur + frost over map (matches plan masthead language) */
@@ -5382,7 +5436,7 @@ const styles = StyleSheet.create({
   },
   buildModePanelTitle: {
     fontSize: 18,
-    fontWeight: '800',
+    fontFamily: FONT_POPPINS_BOLD,
     color: 'rgba(15,23,42,0.94)',
     textAlign: 'center',
     letterSpacing: -0.35,
@@ -5390,7 +5444,7 @@ const styles = StyleSheet.create({
   },
   buildModePanelHint: {
     fontSize: 13,
-    fontWeight: '600',
+    fontFamily: FONT_POPPINS_SEMIBOLD,
     color: 'rgba(51,65,85,0.88)',
     textAlign: 'center',
     lineHeight: 18,
@@ -5404,13 +5458,13 @@ const styles = StyleSheet.create({
   },
   buildModeGlassMenuTitle: {
     fontSize: 17,
-    fontWeight: '800',
+    fontFamily: FONT_POPPINS_BOLD,
     color: 'rgba(15,23,42,0.92)',
     marginBottom: 4,
   },
   buildModeGlassMenuSub: {
     fontSize: 13,
-    fontWeight: '600',
+    fontFamily: FONT_POPPINS_SEMIBOLD,
     color: 'rgba(51,65,85,0.82)',
     lineHeight: 18,
   },
@@ -5514,7 +5568,7 @@ const styles = StyleSheet.create({
   },
   pmCinematicTitle: {
     fontSize: 22,
-    fontWeight: '800',
+    fontFamily: FONT_POPPINS_BOLD,
     color: '#FFFFFF',
     textAlign: 'center',
     letterSpacing: 0.2,
@@ -5536,7 +5590,7 @@ const styles = StyleSheet.create({
     color: 'rgba(255,255,255,0.82)',
     textAlign: 'center',
     letterSpacing: 0.2,
-    fontWeight: '500',
+    fontFamily: FONT_POPPINS_MEDIUM,
     paddingHorizontal: 12,
     lineHeight: 17,
     minHeight: 34,
@@ -5566,14 +5620,14 @@ const styles = StyleSheet.create({
   },
   pmCinematicPickedText: {
     fontSize: 11,
-    fontWeight: '800',
+    fontFamily: FONT_POPPINS_BOLD,
     color: '#F7DFA0',
     letterSpacing: 0.4,
     textTransform: 'uppercase',
   },
   pmCinematicPickedTextIdle: {
     color: 'rgba(255,255,255,0.5)',
-    fontWeight: '700',
+    fontFamily: FONT_POPPINS_BOLD,
     letterSpacing: 0.35,
   },
   pmCinematicChipsPanel: {
@@ -5601,7 +5655,7 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     fontSize: 11,
     letterSpacing: 0.2,
-    fontWeight: '700',
+    fontFamily: FONT_POPPINS_BOLD,
     color: 'rgba(247,223,160,0.92)',
   },
   pmCinematicOtherInput: {
@@ -5614,7 +5668,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 10,
     fontSize: 14,
-    fontWeight: '600',
+    fontFamily: FONT_POPPINS_SEMIBOLD,
   },
   pmCinematicActionRow: {
     flexDirection: 'row',
@@ -5654,7 +5708,7 @@ const styles = StyleSheet.create({
   },
   pmCinematicBtnText: {
     fontSize: 15,
-    fontWeight: '800',
+    fontFamily: FONT_POPPINS_BOLD,
     color: '#1A120A',
     letterSpacing: 0.4,
   },
@@ -5679,7 +5733,7 @@ const styles = StyleSheet.create({
   },
   pmStepBadgeText: {
     fontSize: 9,
-    fontWeight: '900',
+    fontFamily: FONT_POPPINS_BOLD,
     color: '#FFFFFF',
     letterSpacing: 1.1,
     textTransform: 'uppercase',
@@ -5755,13 +5809,13 @@ const styles = StyleSheet.create({
   },
   pmTravelTitle: {
     fontSize: 16,
-    fontWeight: '800',
+    fontFamily: FONT_POPPINS_BOLD,
     color: '#1e293b',
     marginBottom: 1,
   },
   pmTravelDesc: {
     fontSize: 12,
-    fontWeight: '600',
+    fontFamily: FONT_POPPINS_SEMIBOLD,
     color: '#64748b',
     lineHeight: 15,
   },
@@ -5804,31 +5858,31 @@ const styles = StyleSheet.create({
   },
   buildDayMenuTitle: {
     fontSize: 17,
-    fontWeight: '800',
+    fontFamily: FONT_POPPINS_BOLD,
     color: '#FFFFFF',
     marginBottom: 4,
   },
   buildDayMenuSub: {
     fontSize: 13,
-    fontWeight: '600',
+    fontFamily: FONT_POPPINS_SEMIBOLD,
     color: 'rgba(255,255,255,0.88)',
     lineHeight: 18,
   },
   buildDayMenuTitleDark: {
     fontSize: 17,
-    fontWeight: '800',
+    fontFamily: FONT_POPPINS_BOLD,
     color: '#0F172A',
     marginBottom: 4,
   },
   buildDayMenuSubDark: {
     fontSize: 13,
-    fontWeight: '600',
+    fontFamily: FONT_POPPINS_SEMIBOLD,
     color: '#64748B',
     lineHeight: 18,
   },
   pmTitle: {
     fontSize: 22,
-    fontWeight: '900',
+    fontFamily: FONT_POPPINS_BOLD,
     color: '#0F172A',
     textAlign: 'center',
     letterSpacing: -0.5,
@@ -5837,7 +5891,7 @@ const styles = StyleSheet.create({
   },
   pmSub: {
     fontSize: 13,
-    fontWeight: '600',
+    fontFamily: FONT_POPPINS_SEMIBOLD,
     color: '#64748B',
     textAlign: 'center',
     lineHeight: 18,
@@ -5859,7 +5913,7 @@ const styles = StyleSheet.create({
   },
   pmSelectedText: {
     fontSize: 11,
-    fontWeight: '800',
+    fontFamily: FONT_POPPINS_BOLD,
     color: '#E9C877',
     letterSpacing: 0.4,
     textTransform: 'uppercase',
@@ -6004,7 +6058,7 @@ const styles = StyleSheet.create({
   },
   pmOptTileLabel: {
     fontSize: 12,
-    fontWeight: '600',
+    fontFamily: FONT_POPPINS_SEMIBOLD,
     color: '#475569',
     textAlign: 'center',
     letterSpacing: 0.05,
@@ -6016,15 +6070,15 @@ const styles = StyleSheet.create({
   },
   pmOptTileLabelDark: {
     color: 'rgba(244,243,239,0.92)',
-    fontWeight: '600',
+    fontFamily: FONT_POPPINS_SEMIBOLD,
   },
   pmOptTileLabelSelected: {
     color: '#1c1914',
-    fontWeight: '800',
+    fontFamily: FONT_POPPINS_BOLD,
   },
   pmOptTileLabelSelectedDark: {
     color: '#fcf9f4',
-    fontWeight: '800',
+    fontFamily: FONT_POPPINS_BOLD,
   },
   pmOptTileCheckSlot: {
     position: 'absolute',
@@ -6144,7 +6198,7 @@ const styles = StyleSheet.create({
   },
   ldTitle: {
     fontSize: 32,
-    fontWeight: '900',
+    fontFamily: FONT_POPPINS_BOLD,
     color: '#0F172A',
     textAlign: 'center',
     letterSpacing: -0.8,
@@ -6153,14 +6207,14 @@ const styles = StyleSheet.create({
   },
   ldSub: {
     fontSize: 15,
-    fontWeight: '600',
+    fontFamily: FONT_POPPINS_SEMIBOLD,
     color: 'rgba(255,255,255,0.75)',
     textAlign: 'center',
     lineHeight: 21,
   },
   ldLoadingSub: {
     fontSize: 16,
-    fontWeight: '600',
+    fontFamily: FONT_POPPINS_SEMIBOLD,
     color: '#64748B',
     textAlign: 'center',
     lineHeight: 22,
@@ -6195,14 +6249,14 @@ const styles = StyleSheet.create({
   },
   ldSheetHintTitle: {
     fontSize: 17,
-    fontWeight: '900',
+    fontFamily: FONT_POPPINS_BOLD,
     color: '#0f172a',
     textAlign: 'center',
     letterSpacing: -0.4,
   },
   ldSheetHintSub: {
     fontSize: 13,
-    fontWeight: '600',
+    fontFamily: FONT_POPPINS_SEMIBOLD,
     color: '#64748b',
     textAlign: 'center',
     lineHeight: 19,
@@ -6260,15 +6314,15 @@ const styles = StyleSheet.create({
   lsTextCol: { flex: 1 },
   lsStepName: {
     fontSize: 15,
-    fontWeight: '700',
+    fontFamily: FONT_POPPINS_BOLD,
     color: '#94A3B8',
     marginBottom: 1,
   },
   lsStepNameDone: { color: '#0F172A' },
-  lsStepNameActive: { color: themeColors.primary, fontWeight: '800' },
+  lsStepNameActive: { color: themeColors.primary, fontFamily: FONT_POPPINS_BOLD },
   lsStepStatus: {
     fontSize: 12,
-    fontWeight: '600',
+    fontFamily: FONT_POPPINS_SEMIBOLD,
     color: '#94A3B8',
   },
   lsBarTrack: {
@@ -6327,7 +6381,7 @@ const styles = StyleSheet.create({
   ldFactContent: { flex: 1 },
   ldFactLabel: {
     fontSize: 11,
-    fontWeight: '800',
+    fontFamily: FONT_POPPINS_BOLD,
     color: '#FACC15',
     letterSpacing: 0.5,
     marginBottom: 4,
@@ -6336,7 +6390,7 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: '#475569',
     lineHeight: 18,
-    fontWeight: '500',
+    fontFamily: FONT_POPPINS_MEDIUM,
   },
   planModalMarqueeMask: {
     width: '100%',
@@ -6388,7 +6442,7 @@ const styles = StyleSheet.create({
   },
   planModalBannerName: {
     fontSize: 12,
-    fontWeight: '700',
+    fontFamily: FONT_POPPINS_BOLD,
     color: '#FFFFFF',
     textAlign: 'center',
     paddingHorizontal: 8,
@@ -6398,7 +6452,7 @@ const styles = StyleSheet.create({
     fontSize: 11,
     color: 'rgba(255,255,255,0.85)',
     marginTop: 4,
-    fontWeight: '500',
+    fontFamily: FONT_POPPINS_MEDIUM,
   },
   planModalPreviewCardLegacy: {
     width: 220,
@@ -6432,16 +6486,16 @@ const styles = StyleSheet.create({
   },
   planModalPreviewTagText: {
     fontSize: 11,
-    fontWeight: '700',
+    fontFamily: FONT_POPPINS_BOLD,
   },
   planModalPreviewArea: {
     fontSize: 11,
     color: 'rgba(15,23,42,0.9)',
-    fontWeight: '500',
+    fontFamily: FONT_POPPINS_MEDIUM,
   },
   planModalPreviewName: {
     fontSize: 15,
-    fontWeight: '700',
+    fontFamily: FONT_POPPINS_BOLD,
     color: '#0F172A',
     marginBottom: 4,
   },
@@ -6476,7 +6530,7 @@ const styles = StyleSheet.create({
   planModalPreviewCounter: {
     fontSize: 11,
     color: 'rgba(15,23,42,0.65)',
-    fontWeight: '600',
+    fontFamily: FONT_POPPINS_SEMIBOLD,
   },
   planModalOptionsWrap: { flex: 1, width: '100%', maxWidth: 400, alignSelf: 'center' },
   planModalActionRow: {
@@ -6523,7 +6577,7 @@ const styles = StyleSheet.create({
   },
   planModalContinueBtnText: { 
     fontSize: 16, 
-    fontWeight: '900', 
+    fontFamily: FONT_POPPINS_BOLD, 
     color: '#1A120A', 
     letterSpacing: 0.5 
   },
@@ -6544,7 +6598,7 @@ const styles = StyleSheet.create({
   },
   planModalGenerateBtnText: { 
     fontSize: 16, 
-    fontWeight: '900', 
+    fontFamily: FONT_POPPINS_BOLD, 
     color: '#1A120A', 
     letterSpacing: 0.5 
   },
@@ -6618,7 +6672,7 @@ const styles = StyleSheet.create({
     marginTop: 16,
     fontFamily: BRAND_WORDMARK_FONT,
     fontSize: 22,
-    fontWeight: '400',
+    fontFamily: FONT_POPPINS_REGULAR,
     color: '#FFFFFF',
     letterSpacing: 2,
     textTransform: 'uppercase',
@@ -6731,14 +6785,14 @@ const styles = StyleSheet.create({
   },
   categorySpinMapLegendText: {
     fontSize: 10,
-    fontWeight: '800',
+    fontFamily: FONT_POPPINS_BOLD,
     color: '#475569',
     maxWidth: 72,
   },
   categorySpinMapCaption: {
     marginTop: 8,
     fontSize: 13,
-    fontWeight: '800',
+    fontFamily: FONT_POPPINS_BOLD,
     color: '#1E293B',
     textAlign: 'center',
     lineHeight: 18,
@@ -6855,7 +6909,7 @@ const styles = StyleSheet.create({
   },
   scoutMosaicEmptyText: {
     fontSize: 13,
-    fontWeight: '700',
+    fontFamily: FONT_POPPINS_BOLD,
     color: 'rgba(255,255,255,0.72)',
     textAlign: 'center',
   },
@@ -6888,7 +6942,7 @@ const styles = StyleSheet.create({
   },
   scoutChipText: {
     fontSize: 11,
-    fontWeight: '800',
+    fontFamily: FONT_POPPINS_BOLD,
     color: 'rgba(255,255,255,0.88)',
     letterSpacing: 0.2,
   },
@@ -6897,7 +6951,7 @@ const styles = StyleSheet.create({
   },
   loadingScoutTitle: {
     fontSize: 18,
-    fontWeight: '800',
+    fontFamily: FONT_POPPINS_BOLD,
     color: '#0F172A',
     textAlign: 'center',
     letterSpacing: -0.3,
@@ -6906,11 +6960,11 @@ const styles = StyleSheet.create({
   },
   loadingScoutTitleAccent: {
     color: themeColors.primary,
-    fontWeight: '900',
+    fontFamily: FONT_POPPINS_BOLD,
   },
   loadingScoutSub: {
     fontSize: 13,
-    fontWeight: '600',
+    fontFamily: FONT_POPPINS_SEMIBOLD,
     color: '#64748B',
     textAlign: 'center',
     lineHeight: 19,

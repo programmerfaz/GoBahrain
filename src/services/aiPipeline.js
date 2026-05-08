@@ -149,11 +149,19 @@ const RETRIEVAL_LIMITS = {
   placesTopKDefault: 20,
   placesTopKCoastal: 28,
   placesReturnMax: 24,
-  /** Single-label quick find: tighter pools = faster Pinecone round-trips without changing filters */
-  quickFindPlacesTopK: 14,
-  quickFindPlacesReturnMax: 14,
-  quickFindRestaurantsTopK: 12,
-  quickFindEventsTopK: 14,
+  /** Single-label quick find (generic): moderate pool */
+  quickFindPlacesTopK: 18,
+  quickFindPlacesReturnMax: 18,
+  /**
+   * Quick find with a specific gated theme (Beach, Museum, Park…): large dual-query pool so
+   * the caller has enough real matches for distance-based cycling ("nearest → second nearest → …").
+   * Each of the two parallel Pinecone queries uses topK=40; after RRF merge ≈50-60 candidates,
+   * typically 8-20 pass the strict theme gate — enough for many "Search again" rotations.
+   */
+  quickFindGatedTopK: 40,
+  quickFindGatedReturnMax: 50,
+  quickFindRestaurantsTopK: 16,
+  quickFindEventsTopK: 18,
   restaurantsTopK: 24,
   breakfastTopK: 8,
   eventsTopK: 14,
@@ -254,13 +262,59 @@ const buildRetrievalEmbeddingText = (coreLine, profileNarrative, retrievalExtras
 }
 
 const COASTAL_LABEL_HINTS = ['beach', 'beaches', 'seaside', 'waterfront', 'waterfronts', 'sea', 'coast', 'corniche']
-const COASTAL_TEXT_HINTS = ['beach', 'seaside', 'waterfront', 'sea', 'coast', 'bay', 'corniche', 'marina', 'shore', 'island']
+// Tighter text hints for scoring — avoid boosting venues that are merely *near* the coast (hotels, malls)
+// by keeping only terms that appear in actual beach/waterfront venue descriptions.
+const COASTAL_TEXT_HINTS = ['beach', 'beachfront', 'sandy beach', 'swimming beach', 'seafront', 'beach resort', 'beach club', 'seaside', 'island resort', 'water sports', 'sea access', 'sunbathing']
 
 const hasCoastalPreference = (labels) => {
   const joined = (Array.isArray(labels) ? labels : []).map((x) => String(x || '').toLowerCase()).join(' | ')
   if (!joined) return false
   return COASTAL_LABEL_HINTS.some((hint) => joined.includes(hint))
 }
+
+/**
+ * Hard theme gates for place sub-labels — applied to the metadata haystack string.
+ * Used in both the main plan flow (fetchPlaces) and Quick Find to ensure strict relevance.
+ * Exported so quickFindFromMatches.js can import and reuse them.
+ */
+export const PLACE_THEME_GATES = {
+  Museum: (hay) =>
+    /\bmuseums?\b|\bgaller(y|ies)\b|\bexhibitions?\b|\bexhibits?\b|cultural centr|cultural cent|archaeolog|fine arts|collections?\b|\bartifacts?\b/i.test(hay),
+  /**
+   * Beach gate — passes any venue that is a beach, dedicated beach-access point, sea-swimming
+   * spot, island resort, or water-sports venue.  Bahrain beach venues are often labelled as
+   * "Resort", "Island", or "Waterfront Park" without the word "beach" in their name, so we
+   * must catch those patterns too.
+   */
+  Beach: (hay) =>
+    // Direct "beach" keyword in any metadata field — most reliable signal
+    /\bbeach(es|front|side)?\b/i.test(hay) ||
+    // Compound beach-specific phrases
+    /public beach|swimming beach|sandy beach|beach resort|beach club|beach park|beach access|beach gate|sea front|seafront|sea-front/i.test(hay) ||
+    // Sandy shore descriptors
+    /\bsand(y)?\b.*\bbeach\b|\bbeach\b.*\bsand\b/i.test(hay) ||
+    // Sea-swimming venues
+    /\bopen sea\b.*\bswim|\bswimming\b.*\bsea\b|\bsea\b.*\bswimming\b/i.test(hay) ||
+    // Island resorts (e.g. Al Dar Islands), seaside venues — common in Bahrain
+    /\bseaside\b|\bisland\s*resort\b|\bresort\b.*\bisland\b/i.test(hay) ||
+    // Water-sports / sea-access / sunbathing indicators
+    /\bwater\s*sports?\b|\bsea\s*access\b|\bsunbathing?\b/i.test(hay),
+  Park: (hay) =>
+    /\bparks?\b|\bgardens?\b|\bbotan(ic|ical)|\bhiking\b|\bwalking trail(s)?\b|\bgreen\b.*\bspace|\brecreation(al)? ground|\bnational park\b/i.test(hay),
+  Shopping: (hay) =>
+    /\bmalls?\b|shopping centr|shopping complex|shopping district|\b(retail)\b|\bsouk\b|\bsouq\b|department store|boutique arcade|luxury plaza|city centre|citi centr/i.test(hay),
+  Landmark: (hay) =>
+    /\b(landmarks?|monuments?)\b|\biconic\b.*\bsight|\bhistoric\b.*\bmilestone|\boutlook tower|\bqal'?at\b|\bfort\b|tree of life|world trade centre|financial harbour/i.test(hay),
+  'Family fun': (hay) =>
+    /\bfamily\b|\bkids\b|\bchildren\b|play(area|ground)|trampolin|theme park|\barcade\b|\bgo-kart\b|water park|\baquarium\b|edutainment|kids zone|bounce/i.test(hay),
+  Scenic: (hay) =>
+    /\bscenic\b|\bviewpoint(s)?\b|\bpanorama\b|\boverlook\b|\b(observation|birds?)\s*deck\b|\bphoto(?:graphy)? spots?\b|sunset\b.*\bview/i.test(hay),
+  Historical: (hay) =>
+    /\bhistor(ic|ical)\b|\bheritage\b|\bdilmun\b|\bunesco\b|\bpearling\b|\barchaeolog|ancient\s+site(s)?|traditional\s+house|traditional\s+village|\bqal'?at\b|\bfort\b|\bmuseums?\b/i.test(hay),
+}
+
+/** Minimum gated place results before falling back to unfiltered ranking */
+const MIN_GATED_PLACES_FLOOR = 3
 
 /** Shared text bag for ranking + “does this venue echo today’s prefs?” checks (plans, catalog repair, quick-find gates). */
 export const buildMetadataHaystackLower = (match) => {
@@ -424,11 +478,11 @@ const eventHasAnyScheduleField = (eventMatch) => {
 }
 
 /**
- * Keyword tails for single-label quick find — tightens embeddings when the broad “themes” prompt is too fuzzy.
+ * Primary keyword hints for single-label quick find.
  * Keys match `QUICK_FIND_SUBLABELS_BY_KIND.place` in the plan screen.
  */
 const QUICK_FIND_PLACE_EMBEDDING_HINTS = {
-  Beach: 'public beaches sandy shores waterfront corniche coastal sea swimming island access',
+  Beach: 'public beaches sandy beach beachfront swimming beach sea swimming sandy shore beach resort beach club beach access',
   Museum: 'museums galleries exhibitions archaeology cultural heritage indoor collections',
   Park: 'parks gardens green public spaces walking trails playgrounds',
   Shopping: 'malls shopping centers retail souqs boutiques department stores',
@@ -438,6 +492,20 @@ const QUICK_FIND_PLACE_EMBEDDING_HINTS = {
   Historical: 'historical sites heritage forts UNESCO traditional architecture old Bahrain',
 }
 
+/**
+ * Secondary (diversity) hints used in the second parallel Pinecone query so the merged
+ * pool covers different facets of the same theme and maximises distinct venue options.
+ */
+const QUICK_FIND_PLACE_EMBEDDING_HINTS_ALT = {
+  Beach: 'Bahrain seaside island resort sea access water sports sunbathing open sea swimming sandy seashore beach venue coastal resort sea-facing',
+  Museum: 'Bahrain heritage center art gallery archaeological site cultural institution exhibit hall display',
+  Park: 'Bahrain nature reserve botanical garden public park recreation area green space leisure ground',
+  Shopping: 'Bahrain retail district shopping mall souq market boutique arcade shopping experience',
+  Landmark: 'Bahrain iconic attraction tourist site famous building historic monument viewpoint',
+  'Family fun': 'Bahrain family entertainment center kids zone amusement park children activities fun park',
+  Scenic: 'Bahrain scenic overlook photography spot sunset view natural landscape panorama beautiful view',
+  Historical: 'Bahrain UNESCO heritage site ancient ruins fort dilmun traditional village archaeological museum',
+}
 // ─── Step 1: Places (from preferences) ─────────────────────────────
 
 export async function fetchPlaces(preferenceLabels, retrievalOptions = {}) {
@@ -455,6 +523,7 @@ export async function fetchPlaces(preferenceLabels, retrievalOptions = {}) {
       retrievalOptions.quickFind === true && Array.isArray(preferenceLabels) && preferenceLabels.length === 1
     const singlePlaceVibe = isQuickFindSingle ? String(preferenceLabels[0] || '').trim() : ''
     const placeHint = isQuickFindSingle ? QUICK_FIND_PLACE_EMBEDDING_HINTS[singlePlaceVibe] || '' : ''
+    const placeHintAlt = isQuickFindSingle ? QUICK_FIND_PLACE_EMBEDDING_HINTS_ALT[singlePlaceVibe] || '' : ''
     const core =
       preferenceLabels.length > 0
         ? isQuickFindSingle && singlePlaceVibe
@@ -463,10 +532,37 @@ export async function fetchPlaces(preferenceLabels, retrievalOptions = {}) {
         : 'Popular places and things to do in Bahrain'
 
     const runDiversityPair = preferenceLabels.length === 0 && !wantsCoastal
-
     const qfPlaces = retrievalOptions.quickFind === true
+
+    // For Quick Find with a specific gated label (Beach, Museum, Park…), run TWO parallel
+    // Pinecone queries — primary + alternative embeddings — with a large topK, then merge
+    // via RRF. This maximises the distinct venue pool so distance-based cycling works well:
+    // nearest → second nearest → third nearest → … → cycle back to nearest.
+    const isQuickFindGated = qfPlaces && isQuickFindSingle && !!PLACE_THEME_GATES[singlePlaceVibe]
+
     let places = []
-    if (runDiversityPair) {
+    if (isQuickFindGated) {
+      const coreAlt = placeHintAlt
+        ? `Bahrain ${singlePlaceVibe} venues — ${placeHintAlt}`
+        : core
+      const [embMain, embAlt] = await Promise.all([
+        getEmbedding(buildRetrievalEmbeddingText(core, profileNarrative, retrievalExtras)),
+        getEmbedding(buildRetrievalEmbeddingText(coreAlt, profileNarrative, retrievalExtras)),
+      ])
+      const topK = RETRIEVAL_LIMITS.quickFindGatedTopK
+      const [pMain, pAlt] = await Promise.all([
+        queryPineconeSafe(embMain, topK, {
+          record_type: { $eq: 'client' },
+          client_type: { $eq: 'place' },
+        }),
+        queryPineconeSafe(embAlt, topK, {
+          record_type: { $eq: 'client' },
+          client_type: { $eq: 'place' },
+        }),
+      ])
+      places = mergeRankedListsByRRF([pMain || [], pAlt || []], stableMatchKey, RRF_MERGE_K)
+      console.log(`[fetchPlaces][quickFind][gated] "${singlePlaceVibe}" dual-query: main=${pMain?.length ?? 0} alt=${pAlt?.length ?? 0} merged=${places.length}`)
+    } else if (runDiversityPair) {
       const coreAlt =
         'Heritage museums UNESCO forts art galleries traditional souqs beaches coastline scenic parks mixed Bahrain sightseeing'
       const topK = qfPlaces ? RETRIEVAL_LIMITS.quickFindPlacesTopK : RETRIEVAL_LIMITS.placesTopKCoastal
@@ -505,12 +601,11 @@ export async function fetchPlaces(preferenceLabels, retrievalOptions = {}) {
       )
     }
 
-    // For strong coastal intent, run a second explicit coastal retrieval and merge.
-    /** Quick find skips the second Pinecone merge to cut latency; single query still uses coastal hints in embedding for Beach. */
+    // For strong coastal intent in main plan flow, run a second explicit coastal retrieval.
     if (wantsCoastal && !qfPlaces) {
       const coastalEmbedding = await getEmbedding(
         buildRetrievalEmbeddingText(
-          'Bahrain beach, seaside, waterfront, marina, corniche, island coastal attractions and sea-view places',
+          'Bahrain public beach sandy beach beachfront swimming beach beach resort beach club sea swimming shore island resort seaside sea access water sports',
           profileNarrative,
           retrievalExtras,
         ),
@@ -535,7 +630,7 @@ export async function fetchPlaces(preferenceLabels, retrievalOptions = {}) {
         .slice(0, qfPlaces ? RETRIEVAL_LIMITS.quickFindPlacesTopK : RETRIEVAL_LIMITS.placesTopKDefault);
     }
 
-    // If still nothing, just get any 8 clients from the broader pool
+    // If still nothing, just get any clients from the broader pool
     if (places.length === 0) {
       const panicEmbedding = await getEmbedding(
         buildRetrievalEmbeddingText(core, profileNarrative, retrievalExtras),
@@ -546,8 +641,35 @@ export async function fetchPlaces(preferenceLabels, retrievalOptions = {}) {
       places = all.slice(0, qfPlaces ? RETRIEVAL_LIMITS.quickFindPlacesTopK : RETRIEVAL_LIMITS.placesTopKDefault);
     }
 
-    const pfCap = qfPlaces ? RETRIEVAL_LIMITS.quickFindPlacesReturnMax : RETRIEVAL_LIMITS.placesReturnMax
-    return rankPlacesByPreferenceLabels(places, preferenceLabels).slice(0, pfCap);
+    // Use a larger cap for gated Quick Find so the pool isn't truncated before distance-sorting.
+    const pfCap = isQuickFindGated
+      ? RETRIEVAL_LIMITS.quickFindGatedReturnMax
+      : qfPlaces
+        ? RETRIEVAL_LIMITS.quickFindPlacesReturnMax
+        : RETRIEVAL_LIMITS.placesReturnMax
+    const ranked = rankPlacesByPreferenceLabels(places, preferenceLabels)
+
+    // Hard gate: when specific theme labels with known gates are selected, only keep
+    // places whose metadata actually matches that theme.
+    const gatedLabels = preferenceLabels.filter((l) => PLACE_THEME_GATES[l])
+    if (gatedLabels.length > 0) {
+      const gated = ranked.filter((m) => {
+        const hay = buildMetadataHaystackLower(m)
+        return gatedLabels.some((label) => PLACE_THEME_GATES[label](hay))
+      })
+      // Quick Find: always return gated-only, never mix in unrelated venues.
+      if (qfPlaces) {
+        console.log(`[fetchPlaces][quickFind] theme gate "${gatedLabels.join(',')}" — kept ${gated.length}/${ranked.length} places`)
+        return gated.slice(0, pfCap)
+      }
+      // Main plan flow: return gated if there are enough, otherwise fall back.
+      if (gated.length >= MIN_GATED_PLACES_FLOOR) {
+        console.log(`[fetchPlaces] theme gate "${gatedLabels.join(',')}" — kept ${gated.length}/${ranked.length} places`)
+        return gated.slice(0, pfCap)
+      }
+      console.log(`[fetchPlaces] theme gate "${gatedLabels.join(',')}" too strict (${gated.length}/${ranked.length}), using full ranked list`)
+    }
+    return ranked.slice(0, pfCap)
   } catch (e) {
     console.warn('[fetchPlaces] failed:', e?.message);
     return [];
@@ -1268,6 +1390,57 @@ export function extractKhalidTopicHintFromPriorTurns(apiHistoryIncludingLatest) 
 }
 
 /**
+ * Bahrain-specific geo hint normalizer.
+ * Expands governorate / area names into nearby districts so Pinecone retrieval
+ * is more aware of how locals actually refer to places.
+ */
+function expandBahrainGeoHints(text) {
+  const raw = String(text || '').trim()
+  if (!raw) return raw
+  const lower = raw.toLowerCase()
+  const extras = []
+
+  // Muharraq governorate + nearby islands
+  if (/\bmuharraq\b/.test(lower)) {
+    extras.push('Amwaj Islands', 'Amwaj', 'Diyar Al Muharraq', 'Diyar', 'Hidd', 'Busaiteen')
+  }
+
+  // Capital / Manama core
+  if (/\bmanama\b/.test(lower) || /\bcapital\b/.test(lower)) {
+    extras.push('Seef', 'Bab Al Bahrain', 'Souq Bab Al Bahrain', 'Diplomatic Area', 'Hoora', 'Gudaibiya')
+  }
+
+  // Adliya food / nightlife cluster
+  if (/\badliya\b/.test(lower)) {
+    extras.push('Block 338', 'Block 338 restaurants')
+  }
+
+  // Seef / west Manama malls
+  if (/\bseef\b/.test(lower)) {
+    extras.push('City Centre Bahrain', 'Seef Mall', 'The Avenues Bahrain')
+  }
+
+  // Northern governorate suburbs
+  if (/\bsaar\b/.test(lower) || /\bjanabiyah\b/.test(lower) || /\bjanabiya\b/.test(lower)) {
+    extras.push('Saar', 'Janabiyah', 'Budaiya')
+  }
+
+  // Riffa split (West / East)
+  if (/\briffa\b/.test(lower)) {
+    extras.push('East Riffa', 'West Riffa')
+  }
+
+  // Coastal leisure strip in the south-west
+  if (/\bzallaq\b/.test(lower) || /\bal areen\b/.test(lower)) {
+    extras.push('Al Areen', 'Bahrain International Circuit', 'Zallaq')
+  }
+
+  if (!extras.length) return raw
+  const tail = Array.from(new Set(extras)).join(', ')
+  return `${raw}. Nearby Bahrain areas: ${tail}.`
+}
+
+/**
  * Fetches places, restaurants, and events from Pinecone relevant to the user message.
  * Optional user preferences bias the query (prioritize) but do not filter — we still return a mix.
  * Optional `options.retrievalQueryText` overrides the embedding text (e.g. history-augmented) while leaving `userMessage` for display/logs.
@@ -1292,9 +1465,10 @@ export async function fetchPineconePlacesForChat(userMessage, options = {}) {
   if (generalLabels.length) preferenceParts.push(`About them: ${generalLabels.join(', ')}`);
   if (activityLabels.length) preferenceParts.push(`Activities they like: ${activityLabels.join(', ')}`);
   if (foodLabels.length) preferenceParts.push(`Food they like: ${foodLabels.join(', ')}`);
+  const geoAwareText = expandBahrainGeoHints(textForEmbed);
   const queryText = preferenceParts.length
-    ? `${textForEmbed}. ${preferenceParts.join('. ')}`
-    : textForEmbed;
+    ? `${geoAwareText}. ${preferenceParts.join('. ')}`
+    : geoAwareText;
   let embedding;
   try {
     embedding = await getEmbedding(queryText);
@@ -2054,6 +2228,12 @@ function selectMatchesForPlan(places, restaurants, breakfastSpots, events, optio
     options.feedbackDownrankSet instanceof Set ? options.feedbackDownrankSet : new Set()
   const feedbackBoost = options.feedbackBoostSet instanceof Set ? options.feedbackBoostSet : new Set()
 
+  // When specific gated place themes are selected (e.g. Beach, Museum), apply a much
+  // heavier preference weight so theme-matched venues dominate the catalog slice sent to GPT.
+  const hasGatedPrefLabels = (Array.isArray(options.prefLabels) ? options.prefLabels : []).some(
+    (l) => PLACE_THEME_GATES[l],
+  )
+
   const rankingSpotKey = (m) => {
     const meta = m?.metadata || {}
     return normalizePlanRankingSpotKey(
@@ -2079,13 +2259,18 @@ function selectMatchesForPlan(places, restaurants, breakfastSpots, events, optio
       if (c) {
         const d = haversineKm(originLat, originLng, c.lat, c.lng)
         if (!Number.isNaN(d)) {
-          if (tier === 'nearby') geo = -d * 1.12
-          else if (tier === 'balanced') geo = -d * 0.58
+          // Stronger distance weighting to prefer closest venues when origin is known.
+          // "nearby" tier is very aggressive; "balanced" is moderate; "wide" still boosts far.
+          if (tier === 'nearby') geo = -d * 2.2
+          else if (tier === 'balanced') geo = -d * 1.1
           else geo = d * 0.22
         }
       }
     }
-    return pc * 52 + pref * 3.4 + geo + upW - downW
+    // Use a higher preference multiplier when specific gated labels (Beach, Museum, etc.)
+    // are selected so the catalog slice GPT receives is dominated by theme-matching venues.
+    const prefWeight = hasGatedPrefLabels ? 9.0 : 3.4
+    return pc * 52 + pref * prefWeight + geo + upW - downW
   }
 
   const takeBucket = (arr, cap, diversifyMaxPerFacet) => {
@@ -3144,14 +3329,14 @@ Core requirements:
 2) Nearby/balanced days: usually 6-7 stops. Wide days with strong catalog: up to 9 stops.
 3) Never skip breakfast.
 
-Session preferences (highest priority after safety/feasibility):
+Session preferences (HARD CONSTRAINTS — strictly enforced, not loose suggestions):
 ${hasPref
-  ? `- Activities: ${prefLabels.join(', ')}. Match place types to these preferences.`
+  ? `- Activities (STRICT — every place stop must match): ${prefLabels.join(', ')}. EVERY non-restaurant stop in this plan MUST belong to one of these selected categories. Example: if "Beach" is selected, only beach/coastal/waterfront/seaside venues qualify as place stops — never museums, malls, or unrelated attractions. If "Museum" is selected, only museums and galleries qualify. Exclude any catalog row that does not clearly match the selected activity type. This is a hard filter, not a suggestion.`
   : hasPersonaSummary
     ? '- Activities: none selected this session; infer activity style from persona summary first, then provide a balanced mix (culture, sightseeing, nature, shopping).'
     : '- Activities: none selected this session; provide a balanced mix (culture, sightseeing, nature, shopping).'}
 ${hasFood
-  ? `- Food: ${foodLabels.join(', ')} — use ONLY restaurants whose catalog row shows a matching Cuisine/Type (today’s chips are hard constraints; do not substitute e.g. Japanese/Thai/Lebanese unless that chip was explicitly selected). Include at least one clear match per selected food type when available.`
+  ? `- Food (STRICT): ${foodLabels.join(', ')} — use ONLY restaurants whose catalog row shows a matching Cuisine/Type (today's chips are hard constraints; do not substitute e.g. Japanese/Thai/Lebanese unless that chip was explicitly selected). Include at least one clear match per selected food type when available.`
   : hasPersonaSummary
     ? '- Food: none selected this session; infer dining style from persona summary first, while keeping meal choices varied.'
     : '- Food: none selected this session; keep meal choices varied.'}
@@ -3223,7 +3408,7 @@ Return only JSON array, no markdown:
 
   const userMsg = `${viewerUType === 'tourist' ? '🧭 Visitor mode: smooth routing and light orientation when helpful.' : '🏠 Local mode: insider-feel picks; skip lengthy introductions to obvious sights.'}
 🚗 Travel willingness this session: ${travelTier} (nearby = stay local; balanced = mix; wide = island-wide when worth it).
-${hasPref ? `🎯 Today’s activity preferences: ${prefLabels.join(', ')}` : '🎯 Today: no activity prefs — diverse mix'}
+${hasPref ? `🎯 Today’s activity preferences (STRICT — place stops must ONLY match these types): ${prefLabels.join(', ')}` : '🎯 Today: no activity prefs — diverse mix'}
 ${hasFood ? `🍽️ Today’s food types: ${foodLabels.join(', ')} — each meal must use catalogue rows whose Cuisine line matches one of these types (no substitutes).` : hasPersonaSummary ? '🍽️ Today: open on food — personalize from persona summary' : '🍽️ Today: open on food'}
 
 Catalog (${promptCatalogMatches.length} rows):

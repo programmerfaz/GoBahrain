@@ -12,6 +12,10 @@ import { Ionicons } from '@expo/vector-icons'
 import { CachedImage } from '../../components/CachedImage'
 import { resolvePublicImageUrl } from '../../utils/imageUrl'
 import { BAHRAIN_FACTS } from './constants'
+import {
+  FONT_POPPINS_BOLD,
+  FONT_POPPINS_MEDIUM,
+} from '../../constants/brandFont'
 
 /* ────────────────────────────────────────────────────────────────────────────
  * Cinematic Reel — plan generation loader.
@@ -1039,7 +1043,7 @@ const cn = StyleSheet.create({
   },
   title: {
     fontSize: 30,
-    fontWeight: '900',
+    fontFamily: FONT_POPPINS_BOLD,
     color: '#FFFFFF',
     letterSpacing: -0.6,
     lineHeight: 34,
@@ -1054,7 +1058,7 @@ const cn = StyleSheet.create({
   },
   subtitle: {
     fontSize: 14,
-    fontWeight: '500',
+    fontFamily: FONT_POPPINS_MEDIUM,
     color: 'rgba(255,255,255,0.78)',
     letterSpacing: 0.2,
     marginTop: 2,
@@ -1098,7 +1102,7 @@ const cn = StyleSheet.create({
   },
   liveText: {
     fontSize: 10,
-    fontWeight: '900',
+    fontFamily: FONT_POPPINS_BOLD,
     letterSpacing: 2.6,
     color: '#FFFFFF',
   },
@@ -1216,7 +1220,7 @@ const cn = StyleSheet.create({
   },
   stepLabel: {
     fontSize: 13,
-    fontWeight: '700',
+    fontFamily: FONT_POPPINS_BOLD,
     letterSpacing: 0.6,
     color: 'rgba(255,255,255,0.7)',
   },
@@ -1273,7 +1277,7 @@ const cn = StyleSheet.create({
     fontSize: 12,
     lineHeight: 17,
     color: 'rgba(255,255,255,0.8)',
-    fontWeight: '500',
+    fontFamily: FONT_POPPINS_MEDIUM,
   },
   factTextCompact: {
     fontSize: 11,

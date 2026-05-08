@@ -340,8 +340,13 @@ export function useAIPlanScreenOuter() {
     const openPlanModal = mid.route.params?.openPlanModal;
     if (openPlanModal) {
       mid.startSetup();
+      try {
+        mid.navigation.setParams({ openPlanModal: undefined });
+      } catch (_) {
+        /* older navigators */
+      }
     }
-  }, [mid.route.params?.openPlanModal]);
+  }, [mid.route.params?.openPlanModal, mid]);
 
   const closePlanModal = (then) => {
     mid.setDoorVisible(false)
@@ -718,19 +723,22 @@ export function useAIPlanScreenOuter() {
         }
         mid.setPineconeMatches(matches);
         const referenceCoords = (() => {
+          // Priority 1: real GPS location
           const u = mid.userLocationRef?.current;
           const uLat = Number(u?.latitude);
           const uLng = Number(u?.longitude);
           if (Number.isFinite(uLat) && Number.isFinite(uLng)) {
             return { latitude: uLat, longitude: uLng };
           }
+          // Priority 2: current map region center
           const r = mid.mapRegion;
           const rLat = Number(r?.latitude);
           const rLng = Number(r?.longitude);
           if (Number.isFinite(rLat) && Number.isFinite(rLng)) {
             return { latitude: rLat, longitude: rLng };
           }
-          return undefined;
+          // Priority 3: default Bahrain center — ensures distance sorting always works
+          return { latitude: 26.0667, longitude: 50.5577 };
         })();
         const { plan, fingerprints, stats } = await buildQuickFindSingleStopPlan(
           matches,
