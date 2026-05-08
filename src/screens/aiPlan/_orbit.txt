@@ -1,0 +1,79 @@
+  const runMarkerShowcaseOrbitForMarker = useCallback(
+    (mk, gen) => {
+      const lat = Number(mk?.lat);
+      const lng = Number(mk?.lng);
+      const map = mapRef.current;
+      if (!map || Number.isNaN(lat) || Number.isNaN(lng)) return;
+
+      const center = { latitude: lat, longitude: lng };
+      const schedule = (fn, delay) => {
+        const id = setTimeout(() => {
+          markerShowcaseRef.current.timeoutIds = markerShowcaseRef.current.timeoutIds.filter((x) => x !== id);
+          if (markerShowcaseRef.current.generation !== gen) return;
+          fn();
+        }, delay);
+        markerShowcaseRef.current.timeoutIds.push(id);
+      };
+
+      const runFallbackRegion = (latitudeDelta, duration) => {
+        markProgrammaticMapMove(800);
+        map.animateToRegion(
+          clampRegionToBahrain({
+            latitude: lat,
+            longitude: lng,
+            latitudeDelta,
+            longitudeDelta: latitudeDelta,
+          }),
+          duration,
+        );
+      };
+
+      if (typeof map.animateCamera !== 'function') {
+        setIsMarkerShowcaseActive(true);
+        runFallbackRegion(0.012, 520);
+        return;
+      }
+
+      setIsMarkerShowcaseActive(true);
+
+      markProgrammaticMapMove(520);
+      map.animateCamera(
+        Platform.OS === 'ios'
+          ? { center, pitch: 0, heading: 0, altitude: 2600 }
+          : { center, pitch: 0, heading: 0, zoom: 15.5 },
+        { duration: 520 },
+      );
+
+      schedule(() => {
+        const LEG_MS = 13500;
+        const HEADINGS = [90, 180, 270, 360];
+        markProgrammaticMapMove(HEADINGS.length * LEG_MS + 2200);
+        map.animateCamera(
+          Platform.OS === 'ios'
+            ? { center, pitch: 52, heading: 0, altitude: 880 }
+            : { center, pitch: 48, heading: 0, zoom: 18.5 },
+          { duration: 780 },
+        );
+
+        schedule(() => {
+          let leg = 0;
+          const runLeg = () => {
+            if (markerShowcaseRef.current.generation !== gen) return;
+            if (leg >= HEADINGS.length) return;
+            map.animateCamera(
+              Platform.OS === 'ios'
+                ? { center, pitch: 52, heading: HEADINGS[leg], altitude: 880 }
+                : { center, pitch: 48, heading: HEADINGS[leg], zoom: 18.5 },
+              { duration: LEG_MS },
+            );
+            leg += 1;
+            if (leg < HEADINGS.length) {
+              schedule(runLeg, LEG_MS);
+            }
+          };
+          runLeg();
+        }, 820);
+      }, 560);
+    },
+    [markProgrammaticMapMove],
+  );

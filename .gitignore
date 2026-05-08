@@ -36,6 +36,9 @@ yarn-error.*
 .env*.local
 backend/.env
 
+# Supabase: cloud data dumps (may contain PII; never commit)
+supabase/snapshots/*.sql
+
 # typescript
 *.tsbuildinfo
 

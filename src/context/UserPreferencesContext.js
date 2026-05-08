@@ -7,6 +7,8 @@ import {
   getLabelsFromIds,
   getGeneralLabelsFromIds,
 } from '../constants/preferences';
+import { fetchUserPersonalization } from '../services/personalization';
+import { supabase } from '../config/supabase';
 
 const ONBOARDING_KEY = '@gobahrain_onboarding_complete';
 const PREFERENCES_KEY = '@gobahrain_user_preferences';
@@ -15,6 +17,8 @@ const defaultPreferences = {
   generalIds: [],
   activityIds: [],
   foodIds: [],
+  profileAnswers: {},
+  profileSummary: '',
 };
 
 const UserPreferencesContext = createContext(null);
@@ -39,6 +43,8 @@ export function UserPreferencesProvider({ children }) {
               generalIds: Array.isArray(parsed.generalIds) ? parsed.generalIds : [],
               activityIds: Array.isArray(parsed.activityIds) ? parsed.activityIds : [],
               foodIds: Array.isArray(parsed.foodIds) ? parsed.foodIds : [],
+              profileAnswers: parsed.profileAnswers && typeof parsed.profileAnswers === 'object' ? parsed.profileAnswers : {},
+              profileSummary: typeof parsed.profileSummary === 'string' ? parsed.profileSummary : '',
             });
           }
         } catch (_) {}
@@ -55,6 +61,40 @@ export function UserPreferencesProvider({ children }) {
     loadStored();
   }, [loadStored]);
 
+  const hydrateFromSupabase = useCallback(async () => {
+    try {
+      const remote = await fetchUserPersonalization();
+      if (!remote) return;
+      setPreferencesState((prev) => {
+        const merged = {
+          generalIds: remote.generalIds.length ? remote.generalIds : (prev?.generalIds ?? []),
+          activityIds: remote.activityIds.length ? remote.activityIds : (prev?.activityIds ?? []),
+          foodIds: remote.foodIds.length ? remote.foodIds : (prev?.foodIds ?? []),
+          profileAnswers: Object.keys(remote.profileAnswers || {}).length
+            ? remote.profileAnswers
+            : (prev?.profileAnswers ?? {}),
+          profileSummary: remote.personaSummary || prev?.profileSummary || '',
+        };
+        AsyncStorage.setItem(PREFERENCES_KEY, JSON.stringify(merged)).catch(() => {});
+        return merged;
+      });
+    } catch (_) {
+      // Keep local state; remote hydration is best-effort.
+    }
+  }, []);
+
+  useEffect(() => {
+    hydrateFromSupabase();
+    const { data: sub } = supabase.auth.onAuthStateChange((event) => {
+      if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED' || event === 'INITIAL_SESSION') {
+        hydrateFromSupabase();
+      }
+    });
+    return () => {
+      try { sub?.subscription?.unsubscribe?.(); } catch (_) {}
+    };
+  }, [hydrateFromSupabase]);
+
   const setPreferences = useCallback(async (next) => {
     let merged = null;
     setPreferencesState((prev) => {
@@ -68,6 +108,12 @@ export function UserPreferencesProvider({ children }) {
         foodIds: next?.foodIds !== undefined
           ? (Array.isArray(next.foodIds) ? next.foodIds : defaultPreferences.foodIds)
           : (prev?.foodIds ?? defaultPreferences.foodIds),
+        profileAnswers: next?.profileAnswers !== undefined
+          ? (next.profileAnswers && typeof next.profileAnswers === 'object' ? next.profileAnswers : defaultPreferences.profileAnswers)
+          : (prev?.profileAnswers ?? defaultPreferences.profileAnswers),
+        profileSummary: next?.profileSummary !== undefined
+          ? (typeof next.profileSummary === 'string' ? next.profileSummary : defaultPreferences.profileSummary)
+          : (prev?.profileSummary ?? defaultPreferences.profileSummary),
       };
       return merged;
     });

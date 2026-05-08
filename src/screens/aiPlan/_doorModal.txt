@@ -1,0 +1,462 @@
+  const startSetup = () => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {})
+    setPlanGenerationSuccess(false)
+    setRevealingPins(false)
+    setVisiblePinCount(0)
+    sheetOpacity.setValue(1)
+    setActiveSavedPlanId(null)
+    setSharedCollaboration(null)
+    setSelectedPreferences(Array.isArray(preferences?.activityIds) ? preferences.activityIds : [])
+    setSelectedFoodCategories(Array.isArray(preferences?.foodIds) ? preferences.foodIds : [])
+    setDayPlan(null)
+    setPineconeMatches([])
+    setError(null)
+    setSpotPreviews([])
+    setPlanModalStep(1)
+    setTravelExploreId('balanced')
+
+    doorLeft.setValue(-SCREEN_WIDTH / 2)
+    doorRight.setValue(SCREEN_WIDTH / 2)
+    doorIconScale.setValue(0)
+    doorIconOpacity.setValue(0)
+    doorFade.setValue(1)
+    setDoorVisible(true)
+
+    planModalBackdrop.setValue(1)
+    planModalScale.setValue(1)
+    planModalOpacity.setValue(1)
+
+    Animated.sequence([
+      Animated.parallel([
+        Animated.spring(doorIconScale, { toValue: 1, tension: 120, friction: 8, useNativeDriver: true }),
+        Animated.timing(doorIconOpacity, { toValue: 1, duration: 200, useNativeDriver: true }),
+      ]),
+      Animated.delay(100),
+      Animated.parallel([
+        Animated.timing(doorLeft, { toValue: 0, duration: 380, easing: Easing.bezier(0.4, 0, 0.2, 1), useNativeDriver: true }),
+        Animated.timing(doorRight, { toValue: 0, duration: 380, easing: Easing.bezier(0.4, 0, 0.2, 1), useNativeDriver: true }),
+      ]),
+    ]).start(() => {
+      skipOpenAnim.current = true
+      setShowPlanModal(true)
+
+      requestAnimationFrame(() => {
+        Animated.parallel([
+          Animated.timing(doorIconOpacity, { toValue: 0, duration: 150, useNativeDriver: true }),
+          Animated.timing(doorIconScale, { toValue: 0.6, duration: 150, useNativeDriver: true }),
+        ]).start(() => {
+          Animated.parallel([
+            Animated.timing(doorLeft, { toValue: -SCREEN_WIDTH / 2, duration: 400, easing: Easing.bezier(0.4, 0, 0.2, 1), useNativeDriver: true }),
+            Animated.timing(doorRight, { toValue: SCREEN_WIDTH / 2, duration: 400, easing: Easing.bezier(0.4, 0, 0.2, 1), useNativeDriver: true }),
+          ]).start(() => {
+            setDoorVisible(false)
+          })
+        })
+      })
+    })
+  };
+
+  const handleSharePlanWithFriends = useCallback(async () => {
+    const { message, title } = formatPlanShareMessage(dayPlan);
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+    try {
+      await Share.share(
+        Platform.OS === 'ios'
+          ? { message, title }
+          : { message, title: title || 'SiyahaBH' },
+      );
+    } catch (_) {
+      /* dismissed */
+    }
+  }, [dayPlan]);
+
+  const renderPlanTimelineOverviewHeader = useCallback(() => {
+    if (!dayPlan?.length) return null
+    const mealCount = dayPlan.filter((i) => i.type === 'restaurant').length
+    const reel = dayPlan.slice(0, 6).map((stop) => {
+      const thumbUri = pickPlanStopThumbUri(stop, allPlaceMarkers)
+      return { key: stop._planRowKey || `${stop.spot}-${stop.lat}`, uri: thumbUri }
+    })
+    const sharedBanner =
+      sharedCollaboration?.role === 'viewer'
+        ? 'View-only shared plan'
+        : sharedCollaboration?.role === 'editor'
+          ? 'Shared plan — your edits sync to the owner'
+          : sharedCollaboration?.role === 'owner'
+            ? 'Your saved plan (you can edit and re-share)'
+            : null
+    const titleLabel =
+      sharedCollaboration?.role === 'viewer' || sharedCollaboration?.role === 'editor'
+        ? 'Shared Bahrain day'
+        : 'Your Bahrain day'
+    const canEditSavedPlanTitle =
+      !!activeSavedPlanId &&
+      !planReadOnly &&
+      (sharedCollaboration == null || sharedCollaboration.role === 'owner')
+    const rowForTitle = savedPlansList.find((p) => p.id === activeSavedPlanId)
+    const savedTitleRaw = typeof rowForTitle?.title === 'string' ? rowForTitle.title.trim() : ''
+    const primaryTitle = canEditSavedPlanTitle && savedTitleRaw ? savedTitleRaw : titleLabel
+    return (
+      <View style={styles.planLuxuryOverviewCard} accessibilityRole="summary">
+        <View style={styles.planLuxuryOverviewAccentTop} />
+        {sharedBanner ? (
+          <View style={styles.planShareBanner} accessibilityRole="text">
+            <Text style={styles.planShareBannerText}>{sharedBanner}</Text>
+          </View>
+        ) : null}
+        <View style={styles.planLuxuryOverviewHeaderRow}>
+          <TouchableOpacity
+            style={styles.planLuxuryOverviewBackBtn}
+            activeOpacity={0.8}
+            onPress={() => {
+              setDrawerStep(0)
+              setDayPlan(null)
+              setError(null)
+              setActiveSavedPlanId(null)
+              setSharedCollaboration(null)
+            }}
+            accessibilityRole="button"
+            accessibilityLabel="Back to plans"
+          >
+            <Ionicons name="chevron-back" size={20} color="#0F172A" />
+          </TouchableOpacity>
+          <View style={styles.planLuxuryOverviewTitleBlock}>
+            <View style={styles.planLuxuryOverviewTitleRow}>
+              <Text style={[styles.planLuxuryOverviewTitle, { flex: 1, minWidth: 0 }]} numberOfLines={2}>
+                {primaryTitle}
+              </Text>
+              {canEditSavedPlanTitle ? (
+                <TouchableOpacity
+                  style={styles.planLuxuryOverviewTitleEditBtn}
+                  activeOpacity={0.75}
+                  onPress={() => handleOpenEditSavedPlanTitle(activeSavedPlanId)}
+                  accessibilityRole="button"
+                  accessibilityLabel="Edit plan title"
+                >
+                  <Ionicons name="create-outline" size={20} color="#64748B" />
+                </TouchableOpacity>
+              ) : null}
+            </View>
+            <Text
+              style={styles.planLuxuryOverviewSubtitle}
+              numberOfLines={2}
+              accessibilityLabel={`${dayPlan.length} stops, ${mealCount} meals`}
+            >
+              {mealCount === 0
+                ? `${dayPlan.length} hand-picked stops`
+                : `${dayPlan.length} stops, including ${mealCount} meal${mealCount === 1 ? '' : 's'}`}
+            </Text>
+          </View>
+          <View style={styles.planLuxuryOverviewHeaderActions}>
+            {!planReadOnly ? (
+              <TouchableOpacity
+                style={styles.savePlanHeaderBtn}
+                activeOpacity={0.75}
+                onPress={handleSavePlanToCloud}
+                disabled={savePlanBusy}
+                accessibilityRole="button"
+                accessibilityLabel="Save plan to cloud"
+              >
+                <Text style={styles.savePlanHeaderBtnText}>{savePlanBusy ? '…' : 'Save'}</Text>
+              </TouchableOpacity>
+            ) : null}
+            {!planReadOnly ? (
+              <TouchableOpacity
+                style={styles.planLuxuryOverviewIconBtn}
+                activeOpacity={0.75}
+                onPress={handleOpenShareModal}
+                disabled={shareModalBusy}
+                accessibilityRole="button"
+                accessibilityLabel="Share link and code"
+              >
+                <Ionicons name="link-outline" size={18} color={themeColors.primary} />
+              </TouchableOpacity>
+            ) : null}
+            <TouchableOpacity
+              style={styles.planLuxuryOverviewShareBtn}
+              activeOpacity={0.75}
+              onPress={handleSharePlanWithFriends}
+              accessibilityRole="button"
+              accessibilityLabel="Share plan as text"
+            >
+              <Ionicons name="share-outline" size={18} color={themeColors.primary} />
+            </TouchableOpacity>
+          </View>
+        </View>
+        <View style={styles.planLuxuryOverviewMapRow}>
+          <View style={styles.planLuxuryOverviewMapRowSplit}>
+            <TouchableOpacity
+              style={[styles.planLuxuryOverviewMapBtn, styles.planLuxuryOverviewMapBtnFlex]}
+              onPress={handleOpenInGoogleMaps}
+              disabled={openingMaps}
+              activeOpacity={0.85}
+              accessibilityRole="button"
+              accessibilityLabel="Open route in Google Maps"
+            >
+              {openingMaps ? (
+                <ActivityIndicator size="small" color="#64748B" />
+              ) : (
+                <>
+                  <Ionicons name="navigate-outline" size={18} color="#475569" />
+                  <Text style={styles.planLuxuryOverviewMapBtnText}>Maps</Text>
+                </>
+              )}
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[
+                styles.planLuxuryOverviewMapBtn,
+                styles.planLuxuryOverviewMapBtnFlex,
+                styles.planLuxuryOverviewAddBtn,
+                planReadOnly && { opacity: 0.45 },
+              ]}
+              onPress={() => {
+                if (planReadOnly) return
+                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {})
+                setShowSearchModal(true)
+              }}
+              disabled={planReadOnly}
+              activeOpacity={0.85}
+              accessibilityRole="button"
+              accessibilityLabel="Add a stop from the catalog"
+            >
+              <Ionicons name="add-circle-outline" size={18} color="#0096FF" />
+              <Text style={styles.planLuxuryOverviewAddBtnText}>Add stop</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.planLuxuryReelContent}
+          accessibilityRole="scrollbar"
+          accessibilityLabel="Spot photo previews"
+        >
+          {reel.map(({ key, uri }) => (
+            <View key={String(key)} style={styles.planLuxuryReelThumbWrap}>
+              {uri ? (
+                <PreviewImage uri={uri} style={styles.planLuxuryReelThumbImg} noFade />
+              ) : (
+                <View style={[styles.planLuxuryReelThumbImg, styles.planLuxuryReelThumbEmpty]}>
+                  <Ionicons name="image-outline" size={18} color="#C7C7CC" />
+                </View>
+              )}
+            </View>
+          ))}
+        </ScrollView>
+      </View>
+    )
+  }, [
+    dayPlan,
+    allPlaceMarkers,
+    openingMaps,
+    handleOpenInGoogleMaps,
+    handleSharePlanWithFriends,
+    setShowSearchModal,
+    sharedCollaboration,
+    planReadOnly,
+    handleSavePlanToCloud,
+    savePlanBusy,
+    handleOpenShareModal,
+    shareModalBusy,
+    activeSavedPlanId,
+    savedPlansList,
+    handleOpenEditSavedPlanTitle,
+  ])
+
+  const handleCopyShareText = useCallback(async () => {
+    const { message } = formatPlanShareMessage(dayPlan);
+    try {
+      await Clipboard.setStringAsync(message);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
+      if (shareCopyHintTimerRef.current) clearTimeout(shareCopyHintTimerRef.current);
+      setShareCopyHint(true);
+      shareCopyHintTimerRef.current = setTimeout(() => {
+        setShareCopyHint(false);
+        shareCopyHintTimerRef.current = null;
+      }, 2200);
+    } catch (_) {
+      Alert.alert('Could not copy', 'Please try again.');
+    }
+  }, [dayPlan]);
+
+  const handleEnhanceStop = useCallback(async (planIndex) => {
+    if (planIndex == null || planIndex < 0) return
+    if (enhancingIndex !== null || loading) return
+    if (planReadOnly) {
+      Alert.alert('View only', 'This plan is shared for viewing only.')
+      return
+    }
+    if (!dayPlan?.length) {
+      Alert.alert('Unavailable', 'Build a plan first so we can swap this stop.')
+      return
+    }
+    setEnhancingIndex(planIndex)
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {})
+    const prevKeys = dayPlan.map((x) => x._planRowKey)
+    const draft = [...dayPlan]
+    try {
+      const { replacement: rawStop, enrichCatalog } = await enhancePlanStopAtIndex(
+        dayPlan,
+        planIndex,
+        pineconeMatches,
+        lastPrefLabelsRef.current || [],
+        lastFoodLabelsRef.current || [],
+        {
+          profileGeneral: generalLabels,
+          profileActivity: activityLabels,
+          profileFood: savedProfileFoodLabels,
+          profileNarrative: preferences?.profileSummary || '',
+          profileAnswers: preferences?.profileAnswers || {},
+        },
+      )
+      const newKey = `rk-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`
+      draft[planIndex] = { ...rawStop, _planRowKey: newKey }
+      const mergedKeys = prevKeys.map((k, i) => (i === planIndex ? newKey : k))
+      const enrichPool = enrichCatalog?.length ? enrichCatalog : pineconeMatches
+      const enriched = await enrichPlanWithClientData(draft, enrichPool, allPlaceMarkers)
+      const keyed = attachPlanRowKeys(
+        enriched.map((item, i) => ({ ...item, _planRowKey: mergedKeys[i] || item._planRowKey })),
+      )
+      setDayPlan(keyed)
+      setStopDetailIndex((prev) => {
+        if (prev == null || prev !== planIndex) return prev
+        return Math.min(planIndex, keyed.length - 1)
+      })
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {})
+    } catch (e) {
+      Alert.alert('Enhance failed', e?.message || 'Please try again.')
+    } finally {
+      setEnhancingIndex(null)
+    }
+  }, [
+    dayPlan,
+    pineconeMatches,
+    enhancingIndex,
+    loading,
+    planReadOnly,
+    generalLabels,
+    activityLabels,
+    savedProfileFoodLabels,
+    colors.morning,
+    colors.afternoon,
+    colors.evening,
+  ])
+
+  const addToPlanMode = Boolean(dayPlan?.length)
+
+  const handleAddClientToPlan = useCallback(async (client) => {
+    if (planReadOnly) return
+    if (!dayPlan?.length || !client) return
+    const cid = client.client_a_uuid || client.clientId
+    if (cid && dayPlan.some((s) => s.clientId && s.clientId === cid)) {
+      Alert.alert(
+        'Already on your itinerary',
+        'This place is already in your plan. Drag the list to change the order.',
+      )
+      return
+    }
+    if (addingPlanStop || enhancingIndex !== null) return
+    setAddingPlanStop(true)
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {})
+    try {
+      const draftStop = buildDraftStopFromClient(client, dayPlan)
+      const draftPlan = [...dayPlan, draftStop]
+      const enriched = await enrichPlanWithClientData(draftPlan, pineconeMatches, allPlaceMarkers)
+      const keyed = attachPlanRowKeys(enriched)
+      setDayPlan(keyed)
+      setVisibleStopCount(keyed.length)
+      setShowSearchModal(false)
+      setSearchModalQuery('')
+      const validMarkers = buildMapMarkers(keyed, allPlaceMarkers).filter((m) => m?.lat && m?.lng)
+      const coords = validMarkers.map((m) => ({ latitude: m.lat, longitude: m.lng }))
+      if (coords.length > 0 && mapRef.current) {
+        markProgrammaticMapMove(2200);
+        mapRef.current.fitToCoordinates(coords, {
+          edgePadding: { top: 80, right: 60, bottom: SCREEN_HEIGHT * 0.35, left: 60 },
+          animated: true,
+        })
+      }
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {})
+    } catch (e) {
+      Alert.alert('Could not add stop', e?.message || 'Please try again.')
+    } finally {
+      setAddingPlanStop(false)
+    }
+  }, [
+    dayPlan,
+    pineconeMatches,
+    allPlaceMarkers,
+    addingPlanStop,
+    enhancingIndex,
+    planReadOnly,
+  ])
+
+  useEffect(() => () => {
+    if (shareCopyHintTimerRef.current) clearTimeout(shareCopyHintTimerRef.current);
+  }, []);
+
+  useEffect(() => {
+    const openPlanModal = route.params?.openPlanModal;
+    if (openPlanModal) {
+      startSetup();
+    }
+  }, [route.params?.openPlanModal]);
+
+  const closePlanModal = (then) => {
+    doorLeft.setValue(0)
+    doorRight.setValue(0)
+    doorIconScale.setValue(0)
+    doorIconOpacity.setValue(0)
+    doorFade.setValue(1)
+    setDoorVisible(true)
+
+    requestAnimationFrame(() => {
+      setShowPlanModal(false)
+      setPlanGenerationSuccess(false)
+      planModalBackdrop.setValue(0)
+      planModalScale.setValue(0.95)
+      planModalOpacity.setValue(0)
+
+      Animated.sequence([
+        Animated.parallel([
+          Animated.spring(doorIconScale, { toValue: 1, tension: 120, friction: 8, useNativeDriver: true }),
+          Animated.timing(doorIconOpacity, { toValue: 1, duration: 200, useNativeDriver: true }),
+        ]),
+        Animated.delay(200),
+        Animated.parallel([
+          Animated.timing(doorLeft, { toValue: -SCREEN_WIDTH / 2, duration: 420, easing: Easing.bezier(0.4, 0, 0.2, 1), useNativeDriver: true }),
+          Animated.timing(doorRight, { toValue: SCREEN_WIDTH / 2, duration: 420, easing: Easing.bezier(0.4, 0, 0.2, 1), useNativeDriver: true }),
+        ]),
+        Animated.parallel([
+          Animated.timing(doorIconScale, { toValue: 0, duration: 200, useNativeDriver: true }),
+          Animated.timing(doorIconOpacity, { toValue: 0, duration: 200, useNativeDriver: true }),
+        ]),
+      ]).start(() => {
+        setDoorVisible(false)
+        then?.()
+      })
+    })
+  };
+
+  const openPlanModalAnim = () => {
+    Animated.parallel([
+      Animated.timing(planModalBackdrop, {
+        toValue: 1,
+        duration: 350,
+        easing: Easing.out(Easing.quad),
+        useNativeDriver: true,
+      }),
+      Animated.timing(planModalScale, {
+        toValue: 1,
+        duration: 380,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: true,
+      }),
+      Animated.timing(planModalOpacity, {
+        toValue: 1,
+        duration: 320,
+        easing: Easing.out(Easing.quad),
+        useNativeDriver: true,
+      }),
+    ]).start();
+  };

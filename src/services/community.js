@@ -2,6 +2,7 @@ import { decode as decodeBase64ToArrayBuffer } from 'base64-arraybuffer';
 import { supabase } from '../config/supabase';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { OPENAI_KEY } from '../config/keys';
+import { ensureImageUrl } from '../utils/imageUrl';
 
 const OPENAI_CHAT_URL = 'https://api.openai.com/v1/chat/completions';
 const AI_REVIEWS_LIMIT = 40;
@@ -30,23 +31,20 @@ function isValidUUID(s) {
 const GUEST_USER_UUID = (typeof process !== 'undefined' && process.env?.EXPO_PUBLIC_GUEST_USER_UUID) || 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaa0003';
 
 /**
- * Get user_a_uuid for community posts. Uses Supabase auth if available; otherwise uses guest user (EXPO_PUBLIC_GUEST_USER_UUID).
+ * Get user_a_uuid for community posts. Must be a UUID that exists in public."user" (FK constraint).
+ * Returns the signed-in user's user_a_uuid from get_my_profile when available; otherwise GUEST_USER_UUID.
+ * Ensure GUEST_USER_UUID exists in public."user" (e.g. seed row or EXPO_PUBLIC_GUEST_USER_UUID).
  */
 export async function getCommunityUserId() {
   try {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (user?.id && isValidUUID(user.id)) return user.id;
-
-    const { data: anon, error: anonError } = await supabase.auth.signInAnonymously();
-    if (!anonError && anon?.user?.id && isValidUUID(anon.user.id)) return anon.user.id;
-
-    if (GUEST_USER_UUID && isValidUUID(GUEST_USER_UUID)) return GUEST_USER_UUID;
-    return generateUUID();
+    const { data: profile } = await supabase.rpc('get_my_profile');
+    const userUuid = profile?.user?.user_a_uuid;
+    if (userUuid && isValidUUID(userUuid)) return userUuid;
   } catch (e) {
-    console.warn('[Community] getCommunityUserId failed:', e);
-    if (GUEST_USER_UUID && isValidUUID(GUEST_USER_UUID)) return GUEST_USER_UUID;
-    return generateUUID();
+    console.warn('[Community] getCommunityUserId get_my_profile failed:', e?.message);
   }
+  if (GUEST_USER_UUID && isValidUUID(GUEST_USER_UUID)) return GUEST_USER_UUID;
+  return generateUUID();
 }
 
 /**
@@ -109,41 +107,270 @@ export async function fetchClientByQrPayload(payload) {
   };
 }
 
-/**
- * Fetch community posts from Supabase.
- * - all: all posts, newest first
- * - trending: top 40 by upvotes (descending)
- * - other topicId: filter by hashtags, newest first
- */
-export async function fetchCommunityPosts(topicId = 'all') {
-  let query = supabase.from('community').select('*');
+const COMMUNITY_SELECT_WITH_AUTHOR = '*, user(account(user_name))';
+const PERSONALIZED_TOPIC_BOOSTS = {
+  foodie: ['food', 'restaurant', 'cafe', 'dessert', 'brunch', 'dining'],
+  'culture-history': ['culture', 'museum', 'heritage', 'history', 'traditional', 'fort'],
+  'nature-outdoors': ['nature', 'beach', 'park', 'outdoor', 'garden', 'trail'],
+  nightlife: ['nightlife', 'bar', 'lounge', 'night', 'club'],
+  shopping: ['shopping', 'mall', 'souq', 'market', 'store'],
+  adventure: ['adventure', 'dive', 'kayak', 'jetski', 'hiking'],
+  'instagram-spots': ['instagram', 'photo', 'aesthetic', 'scenic', 'view'],
+  'local-authentic': ['local', 'authentic', 'bahraini', 'traditional', 'hidden'],
+  'family-friendly': ['family', 'kids', 'children', 'playground', 'fun'],
+  'beaches-sun': ['beach', 'sea', 'coast', 'sunset', 'island'],
+  'quiet-peaceful': ['quiet', 'peaceful', 'calm', 'serene'],
+  'social-lively': ['social', 'lively', 'crowded', 'buzz', 'vibe'],
+  'hidden-gems': ['hidden', 'gem', 'underrated', 'secret'],
+}
 
-  if (topicId === 'trending') {
-    query = query.order('num_of_upvote', { ascending: false }).limit(40);
+/** Fetch client_image for community posts (batch by client_a_uuid). Converts paths to full URLs. */
+async function fetchClientImagesForPosts(rows) {
+  const ids = [...new Set((rows || []).map((r) => r.client_a_uuid).filter(Boolean))];
+  if (ids.length === 0) return {};
+  const { data } = await supabase.from('client').select('client_a_uuid, client_image').in('client_a_uuid', ids);
+  const map = {};
+  (data || []).forEach((c) => {
+    if (c.client_a_uuid && c.client_image) {
+      const raw = String(c.client_image).trim();
+      map[c.client_a_uuid] = ensureImageUrl(raw) || raw;
+    }
+  });
+  return map;
+}
+
+/** Matches home feed page size for consistent infinite-scroll behaviour. */
+export const COMMUNITY_FEED_PAGE_SIZE = 15
+
+function escapePostgrestQuotes(value) {
+  return String(value ?? '').replace(/'/g, "''")
+}
+
+function quoteTimestamptz(value) {
+  const iso =
+    typeof value === 'string' && value.includes('T')
+      ? value
+      : value
+        ? new Date(value).toISOString()
+        : new Date(0).toISOString()
+  return `'${escapePostgrestQuotes(iso)}'`
+}
+
+function quoteUuid(value) {
+  return `'${escapePostgrestQuotes(value)}'`
+}
+
+/** Keyset for newest-first with stable tie-break (created_at DESC, community_uuid ASC). */
+function buildRecentKeysetOr(createdAt, communityUuid) {
+  const ts = quoteTimestamptz(createdAt)
+  const id = quoteUuid(communityUuid)
+  return `created_at.lt.${ts},and(created_at.eq.${ts},community_uuid.gt.${id})`
+}
+
+/** Keyset for trending: num_of_upvote DESC, created_at DESC, community_uuid DESC. */
+function buildTrendingKeysetOr(votes, createdAt, communityUuid) {
+  const v = Number(votes ?? 0)
+  const ts = quoteTimestamptz(createdAt)
+  const id = quoteUuid(communityUuid)
+  return `num_of_upvote.lt.${v},and(num_of_upvote.eq.${v},created_at.lt.${ts}),and(num_of_upvote.eq.${v},created_at.eq.${ts},community_uuid.lt.${id})`
+}
+
+function buildCommunityPreferenceSignals(preferences) {
+  const generalIds = Array.isArray(preferences?.generalIds) ? preferences.generalIds : []
+  const activityIds = Array.isArray(preferences?.activityIds) ? preferences.activityIds : []
+  const foodIds = Array.isArray(preferences?.foodIds) ? preferences.foodIds : []
+  const all = [...generalIds, ...activityIds, ...foodIds]
+  if (!all.length) return { hasSignals: false, keywords: [] }
+
+  const keywords = new Set()
+  all.forEach((id) => {
+    const seeds = PERSONALIZED_TOPIC_BOOSTS[id]
+    if (Array.isArray(seeds)) {
+      seeds.forEach((k) => keywords.add(String(k).toLowerCase()))
+    } else if (typeof id === 'string' && id.trim()) {
+      keywords.add(id.toLowerCase().replace(/-/g, ' '))
+    }
+  })
+  return { hasSignals: keywords.size > 0, keywords: [...keywords] }
+}
+
+function scoreCommunityPostForPreference(post, prefSignals) {
+  const text = [
+    post.topic,
+    post.place,
+    post.body,
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase()
+
+  const matchedKeywordCount = prefSignals.keywords.reduce(
+    (acc, kw) => (kw && text.includes(kw) ? acc + 1 : acc),
+    0
+  )
+  const keywordScore = Math.min(1, matchedKeywordCount / 3)
+  const ratingScore = Math.max(0, Math.min(1, Number(post.rating ?? 0) / 5))
+  const upvoteScore = Math.min(1, Math.log10(Number(post.upvotes ?? 0) + 1) / Math.log10(101))
+  const commentScore = Math.min(1, Math.log10(Number(post.comments ?? 0) + 1) / Math.log10(41))
+
+  // Keep freshness as a light signal so old posts can still win if they strongly match preference.
+  let recencyScore = 0.4
+  if (typeof post.time === 'string') {
+    if (post.time === 'now') recencyScore = 1
+    else if (post.time.endsWith('m')) recencyScore = 0.95
+    else if (post.time.endsWith('h')) recencyScore = 0.85
+    else if (post.time.endsWith('d')) recencyScore = 0.65
+    else if (post.time.endsWith('mo')) recencyScore = 0.45
+  }
+
+  return keywordScore * 0.44 + ratingScore * 0.28 + upvoteScore * 0.12 + commentScore * 0.08 + recencyScore * 0.08
+}
+
+/**
+ * One page of community posts (cursor-based; avoids loading the entire table).
+ * @param {{ topicId?: string, limit?: number, cursor?: { kind: 'recent', created_at: string, community_uuid: string } | { kind: 'trending', num_of_upvote: number, created_at: string, community_uuid: string } | null, clientId?: string | null }} opts
+ * @returns {Promise<{ posts: Array, hasMore: boolean, nextCursor: object | null }>}
+ */
+export async function fetchCommunityPostsPage({
+  topicId = 'all',
+  limit = COMMUNITY_FEED_PAGE_SIZE,
+  cursor = null,
+  clientId = null,
+  preferences = null,
+} = {}) {
+  const pageLimit = Math.min(Math.max(1, Number(limit) || COMMUNITY_FEED_PAGE_SIZE), 50)
+  const take = pageLimit + 1
+  const isTrending = topicId === 'trending'
+
+  let query = supabase.from('community').select(COMMUNITY_SELECT_WITH_AUTHOR)
+
+  if (clientId) {
+    query = query.eq('client_a_uuid', clientId)
+  }
+
+  if (!isTrending && topicId && topicId !== 'all') {
+    query = query.ilike('hashtags', `%${topicId}%`)
+  }
+
+  if (isTrending) {
+    query = query
+      .order('num_of_upvote', { ascending: false })
+      .order('created_at', { ascending: false })
+      .order('community_uuid', { ascending: false })
+
+    if (cursor?.kind === 'trending' && cursor.created_at && cursor.community_uuid) {
+      query = query.or(
+        buildTrendingKeysetOr(cursor.num_of_upvote, cursor.created_at, cursor.community_uuid)
+      )
+    }
   } else {
-    query = query.order('created_at', { ascending: false });
-    if (topicId && topicId !== 'all') {
-      query = query.ilike('hashtags', `%${topicId}%`);
+    query = query.order('created_at', { ascending: false }).order('community_uuid', { ascending: true })
+
+    if (cursor?.kind === 'recent' && cursor.created_at && cursor.community_uuid) {
+      query = query.or(buildRecentKeysetOr(cursor.created_at, cursor.community_uuid))
     }
   }
 
-  const { data: rows, error } = await query;
+  query = query.limit(take)
+
+  const { data: rows, error } = await query
 
   if (error) {
-    console.error('[Community] fetchCommunityPosts error:', error);
+    console.error('[Community] fetchCommunityPostsPage error:', error)
+    return { posts: [], hasMore: false, nextCursor: null }
+  }
+
+  const raw = rows || []
+  const hasMore = raw.length > pageLimit
+  const pageRows = hasMore ? raw.slice(0, pageLimit) : raw
+
+  const clientMap = await fetchClientImagesForPosts(pageRows)
+  const posts = pageRows.map((row) => mapRowToPost(row, clientMap))
+  const commentMap = await fetchCommentCountsByCommunityIds(posts.map((p) => p.id))
+  const hydrated = posts.map((p) => ({ ...p, comments: commentMap[p.id] ?? p.comments ?? 0 }))
+  const prefSignals = buildCommunityPreferenceSignals(preferences)
+  const ranked = prefSignals.hasSignals
+    ? [...hydrated]
+        .map((post) => ({ ...post, __rankScore: scoreCommunityPostForPreference(post, prefSignals) }))
+        .sort((a, b) => b.__rankScore - a.__rankScore)
+        .map(({ __rankScore, ...rest }) => rest)
+    : hydrated
+
+  let nextCursor = null
+  const last = pageRows[pageRows.length - 1]
+  if (hasMore && last?.community_uuid) {
+    if (isTrending) {
+      nextCursor = {
+        kind: 'trending',
+        num_of_upvote: Number(last.num_of_upvote ?? 0),
+        created_at: last.created_at,
+        community_uuid: last.community_uuid,
+      }
+    } else {
+      nextCursor = {
+        kind: 'recent',
+        created_at: last.created_at,
+        community_uuid: last.community_uuid,
+      }
+    }
+  }
+
+  return { posts: ranked, hasMore, nextCursor }
+}
+
+/** Count comments per post from community_comment (empty map if table missing or error). */
+export async function fetchCommentCountsByCommunityIds(communityUuids) {
+  const ids = [...new Set((communityUuids || []).filter(Boolean))];
+  if (ids.length === 0) return {};
+  const map = Object.fromEntries(ids.map((id) => [id, 0]));
+  const { data, error } = await supabase.from('community_comment').select('community_uuid').in('community_uuid', ids);
+  if (error || !data) {
+    if (error) console.warn('[Community] fetchCommentCountsByCommunityIds:', error.message);
+    return map;
+  }
+  data.forEach((row) => {
+    const id = row.community_uuid;
+    if (id) map[id] = (map[id] || 0) + 1;
+  });
+  return map;
+}
+
+/**
+ * Fetch community posts by the current user (user's own reviews).
+ */
+export async function fetchMyCommunityPosts(userId) {
+  if (!userId) return [];
+  const { data: rows, error } = await supabase
+    .from('community')
+    .select(COMMUNITY_SELECT_WITH_AUTHOR)
+    .eq('user_a_uuid', userId)
+    .order('created_at', { ascending: false });
+
+  if (error) {
+    console.error('[Community] fetchMyCommunityPosts error:', error);
     return [];
   }
 
-  return (rows || []).map((row) => mapRowToPost(row));
+  const clientMap = await fetchClientImagesForPosts(rows || []);
+  const posts = (rows || []).map((row) => mapRowToPost(row, clientMap));
+  const commentMap = await fetchCommentCountsByCommunityIds(posts.map((p) => p.id));
+  return posts.map((p) => ({ ...p, comments: commentMap[p.id] ?? p.comments ?? 0 }));
 }
 
-function mapRowToPost(row) {
-  const images = parseImageUrls(row.image);
+function mapRowToPost(row, clientMap = {}) {
+  const rawImages = parseImageUrls(row.image);
+  const images = rawImages.map((u) => ensureImageUrl(u) || u).filter(Boolean);
+  const userName = (row.user?.account?.user_name || '').trim() || null;
+  const author = userName || 'User';
+  const handle = userName ? `@${userName.replace(/\s+/g, '').toLowerCase().slice(0, 16)}` : `@${(row.user_a_uuid || '').slice(0, 8)}`;
+  const clientImage = row.client_a_uuid ? clientMap[row.client_a_uuid] || null : null;
   return {
     id: row.community_uuid,
-    author: 'User',
-    handle: `@${(row.user_a_uuid || '').slice(0, 8)}`,
+    author,
+    handle,
     avatar: null,
+    client_image: clientImage,
+    client_a_uuid: row.client_a_uuid || null,
     time: formatTimeAgo(row.created_at),
     topic: row.hashtags || 'tips',
     place: row.badge || null,
@@ -277,6 +504,66 @@ function formatTimeAgo(iso) {
   if (sec < 86400) return `${Math.floor(sec / 3600)}h`;
   if (sec < 2592000) return `${Math.floor(sec / 86400)}d`;
   return `${Math.floor(sec / 2592000)}mo`;
+}
+
+const COMMENT_SELECT = 'comment_uuid, body, created_at, user_a_uuid, user(account(user_name))';
+
+function mapCommentRow(row) {
+  if (!row) return null;
+  const userName = (row.user?.account?.user_name || '').trim();
+  const shortId = String(row.user_a_uuid || '').replace(/-/g, '').slice(0, 6);
+  const author = userName ? `@${userName.replace(/\s+/g, '').toLowerCase()}` : (shortId ? `@${shortId}` : 'Member');
+  return {
+    id: row.comment_uuid,
+    body: row.body || '',
+    author,
+    time: formatTimeAgo(row.created_at),
+  };
+}
+
+/**
+ * Replies for a community post. Requires table public.community_comment (see database/migrations/002_community_comment.sql).
+ * Returns [] if the table is missing or on error.
+ */
+export async function fetchCommunityComments(communityUuid) {
+  if (!communityUuid) return [];
+  const { data, error } = await supabase
+    .from('community_comment')
+    .select(COMMENT_SELECT)
+    .eq('community_uuid', communityUuid)
+    .order('created_at', { ascending: true });
+
+  if (error) {
+    console.warn('[Community] fetchCommunityComments:', error.message);
+    return [];
+  }
+  return (data || []).map(mapCommentRow).filter(Boolean);
+}
+
+/**
+ * Insert a reply. Uses getCommunityUserId() for user_a_uuid (same as posts).
+ */
+export async function createCommunityComment(communityUuid, text) {
+  const body = (text || '').trim();
+  if (!communityUuid || !body) {
+    throw new Error('Comment cannot be empty');
+  }
+  const user_a_uuid = await getCommunityUserId();
+  const { data, error } = await supabase
+    .from('community_comment')
+    .insert({
+      community_uuid: communityUuid,
+      user_a_uuid,
+      body,
+    })
+    .select(COMMENT_SELECT)
+    .single();
+
+  if (error) {
+    console.error('[Community] createCommunityComment:', error);
+    throw error;
+  }
+  return mapCommentRow(data);
 }
 
 /**

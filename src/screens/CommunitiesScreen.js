@@ -1,5 +1,5 @@
 // communities screen
-import React, { useState, useRef, useCallback, useEffect } from 'react';
+import React, { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import {
   StyleSheet,
   Text,
@@ -12,6 +12,7 @@ import {
   useWindowDimensions,
   Platform,
   Animated,
+  Easing,
   Modal,
   TextInput,
   KeyboardAvoidingView,
@@ -19,59 +20,45 @@ import {
   RefreshControl,
   Alert,
 } from 'react-native';
-import { BlurView } from 'expo-blur';
+import { FlatList as GHFlatList } from 'react-native-gesture-handler';
+
+const AnimatedGHFlatList = Animated.createAnimatedComponent(GHFlatList)
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
+import { BlurView } from 'expo-blur';
 import * as ImagePicker from 'expo-image-picker';
 import ScreenContainer from '../components/ScreenContainer';
-import ProfileButton from '../components/ProfileButton';
+import PageHeadingBar from '../components/PageHeadingBar';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import {
-  fetchCommunityPosts,
-  searchCommunityWithOpenAI,
+  fetchCommunityPostsPage,
+  COMMUNITY_FEED_PAGE_SIZE,
   createCommunityPost,
   uploadCommunityImages,
-  upvoteCommunityPost,
-  removeUpvoteCommunityPost,
   getCommunityUserId,
   fetchClients,
   fetchClientByQrPayload,
 } from '../services/community';
-
-const C = {
-  bg: '#FFFFFF',
-  card: '#FFFFFF',
-  text: '#111827',
-  sub: '#6B7280',
-  muted: '#9CA3AF',
-  border: 'rgba(209,213,219,0.7)',
-  red: '#C8102E',
-  redSoft: '#FEF2F2',
-  orange: '#EA580C',
-  orangeSoft: '#FFF7ED',
-  blue: '#0284C7',
-  blueSoft: '#EFF6FF',
-  green: '#059669',
-  upvoteLight: '#22C55E',
-  upvoteDark: '#15803D',
-  chip: '#F3F4F6',
-  chipActive: '#1C1917',
-  accent: '#D4A574',
-  warmGlow: '#9CA3AF',
-};
-
-// Different accent color per review (left strip + avatar border)
-const REVIEW_ACCENT_COLORS = [
-  '#C8102E', '#B45309', '#0D9488', '#7C3AED', '#DC2626',
-  '#CA8A04', '#059669', '#2563EB', '#C2410C', '#9333EA',
-];
-function getReviewAccentColor(item) {
-  const id = (item?.id ?? item?.body ?? '0').toString();
-  let n = 0;
-  for (let i = 0; i < id.length; i++) n = (n * 31 + id.charCodeAt(i)) >>> 0;
-  return REVIEW_ACCENT_COLORS[n % REVIEW_ACCENT_COLORS.length];
-}
+import { UpvoteParticles } from '../components/FeedUpvoteInteractions';
+import { useCommunityUpvoteToggle } from '../hooks/useCommunityUpvoteToggle';
+import { colors as themeColors, colorsDark as themeColorsDark } from '../theme/designTokens'
+import { useTheme } from '../context/ThemeContext'
+import { useAuth } from '../context/AuthContext'
+import { useUserPreferences } from '../context/UserPreferencesContext'
+import { layoutContentWidth } from '../constants/webLayout'
+import {
+  FONT_POPPINS_BOLD,
+  FONT_POPPINS_MEDIUM,
+  FONT_POPPINS_REGULAR,
+  FONT_POPPINS_SEMIBOLD,
+} from '../constants/brandFont'
+import {
+  getCommunityPalette,
+  buildCommunityFeedStyles,
+  CommunityReviewCard,
+} from '../components/community/CommunityReviewViews'
+const DEFAULT_PROFILE_IMAGE = require('../../assets/pfp.png')
 
 // Community page top filter: All, Trending + hashtags (no AI chip — AI results show temporarily until another filter is tapped)
 const TOPICS = [
@@ -82,17 +69,11 @@ const TOPICS = [
   { id: 'events', label: 'Events' },
   { id: 'beaches', label: 'Beaches' },
   { id: 'culture', label: 'Culture' },
-  { id: 'nightlife', label: 'Nightlife' },
   { id: 'family', label: 'Family' },
   { id: 'tips', label: 'Tips' },
 ];
-
-const TOPIC_EMOJIS = {
-  all: '🌴', trending: '🔥', food: '🍽️', places: '📍', events: '🎉',
-  beaches: '🏖️', culture: '🕌', nightlife: '🌙', family: '👨‍👩‍👧‍👦', tips: '💡',
-};
-
-const AI_SEARCH_MAX_LEN = 50;
+const PRIMARY_TOPICS = TOPICS.slice(0, 2)
+const SECONDARY_TOPICS = TOPICS.slice(2)
 
 // Create post — Select topic: only these 8, multiple select
 const CREATE_POST_TOPICS = [
@@ -101,7 +82,6 @@ const CREATE_POST_TOPICS = [
   { id: 'events', label: 'Events' },
   { id: 'beaches', label: 'Beaches' },
   { id: 'culture', label: 'Culture' },
-  { id: 'nightlife', label: 'Nightlife' },
   { id: 'family', label: 'Family' },
   { id: 'tips', label: 'Tips' },
 ];
@@ -117,342 +97,143 @@ const CREATE_POST_TOPIC_ICONS = {
   tips: 'bulb-outline',
 };
 
-const TOTAL_STARS = 5;
+// Top feed filters: feed chips use icons only; labels kept for accessibility
+const TOPIC_FILTER_ICONS = {
+  all: 'apps-outline',
+  trending: 'flame-outline',
+  ...CREATE_POST_TOPIC_ICONS,
+};
 
-function RatingStars({ rating, size = 12, color }) {
-  if (rating == null || rating <= 0) return null;
-  const r = Math.min(5, Math.max(0, Number(rating)));
-  const starColor = color ?? C.orange;
-  return (
-    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 1 }}>
-      {Array.from({ length: TOTAL_STARS }, (_, i) => {
-        const starValue = i + 1;
-        const filled = r >= starValue;
-        const half = !filled && r >= starValue - 0.5;
-        const name = filled ? 'star' : half ? 'star-half' : 'star-outline';
-        return (
-          <Ionicons key={i} name={name} size={size} color={filled || half ? starColor : C.muted} />
-        );
-      })}
-    </View>
-  );
-}
-
-function ReviewCard({ item, onPress, onCommentPress, onUpvote, onRemoveUpvote, aiTip }) {
-  const { width } = useWindowDimensions();
-  const cardWidth = width - 40;
-  const imgH = Math.round(cardWidth * 0.48);
-  const [upvoted, setUpvoted] = useState(item.upvoted);
-  const scale = useRef(new Animated.Value(1)).current;
-  const count = item.upvotes ?? 0;
-
-  const images = item.images?.length > 0 ? item.images : item.image ? [item.image] : [];
-
-  const doUpvote = () => {
-    const next = !upvoted;
-    setUpvoted(next);
-    Animated.sequence([
-      Animated.timing(scale, { toValue: 1.35, duration: 100, useNativeDriver: true }),
-      Animated.timing(scale, { toValue: 1, duration: 100, useNativeDriver: true }),
-    ]).start();
-    if (next) onUpvote?.(item); else onRemoveUpvote?.(item);
-  };
-
-  const topicIds = (item.topic || '').split(',').map((t) => t.trim()).filter(Boolean);
-
-  const body = (
-    <TouchableOpacity activeOpacity={0.94} onPress={() => onPress?.(item)} style={s.card}>
-      <View style={s.cardInner}>
-        {/* Author row */}
-        <View style={s.cardAuthorRow}>
-          {item.avatar ? (
-            <Image source={{ uri: item.avatar }} style={s.av} />
-          ) : (
-            <View style={[s.av, s.avPlaceholder]}>
-              <Text style={s.avInitial}>{(item.author || 'U')[0].toUpperCase()}</Text>
-            </View>
-          )}
-          <View style={s.cardMeta}>
-            <Text style={s.authorText} numberOfLines={1}>{item.author}</Text>
-            {item.place ? (
-              <View style={s.cardPlaceRow}>
-                <Ionicons name="location-sharp" size={11} color={C.red} />
-                <Text style={s.cardPlaceText} numberOfLines={1}>{item.place}</Text>
-              </View>
-            ) : null}
-          </View>
-          {item.rating != null && item.rating > 0 && (
-            <View style={[s.cardRatingPill, { backgroundColor: C.redSoft }]}>
-              <RatingStars rating={item.rating} size={11} color={C.red} />
-              <Text style={[s.cardRatingNum, { color: C.red }]}>{Number(item.rating).toFixed(1)}</Text>
-            </View>
-          )}
-        </View>
-
-        <Text style={s.bodyText} numberOfLines={3}>{item.body}</Text>
-
-        {/* Topic pills */}
-        {topicIds.length > 0 && (
-          <View style={s.cardTopicRow}>
-            {topicIds.slice(0, 3).map((tid) => (
-              <View key={tid} style={s.cardTopicPill}>
-                <Text style={s.cardTopicPillText}>#{tid}</Text>
-              </View>
-            ))}
-          </View>
-        )}
-
-        {/* Image */}
-        {images.length > 0 && (
-          <View style={[s.cardImgWrap, { height: imgH, width: '100%' }]}>
-            {images.length === 1 ? (
-              <Image source={{ uri: images[0] }} style={s.cardImg} resizeMode="cover" />
-            ) : images.length === 2 ? (
-              <View style={s.cardImgSplitRow}>
-                <Image source={{ uri: images[0] }} style={s.cardImgHalf} resizeMode="cover" />
-                <View style={s.cardImgGap} />
-                <Image source={{ uri: images[1] }} style={s.cardImgHalf} resizeMode="cover" />
-              </View>
-            ) : (
-              <>
-                <Image source={{ uri: images[0] }} style={s.cardImg} resizeMode="cover" />
-                <View style={s.imgCountBadge}>
-                  <Text style={s.imgCountText}>+{images.length - 1}</Text>
-                </View>
-              </>
-            )}
-          </View>
-        )}
-
-        {/* Khalid's tip — dashed line + yellow block (same as itinerary tip) */}
-        {aiTip ? (
-          <>
-            <View style={s.cardKhalidDashedLine} />
-            <View style={s.cardKhalidTipWrap}>
-              <Ionicons name="bulb-outline" size={15} color="#D97706" />
-              <Text style={s.cardKhalidTipText}>{aiTip}</Text>
-            </View>
-          </>
-        ) : null}
-
-        {/* Actions: Upvote · Comment only */}
-        <View style={s.actions}>
-          <TouchableOpacity style={s.actionBtn} onPress={doUpvote} activeOpacity={0.7}>
-            <Animated.View style={{ transform: [{ scale }] }}>
-              <Ionicons name={upvoted ? 'arrow-up-circle' : 'arrow-up-circle-outline'} size={20} color={upvoted ? C.upvoteDark : C.upvoteLight} />
-            </Animated.View>
-            <Text style={[s.actionNum, { color: upvoted ? C.upvoteDark : C.upvoteLight }]}>{count}</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={s.actionBtn} onPress={() => onCommentPress?.(item)} activeOpacity={0.7}>
-            <Ionicons name="chatbubble-outline" size={17} color={C.blue} />
-            <Text style={[s.actionNum, { color: C.blue }]}>{item.comments}</Text>
-          </TouchableOpacity>
-        </View>
-      </View>
-    </TouchableOpacity>
-  );
-
-  return body;
-}
-
-function DetailModal({ post, onClose, onUpvote, onRemoveUpvote, focusReplyWhenOpen = false, onClearFocusReply }) {
-  const insets = useSafeAreaInsets();
-  const { width, height } = useWindowDimensions();
-  const cardMargin = 24;
-  const cardW = width - cardMargin * 2;
-  const imgW = cardW;
-  const imgH = Math.round(imgW * 0.5);
-  const popupMaxHeight = height * 0.88;
-  const popupCardHeaderH = 54; // "Review" header row
-  const [upvoted, setUpvoted] = useState(post?.upvoted ?? false);
-  const [imageIndex, setImageIndex] = useState(0);
-  const [cardHeight, setCardHeight] = useState(popupMaxHeight);
-  const [replyText, setReplyText] = useState('');
-  const imageScrollRef = useRef(null);
-  const replyInputRef = useRef(null);
-  const scale = useRef(new Animated.Value(1)).current;
-  const count = post?.upvotes ?? 0;
+/** Smooth shimmer skeleton loader for community feed. */
+function CommunityLoadingShimmer({ scrollable = true }) {
+  const { isDark } = useTheme()
+  const palette = useMemo(() => getCommunityPalette(isDark), [isDark])
+  const s = useMemo(() => buildCommunitiesScreenStyles(palette, isDark), [palette, isDark])
+  const { width: winW = 375 } = useWindowDimensions();
+  const layoutW = layoutContentWidth(winW);
+  const cardWidth = layoutW - 64;
+  const imgH = Math.round(cardWidth * 0.75);
+  const shimmer = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
-    if (post?.upvoted) setUpvoted(true);
-  }, [post?.id, post?.upvoted]);
-  useEffect(() => { setImageIndex(0); setCardHeight(popupMaxHeight); setReplyText(''); }, [post?.id, popupMaxHeight]);
-  useEffect(() => {
-    if (post && focusReplyWhenOpen && replyInputRef.current) {
-      const t = setTimeout(() => {
-        replyInputRef.current?.focus();
-        onClearFocusReply?.();
-      }, 400);
-      return () => clearTimeout(t);
-    }
-  }, [post?.id, focusReplyWhenOpen]);
+    const loop = Animated.loop(
+      Animated.timing(shimmer, {
+        toValue: 1,
+        duration: 1400,
+        easing: Easing.inOut(Easing.ease),
+        useNativeDriver: true,
+      })
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [shimmer]);
 
-  if (!post) return null;
+  const opacity = shimmer.interpolate({
+    inputRange: [0, 0.5, 1],
+    outputRange: [0.35, 0.75, 0.35],
+  });
 
-  const images = post.images?.length > 0 ? post.images : post.image ? [post.image] : [];
-  const hasMultipleImages = images.length > 1;
+  const SkeletonBox = ({ style, width: w, height: h }) => (
+    <Animated.View style={[s.skeletonBox, style, { width: w || '100%', height: h || 14, opacity }]} />
+  );
 
-  const goToImage = (index) => {
-    const i = Math.max(0, Math.min(index, images.length - 1));
-    setImageIndex(i);
-    imageScrollRef.current?.scrollTo({ x: i * imgW, animated: true });
-  };
-  const topicIds = (post.topic || '').split(',').map((s2) => s2.trim()).filter(Boolean);
-  const topicLabels = topicIds.map((id) => TOPICS.find((t) => t.id === id)?.label || CREATE_POST_TOPICS.find((t) => t.id === id)?.label || id);
+  const skeletonCards = (
+    <>
+      {[1, 2, 3].map((i) => (
+        <View
+          key={i}
+          style={[
+            s.skeletonGlassOuter,
+            isDark && { borderColor: 'rgba(148,148,158,0.28)' },
+          ]}
+        >
+          <BlurView
+            intensity={Platform.OS === 'ios' ? 30 : 18}
+            tint={isDark ? 'dark' : 'light'}
+            style={StyleSheet.absoluteFillObject}
+            pointerEvents="none"
+          />
+          <View
+            style={s.skeletonGlassFrost}
+            pointerEvents="none"
+          />
+          <View style={s.skeletonGlassInner}>
+            {/* User row */}
+            <View style={{ paddingHorizontal: 14, paddingTop: 12, paddingBottom: 8 }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                <SkeletonBox style={s.skeletonAvatar} width={36} height={36} />
+                <View style={{ flex: 1, marginLeft: 10 }}>
+                  <SkeletonBox width="42%" height={13} />
+                  <SkeletonBox width="55%" height={11} style={{ marginTop: 5 }} />
+                </View>
+              </View>
+            </View>
+            {/* Body lines */}
+            <View style={{ paddingHorizontal: 14, paddingBottom: 8 }}>
+              <SkeletonBox width="100%" height={13} style={{ marginBottom: 5 }} />
+              <SkeletonBox width="78%" height={13} style={{ marginBottom: 10 }} />
+              {/* Image */}
+              <View style={{ height: imgH, width: '100%', borderRadius: 12, overflow: 'hidden', marginBottom: 8 }}>
+                <Animated.View style={[StyleSheet.absoluteFill, s.skeletonImage, { opacity }]} />
+              </View>
+              {/* Tags */}
+              <View style={{ flexDirection: 'row', gap: 6, marginBottom: 8 }}>
+                <SkeletonBox width={54} height={20} style={{ borderRadius: 8 }} />
+                <SkeletonBox width={46} height={20} style={{ borderRadius: 8 }} />
+              </View>
+              {/* Action row */}
+              <View style={{
+                flexDirection: 'row',
+                gap: 14,
+                paddingTop: 8,
+                borderTopWidth: StyleSheet.hairlineWidth,
+                borderTopColor: palette.border + '60',
+              }}>
+                <SkeletonBox width={52} height={16} />
+                <SkeletonBox width={42} height={16} />
+              </View>
+            </View>
+          </View>
+        </View>
+      ))}
+    </>
+  )
 
-  const doUpvote = () => {
-    const next = !upvoted;
-    setUpvoted(next);
-    Animated.sequence([
-      Animated.timing(scale, { toValue: 1.3, duration: 100, useNativeDriver: true }),
-      Animated.timing(scale, { toValue: 1, duration: 100, useNativeDriver: true }),
-    ]).start();
-    if (next) onUpvote?.(post); else onRemoveUpvote?.(post);
-  };
+  if (!scrollable) {
+    return (
+      <View style={[s.loaderScroll, s.loaderContent]}>
+        {skeletonCards}
+      </View>
+    )
+  }
 
   return (
-    <Modal visible={!!post} transparent animationType="fade" onRequestClose={onClose}>
-      <KeyboardAvoidingView style={s.popOverlay} behavior={Platform.OS === 'ios' ? 'padding' : undefined} keyboardVerticalOffset={0}>
-      <View style={[s.popOverlay, { flex: 1 }]} collapsable={false}>
-        {/* Blurred / dim backdrop — tap to close */}
-        <TouchableWithoutFeedback onPress={onClose}>
-          <View style={[StyleSheet.absoluteFill, { zIndex: 0 }]}>
-            {Platform.OS === 'ios' ? (
-              <BlurView intensity={70} tint="dark" style={StyleSheet.absoluteFill} />
-            ) : (
-              <View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(0,0,0,0.65)' }]} />
-            )}
-          </View>
-        </TouchableWithoutFeedback>
-
-        {/* Card — height shrinks to content, max popupMaxHeight */}
-        <View style={[s.popCard, { width: cardW, height: cardHeight, maxHeight: popupMaxHeight, zIndex: 10 }]}>
-          <View style={s.popHeader}>
-            <View style={s.popHeaderLeft}>
-              {post.avatar ? (
-                <Image source={{ uri: post.avatar }} style={s.popHeaderAv} />
-              ) : (
-                <View style={[s.popHeaderAv, s.popHeaderAvPlaceholder]}>
-                  <Text style={s.popHeaderAvLetter}>{(post.author || 'U')[0].toUpperCase()}</Text>
-                </View>
-              )}
-              <Text style={s.popHeaderName}>{post.author}</Text>
-            </View>
-            <TouchableOpacity onPress={onClose} hitSlop={14} activeOpacity={0.7}>
-              <Ionicons name="close-circle" size={28} color={C.red} />
-            </TouchableOpacity>
-          </View>
-
-          <ScrollView
-            style={{ flex: 1 }}
-            contentContainerStyle={{ paddingTop: 8, paddingBottom: 12, flexGrow: 0 }}
-            showsVerticalScrollIndicator={false}
-            bounces={false}
-            onContentSizeChange={(_, contentH) => {
-              const total = popupCardHeaderH + contentH;
-              setCardHeight(Math.min(total, popupMaxHeight));
-            }}
-          >
-            {/* Images */}
-            {images.length > 0 ? (
-              <View style={[s.popImgWrap, { width: cardW, height: imgH }]}>
-                <ScrollView
-                  ref={imageScrollRef}
-                  horizontal
-                  pagingEnabled
-                  showsHorizontalScrollIndicator={false}
-                  onMomentumScrollEnd={(e) => {
-                    const i = Math.round(e.nativeEvent.contentOffset.x / imgW);
-                    setImageIndex(i);
-                  }}
-                  style={{ width: cardW, height: imgH }}
-                >
-                  {images.map((uri, i) => (
-                    <Image key={i} source={{ uri }} style={{ width: imgW, height: imgH }} resizeMode="cover" />
-                  ))}
-                </ScrollView>
-                {images.length > 1 && (
-                  <View style={s.popImgPills}>
-                    {images.map((_, i) => (
-                      <View key={i} style={[s.popImgPill, i === imageIndex && s.popImgPillActive]} />
-                    ))}
-                  </View>
-                )}
-                <View style={s.popImgBadge}>
-                  <Ionicons name="images-outline" size={13} color="#FFF" />
-                  <Text style={s.popImgBadgeText}>{imageIndex + 1}/{images.length}</Text>
-                </View>
-              </View>
-            ) : null}
-
-            {/* Body content */}
-            <View style={s.popBody}>
-              {/* Location + rating in same row */}
-              <View style={s.popPlaceRatingRow}>
-                {post.place ? (
-                  <View style={s.popPlaceWrap}>
-                    <Ionicons name="location-sharp" size={13} color={C.red} />
-                    <Text style={s.popPlaceText} numberOfLines={1}>{post.place}</Text>
-                  </View>
-                ) : null}
-                {post.rating != null && post.rating > 0 && (
-                  <View style={s.popRatingWrap}>
-                    <RatingStars rating={post.rating} size={13} />
-                    <Text style={s.popRatingNum}>{Number(post.rating).toFixed(1)}</Text>
-                  </View>
-                )}
-              </View>
-
-              {/* Review text */}
-              <Text style={s.popReviewText}>{post.body}</Text>
-
-              {/* Upvote */}
-              <View style={s.popUpvoteRow}>
-                <TouchableOpacity style={s.popUpvoteBtn} onPress={doUpvote} activeOpacity={0.7}>
-                  <Animated.View style={{ transform: [{ scale }] }}>
-                    <Ionicons name={upvoted ? 'arrow-up-circle' : 'arrow-up-circle-outline'} size={20} color={upvoted ? C.upvoteDark : C.upvoteLight} />
-                  </Animated.View>
-                  <Text style={[s.popUpvoteNum, { color: upvoted ? C.upvoteDark : C.upvoteLight }]}>{count}</Text>
-                </TouchableOpacity>
-              </View>
-
-              {/* Replies — always show so user can add reply */}
-              <View style={s.popReplySection}>
-                <Text style={s.popReplyTitle}>Replies</Text>
-                <View style={s.popReplyBox}>
-                  <View style={s.popReplyAv}>
-                    <Ionicons name="person" size={14} color={C.muted} />
-                  </View>
-                  <TextInput
-                    ref={replyInputRef}
-                    style={s.popReplyInput}
-                    placeholder="Add your thoughts..."
-                    placeholderTextColor={C.muted}
-                    value={replyText}
-                    onChangeText={setReplyText}
-                    multiline={false}
-                    returnKeyType="send"
-                    blurOnSubmit
-                  />
-                  <TouchableOpacity onPress={() => replyInputRef.current?.focus()} hitSlop={8}>
-                    <Ionicons name="send" size={16} color={C.red} />
-                  </TouchableOpacity>
-                </View>
-              </View>
-            </View>
-          </ScrollView>
-        </View>
-      </View>
-      </KeyboardAvoidingView>
-    </Modal>
+    <ScrollView
+      style={s.loaderScroll}
+      contentContainerStyle={s.loaderContent}
+      showsVerticalScrollIndicator={false}
+    >
+      {skeletonCards}
+    </ScrollView>
   );
 }
 
 const TAB_BAR_HEIGHT = Platform.OS === 'ios' ? 70 : 60;
 
+/** Match HomeScreen feed header behavior */
+const SCROLL_THRESHOLD = 80
+const SCROLL_DIRECTION_THRESHOLD = 5
+const HEADER_ANIM_DURATION = 300
+/** Prefetch next page when user has scrolled this far (same idea as HomeScreen). */
+const COMMUNITY_PREFETCH_SCROLL_PROGRESS = 0.75
+
 const SCAN_BOX_SIZE = 240;
 
 function QRScannerModal({ visible, onClose, onScanned }) {
+  const { isDark } = useTheme()
+  const palette = useMemo(() => getCommunityPalette(isDark), [isDark])
+  const s = useMemo(() => buildCommunitiesScreenStyles(palette, isDark), [palette, isDark])
+  const C = palette
   const [permission, requestPermission] = useCameraPermissions();
   const lastScanned = useRef(null);
   const insets = useSafeAreaInsets();
@@ -470,7 +251,7 @@ function QRScannerModal({ visible, onClose, onScanned }) {
         onScanned?.(client);
         onClose?.();
       } else {
-        Alert.alert('Unknown code', 'This QR code is not linked to a venue in Go Bahrain.');
+        Alert.alert('Unknown code', 'This QR code is not linked to a venue in SiyahaBH.');
       }
     },
     [onScanned, onClose]
@@ -539,6 +320,9 @@ function QRScannerModal({ visible, onClose, onScanned }) {
 }
 
 function CreatePostModal({ visible, onClose, onPosted, initialPlace, initialClientUuid }) {
+  const { isDark } = useTheme();
+  const C = useMemo(() => getCommunityPalette(isDark), [isDark])
+  const s = useMemo(() => buildCommunitiesScreenStyles(C, isDark), [C, isDark])
   const insets = useSafeAreaInsets();
   const [body, setBody] = useState('');
   const [place, setPlace] = useState('');
@@ -650,6 +434,27 @@ function CreatePostModal({ visible, onClose, onPosted, initialPlace, initialClie
   const hasTopic = selectedTopicIds.length > 0 || customHashtag.trim().replace(/^#+/, '').length > 0;
   const canPost = body.trim().length > 0 && place.trim().length > 0 && hasTopic && rating > 0;
 
+  const ratingPhrase = useMemo(() => {
+    const r = rating
+    if (r <= 0) return ''
+    if (r <= 1) return 'Needs improvement'
+    if (r <= 2) return 'Could be better'
+    if (r <= 3) return 'It was fine'
+    if (r <= 4) return 'Really enjoyed it'
+    return 'Absolutely loved it'
+  }, [rating])
+
+  const progressSteps = useMemo(
+    () => [
+      { ok: place.trim().length > 0 },
+      { ok: rating > 0 },
+      { ok: body.trim().length > 0 },
+      { ok: hasTopic },
+    ],
+    [place, rating, body, hasTopic],
+  )
+  const progressCount = progressSteps.filter((x) => x.ok).length
+
   const selectClient = (client) => {
     setPlace(client.business_name);
     setSelectedClientUuid(client.client_a_uuid);
@@ -663,31 +468,66 @@ function CreatePostModal({ visible, onClose, onPosted, initialPlace, initialClie
         style={[s.createRoot, { paddingTop: insets.top }]}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
+        <View style={s.createGlassShell}>
+          <BlurView intensity={Platform.OS === 'ios' ? 38 : 24} tint={isDark ? 'dark' : 'light'} style={StyleSheet.absoluteFillObject} />
+          <View style={s.createGlassFrost} pointerEvents="none" />
+          <View style={s.createGlassInner}>
         <View style={s.createHeader}>
-          <TouchableOpacity onPress={handleClose} disabled={posting} style={s.createHeaderBtn} activeOpacity={0.7}>
-            <Ionicons name="close" size={24} color={C.text} />
+          <TouchableOpacity
+            onPress={handleClose}
+            disabled={posting}
+            style={s.createHeaderBtn}
+            activeOpacity={0.7}
+            accessibilityRole="button"
+            accessibilityLabel="Close"
+          >
+            <Ionicons name="close" size={21} color={C.text} />
           </TouchableOpacity>
           <View style={s.createHeaderCenter}>
-            <Text style={s.createTitle}>Add a Review</Text>
-            <Text style={s.createSubtitle}>Share your experience in Bahrain</Text>
+            <Text style={s.createTitle}>New review</Text>
+            <Text style={s.createSubtitle}>
+              {canPost ? 'Ready to post' : `${progressCount}/4 complete`}
+            </Text>
           </View>
-          <TouchableOpacity onPress={handlePost} disabled={!canPost || posting} activeOpacity={0.8} style={[s.postBtn, canPost && s.postBtnActive]}>
+          <TouchableOpacity
+            onPress={handlePost}
+            disabled={!canPost || posting}
+            activeOpacity={0.8}
+            style={[s.postBtn, canPost && s.postBtnActive]}
+            accessibilityRole="button"
+            accessibilityLabel={canPost ? 'Publish review' : 'Complete all sections to post'}
+            hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}
+          >
             {posting ? <ActivityIndicator size="small" color="#FFF" /> : <Text style={[s.postBtnText, canPost && s.postBtnTextActive]}>Post</Text>}
           </TouchableOpacity>
         </View>
 
         <ScrollView
           style={{ flex: 1 }}
-          contentContainerStyle={[s.createScroll, { paddingBottom: insets.bottom + 28 }]}
+          contentContainerStyle={[s.createScroll, { paddingBottom: insets.bottom + 22 }]}
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
         >
+          <View style={s.createProgressRow} accessibilityLabel={`Form progress: ${progressCount} of 4 sections complete`}>
+            {progressSteps.map((step, i) => (
+              <View
+                key={`p-${i}`}
+                style={[s.createProgressChunk, step.ok && s.createProgressChunkOn]}
+                accessibilityElementsHidden
+                importantForAccessibility="no"
+              />
+            ))}
+          </View>
+
           {/* 1. Place or venue */}
           <View style={s.createCard}>
             <View style={s.createCardHeader}>
-              <Ionicons name="location" size={20} color={C.red} />
+              <View style={s.createIconPill}>
+                <Ionicons name="location" size={15} color={C.red} />
+              </View>
               <Text style={s.createCardTitle}>Where did you go?</Text>
             </View>
+            <Text style={s.createFieldHint}>Type a name or pick a place from the app for a link to the venue.</Text>
             <View style={s.placeInputRow}>
               <TextInput
                 style={s.placeInput}
@@ -696,8 +536,14 @@ function CreatePostModal({ visible, onClose, onPosted, initialPlace, initialClie
                 value={place}
                 onChangeText={(t) => { setPlace(t); setSelectedClientUuid(null); }}
               />
-              <TouchableOpacity style={s.fromAppBtn} onPress={() => setShowClientPicker(true)} activeOpacity={0.8}>
-                <Ionicons name="search" size={18} color={C.red} />
+              <TouchableOpacity
+                style={s.fromAppBtn}
+                onPress={() => setShowClientPicker(true)}
+                activeOpacity={0.8}
+                accessibilityRole="button"
+                accessibilityLabel="Browse venues from the app"
+              >
+                <Ionicons name="search" size={16} color={C.red} />
                 <Text style={s.fromAppBtnText}>Browse</Text>
               </TouchableOpacity>
             </View>
@@ -706,53 +552,81 @@ function CreatePostModal({ visible, onClose, onPosted, initialPlace, initialClie
           {/* 2. Rating */}
           <View style={s.createCard}>
             <View style={s.createCardHeader}>
-              <Ionicons name="star" size={20} color="#B45309" />
+              <View style={[s.createIconPill, s.createIconPillAmber]}>
+                <Ionicons name="star" size={15} color="#B45309" />
+              </View>
               <Text style={s.createCardTitle}>How was it?</Text>
             </View>
             <View style={s.starsRow}>
               {[1, 2, 3, 4, 5].map((n) => (
                 <View key={n} style={s.starTouchWrap}>
-                  <TouchableOpacity style={s.starHalf} activeOpacity={0.8} onPress={() => { const v = n - 0.5; setRating(rating === v ? 0 : v); }} />
-                  <TouchableOpacity style={s.starHalf} activeOpacity={0.8} onPress={() => setRating(rating === n ? 0 : n)} />
+                  <TouchableOpacity
+                    style={s.starHalf}
+                    activeOpacity={0.8}
+                    accessibilityLabel={`${n - 0.5} stars`}
+                    onPress={() => {
+                      const v = n - 0.5
+                      setRating(rating === v ? 0 : v)
+                    }}
+                  />
+                  <TouchableOpacity
+                    style={s.starHalf}
+                    activeOpacity={0.8}
+                    accessibilityLabel={`${n} stars`}
+                    onPress={() => setRating(rating === n ? 0 : n)}
+                  />
                   <View pointerEvents="none" style={s.starIconOverlay}>
-                    <Ionicons name={rating >= n ? 'star' : rating >= n - 0.5 ? 'star-half' : 'star-outline'} size={36} color="#B45309" />
+                    <Ionicons name={rating >= n ? 'star' : rating >= n - 0.5 ? 'star-half' : 'star-outline'} size={28} color="#B45309" />
                   </View>
                 </View>
               ))}
-              {rating > 0 && <Text style={s.starsLabel}>{rating % 1 === 0 ? `${rating}.0` : rating.toFixed(1)}</Text>}
+              {rating > 0 && (
+                <View style={s.starsMeta}>
+                  <Text style={s.starsLabel}>{rating % 1 === 0 ? `${rating}.0` : rating.toFixed(1)}</Text>
+                  <Text style={s.starsVerbal}>{ratingPhrase}</Text>
+                </View>
+              )}
             </View>
           </View>
 
           {/* 3. Your post */}
           <View style={s.createCard}>
             <View style={s.createCardHeader}>
-              <Ionicons name="chatbubble-ellipses" size={20} color={C.red} />
+              <View style={s.createIconPill}>
+                <Ionicons name="chatbubble-ellipses" size={15} color={C.red} />
+              </View>
               <Text style={s.createCardTitle}>Your review</Text>
             </View>
             <TextInput
               style={s.createTextInput}
-              placeholder="What did you discover? Share tips, highlights, or must-trys..."
+              placeholder="What stood out? Tips, must-tries, or who you would bring along…"
               placeholderTextColor={C.muted}
               value={body}
               onChangeText={setBody}
               multiline
               maxLength={500}
+              textAlignVertical="top"
             />
-            <View style={s.charCountRow}><Text style={s.charCount}>{body.length}/500</Text></View>
+            <View style={s.charCountRow}>
+              <Text style={[s.charCount, body.length >= 450 && s.charCountWarn]}>{body.length}/500</Text>
+            </View>
           </View>
 
           {/* 4. Photos */}
           <View style={s.createCard}>
             <View style={s.createCardHeader}>
-              <Ionicons name="images" size={20} color={C.red} />
+              <View style={s.createIconPill}>
+                <Ionicons name="images" size={15} color={C.red} />
+              </View>
               <Text style={s.createCardTitle}>Photos</Text>
               <Text style={s.photoCountBadge}>{imageEntries.length}/2</Text>
             </View>
+            <Text style={s.createFieldHint}>Optional · up to 2 images help others picture the visit.</Text>
             <View style={s.photoRow}>
               {imageEntries.length === 0 ? (
                 <TouchableOpacity style={s.photoAddSingle} onPress={pickImage} activeOpacity={0.7}>
                   <View style={s.photoAddIconWrap}>
-                    <Ionicons name="add" size={28} color={C.red} />
+                    <Ionicons name="add" size={22} color={C.red} />
                   </View>
                   <Text style={s.photoAddText}>Add up to 2 photos</Text>
                   <Text style={s.photoAddHint}>Tap to choose from library</Text>
@@ -764,7 +638,7 @@ function CreatePostModal({ visible, onClose, onPosted, initialPlace, initialClie
                       <View style={s.photoThumb}>
                         <Image source={{ uri: imageEntries[0].uri }} style={s.photoThumbImg} resizeMode="cover" />
                         <TouchableOpacity style={s.photoRemove} onPress={() => removeImage(0)}>
-                          <Ionicons name="close" size={18} color="#FFF" />
+                          <Ionicons name="close" size={16} color="#FFF" />
                         </TouchableOpacity>
                       </View>
                     ) : null}
@@ -775,12 +649,12 @@ function CreatePostModal({ visible, onClose, onPosted, initialPlace, initialClie
                       <View style={s.photoThumb}>
                         <Image source={{ uri: imageEntries[1].uri }} style={s.photoThumbImg} resizeMode="cover" />
                         <TouchableOpacity style={s.photoRemove} onPress={() => removeImage(1)}>
-                          <Ionicons name="close" size={18} color="#FFF" />
+                          <Ionicons name="close" size={16} color="#FFF" />
                         </TouchableOpacity>
                       </View>
                     ) : (
                       <TouchableOpacity style={s.photoAdd} onPress={pickImage} activeOpacity={0.7}>
-                        <Ionicons name="add" size={24} color={C.red} />
+                        <Ionicons name="add" size={20} color={C.red} />
                         <Text style={s.photoAddText}>Add</Text>
                       </TouchableOpacity>
                     )}
@@ -793,16 +667,18 @@ function CreatePostModal({ visible, onClose, onPosted, initialPlace, initialClie
           {/* 5. Hashtags */}
           <View style={s.createCard}>
             <View style={s.createCardHeader}>
-              <Ionicons name="pricetags" size={20} color={C.red} />
+              <View style={s.createIconPill}>
+                <Ionicons name="pricetags" size={15} color={C.red} />
+              </View>
               <Text style={s.createCardTitle}>Tags</Text>
             </View>
-            <Text style={s.createCardDesc}>Help others find your review</Text>
+            <Text style={s.createCardDesc}>Pick one or more topics, or add your own — helps others discover your post.</Text>
             <View style={s.topicGrid}>
               {CREATE_POST_TOPICS.map((t) => {
                 const on = selectedTopicIds.includes(t.id);
                 return (
                   <TouchableOpacity key={t.id} style={[s.topicChip, on && s.topicChipOn]} onPress={() => toggleTopic(t.id)} activeOpacity={0.8}>
-                    <Ionicons name={CREATE_POST_TOPIC_ICONS[t.id] || 'pricetag-outline'} size={18} color={on ? C.red : C.sub} />
+                    <Ionicons name={CREATE_POST_TOPIC_ICONS[t.id] || 'pricetag-outline'} size={15} color={on ? C.red : C.sub} />
                     <Text style={[s.topicChipLabel, on && s.topicChipLabelOn]}>{t.label}</Text>
                   </TouchableOpacity>
                 );
@@ -824,10 +700,24 @@ function CreatePostModal({ visible, onClose, onPosted, initialPlace, initialClie
             </View>
           </View>
 
-          {!canPost && (body.length > 0 || place.length > 0 || selectedTopicIds.length > 0) && (
-            <Text style={s.createHint}>Fill in place, rating, review text, and at least one tag to post.</Text>
+          {!canPost && (body.length > 0 || place.length > 0 || selectedTopicIds.length > 0 || rating > 0) && (
+            <View style={s.createChecklist}>
+              {[
+                { ok: place.trim().length > 0, text: 'Venue or place' },
+                { ok: rating > 0, text: 'Star rating' },
+                { ok: body.trim().length > 0, text: 'Review text' },
+                { ok: hasTopic, text: 'At least one tag' },
+              ].map((row) => (
+                <View key={row.text} style={s.createChecklistRow}>
+                  <Ionicons name={row.ok ? 'checkmark-circle' : 'ellipse-outline'} size={17} color={row.ok ? C.green : C.muted} />
+                  <Text style={[s.createChecklistText, row.ok && s.createChecklistTextDone]}>{row.text}</Text>
+                </View>
+              ))}
+            </View>
           )}
         </ScrollView>
+          </View>
+        </View>
 
         <Modal visible={showClientPicker} animationType="slide" transparent onRequestClose={() => setShowClientPicker(false)}>
           <View style={[s.pickerOverlay, { paddingTop: insets.top + 60 }]}>
@@ -874,323 +764,624 @@ function CreatePostModal({ visible, onClose, onPosted, initialPlace, initialClie
   );
 }
 
+// FAB menu: Post on top, Scan on left — each with distinct look
+const FAB_MENU_OPTIONS = [
+  { id: 'post', label: 'Post', icon: 'create-outline', position: 'top', variant: 'post' },
+  { id: 'scan', label: 'Scan', icon: 'scan-outline', position: 'left', variant: 'scan' },
+];
+
+function FabButton({ expanded, onPress, commStyles: st }) {
+  const rotateAnim = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    Animated.timing(rotateAnim, {
+      toValue: expanded ? 1 : 0,
+      duration: 260,
+      easing: Easing.out(Easing.back(1.2)),
+      useNativeDriver: true,
+    }).start();
+  }, [expanded]);
+  const rotate = rotateAnim.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '45deg'] });
+  return (
+    <TouchableOpacity onPress={onPress} activeOpacity={0.85}>
+      <Animated.View style={[st.fab, { transform: [{ rotate }] }]}>
+        <Ionicons name="add" size={28} color="#FFF" />
+      </Animated.View>
+    </TouchableOpacity>
+  );
+}
+
+function FabOptionIconWriting({ icon, expanded }) {
+  const rotate = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    if (!expanded) return;
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(rotate, { toValue: 1, duration: 400, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
+        Animated.timing(rotate, { toValue: 0, duration: 400, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
+      ])
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [expanded]);
+  const rotateDeg = rotate.interpolate({ inputRange: [0, 1], outputRange: ['-8deg', '8deg'] });
+  return (
+    <Animated.View style={{ transform: [{ rotate: rotateDeg }] }}>
+      <Ionicons name={icon} size={22} color="#FFF" />
+    </Animated.View>
+  );
+}
+
+function FabOptionIconScanning({ icon, expanded, commStyles: st }) {
+  const scanLine = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    if (!expanded) return;
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(scanLine, { toValue: 1, duration: 900, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
+        Animated.timing(scanLine, { toValue: 0, duration: 900, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
+      ])
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [expanded]);
+  const translateY = scanLine.interpolate({ inputRange: [0, 1], outputRange: [0, 28] });
+  return (
+    <View style={st.fabOptionIconWrap}>
+      <Ionicons name={icon} size={22} color="#FFF" />
+      {expanded && (
+        <Animated.View style={[st.fabOptionScanLine, { transform: [{ translateY }] }]} pointerEvents="none">
+          <View style={st.fabOptionScanLineInner} />
+        </Animated.View>
+      )}
+    </View>
+  );
+}
+
+function RevolverFabOverlay({ expanded, onClose, commStyles: st }) {
+  const opacity = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    Animated.timing(opacity, {
+      toValue: expanded ? 1 : 0,
+      duration: expanded ? 180 : 120,
+      useNativeDriver: true,
+    }).start();
+  }, [expanded]);
+  return (
+    <Animated.View style={[st.fabOverlay, st.fabOverlayDim, { opacity }]} pointerEvents={expanded ? 'auto' : 'none'}>
+      <TouchableWithoutFeedback onPress={onClose}>
+        <View style={StyleSheet.absoluteFill} />
+      </TouchableWithoutFeedback>
+    </Animated.View>
+  );
+}
+
+function RevolverFabOptions({ expanded, onOptionPress, children, commStyles: st }) {
+  const optionAnims = useRef(FAB_MENU_OPTIONS.map(() => new Animated.Value(0))).current;
+
+  useEffect(() => {
+    if (expanded) {
+      optionAnims.forEach((a) => a.setValue(0));
+      FAB_MENU_OPTIONS.forEach((_, i) => {
+        Animated.timing(optionAnims[i], {
+          toValue: 1,
+          duration: 260,
+          delay: 50 + i * 65,
+          easing: Easing.out(Easing.back(1.35)),
+          useNativeDriver: true,
+        }).start();
+      });
+    } else {
+      optionAnims.forEach((a) => {
+        Animated.timing(a, { toValue: 0, duration: 100, useNativeDriver: true }).start();
+      });
+    }
+  }, [expanded]);
+
+  const topOpt = FAB_MENU_OPTIONS.find((o) => o.position === 'top');
+  const leftOpt = FAB_MENU_OPTIONS.find((o) => o.position === 'left');
+
+  const OptionBtn = ({ opt, index, style }) => {
+    const scale = optionAnims[index].interpolate({ inputRange: [0, 1], outputRange: [0.3, 1] });
+    const translateY = optionAnims[index].interpolate({ inputRange: [0, 1], outputRange: [8, 0] });
+    const isPost = opt.variant === 'post';
+    const btnStyle = isPost ? st.fabOptionBtnPost : st.fabOptionBtnScan;
+    const textStyle = isPost ? st.fabOptionTextPost : st.fabOptionTextScan;
+    return (
+      <Animated.View
+        pointerEvents={expanded ? 'auto' : 'none'}
+        style={[st.fabOptionAbsolute, style, { opacity: optionAnims[index], transform: [{ scale }, { translateY }] }]}
+      >
+        <TouchableOpacity style={[st.fabRadialOptionBtn, btnStyle]} onPress={() => onOptionPress(opt.id)} activeOpacity={0.85}>
+          {isPost ? (
+            <FabOptionIconWriting icon={opt.icon} expanded={expanded} />
+          ) : (
+            <FabOptionIconScanning icon={opt.icon} expanded={expanded} commStyles={st} />
+          )}
+          <Text style={[st.fabRadialOptionText, textStyle]}>{opt.label}</Text>
+        </TouchableOpacity>
+      </Animated.View>
+    );
+  };
+
+  return (
+    <View style={st.fabMenuLayout}>
+      {topOpt && <OptionBtn opt={topOpt} index={FAB_MENU_OPTIONS.indexOf(topOpt)} style={st.fabOptionTop} />}
+      {leftOpt && <OptionBtn opt={leftOpt} index={FAB_MENU_OPTIONS.indexOf(leftOpt)} style={st.fabOptionLeft} />}
+      {children}
+    </View>
+  );
+}
+
+const COMMUNITY_CARD_STAGGER_MS = 36;
+const COMMUNITY_CARD_STAGGER_CAP = 12;
+
+/** Staggered fade + slide-up when a row mounts or shows a new post (FlatList recycle). */
+const CommunityFeedCardWrapper = ({ itemId, index, children }) => {
+  const opacity = useRef(new Animated.Value(0)).current;
+  const translateY = useRef(new Animated.Value(14)).current;
+
+  useEffect(() => {
+    opacity.setValue(0);
+    translateY.setValue(14);
+    const delay = Math.min(index, COMMUNITY_CARD_STAGGER_CAP) * COMMUNITY_CARD_STAGGER_MS;
+    const parallel = Animated.parallel([
+      Animated.timing(opacity, {
+        toValue: 1,
+        duration: 340,
+        delay,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: true,
+      }),
+      Animated.spring(translateY, {
+        toValue: 0,
+        delay,
+        useNativeDriver: true,
+        damping: 19,
+        stiffness: 210,
+      }),
+    ]);
+    parallel.start();
+    return () => parallel.stop();
+  }, [itemId, index, opacity, translateY]);
+
+  return (
+    <Animated.View style={{ opacity, transform: [{ translateY }] }}>
+      {children}
+    </Animated.View>
+  );
+};
+
 export default function CommunitiesScreen() {
-  const insets = useSafeAreaInsets();
-  const route = useRoute();
-  const navigation = useNavigation();
+  const navigation = useNavigation()
+  const route = useRoute()
+  const { isDark, colors } = useTheme()
+  const { session } = useAuth()
+  const { preferences } = useUserPreferences()
+  const palette = useMemo(() => getCommunityPalette(isDark), [isDark])
+  const s = useMemo(() => buildCommunitiesScreenStyles(palette, isDark), [palette, isDark])
+  const feedStyles = useMemo(() => buildCommunityFeedStyles(palette, isDark), [palette, isDark])
+  const insets = useSafeAreaInsets()
   const [posts, setPosts] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [nextCursor, setNextCursor] = useState(null);
+  const [hasMore, setHasMore] = useState(true);
   const [activeTopic, setActiveTopic] = useState('all');
-  const [selectedPost, setSelectedPost] = useState(null);
-  const [focusReplyWhenOpen, setFocusReplyWhenOpen] = useState(false);
+  const [activeClientFilter, setActiveClientFilter] = useState(null);
   const [showCreate, setShowCreate] = useState(false);
   const [showScanner, setShowScanner] = useState(false);
   const [scanInitialPlace, setScanInitialPlace] = useState(null);
   const [scanInitialClientUuid, setScanInitialClientUuid] = useState(null);
   const [fabExpanded, setFabExpanded] = useState(false);
-  const [showAiFilterPanel, setShowAiFilterPanel] = useState(false);
-  const [aiSearchQuery, setAiSearchQuery] = useState('');
-  const [aiFilteredPosts, setAiFilteredPosts] = useState([]);
-  const [aiSearching, setAiSearching] = useState(false);
-  const [khalidFilterBanner, setKhalidFilterBanner] = useState(null);
-  const askKhalidModalOpacity = useRef(new Animated.Value(0)).current;
-  const askKhalidCardScale = useRef(new Animated.Value(0.9)).current;
-  const lightningPulse = useRef(new Animated.Value(1)).current;
   const fabBottom = TAB_BAR_HEIGHT + 72 + (Platform.OS === 'android' ? insets.bottom : 0);
 
-  const loadPosts = useCallback(async (opts = {}) => {
-    if (activeTopic === 'ai') return;
-    const { isRefresh = false } = opts;
-    if (isRefresh) setRefreshing(true); else setLoading(true);
-    try {
-      const list = await fetchCommunityPosts(activeTopic);
-      setPosts(list);
-    } catch (e) {
-      console.error('[Community] load posts failed:', e);
-      setPosts([]);
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
-    }
-  }, [activeTopic]);
-
-  useEffect(() => { loadPosts(); }, [loadPosts]);
+  const scrollY = useRef(new Animated.Value(0)).current
+  const lastScrollY = useRef(0)
+  const headerTranslateY = useRef(new Animated.Value(0)).current
+  const headerVisibleRef = useRef(true)
+  const appendInFlightRef = useRef(false)
+  const nextCursorRef = useRef(null)
+  const activeTopicRef = useRef(activeTopic)
+  const pagingRef = useRef({
+    hasMore: true,
+    loadingMore: false,
+    loading: true,
+    refreshing: false,
+    loadMore: () => {},
+  })
+  const [headerBarHeight, setHeaderBarHeight] = useState(() => insets.top + 130)
 
   useEffect(() => {
-    if (activeTopic !== 'ai') setKhalidFilterBanner(null);
-  }, [activeTopic]);
+    activeTopicRef.current = activeTopic
+  }, [activeTopic])
 
-  const runAiSearch = useCallback(async () => {
-    const term = aiSearchQuery.trim().slice(0, AI_SEARCH_MAX_LEN);
-    if (!term) return;
-    setAiSearching(true);
-    try {
-      const list = await searchCommunityWithOpenAI(term);
-      setAiFilteredPosts(list);
-      setActiveTopic('ai');
-      setShowAiFilterPanel(false);
-      setAiSearchQuery('');
-    } catch (e) {
-      console.error('[Community] AI search failed:', e);
-      Alert.alert('Search failed', e?.message || 'Try again.');
-      setAiFilteredPosts([]);
-    } finally {
-      setAiSearching(false);
-    }
-  }, [aiSearchQuery]);
-
-  // Allow Khalid assistant to jump here and filter reviews for a specific place
   useEffect(() => {
-    const fromKhalid = route.params?.fromKhalid;
-    if (!fromKhalid || fromKhalid.type !== 'filter_reviews') return;
-    const term = (fromKhalid.place || '').trim().slice(0, AI_SEARCH_MAX_LEN);
-    if (!term) return;
+    nextCursorRef.current = nextCursor
+  }, [nextCursor])
 
-    (async () => {
-      setAiSearching(true);
-      setKhalidFilterBanner(term);
-      try {
-        const list = await searchCommunityWithOpenAI(term);
-        setAiFilteredPosts(list);
-        setActiveTopic('ai');
-      } catch (e) {
-        console.error('[Community] AI search (from Khalid) failed:', e);
-        Alert.alert('Search failed', e?.message || 'Try again.');
-        setKhalidFilterBanner(null);
-      } finally {
-        setAiSearching(false);
-        navigation.setParams({ fromKhalid: undefined });
+  useEffect(() => {
+    const clientFilter = route.params?.clientFilter
+    if (clientFilter?.clientId) {
+      setActiveClientFilter({ clientId: clientFilter.clientId, businessName: clientFilter.businessName || null })
+      setActiveTopic('all')
+    }
+  }, [route.params?.clientFilter])
+
+  const handleHeaderBarLayout = useCallback((event) => {
+    const h = event.nativeEvent.layout.height
+    if (h <= 0) return
+    setHeaderBarHeight((prev) => (Math.abs(prev - h) < 2 ? prev : h))
+  }, [])
+
+  const handleScroll = useMemo(
+    () =>
+      Animated.event(
+        [{ nativeEvent: { contentOffset: { y: scrollY } } }],
+        {
+          useNativeDriver: true,
+          listener: (e) => {
+            const y = e.nativeEvent.contentOffset.y
+            const diff = y - lastScrollY.current
+            lastScrollY.current = y
+
+            const { contentSize, layoutMeasurement } = e.nativeEvent
+            const contentH = contentSize?.height ?? 0
+            const viewH = layoutMeasurement?.height ?? 0
+            if (contentH > 1 && viewH > 1) {
+              const maxScrollY = contentH - viewH
+              const paging = pagingRef.current
+              const canLoad = paging.hasMore && !paging.loadingMore && !paging.loading && !paging.refreshing
+              if (canLoad) {
+                if (maxScrollY <= 8) {
+                  paging.loadMore()
+                } else {
+                  const progress = y / maxScrollY
+                  if (progress >= COMMUNITY_PREFETCH_SCROLL_PROGRESS) {
+                    paging.loadMore()
+                  }
+                }
+              }
+            }
+
+            if (diff > SCROLL_DIRECTION_THRESHOLD && y > SCROLL_THRESHOLD && headerVisibleRef.current) {
+              headerVisibleRef.current = false
+              Animated.timing(headerTranslateY, {
+                toValue: -headerBarHeight,
+                duration: HEADER_ANIM_DURATION,
+                easing: Easing.out(Easing.cubic),
+                useNativeDriver: true,
+              }).start()
+            } else if (diff < -SCROLL_DIRECTION_THRESHOLD && !headerVisibleRef.current) {
+              headerVisibleRef.current = true
+              Animated.timing(headerTranslateY, {
+                toValue: 0,
+                duration: HEADER_ANIM_DURATION,
+                easing: Easing.out(Easing.cubic),
+                useNativeDriver: true,
+              }).start()
+            }
+          },
+        }
+      ),
+    [scrollY, headerTranslateY, headerBarHeight]
+  )
+
+  const fetchCommunityPage = useCallback(async (opts = {}) => {
+    const { append = false, isRefresh = false } = opts
+    if (append && appendInFlightRef.current) return
+    if (append) appendInFlightRef.current = true
+
+    const topicSnapshot = activeTopic
+    const clientIdSnapshot = activeClientFilter?.clientId ?? null
+    const cursor = append && !isRefresh ? nextCursorRef.current : null
+
+    try {
+      if (isRefresh) {
+        setRefreshing(true)
+      } else if (append) {
+        setLoadingMore(true)
+      } else {
+        setLoading(true)
+        setPosts([])
       }
-    })();
-    const t = setTimeout(() => setKhalidFilterBanner(null), 6000);
-    return () => clearTimeout(t);
-  }, [route.params?.fromKhalid, navigation]);
 
-  const openAiFilterPanel = useCallback(() => {
-    setShowAiFilterPanel(true);
-    askKhalidModalOpacity.setValue(0);
-    askKhalidCardScale.setValue(0.9);
-    Animated.parallel([
-      Animated.timing(askKhalidModalOpacity, { toValue: 1, duration: 280, useNativeDriver: true }),
-      Animated.spring(askKhalidCardScale, { toValue: 1, useNativeDriver: true, damping: 14, stiffness: 120 }),
-    ]).start();
-  }, [askKhalidModalOpacity, askKhalidCardScale]);
+      const result = await fetchCommunityPostsPage({
+        topicId: topicSnapshot,
+        limit: COMMUNITY_FEED_PAGE_SIZE,
+        cursor,
+        clientId: clientIdSnapshot,
+        preferences,
+      })
 
-  const closeAiFilterPanel = useCallback(() => {
-    if (aiSearching) return;
-    Animated.timing(askKhalidModalOpacity, { toValue: 0, duration: 200, useNativeDriver: true }).start(() => setShowAiFilterPanel(false));
-    askKhalidCardScale.setValue(0.9);
-  }, [askKhalidModalOpacity, askKhalidCardScale, aiSearching]);
+      if (topicSnapshot !== activeTopicRef.current) return
+
+      if (append) {
+        setPosts((prev) => {
+          const seen = new Set(prev.map((p) => p.id))
+          const merged = [...prev]
+          for (const p of result.posts) {
+            if (!seen.has(p.id)) {
+              seen.add(p.id)
+              merged.push(p)
+            }
+          }
+          return merged
+        })
+      } else {
+        setPosts(result.posts)
+      }
+      setNextCursor(result.nextCursor)
+      setHasMore(result.hasMore)
+    } catch (e) {
+      console.error('[Community] load posts failed:', e)
+      if (!append && !isRefresh) {
+        setPosts([])
+        setHasMore(false)
+      }
+    } finally {
+      setLoading(false)
+      setRefreshing(false)
+      setLoadingMore(false)
+      if (append) appendInFlightRef.current = false
+    }
+  }, [activeTopic, activeClientFilter, preferences])
 
   useEffect(() => {
-    if (!aiSearching) return;
-    const pulse = Animated.loop(
-      Animated.sequence([
-        Animated.timing(lightningPulse, { toValue: 1.4, duration: 400, useNativeDriver: true }),
-        Animated.timing(lightningPulse, { toValue: 0.8, duration: 400, useNativeDriver: true }),
-      ])
-    );
-    pulse.start();
-    return () => pulse.stop();
-  }, [aiSearching, lightningPulse]);
+    setNextCursor(null)
+    setHasMore(true)
+    nextCursorRef.current = null
+    fetchCommunityPage({ append: false, isRefresh: false })
+  }, [activeTopic, activeClientFilter, fetchCommunityPage])
 
-  const displayPosts = activeTopic === 'ai' ? aiFilteredPosts : posts;
-  const showAiTip = activeTopic === 'ai';
+  const handleLoadMore = useCallback(() => {
+    if (loadingMore || !hasMore || loading || refreshing || appendInFlightRef.current) return
+    fetchCommunityPage({ append: true })
+  }, [loadingMore, hasMore, loading, refreshing, fetchCommunityPage])
 
-  const handleUpvote = useCallback(async (item) => {
-    try {
-      const newCount = await upvoteCommunityPost(item.id);
-      const updater = (p) => (p.id === item.id ? { ...p, upvotes: newCount, upvoted: true } : p);
-      setPosts((prev) => prev.map(updater));
-      setAiFilteredPosts((prev) => prev.map(updater));
-      if (selectedPost?.id === item.id) setSelectedPost((p) => (p?.id === item.id ? { ...p, upvotes: newCount, upvoted: true } : p));
-    } catch (e) {
-      console.warn('[Community] upvote failed:', e);
-    }
-  }, [selectedPost?.id]);
+  const handleRefresh = useCallback(() => {
+    fetchCommunityPage({ append: false, isRefresh: true })
+  }, [fetchCommunityPage])
 
-  const handleRemoveUpvote = useCallback(async (item) => {
-    try {
-      const newCount = await removeUpvoteCommunityPost(item.id);
-      const updater = (p) => (p.id === item.id ? { ...p, upvotes: newCount, upvoted: false } : p);
-      setPosts((prev) => prev.map(updater));
-      setAiFilteredPosts((prev) => prev.map(updater));
-      if (selectedPost?.id === item.id) setSelectedPost((p) => (p?.id === item.id ? { ...p, upvotes: newCount, upvoted: false } : p));
-    } catch (e) {
-      console.warn('[Community] remove upvote failed:', e);
-    }
-  }, [selectedPost?.id]);
+  useEffect(() => {
+    lastScrollY.current = 0
+    headerVisibleRef.current = true
+    headerTranslateY.setValue(0)
+  }, [activeTopic, activeClientFilter])
+
+  const handleClearClientFilter = useCallback(() => {
+    setActiveClientFilter(null)
+  }, [])
+
+  const handleOpenProfile = useCallback(() => {
+    navigation.navigate('Profile', { screen: 'ProfileMain' })
+  }, [navigation])
+
+  const communityHeadingRightSlot = useMemo(() => {
+    if (!session?.user) return undefined
+    return (
+      <TouchableOpacity
+        style={[s.communityProfileHeaderBtn, { backgroundColor: palette.bg, borderColor: palette.border }]}
+        activeOpacity={0.7}
+        onPress={handleOpenProfile}
+        accessibilityRole="button"
+        accessibilityLabel="Open profile"
+      >
+        <Image source={DEFAULT_PROFILE_IMAGE} style={s.communityProfileHeaderImage} resizeMode="cover" />
+      </TouchableOpacity>
+    )
+  }, [
+    session?.user,
+    s,
+    palette.bg,
+    palette.border,
+    handleOpenProfile,
+  ])
+
+  const {
+    handleUpvoteToggle,
+    getUpvoteScaleAnim,
+    particlesVisible,
+    particlePosition,
+  } = useCommunityUpvoteToggle();
+
+  const syncCommunityPost = useCallback((updated) => {
+    setPosts((prev) => prev.map((p) => (p.id === updated.id ? { ...p, ...updated } : p)));
+  }, []);
+
+  const onCommunityUpvoteToggle = useCallback(
+    (item, e) => {
+      handleUpvoteToggle(item, e, syncCommunityPost);
+    },
+    [handleUpvoteToggle, syncCommunityPost],
+  );
+
+  const handleOpenPost = useCallback((post) => {
+    navigation.navigate('CommunityPostDetail', { post });
+  }, [navigation]);
+
+  const handleOpenPostComments = useCallback((post) => {
+    navigation.navigate('CommunityPostDetail', { post, focusComposer: true });
+  }, [navigation]);
+
+  const handleTaggedClientPress = useCallback(({ clientId, businessName }) => {
+    if (!clientId) return
+    setActiveClientFilter({ clientId, businessName: businessName || null })
+    setActiveTopic('all')
+  }, [])
+
+  pagingRef.current = {
+    hasMore,
+    loadingMore,
+    loading,
+    refreshing,
+    loadMore: handleLoadMore,
+  }
 
   return (
     <ScreenContainer style={s.screen}>
-      <View style={[s.topBar, { paddingTop: insets.top + 8 }]}>
-        {/* Header row */}
-        <View style={s.header}>
-          <Text style={s.headerTitle}>Community</Text>
-          <View style={s.headerRight}>
-            <TouchableOpacity style={s.aiFilterBtn} onPress={openAiFilterPanel} activeOpacity={0.75}>
-              <Ionicons name="sparkles" size={14} color="#FFF" />
-              <Text style={s.aiFilterText}>Ask Khalid</Text>
-            </TouchableOpacity>
-            <ProfileButton iconColor={C.text} />
-          </View>
-        </View>
-
-        {/* Filter chips */}
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.filterScroll}>
-          {TOPICS.map((t) => {
-            const on = activeTopic === t.id;
-            return (
-              <TouchableOpacity
-                key={t.id}
-                style={[s.filterChip, on && s.filterChipOn]}
-                onPress={() => setActiveTopic(t.id)}
-                activeOpacity={0.75}
-              >
-                <Text style={[s.filterChipText, on && s.filterChipTextOn]}>{t.label}</Text>
-              </TouchableOpacity>
-            );
-          })}
-        </ScrollView>
-      </View>
-
-      {/* Ask Khalid — full-screen blurred modal */}
-      <Modal visible={showAiFilterPanel} transparent animationType="none" onRequestClose={closeAiFilterPanel}>
-        <Animated.View style={[s.askKhalidOverlay, { opacity: askKhalidModalOpacity }]}>
-          {Platform.OS === 'ios' ? (
-            <BlurView intensity={80} tint="dark" style={StyleSheet.absoluteFill} />
-          ) : (
-            <View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(0,0,0,0.6)' }]} />
-          )}
-          <TouchableWithoutFeedback onPress={closeAiFilterPanel}>
-            <View style={StyleSheet.absoluteFill} />
-          </TouchableWithoutFeedback>
-          <Animated.View style={[s.askKhalidCardWrap, { transform: [{ scale: askKhalidCardScale }] }]}>
-            <View style={s.askKhalidCard}>
-              <View style={s.askKhalidHeader}>
-                <View style={s.askKhalidTitleRow}>
-                  <Ionicons name="sparkles" size={24} color={C.red} />
-                  <Text style={s.askKhalidTitle}>Ask Khalid</Text>
-                </View>
-                <Text style={s.askKhalidSub}>AI-powered suggestions from community reviews</Text>
-              </View>
-              {!aiSearching ? (
-                <>
-                  <TextInput
-                    style={s.askKhalidInput}
-                    placeholder="e.g. food, burger, breakfast..."
-                    placeholderTextColor={C.muted}
-                    value={aiSearchQuery}
-                    onChangeText={(t) => setAiSearchQuery(t.slice(0, AI_SEARCH_MAX_LEN))}
-                    maxLength={AI_SEARCH_MAX_LEN}
-                    autoCapitalize="none"
-                    autoCorrect={false}
-                  />
-                  <View style={s.askKhalidActions}>
-                    <TouchableOpacity
-                      style={[s.askKhalidSearchBtn, !aiSearchQuery.trim() && s.askKhalidSearchBtnDisabled]}
-                      onPress={runAiSearch}
-                      disabled={!aiSearchQuery.trim()}
-                      activeOpacity={0.85}
-                    >
-                      <Ionicons name="flash" size={18} color="#FFF" />
-                      <Text style={s.askKhalidSearchBtnText}>Search</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity onPress={closeAiFilterPanel} style={s.askKhalidCloseBtn} hitSlop={12}>
-                      <Text style={s.askKhalidCloseText}>Cancel</Text>
-                    </TouchableOpacity>
-                  </View>
-                </>
-              ) : (
-                <View style={s.askKhalidSearching}>
-                  <Animated.View style={{ transform: [{ scale: lightningPulse }] }}>
-                    <Ionicons name="flash" size={48} color="#FBBF24" />
-                  </Animated.View>
-                  <Text style={s.askKhalidSearchingTitle}>Khalid is searching...</Text>
-                  <Text style={s.askKhalidSearchingSub}>Scanning through reviews for you</Text>
-                </View>
-              )}
+      <View style={s.communityFeedRoot}>
+        <Animated.View
+          pointerEvents="box-none"
+          style={[
+            s.communityHeaderBar,
+            { backgroundColor: palette.bg, transform: [{ translateY: headerTranslateY }] },
+          ]}
+          onLayout={handleHeaderBarLayout}
+        >
+          <PageHeadingBar
+            title="Community"
+            backgroundColor={palette.bg}
+            rightSlot={communityHeadingRightSlot}
+          />
+          <View style={s.communityFilterOuter}>
+            <View style={s.filterPrimaryRow}>
+              {PRIMARY_TOPICS.map((t) => {
+                const on = activeTopic === t.id;
+                const iconName = TOPIC_FILTER_ICONS[t.id] || 'ellipse-outline';
+                return (
+                  <TouchableOpacity
+                    key={t.id}
+                    style={[s.filterPrimaryChip, on && s.filterPrimaryChipOn]}
+                    onPress={() => setActiveTopic(t.id)}
+                    activeOpacity={0.85}
+                    accessibilityRole="button"
+                    accessibilityLabel={t.label}
+                    accessibilityState={{ selected: on }}
+                  >
+                    <Ionicons
+                      name={iconName}
+                      size={17}
+                      color={on ? '#FFF' : palette.sub}
+                    />
+                    <Text style={[s.filterPrimaryChipLabel, on && s.filterPrimaryChipLabelOn]}>{t.label}</Text>
+                  </TouchableOpacity>
+                );
+              })}
             </View>
-          </Animated.View>
-        </Animated.View>
-      </Modal>
-
-      {loading && activeTopic !== 'ai' && displayPosts.length === 0 ? (
-        <View style={s.loadingWrap}><ActivityIndicator size="large" color={C.red} /></View>
-      ) : (
-        <FlatList
-          data={displayPosts}
-          keyExtractor={(item) => item.id}
-          ListHeaderComponent={
-            khalidFilterBanner ? (
-              <View style={s.khalidFilterBanner}>
-                <Ionicons name="sparkles" size={16} color={C.red} />
-                <Text style={s.khalidFilterBannerText} numberOfLines={1}>
-                  Reviews for: {khalidFilterBanner}
+            <View style={s.filterTabsWrap}>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.filterScroll}>
+                {SECONDARY_TOPICS.map((t) => {
+                  const on = activeTopic === t.id;
+                  const iconName = TOPIC_FILTER_ICONS[t.id] || 'ellipse-outline';
+                  return (
+                    <TouchableOpacity
+                      key={t.id}
+                      style={[s.filterChip, on && s.filterChipOn]}
+                      onPress={() => setActiveTopic(t.id)}
+                      activeOpacity={0.82}
+                      hitSlop={{ top: 4, bottom: 4, left: 2, right: 2 }}
+                      accessibilityRole="button"
+                      accessibilityLabel={t.label}
+                      accessibilityState={{ selected: on }}
+                    >
+                      <Ionicons
+                        name={iconName}
+                        size={16}
+                        color={on ? '#FFF' : palette.sub}
+                      />
+                      <Text style={[s.filterChipLabel, on && s.filterChipLabelOn]}>{t.label}</Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </ScrollView>
+            </View>
+            {activeClientFilter ? (
+              <View style={s.clientFilterBanner}>
+                <Ionicons name="storefront-outline" size={14} color={palette.accent || palette.red} style={{ marginRight: 6 }} />
+                <Text style={[s.clientFilterBannerText, { color: palette.text }]} numberOfLines={1}>
+                  {activeClientFilter.businessName || 'Selected venue'}
                 </Text>
-                <TouchableOpacity onPress={() => setKhalidFilterBanner(null)} hitSlop={8}>
-                  <Ionicons name="close-circle" size={20} color={C.muted} />
+                <TouchableOpacity
+                  onPress={handleClearClientFilter}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  accessibilityRole="button"
+                  accessibilityLabel="Clear venue filter"
+                  style={s.clientFilterClearBtn}
+                >
+                  <Ionicons name="close-circle" size={16} color={palette.sub} />
                 </TouchableOpacity>
+              </View>
+            ) : null}
+          </View>
+        </Animated.View>
+
+        <AnimatedGHFlatList
+          style={s.feedArea}
+          data={loading && posts.length === 0 ? [] : posts}
+          keyExtractor={(item) => item.id}
+          renderItem={({ item, index }) => (
+            <CommunityFeedCardWrapper itemId={item.id} index={index}>
+              <CommunityReviewCard
+                item={item}
+                C={palette}
+                styles={feedStyles}
+                onPress={handleOpenPost}
+                onTaggedClientPress={handleTaggedClientPress}
+                onCommentPress={handleOpenPostComments}
+                onUpvoteToggle={onCommunityUpvoteToggle}
+                upvoteScaleAnim={getUpvoteScaleAnim(item.id)}
+              />
+            </CommunityFeedCardWrapper>
+          )}
+          contentContainerStyle={[
+            feedStyles.feed,
+            { paddingTop: headerBarHeight },
+            posts.length === 0 && { flexGrow: 1 },
+          ]}
+          showsVerticalScrollIndicator={false}
+          onScroll={handleScroll}
+          scrollEventThrottle={16}
+          onEndReached={handleLoadMore}
+          onEndReachedThreshold={0.35}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={handleRefresh}
+              {...(Platform.OS === 'android' ? { progressViewOffset: headerBarHeight } : {})}
+              colors={[palette.red]}
+            />
+          }
+          ListFooterComponent={
+            loadingMore && hasMore ? (
+              <View style={{ paddingBottom: 24 }}>
+                <CommunityLoadingShimmer scrollable={false} />
+              </View>
+            ) : !hasMore && posts.length > 0 ? (
+              <View style={{ paddingVertical: 28, alignItems: 'center' }}>
+                <Text style={{ fontSize: 14, fontFamily: FONT_POPPINS_REGULAR, color: palette.sub }}>End of feed</Text>
               </View>
             ) : null
           }
-          renderItem={({ item }) => (
-            <ReviewCard
-                item={item}
-                onPress={setSelectedPost}
-                onCommentPress={(it) => { setSelectedPost(it); setFocusReplyWhenOpen(true); }}
-                onUpvote={handleUpvote}
-                onRemoveUpvote={handleRemoveUpvote}
-                aiTip={showAiTip ? item.aiSuggestion : undefined}
-              />
-          )}
-          contentContainerStyle={s.feed}
-          showsVerticalScrollIndicator={false}
-          refreshControl={activeTopic !== 'ai' ? <RefreshControl refreshing={refreshing} onRefresh={() => loadPosts({ isRefresh: true })} colors={[C.red]} /> : undefined}
           ListEmptyComponent={
-            <View style={s.empty}>
-              <View style={s.emptyIcon}><Ionicons name="compass-outline" size={44} color={C.muted} /></View>
-              <Text style={s.emptyTitle}>{activeTopic === 'ai' ? 'No matching reviews' : 'No reviews yet'}</Text>
-              <Text style={s.emptySub}>{activeTopic === 'ai' ? 'Try a different search (e.g. food, burger)' : 'Be the first to share a hidden gem in Bahrain'}</Text>
-            </View>
+            loading && posts.length === 0 ? (
+              <CommunityLoadingShimmer scrollable={false} />
+            ) : (
+              <View style={feedStyles.empty}>
+                <View style={feedStyles.emptyIcon}>
+                  <Ionicons name="people" size={48} color={palette.red} />
+                </View>
+                <Text style={feedStyles.emptyTitle}>No reviews yet</Text>
+                <Text style={feedStyles.emptySub}>Be the first to share your experience and help build our community</Text>
+              </View>
+            )
           }
         />
-      )}
+      </View>
 
-      {fabExpanded && (
-        <TouchableWithoutFeedback onPress={() => setFabExpanded(false)}>
-          <View style={s.fabOverlay} />
-        </TouchableWithoutFeedback>
-      )}
+      <RevolverFabOverlay expanded={fabExpanded} onClose={() => setFabExpanded(false)} commStyles={s} />
       <View style={[s.fabContainer, { bottom: fabBottom }]} pointerEvents="box-none">
-        {fabExpanded && (
-          <View style={s.fabMenu}>
-            <TouchableOpacity
-              style={s.fabMenuBtn}
-              onPress={() => { setFabExpanded(false); setShowCreate(true); }}
-              activeOpacity={0.85}
-            >
-              <Ionicons name="create-outline" size={20} color="#FFF" />
-              <Text style={s.fabMenuBtnText}>Post</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={s.fabMenuBtn}
-              onPress={() => { setFabExpanded(false); setShowScanner(true); }}
-              activeOpacity={0.85}
-            >
-              <Ionicons name="scan-outline" size={20} color="#FFF" />
-              <Text style={s.fabMenuBtnText}>Scan</Text>
-            </TouchableOpacity>
-          </View>
-        )}
-        <TouchableOpacity
-          style={[s.fab, fabExpanded && s.fabRotate]}
-          onPress={() => setFabExpanded((v) => !v)}
-          activeOpacity={0.85}
+        <RevolverFabOptions
+          expanded={fabExpanded}
+          commStyles={s}
+          onOptionPress={(id) => {
+            setFabExpanded(false);
+            if (id === 'post') setShowCreate(true);
+            if (id === 'scan') setShowScanner(true);
+          }}
         >
-          <Ionicons name="add" size={28} color="#FFF" />
-        </TouchableOpacity>
+          <FabButton expanded={fabExpanded} onPress={() => setFabExpanded((v) => !v)} commStyles={s} />
+        </RevolverFabOptions>
       </View>
 
       <QRScannerModal
@@ -1202,206 +1393,350 @@ export default function CommunitiesScreen() {
           setShowCreate(true);
         }}
       />
-      <DetailModal
-        post={selectedPost}
-        onClose={() => { setSelectedPost(null); setFocusReplyWhenOpen(false); }}
-        onUpvote={handleUpvote}
-        onRemoveUpvote={handleRemoveUpvote}
-        focusReplyWhenOpen={focusReplyWhenOpen}
-        onClearFocusReply={() => setFocusReplyWhenOpen(false)}
-      />
       <CreatePostModal
         visible={showCreate}
         onClose={() => { setShowCreate(false); setScanInitialPlace(null); setScanInitialClientUuid(null); }}
-        onPosted={() => loadPosts({ isRefresh: true })}
+        onPosted={handleRefresh}
         initialPlace={scanInitialPlace}
         initialClientUuid={scanInitialClientUuid}
+      />
+      <UpvoteParticles
+        visible={particlesVisible}
+        position={particlePosition}
+        accentColor={palette.green}
       />
     </ScreenContainer>
   );
 }
 
-const s = StyleSheet.create({
+function buildCommunitiesScreenStyles(C, isDark = false) {
+  return StyleSheet.create({
   screen: { backgroundColor: C.bg },
-  topBar: {
-    backgroundColor: C.bg,
-    paddingBottom: 12,
+  communityFeedRoot: {
+    flex: 1,
+    minHeight: 0,
   },
-  header: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    paddingHorizontal: 20, paddingBottom: 12,
-  },
-  headerRight: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  headerTitle: { fontSize: 20, fontWeight: '700', color: C.text, letterSpacing: -0.2 },
-  aiFilterBtn: {
-    flexDirection: 'row', alignItems: 'center', gap: 5,
-    backgroundColor: C.red, paddingHorizontal: 12, paddingVertical: 6,
-    borderRadius: 16,
-  },
-  aiFilterText: { fontSize: 12, fontWeight: '700', color: '#FFF' },
-  filterScroll: { paddingHorizontal: 20, gap: 8, flexDirection: 'row', alignItems: 'center' },
-  filterChip: {
-    flexDirection: 'row', alignItems: 'center', gap: 4,
-    paddingVertical: 6, paddingHorizontal: 14, borderRadius: 16,
-    backgroundColor: C.chip,
-  },
-  filterChipOn: {
-    backgroundColor: C.red,
+  communityHeaderBar: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    zIndex: 10,
     ...Platform.select({
-      ios: { shadowColor: C.red, shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.25, shadowRadius: 4 },
+      android: { elevation: 8 },
+      default: {},
+    }),
+  },
+  communityProfileHeaderBtn: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1.5,
+    ...Platform.select({
+      ios: {
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 1 },
+        shadowOpacity: isDark ? 0.35 : 0.06,
+        shadowRadius: 2,
+      },
       android: { elevation: 2 },
     }),
   },
-  filterChipText: { fontSize: 13, fontWeight: '600', color: C.sub },
-  filterChipTextOn: { color: '#FFFFFF', fontWeight: '700' },
-  filterChipDisabled: { opacity: 0.5 },
-  filterChipTextDisabled: { color: C.muted },
-  askKhalidOverlay: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    paddingHorizontal: 24,
+  communityProfileHeaderImage: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
   },
-  askKhalidCardWrap: { width: '100%', maxWidth: 340 },
-  askKhalidCard: {
-    backgroundColor: C.card,
-    borderRadius: 24,
-    padding: 24,
+  communityFilterOuter: {
+    paddingHorizontal: 10,
+    paddingBottom: 6,
+  },
+  feedArea: {
+    flex: 1,
+    minHeight: 0,
+  },
+  filterTabsWrap: {
+    paddingBottom: 4,
+    overflow: 'hidden',
+  },
+  filterPrimaryRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginHorizontal: 10,
+    marginBottom: 8,
+  },
+  filterPrimaryChip: {
+    flex: 1,
+    minHeight: 44,
+    borderRadius: 14,
+    borderWidth: 1.5,
+    borderColor: C.border,
+    backgroundColor: C.bg,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+  },
+  filterPrimaryChipOn: {
+    backgroundColor: C.red,
+    borderColor: C.red,
+  },
+  filterPrimaryChipLabel: {
+    fontSize: 13,
+    fontFamily: FONT_POPPINS_SEMIBOLD,
+    color: C.sub,
+  },
+  filterPrimaryChipLabelOn: {
+    color: '#FFF',
+    fontFamily: FONT_POPPINS_BOLD,
+  },
+  filterScroll: {
+    paddingLeft: 10,
+    paddingRight: 16,
+    paddingVertical: 6,
+    gap: 6,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  filterChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    minHeight: 38,
+    paddingHorizontal: 12,
+    borderRadius: 18,
+    backgroundColor: C.bg,
+    borderWidth: 1.5,
+    borderColor: C.border,
     ...Platform.select({
-      ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.25, shadowRadius: 24 },
-      android: { elevation: 16 },
+      ios: {
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 1 },
+        shadowOpacity: isDark ? 0.35 : 0.06,
+        shadowRadius: 2,
+      },
+      android: { elevation: 2 },
     }),
   },
-  askKhalidHeader: { marginBottom: 20 },
-  askKhalidTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 6 },
-  askKhalidTitle: { fontSize: 24, fontWeight: '800', color: C.text },
-  askKhalidSub: { fontSize: 14, color: C.muted, lineHeight: 20 },
-  askKhalidInput: {
-    height: 48,
-    backgroundColor: C.chip,
-    borderRadius: 14,
-    paddingHorizontal: 16,
-    fontSize: 16,
-    color: C.text,
-    marginBottom: 16,
-  },
-  askKhalidActions: { flexDirection: 'row', alignItems: 'center', gap: 12 },
-  askKhalidSearchBtn: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
+  filterChipOn: {
     backgroundColor: C.red,
-    paddingVertical: 14,
-    borderRadius: 14,
+    borderColor: C.red,
+    ...Platform.select({
+      ios: { shadowColor: C.red, shadowOpacity: 0.35 },
+      android: { elevation: 4 },
+    }),
   },
-  askKhalidSearchBtnDisabled: { opacity: 0.5 },
-  askKhalidSearchBtnText: { fontSize: 16, fontWeight: '700', color: '#FFF' },
-  askKhalidCloseBtn: { paddingVertical: 14, paddingHorizontal: 16 },
-  askKhalidCloseText: { fontSize: 16, fontWeight: '600', color: C.sub },
-  askKhalidSearching: {
-    alignItems: 'center',
-    paddingVertical: 24,
-    paddingHorizontal: 16,
+  filterChipLabel: {
+    fontSize: 12,
+    fontFamily: FONT_POPPINS_SEMIBOLD,
+    color: C.sub,
   },
-  askKhalidSearchingTitle: { fontSize: 18, fontWeight: '700', color: C.text, marginTop: 16, marginBottom: 4 },
-  askKhalidSearchingSub: { fontSize: 14, color: C.muted },
-  khalidFilterBanner: {
+  filterChipLabelOn: {
+    color: '#FFF',
+    fontFamily: FONT_POPPINS_BOLD,
+  },
+  clientFilterBanner: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
-    paddingVertical: 10,
-    paddingHorizontal: 14,
-    marginBottom: 12,
-    backgroundColor: '#FEF2F2',
-    borderLeftWidth: 4,
-    borderLeftColor: C.red,
-    borderRadius: 12,
+    marginHorizontal: 10,
+    marginBottom: 6,
+    marginTop: 2,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 20,
+    backgroundColor: C.card || C.bg,
+    borderWidth: 1,
+    borderColor: C.border,
+    alignSelf: 'flex-start',
+    maxWidth: '90%',
   },
-  khalidFilterBannerText: {
+  clientFilterBannerText: {
+    fontSize: 13,
+    fontFamily: FONT_POPPINS_SEMIBOLD,
     flex: 1,
-    fontSize: 14,
-    fontWeight: '600',
-    color: C.text,
+    flexShrink: 1,
+  },
+  clientFilterClearBtn: {
+    marginLeft: 6,
   },
   feed: { paddingHorizontal: 16, paddingBottom: 110 },
   feedHeader: { paddingTop: 18, paddingBottom: 14 },
-  feedHeaderTitle: { fontSize: 18, fontWeight: '800', color: C.text, marginBottom: 4 },
-  feedHeaderSub: { fontSize: 14, color: C.muted, fontWeight: '500' },
+  feedHeaderTitle: { fontSize: 18, fontFamily: FONT_POPPINS_BOLD, color: C.text, marginBottom: 4 },
+  feedHeaderSub: { fontSize: 14, color: C.muted, fontFamily: FONT_POPPINS_MEDIUM },
   loadingWrap: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingVertical: 60 },
+  loaderScroll: { flex: 1 },
+  loaderContent: { paddingTop: 12, paddingBottom: 40 },
+  skeletonGlassOuter: {
+    marginHorizontal: 12,
+    marginBottom: 8,
+    borderRadius: 18,
+    overflow: 'hidden',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: isDark ? 'rgba(148,148,158,0.28)' : 'rgba(142,142,147,0.2)',
+    ...Platform.select({
+      ios: {
+        shadowColor: '#000000',
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.06,
+        shadowRadius: 10,
+      },
+      android: { elevation: 2 },
+    }),
+  },
+  skeletonGlassFrost: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: isDark ? 'rgba(18,18,20,0.92)' : 'rgba(255,255,255,0.9)',
+  },
+  skeletonGlassFrostDark: {
+    backgroundColor: 'rgba(18,18,20,0.92)',
+  },
+  skeletonGlassInner: {
+    position: 'relative',
+    zIndex: 2,
+  },
+  skeletonBox: {
+    backgroundColor: C.chip,
+    borderRadius: 8,
+  },
+  skeletonAvatar: { borderRadius: 18 },
+  skeletonImage: {
+    backgroundColor: C.chip,
+  },
   card: {
     backgroundColor: C.card,
     paddingVertical: 12,
     borderBottomWidth: 1,
-    borderBottomColor: 'rgba(0,0,0,0.08)',
+    borderBottomColor: isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)',
   },
   cardInner: { flex: 1, paddingHorizontal: 0, paddingVertical: 0 },
   cardAuthorRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 10 },
   av: { width: 38, height: 38, borderRadius: 19, backgroundColor: C.chip, marginRight: 10 },
   avPlaceholder: { alignItems: 'center', justifyContent: 'center', backgroundColor: C.chip },
-  avInitial: { fontSize: 15, fontWeight: '800', color: C.text },
+  avInitial: { fontSize: 15, fontFamily: FONT_POPPINS_BOLD, color: C.text },
   cardMeta: { flex: 1, minWidth: 0 },
-  authorText: { fontSize: 14, fontWeight: '700', color: C.text },
+  authorText: { fontSize: 14, fontFamily: FONT_POPPINS_BOLD, color: C.text },
   cardPlaceRow: { flexDirection: 'row', alignItems: 'center', gap: 3, marginTop: 2 },
-  cardPlaceText: { fontSize: 12, fontWeight: '600', color: C.red },
+  cardPlaceText: { fontSize: 12, fontFamily: FONT_POPPINS_SEMIBOLD, color: C.red },
+  cardClientRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 12 },
+  clientAv: { width: 48, height: 48, borderRadius: 24, backgroundColor: C.chip, marginRight: 12, overflow: 'hidden' },
+  clientAvPlaceholder: { alignItems: 'center', justifyContent: 'center', backgroundColor: C.red + '18' },
+  cardClientMeta: { flex: 1, minWidth: 0 },
+  clientPlaceText: { fontSize: 16, fontFamily: FONT_POPPINS_BOLD, color: C.text, marginBottom: 2 },
+  cardAuthorSub: { fontSize: 12, color: C.sub, fontFamily: FONT_POPPINS_MEDIUM, marginTop: 2 },
   cardRatingPill: {
     flexDirection: 'row', alignItems: 'center', gap: 4,
-    paddingHorizontal: 8, paddingVertical: 4, borderRadius: 10,
   },
-  cardRatingNum: { fontSize: 12, fontWeight: '700', marginLeft: 2 },
-  bodyText: { fontSize: 14, lineHeight: 21, color: C.text, marginBottom: 10 },
-  cardKhalidDashedLine: {
-    height: 1, marginVertical: 10, marginHorizontal: 0,
-    borderStyle: 'dashed', borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 1,
-  },
-  cardKhalidTipWrap: {
-    flexDirection: 'row', alignItems: 'flex-start', gap: 8,
-    backgroundColor: '#FFFBEB', borderTopWidth: 1, borderTopColor: '#FDE68A',
-    marginHorizontal: 0, paddingHorizontal: 12, paddingVertical: 12,
-    borderBottomLeftRadius: 12, borderBottomRightRadius: 12,
-  },
-  cardKhalidTipText: { fontSize: 12.5, color: '#92400E', lineHeight: 17, flex: 1, fontStyle: 'italic' },
+  cardRatingNum: { fontSize: 12, fontFamily: FONT_POPPINS_SEMIBOLD, marginLeft: 2, color: C.sub },
+  bodyText: { fontSize: 14, fontFamily: FONT_POPPINS_REGULAR, lineHeight: 21, color: C.text, marginBottom: 10 },
   cardTopicRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginBottom: 10 },
   cardTopicPill: { backgroundColor: C.chip, paddingHorizontal: 10, paddingVertical: 4, borderRadius: 10 },
-  cardTopicPillText: { fontSize: 12, fontWeight: '600', color: C.sub },
-  cardImgWrap: { overflow: 'hidden', backgroundColor: C.chip, position: 'relative', borderRadius: 12, marginBottom: 10 },
+  cardTopicPillText: { fontSize: 12, fontFamily: FONT_POPPINS_SEMIBOLD, color: C.sub },
+  cardImgWrap: { overflow: 'hidden', backgroundColor: C.chip, position: 'relative', borderRadius: 12, marginBottom: 12 },
   cardImg: { width: '100%', height: '100%' },
   cardImgSplitRow: { flexDirection: 'row', width: '100%', height: '100%' },
   cardImgHalf: { flex: 1, height: '100%' },
   cardImgGap: { width: 2, backgroundColor: 'rgba(0,0,0,0.08)' },
+  cardImgPills: {
+    position: 'absolute', bottom: 8, left: 0, right: 0,
+    flexDirection: 'row', justifyContent: 'center', gap: 5,
+  },
+  cardImgPill: { width: 6, height: 6, borderRadius: 3, backgroundColor: 'rgba(255,255,255,0.5)' },
+  cardImgPillActive: { backgroundColor: '#FFF', width: 18, borderRadius: 3 },
   imgCountBadge: {
     position: 'absolute', bottom: 8, right: 8,
     backgroundColor: 'rgba(0,0,0,0.55)', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12,
   },
-  imgCountText: { color: '#FFF', fontSize: 12, fontWeight: '700' },
+  imgCountText: { color: '#FFF', fontSize: 12, fontFamily: FONT_POPPINS_BOLD },
   ratingOnImg: {
     position: 'absolute', top: 8, right: 8, flexDirection: 'row', alignItems: 'center', gap: 4,
     backgroundColor: 'rgba(0,0,0,0.5)', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8,
   },
-  ratingOnImgNum: { fontSize: 12, fontWeight: '700', color: '#FFF' },
+  ratingOnImgNum: { fontSize: 12, fontFamily: FONT_POPPINS_BOLD, color: '#FFF' },
   actions: { flexDirection: 'row', alignItems: 'center', gap: 20, marginTop: 10, paddingTop: 10 },
   actionBtn: { flexDirection: 'row', alignItems: 'center', gap: 5 },
-  actionNum: { fontSize: 13, fontWeight: '600', color: C.muted },
+  actionNum: { fontSize: 13, fontFamily: FONT_POPPINS_SEMIBOLD, color: C.muted },
   fabOverlay: {
     position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 0,
   },
+  fabOverlayDim: {
+    backgroundColor: 'rgba(0,0,0,0.35)',
+  },
   fabContainer: {
-    position: 'absolute', right: 20, alignItems: 'flex-end', zIndex: 1,
+    position: 'absolute', right: 20, width: 200, height: 170, alignItems: 'flex-end', justifyContent: 'flex-end', zIndex: 1, overflow: 'visible',
   },
-  fabMenu: {
-    flexDirection: 'column-reverse', alignItems: 'flex-end', marginBottom: 12, gap: 10,
+  fabMenuLayout: {
+    position: 'relative',
+    width: '100%',
+    height: '100%',
+    alignItems: 'flex-end',
+    justifyContent: 'flex-end',
+    overflow: 'visible',
   },
-  fabMenuBtn: {
-    flexDirection: 'row', alignItems: 'center', gap: 8,
-    backgroundColor: C.red, paddingVertical: 10, paddingHorizontal: 14, borderRadius: 24,
+  fabOptionAbsolute: {
+    position: 'absolute',
+  },
+  fabOptionTop: {
+    bottom: 76,
+    right: 0,
+  },
+  fabOptionLeft: {
+    bottom: 0,
+    right: 76,
+  },
+  fabRadialOptionBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 12,
+    paddingHorizontal: 18,
+    minWidth: 118,
+    minHeight: 52,
+    borderRadius: 26,
+    borderWidth: 2,
+    borderColor: 'rgba(255,255,255,0.55)',
     ...Platform.select({
-      ios: { shadowColor: C.red, shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.3, shadowRadius: 6 },
-      android: { elevation: 6 },
+      ios: { shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.28, shadowRadius: 10 },
+      android: { elevation: 8 },
     }),
   },
-  fabMenuBtnText: { fontSize: 14, fontWeight: '700', color: '#FFF' },
-  fabRotate: { transform: [{ rotate: '45deg' }] },
+  fabOptionBtnPost: {
+    backgroundColor: C.red,
+    ...Platform.select({
+      ios: { shadowColor: C.red },
+      android: {},
+    }),
+  },
+  fabOptionBtnScan: {
+    backgroundColor: C.green,
+    ...Platform.select({
+      ios: { shadowColor: C.green },
+      android: {},
+    }),
+  },
+  fabRadialOptionText: { fontSize: 15, fontFamily: FONT_POPPINS_BOLD, color: '#FFF', letterSpacing: 0.2 },
+  fabOptionTextPost: {},
+  fabOptionTextScan: {},
+  fabOptionIconWrap: { position: 'relative', overflow: 'hidden', width: 22, height: 22, alignItems: 'center', justifyContent: 'center' },
+  fabOptionScanLine: {
+    position: 'absolute',
+    top: -2,
+    left: -4,
+    right: -4,
+    height: 4,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  fabOptionScanLineInner: {
+    width: 30,
+    height: 2,
+    backgroundColor: 'rgba(255,255,255,0.9)',
+    borderRadius: 1,
+  },
   fab: {
     width: 58, height: 58, borderRadius: 29,
     backgroundColor: C.red, alignItems: 'center', justifyContent: 'center',
@@ -1413,13 +1748,13 @@ const s = StyleSheet.create({
   scannerPlaceholder: {
     flex: 1, backgroundColor: C.bg, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 24,
   },
-  scannerPermissionText: { fontSize: 16, color: C.text, textAlign: 'center', marginBottom: 24 },
+  scannerPermissionText: { fontSize: 16, fontFamily: FONT_POPPINS_REGULAR, color: C.text, textAlign: 'center', marginBottom: 24 },
   scannerPermissionBtn: {
     backgroundColor: C.red, paddingVertical: 14, paddingHorizontal: 24, borderRadius: 14, marginBottom: 12,
   },
-  scannerPermissionBtnText: { fontSize: 16, fontWeight: '700', color: '#FFF' },
+  scannerPermissionBtnText: { fontSize: 16, fontFamily: FONT_POPPINS_BOLD, color: '#FFF' },
   scannerCloseBtn: { padding: 12 },
-  scannerCloseText: { fontSize: 16, fontWeight: '600', color: C.sub },
+  scannerCloseText: { fontSize: 16, fontFamily: FONT_POPPINS_SEMIBOLD, color: C.sub },
   scannerOverlay: {
     position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, flex: 1,
   },
@@ -1441,14 +1776,25 @@ const s = StyleSheet.create({
     position: 'absolute', left: 0, right: 0, top: 0,
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 8,
   },
-  scannerHint: { fontSize: 14, color: 'rgba(255,255,255,0.95)', fontWeight: '600', flex: 1, textAlign: 'center' },
-  empty: { paddingVertical: 72, alignItems: 'center', paddingHorizontal: 32 },
+  scannerHint: { fontSize: 14, color: 'rgba(255,255,255,0.95)', fontFamily: FONT_POPPINS_SEMIBOLD, flex: 1, textAlign: 'center' },
+  empty: { paddingVertical: 80, alignItems: 'center', paddingHorizontal: 32 },
   emptyIcon: {
-    width: 80, height: 80, borderRadius: 40, backgroundColor: C.chip,
-    alignItems: 'center', justifyContent: 'center', marginBottom: 20,
+    width: 96, height: 96, borderRadius: 48, backgroundColor: C.redSoft,
+    alignItems: 'center', justifyContent: 'center', marginBottom: 24,
+    ...Platform.select({
+      ios: {
+        shadowColor: C.red,
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.15,
+        shadowRadius: 12,
+      },
+      android: {
+        elevation: 3,
+      },
+    }),
   },
-  emptyTitle: { fontSize: 18, fontWeight: '700', color: C.text, marginBottom: 6 },
-  emptySub: { fontSize: 15, color: C.sub, textAlign: 'center', lineHeight: 22 },
+  emptyTitle: { fontSize: 20, fontFamily: FONT_POPPINS_BOLD, color: C.text, marginBottom: 8, letterSpacing: -0.3 },
+  emptySub: { fontSize: 15, color: C.sub, textAlign: 'center', lineHeight: 22, fontFamily: FONT_POPPINS_MEDIUM },
   // Popup
   popOverlay: {
     flex: 1,
@@ -1457,7 +1803,7 @@ const s = StyleSheet.create({
     paddingHorizontal: 24,
   },
   popCard: {
-    backgroundColor: '#FFFFFF',
+    backgroundColor: isDark ? C.card : '#FFFFFF',
     borderRadius: 18,
     overflow: 'hidden',
     shadowColor: '#000',
@@ -1471,15 +1817,16 @@ const s = StyleSheet.create({
     paddingHorizontal: 18, paddingVertical: 12, paddingTop: 14, borderBottomWidth: 1, borderBottomColor: C.border,
   },
   popHeaderLeft: { flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 },
-  popHeaderAv: { width: 36, height: 36, borderRadius: 18, backgroundColor: C.chip },
+  popHeaderAv: { width: 40, height: 40, borderRadius: 10, backgroundColor: C.chip, overflow: 'hidden' },
   popHeaderAvPlaceholder: { alignItems: 'center', justifyContent: 'center', backgroundColor: C.red + '18' },
-  popHeaderAvLetter: { fontSize: 14, fontWeight: '800', color: C.red },
-  popHeaderName: { fontSize: 15, fontWeight: '700', color: C.text },
+  popHeaderAvLetter: { fontSize: 14, fontFamily: FONT_POPPINS_BOLD, color: C.red },
+  popHeaderName: { fontSize: 15, fontFamily: FONT_POPPINS_BOLD, color: C.text },
+  popHeaderSub: { fontSize: 12, color: C.sub, fontFamily: FONT_POPPINS_MEDIUM, marginTop: 1 },
   popPlaceRatingRow: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8, marginBottom: 12,
   },
   popPlaceWrap: { flexDirection: 'row', alignItems: 'center', gap: 4, flex: 1, minWidth: 0 },
-  popImgWrap: { position: 'relative', overflow: 'hidden' },
+  popImgWrap: { position: 'relative', overflow: 'hidden', backgroundColor: C.chip },
   popImgPills: {
     position: 'absolute', bottom: 10, left: 0, right: 0,
     flexDirection: 'row', justifyContent: 'center', gap: 5,
@@ -1490,19 +1837,19 @@ const s = StyleSheet.create({
     position: 'absolute', top: 10, left: 10, flexDirection: 'row', alignItems: 'center', gap: 4,
     backgroundColor: 'rgba(0,0,0,0.5)', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6,
   },
-  popImgBadgeText: { color: '#FFF', fontSize: 12, fontWeight: '700' },
+  popImgBadgeText: { color: '#FFF', fontSize: 12, fontFamily: FONT_POPPINS_BOLD },
   popBody: { paddingHorizontal: 18, paddingTop: 16 },
   popRatingWrap: { flexDirection: 'row', alignItems: 'center', gap: 4 },
-  popRatingNum: { fontSize: 13, fontWeight: '700', color: C.text },
-  popPlaceText: { fontSize: 13, fontWeight: '600', color: C.red },
+  popRatingNum: { fontSize: 13, fontFamily: FONT_POPPINS_SEMIBOLD, color: C.sub },
+  popPlaceText: { fontSize: 13, fontFamily: FONT_POPPINS_SEMIBOLD, color: C.red },
   popReviewText: {
-    fontSize: 15, lineHeight: 24, color: C.text, marginTop: 14,
+    fontSize: 15, fontFamily: FONT_POPPINS_REGULAR, lineHeight: 24, color: C.text, marginTop: 14,
   },
   popUpvoteRow: { marginTop: 12 },
   popUpvoteBtn: { flexDirection: 'row', alignItems: 'center', gap: 5 },
-  popUpvoteNum: { fontSize: 14, fontWeight: '600', color: C.muted },
+  popUpvoteNum: { fontSize: 14, fontFamily: FONT_POPPINS_SEMIBOLD, color: C.muted },
   popReplySection: { marginTop: 14, paddingTop: 12, marginBottom: 14, borderTopWidth: 1, borderTopColor: C.border },
-  popReplyTitle: { fontSize: 14, fontWeight: '700', color: C.text, marginBottom: 8 },
+  popReplyTitle: { fontSize: 14, fontFamily: FONT_POPPINS_BOLD, color: C.text, marginBottom: 8 },
   popReplyBox: {
     flexDirection: 'row', alignItems: 'center', backgroundColor: C.bg,
     paddingVertical: 8, paddingHorizontal: 10, borderRadius: 10,
@@ -1512,111 +1859,218 @@ const s = StyleSheet.create({
     width: 26, height: 26, borderRadius: 13, backgroundColor: C.chip,
     alignItems: 'center', justifyContent: 'center', marginRight: 8,
   },
-  popReplyInput: { flex: 1, fontSize: 13, color: C.text, paddingVertical: 0, minHeight: 20 },
-  popReplyPlaceholder: { flex: 1, fontSize: 13, color: C.muted },
-  // Create — warm color scheme
-  createRoot: { flex: 1, backgroundColor: '#F5F5F4' },
-  createHeader: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    paddingHorizontal: 16, paddingVertical: 12, paddingTop: 14,
-    backgroundColor: '#FFF',
+  popReplyInput: { flex: 1, fontSize: 13, fontFamily: FONT_POPPINS_REGULAR, color: C.text, paddingVertical: 0, minHeight: 20 },
+  popReplyPlaceholder: { flex: 1, fontSize: 13, fontFamily: FONT_POPPINS_REGULAR, color: C.muted },
+  // Create — light: warm stone; dark: neutral black surfaces
+  createRoot: { flex: 1, backgroundColor: isDark ? C.bg : '#F0F0EE' },
+  createGlassShell: {
+    flex: 1,
+    minHeight: 0,
+    marginHorizontal: 4,
+    marginTop: 0,
+    marginBottom: 4,
+    borderRadius: 18,
+    overflow: 'hidden',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: isDark ? 'rgba(255,255,255,0.1)' : 'rgba(142,142,147,0.18)',
     ...Platform.select({
-      ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.06, shadowRadius: 4 },
+      ios: {
+        shadowColor: '#000000',
+        shadowOffset: { width: 0, height: 8 },
+        shadowOpacity: isDark ? 0.28 : 0.06,
+        shadowRadius: 16,
+      },
       android: { elevation: 3 },
     }),
   },
-  createHeaderBtn: { padding: 8, marginLeft: -8 },
-  createHeaderCenter: { flex: 1, alignItems: 'center', justifyContent: 'center', marginHorizontal: 8 },
-  createTitle: { fontSize: 18, fontWeight: '800', color: '#1C1917', letterSpacing: -0.3 },
-  createSubtitle: { fontSize: 12, color: '#78716C', marginTop: 2, fontWeight: '500' },
+  createGlassFrost: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: isDark ? 'rgba(28,28,30,0.9)' : 'rgba(255,255,255,0.78)',
+  },
+  createGlassFrostDark: {
+    backgroundColor: 'rgba(28,28,30,0.9)',
+  },
+  createGlassInner: {
+    flex: 1,
+    minHeight: 0,
+    zIndex: 2,
+    position: 'relative',
+  },
+  createHeader: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingHorizontal: 12, paddingVertical: 8, paddingTop: 6,
+    backgroundColor: 'transparent',
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: isDark ? 'rgba(255,255,255,0.09)' : 'rgba(0,0,0,0.07)',
+  },
+  createHeaderBtn: { padding: 6, marginLeft: -6 },
+  createHeaderCenter: { flex: 1, alignItems: 'center', justifyContent: 'center', marginHorizontal: 4 },
+  createTitle: { fontSize: 15, fontFamily: FONT_POPPINS_BOLD, color: isDark ? C.text : '#1C1917', letterSpacing: -0.2 },
+  createSubtitle: { fontSize: 11, color: isDark ? C.muted : '#78716C', marginTop: 2, fontFamily: FONT_POPPINS_SEMIBOLD },
   postBtn: {
-    paddingVertical: 10, paddingHorizontal: 22, borderRadius: 22,
-    backgroundColor: '#E7E5E4', minWidth: 72, alignItems: 'center',
+    paddingVertical: 7, paddingHorizontal: 14, borderRadius: 18,
+    backgroundColor: isDark ? C.chip : '#E7E5E4', minWidth: 64, alignItems: 'center', justifyContent: 'center',
   },
   postBtnActive: { backgroundColor: C.red },
-  postBtnText: { fontSize: 15, fontWeight: '700', color: '#A8A29E' },
+  postBtnText: { fontSize: 14, fontFamily: FONT_POPPINS_BOLD, color: isDark ? C.muted : '#A8A29E' },
   postBtnTextActive: { color: '#FFF' },
-  createScroll: { paddingHorizontal: 16, paddingTop: 20 },
+  createScroll: { paddingHorizontal: 12, paddingTop: 10 },
+  createProgressRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    marginBottom: 12,
+  },
+  createProgressChunk: {
+    flex: 1,
+    height: 3,
+    borderRadius: 2,
+    backgroundColor: isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.07)',
+  },
+  createProgressChunkOn: {
+    backgroundColor: C.red,
+  },
   createCard: {
-    backgroundColor: '#FFF', borderRadius: 16, padding: 20, marginBottom: 16,
+    backgroundColor: isDark ? '#1C1C1E' : '#FFF', borderRadius: 14, padding: 12, marginBottom: 10,
     ...Platform.select({
-      ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.06, shadowRadius: 8 },
-      android: { elevation: 2 },
+      ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: isDark ? 0.28 : 0.05, shadowRadius: 6 },
+      android: { elevation: 1 },
     }),
   },
-  createCardHeader: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 14 },
-  createCardTitle: { fontSize: 16, fontWeight: '700', color: '#1C1917', flex: 1 },
-  createCardDesc: { fontSize: 13, color: '#78716C', marginBottom: 12, lineHeight: 18 },
+  createCardHeader: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 6 },
+  createIconPill: {
+    width: 30, height: 30, borderRadius: 10,
+    backgroundColor: isDark ? 'rgba(230,57,80,0.18)' : 'rgba(200,16,46,0.1)',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  createIconPillAmber: {
+    backgroundColor: isDark ? 'rgba(180,83,9,0.22)' : 'rgba(180,83,9,0.12)',
+  },
+  createFieldHint: {
+    fontSize: 11,
+    fontFamily: FONT_POPPINS_REGULAR,
+    lineHeight: 15,
+    color: C.muted,
+    marginBottom: 8,
+    marginTop: -1,
+  },
+  createCardTitle: { fontSize: 14, fontFamily: FONT_POPPINS_BOLD, color: isDark ? C.text : '#1C1917', flex: 1 },
+  createCardDesc: { fontSize: 12, fontFamily: FONT_POPPINS_REGULAR, color: isDark ? C.sub : '#78716C', marginBottom: 10, lineHeight: 16 },
   createTextInput: {
-    fontSize: 16, lineHeight: 24, color: '#1C1917',
-    minHeight: 100, textAlignVertical: 'top', paddingTop: 14, paddingBottom: 14,
-    backgroundColor: '#FAFAF9', borderRadius: 12, borderWidth: 1, borderColor: '#E7E5E4',
-    paddingHorizontal: 14,
+    fontSize: 15, fontFamily: FONT_POPPINS_REGULAR, lineHeight: 22, color: isDark ? C.text : '#1C1917',
+    minHeight: 88, textAlignVertical: 'top', paddingTop: 10, paddingBottom: 10,
+    backgroundColor: isDark ? '#121212' : '#FAFAF9', borderRadius: 12, borderWidth: 1, borderColor: isDark ? C.border : '#E7E5E4',
+    paddingHorizontal: 12,
   },
   charCountRow: { flexDirection: 'row', justifyContent: 'flex-end', marginTop: 6 },
-  charCount: { fontSize: 12, color: '#78716C' },
-  createHint: { fontSize: 13, color: '#78716C', textAlign: 'center', marginBottom: 24, paddingHorizontal: 16, lineHeight: 18 },
+  charCount: { fontSize: 11, fontFamily: FONT_POPPINS_MEDIUM, color: isDark ? C.sub : '#78716C' },
+  charCountWarn: { color: C.orange },
+  createHint: { fontSize: 13, fontFamily: FONT_POPPINS_REGULAR, color: isDark ? C.sub : '#78716C', textAlign: 'center', marginBottom: 24, paddingHorizontal: 16, lineHeight: 18 },
+  createChecklist: {
+    marginTop: 4,
+    marginBottom: 14,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 12,
+    backgroundColor: isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.04)',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.06)',
+    gap: 7,
+  },
+  createChecklistRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  createChecklistText: { flex: 1, fontSize: 13, fontFamily: FONT_POPPINS_MEDIUM, color: C.muted },
+  createChecklistTextDone: { color: C.sub, fontFamily: FONT_POPPINS_SEMIBOLD },
   placeInputRow: {
     flexDirection: 'row', alignItems: 'center',
-    backgroundColor: '#FAFAF9', borderRadius: 12, borderWidth: 1, borderColor: '#E7E5E4', overflow: 'hidden',
+    backgroundColor: isDark ? '#121212' : '#FAFAF9', borderRadius: 10, borderWidth: 1, borderColor: isDark ? C.border : '#E7E5E4', overflow: 'hidden',
   },
-  placeInput: { flex: 1, fontSize: 16, color: '#1C1917', paddingVertical: 14, paddingHorizontal: 14 },
+  placeInput: { flex: 1, fontSize: 15, fontFamily: FONT_POPPINS_REGULAR, color: isDark ? C.text : '#1C1917', paddingVertical: 10, paddingHorizontal: 12 },
   fromAppBtn: {
-    flexDirection: 'row', alignItems: 'center', gap: 6,
-    paddingVertical: 12, paddingHorizontal: 16, backgroundColor: '#FEF2F2', borderLeftWidth: 1, borderLeftColor: '#E7E5E4',
+    flexDirection: 'row', alignItems: 'center', gap: 5,
+    paddingVertical: 9, paddingHorizontal: 12,
+    backgroundColor: isDark ? 'rgba(230,57,80,0.14)' : '#FEF2F2',
+    borderLeftWidth: 1, borderLeftColor: isDark ? C.border : '#E7E5E4',
   },
-  fromAppBtnText: { fontSize: 14, fontWeight: '700', color: C.red },
-  starsRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
-  starTouchWrap: { width: 40, height: 40, flexDirection: 'row', position: 'relative' },
-  starHalf: { width: 20, height: 40 },
+  fromAppBtnText: { fontSize: 13, fontFamily: FONT_POPPINS_BOLD, color: C.red },
+  starsRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 0, flexWrap: 'wrap', rowGap: 8,
+  },
+  starTouchWrap: { width: 34, height: 34, flexDirection: 'row', position: 'relative' },
+  starHalf: { width: 17, height: 34 },
   starIconOverlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, alignItems: 'center', justifyContent: 'center' },
-  starsLabel: { fontSize: 17, fontWeight: '800', color: '#B45309', marginLeft: 10 },
-  topicGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginBottom: 14 },
-  topicChip: {
-    flexDirection: 'row', alignItems: 'center', gap: 6,
-    paddingVertical: 10, paddingHorizontal: 14, borderRadius: 12,
-    backgroundColor: '#FAFAF9', borderWidth: 1.5, borderColor: '#E7E5E4',
+  starsMeta: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 6,
+    marginLeft: 2,
+    flexShrink: 1,
+    minWidth: 0,
   },
-  topicChipOn: { backgroundColor: '#FEF2F2', borderColor: C.red },
-  topicChipLabel: { fontSize: 13, fontWeight: '600', color: '#57534E' },
-  topicChipLabelOn: { color: C.red, fontWeight: '700' },
+  starsLabel: {
+    fontSize: 15,
+    fontFamily: FONT_POPPINS_BOLD,
+    color: '#B45309',
+    letterSpacing: -0.2,
+  },
+  starsVerbal: {
+    fontSize: 12,
+    fontFamily: FONT_POPPINS_SEMIBOLD,
+    color: isDark ? C.sub : '#57534E',
+    flexShrink: 1,
+  },
+  topicGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 10 },
+  topicChip: {
+    flexDirection: 'row', alignItems: 'center', gap: 5,
+    paddingVertical: 7, paddingHorizontal: 11, borderRadius: 10,
+    backgroundColor: isDark ? '#121212' : '#FAFAF9', borderWidth: 1.5, borderColor: isDark ? C.border : '#E7E5E4',
+  },
+  topicChipOn: {
+    backgroundColor: isDark ? 'rgba(230,57,80,0.2)' : '#FEF2F2',
+    borderColor: C.red,
+  },
+  topicChipLabel: { fontSize: 12, fontFamily: FONT_POPPINS_SEMIBOLD, color: isDark ? C.sub : '#57534E' },
+  topicChipLabelOn: { color: C.red, fontFamily: FONT_POPPINS_BOLD },
   customHashtagRow: {
     flexDirection: 'row', alignItems: 'center',
-    backgroundColor: '#FAFAF9', borderRadius: 12, borderWidth: 1.5, borderColor: '#E7E5E4',
-    paddingVertical: 12, paddingHorizontal: 14,
+    backgroundColor: isDark ? '#121212' : '#FAFAF9', borderRadius: 10, borderWidth: 1.5, borderColor: isDark ? C.border : '#E7E5E4',
+    paddingVertical: 9, paddingHorizontal: 12,
   },
-  customHashtagPrefix: { fontSize: 15, fontWeight: '600', color: C.muted, marginRight: 4 },
-  customHashtagInput: { flex: 1, fontSize: 15, color: '#1C1917', paddingVertical: 0, minWidth: 0 },
-  customHashtagCount: { fontSize: 12, color: C.muted, marginLeft: 8 },
-  photoRow: { flexDirection: 'row', height: 128, alignItems: 'stretch' },
+  customHashtagPrefix: { fontSize: 14, fontFamily: FONT_POPPINS_SEMIBOLD, color: C.muted, marginRight: 4 },
+  customHashtagInput: { flex: 1, fontSize: 14, fontFamily: FONT_POPPINS_REGULAR, color: isDark ? C.text : '#1C1917', paddingVertical: 0, minWidth: 0 },
+  customHashtagCount: { fontSize: 12, fontFamily: FONT_POPPINS_REGULAR, color: C.muted, marginLeft: 8 },
+  photoRow: { flexDirection: 'row', height: 96, alignItems: 'stretch' },
   photoAddSingle: {
-    width: '100%', height: 128, borderRadius: 14,
-    borderWidth: 2, borderStyle: 'dashed', borderColor: '#D6D3D1',
-    alignItems: 'center', justifyContent: 'center', gap: 8,
-    backgroundColor: '#FAFAF9',
+    width: '100%', height: 96, borderRadius: 12,
+    borderWidth: 2, borderStyle: 'dashed', borderColor: isDark ? '#48484A' : '#D6D3D1',
+    alignItems: 'center', justifyContent: 'center', gap: 5,
+    backgroundColor: isDark ? '#121212' : '#FAFAF9',
   },
   photoAddIconWrap: {
-    width: 52, height: 52, borderRadius: 26, backgroundColor: '#FEF2F2', alignItems: 'center', justifyContent: 'center',
+    width: 40, height: 40, borderRadius: 20,
+    backgroundColor: isDark ? 'rgba(230,57,80,0.2)' : '#FEF2F2',
+    alignItems: 'center', justifyContent: 'center',
   },
-  photoAddText: { fontSize: 14, fontWeight: '600', color: '#57534E' },
-  photoAddHint: { fontSize: 12, color: '#78716C' },
-  photoCountBadge: { fontSize: 12, fontWeight: '700', color: C.muted, marginLeft: 'auto' },
+  photoAddText: { fontSize: 13, fontFamily: FONT_POPPINS_SEMIBOLD, color: isDark ? C.sub : '#57534E' },
+  photoAddHint: { fontSize: 11, fontFamily: FONT_POPPINS_REGULAR, color: isDark ? C.sub : '#78716C' },
+  photoCountBadge: { fontSize: 11, fontFamily: FONT_POPPINS_BOLD, color: C.muted, marginLeft: 'auto' },
   photoHalf: { flex: 1 },
-  photoGap: { width: 12 },
+  photoGap: { width: 8 },
   photoThumb: {
-    width: '100%', height: '100%', borderRadius: 14, overflow: 'hidden', backgroundColor: '#E7E5E4', position: 'relative',
+    width: '100%', height: '100%', borderRadius: 12, overflow: 'hidden',
+    backgroundColor: isDark ? '#2C2C2E' : '#E7E5E4', position: 'relative',
   },
   photoThumbImg: { width: '100%', height: '100%' },
   photoRemove: {
-    position: 'absolute', top: 8, right: 8,
-    width: 28, height: 28, borderRadius: 14, backgroundColor: 'rgba(0,0,0,0.55)',
+    position: 'absolute', top: 6, right: 6,
+    width: 26, height: 26, borderRadius: 13, backgroundColor: 'rgba(0,0,0,0.55)',
     alignItems: 'center', justifyContent: 'center',
   },
   photoAdd: {
-    width: '100%', height: '100%', borderRadius: 14,
-    borderWidth: 2, borderStyle: 'dashed', borderColor: '#D6D3D1',
+    width: '100%', height: '100%', borderRadius: 12,
+    borderWidth: 2, borderStyle: 'dashed', borderColor: isDark ? '#48484A' : '#D6D3D1',
     alignItems: 'center', justifyContent: 'center', gap: 4,
-    backgroundColor: '#FAFAF9',
+    backgroundColor: isDark ? '#121212' : '#FAFAF9',
   },
   // Picker
   pickerOverlay: {
@@ -1634,13 +2088,13 @@ const s = StyleSheet.create({
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
     paddingHorizontal: 20, paddingVertical: 16, borderBottomWidth: 1, borderBottomColor: C.border,
   },
-  pickerTitle: { fontSize: 18, fontWeight: '800', color: C.text },
+  pickerTitle: { fontSize: 18, fontFamily: FONT_POPPINS_BOLD, color: C.text },
   pickerSearchWrap: {
     flexDirection: 'row', alignItems: 'center', gap: 8,
     marginHorizontal: 16, marginVertical: 12, paddingVertical: 10, paddingHorizontal: 14,
     borderRadius: 14, backgroundColor: C.bg, borderWidth: 1, borderColor: C.border,
   },
-  pickerSearchInput: { flex: 1, fontSize: 15, color: C.text },
+  pickerSearchInput: { flex: 1, fontSize: 15, fontFamily: FONT_POPPINS_REGULAR, color: C.text },
   pickerLoading: { padding: 32, alignItems: 'center' },
   pickerItem: {
     flexDirection: 'row', alignItems: 'center', gap: 12,
@@ -1651,6 +2105,7 @@ const s = StyleSheet.create({
     width: 36, height: 36, borderRadius: 12, backgroundColor: C.bg,
     alignItems: 'center', justifyContent: 'center',
   },
-  pickerItemText: { flex: 1, fontSize: 15, fontWeight: '600', color: C.text },
-  pickerEmpty: { padding: 28, fontSize: 15, color: C.muted, textAlign: 'center' },
-});
+  pickerItemText: { flex: 1, fontSize: 15, fontFamily: FONT_POPPINS_SEMIBOLD, color: C.text },
+  pickerEmpty: { padding: 28, fontSize: 15, fontFamily: FONT_POPPINS_REGULAR, color: C.muted, textAlign: 'center' },
+  })
+}

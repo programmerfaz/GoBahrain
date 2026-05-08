@@ -1,6 +1,7 @@
 {
   "expo": {
-    "name": "GoBahrain",
+    "name": "SiyahaBH",
+    "scheme": "gobahrain",
     "slug": "go-bahrain",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -8,12 +9,26 @@
     "newArchEnabled": true,
     "splash": {
       "resizeMode": "contain",
-      "backgroundColor": "#ffffff"
+      "backgroundColor": "#F8FAFC"
     },
-    "ios": { "supportsTablet": true },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.esmailooo576.go-bahrain",
+      "infoPlist": {
+        "NSAllowsLocalNetworking": true,
+        "NSLocalNetworkUsageDescription": "Connect to Supabase or Metro on your local network while developing."
+      }
+    },
     "android": {
-      "adaptiveIcon": { "backgroundColor": "#ffffff" },
-      "edgeToEdgeEnabled": true
-    }
+      "adaptiveIcon": {
+        "backgroundColor": "#F8FAFC"
+      },
+      "edgeToEdgeEnabled": true,
+      "usesCleartextTraffic": true,
+      "package": "com.esmailooo576.gobahrain"
+    },
+    "plugins": [
+      "expo-asset"
+    ]
   }
 }

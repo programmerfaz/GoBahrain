@@ -5,6 +5,7 @@ import {
   buildPlacesContext,
   generateDayPlan,
 } from '../services/aiPlannerService.js';
+import { buildHydratedPlanCatalog } from '../services/planHydratedCatalogService.js';
 
 const router = Router();
 
@@ -46,7 +47,7 @@ router.post('/', async (req, res) => {
     let places = [];
     try {
       t0 = Date.now();
-      places = await queryPlaces(embedding, { topK: 5, preferences: preferences || undefined });
+      places = await queryPlaces(embedding, { topK: 8, preferences: preferences || undefined });
       console.log(`[ai-plan] pinecone: ${Date.now() - t0}ms (${places?.length ?? 0} places)`);
     } catch (e) {
       console.warn('[ai-plan] Pinecone failed, using fallback:', e.message);
@@ -72,8 +73,26 @@ router.post('/', async (req, res) => {
 });
 
 /**
+ * POST /api/ai-plan/hydrated-catalog
+ * Pinecone (4 buckets) → Supabase merge → JSON for in-app generateDayPlan().
+ */
+router.post('/hydrated-catalog', async (req, res) => {
+  const start = Date.now();
+  try {
+    const out = await buildHydratedPlanCatalog(req.body || {});
+    res.json({
+      ...out,
+      latency_ms: Date.now() - start,
+    });
+  } catch (err) {
+    console.error('[ai-plan] hydrated-catalog:', err.message);
+    res.status(500).json({ error: err.message, latency_ms: Date.now() - start });
+  }
+});
+
+/**
  * POST /api/ai-plan/match-clients
- * Embed preferences+food → Pinecone client query (top 4)
+ * Embed preferences+food → Pinecone client query
  */
 router.post('/match-clients', async (req, res) => {
   const start = Date.now();
@@ -92,7 +111,7 @@ router.post('/match-clients', async (req, res) => {
     console.log(`[match-clients] embedding: ${Date.now() - t0}ms`);
 
     t0 = Date.now();
-    const clients = await queryClients(embedding, { topK: 10 });
+    const clients = await queryClients(embedding, { topK: 12 });
     console.log(`[match-clients] pinecone: ${Date.now() - t0}ms (${clients.length} clients)`);
 
     res.json({ clients, latency_ms: Date.now() - start });

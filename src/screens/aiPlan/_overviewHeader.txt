@@ -1,0 +1,192 @@
+  const renderPlanTimelineOverviewHeader = useCallback(() => {
+    if (!dayPlan?.length) return null
+    const mealCount = dayPlan.filter((i) => i.type === 'restaurant').length
+    const reel = dayPlan.slice(0, 6).map((stop) => {
+      const thumbUri = pickPlanStopThumbUri(stop, allPlaceMarkers)
+      return { key: stop._planRowKey || `${stop.spot}-${stop.lat}`, uri: thumbUri }
+    })
+    const sharedBanner =
+      sharedCollaboration?.role === 'viewer'
+        ? 'View-only shared plan'
+        : sharedCollaboration?.role === 'editor'
+          ? 'Shared plan — your edits sync to the owner'
+          : sharedCollaboration?.role === 'owner'
+            ? 'Your saved plan (you can edit and re-share)'
+            : null
+    const titleLabel =
+      sharedCollaboration?.role === 'viewer' || sharedCollaboration?.role === 'editor'
+        ? 'Shared Bahrain day'
+        : 'Your Bahrain day'
+    const canEditSavedPlanTitle =
+      !!activeSavedPlanId &&
+      !planReadOnly &&
+      (sharedCollaboration == null || sharedCollaboration.role === 'owner')
+    const rowForTitle = savedPlansList.find((p) => p.id === activeSavedPlanId)
+    const savedTitleRaw = typeof rowForTitle?.title === 'string' ? rowForTitle.title.trim() : ''
+    const primaryTitle = canEditSavedPlanTitle && savedTitleRaw ? savedTitleRaw : titleLabel
+    return (
+      <View style={styles.planLuxuryOverviewCard} accessibilityRole="summary">
+        <View style={styles.planLuxuryOverviewAccentTop} />
+        {sharedBanner ? (
+          <View style={styles.planShareBanner} accessibilityRole="text">
+            <Text style={styles.planShareBannerText}>{sharedBanner}</Text>
+          </View>
+        ) : null}
+        <View style={styles.planLuxuryOverviewHeaderRow}>
+          <TouchableOpacity
+            style={styles.planLuxuryOverviewBackBtn}
+            activeOpacity={0.8}
+            onPress={() => {
+              setDrawerStep(0)
+              setDayPlan(null)
+              setError(null)
+              setActiveSavedPlanId(null)
+              setSharedCollaboration(null)
+            }}
+            accessibilityRole="button"
+            accessibilityLabel="Back to plans"
+          >
+            <Ionicons name="chevron-back" size={20} color="#0F172A" />
+          </TouchableOpacity>
+          <View style={styles.planLuxuryOverviewTitleBlock}>
+            <View style={styles.planLuxuryOverviewTitleRow}>
+              <Text style={[styles.planLuxuryOverviewTitle, { flex: 1, minWidth: 0 }]} numberOfLines={2}>
+                {primaryTitle}
+              </Text>
+              {canEditSavedPlanTitle ? (
+                <TouchableOpacity
+                  style={styles.planLuxuryOverviewTitleEditBtn}
+                  activeOpacity={0.75}
+                  onPress={() => handleOpenEditSavedPlanTitle(activeSavedPlanId)}
+                  accessibilityRole="button"
+                  accessibilityLabel="Edit plan title"
+                >
+                  <Ionicons name="create-outline" size={20} color="#64748B" />
+                </TouchableOpacity>
+              ) : null}
+            </View>
+            <Text
+              style={styles.planLuxuryOverviewSubtitle}
+              numberOfLines={2}
+              accessibilityLabel={`${dayPlan.length} stops, ${mealCount} meals`}
+            >
+              {mealCount === 0
+                ? `${dayPlan.length} hand-picked stops`
+                : `${dayPlan.length} stops, including ${mealCount} meal${mealCount === 1 ? '' : 's'}`}
+            </Text>
+          </View>
+          <View style={styles.planLuxuryOverviewHeaderActions}>
+            {!planReadOnly ? (
+              <TouchableOpacity
+                style={styles.savePlanHeaderBtn}
+                activeOpacity={0.75}
+                onPress={handleSavePlanToCloud}
+                disabled={savePlanBusy}
+                accessibilityRole="button"
+                accessibilityLabel="Save plan to cloud"
+              >
+                <Text style={styles.savePlanHeaderBtnText}>{savePlanBusy ? '…' : 'Save'}</Text>
+              </TouchableOpacity>
+            ) : null}
+            {!planReadOnly ? (
+              <TouchableOpacity
+                style={styles.planLuxuryOverviewIconBtn}
+                activeOpacity={0.75}
+                onPress={handleOpenShareModal}
+                disabled={shareModalBusy}
+                accessibilityRole="button"
+                accessibilityLabel="Share link and code"
+              >
+                <Ionicons name="link-outline" size={18} color={themeColors.primary} />
+              </TouchableOpacity>
+            ) : null}
+            <TouchableOpacity
+              style={styles.planLuxuryOverviewShareBtn}
+              activeOpacity={0.75}
+              onPress={handleSharePlanWithFriends}
+              accessibilityRole="button"
+              accessibilityLabel="Share plan as text"
+            >
+              <Ionicons name="share-outline" size={18} color={themeColors.primary} />
+            </TouchableOpacity>
+          </View>
+        </View>
+        <View style={styles.planLuxuryOverviewMapRow}>
+          <View style={styles.planLuxuryOverviewMapRowSplit}>
+            <TouchableOpacity
+              style={[styles.planLuxuryOverviewMapBtn, styles.planLuxuryOverviewMapBtnFlex]}
+              onPress={handleOpenInGoogleMaps}
+              disabled={openingMaps}
+              activeOpacity={0.85}
+              accessibilityRole="button"
+              accessibilityLabel="Open route in Google Maps"
+            >
+              {openingMaps ? (
+                <ActivityIndicator size="small" color="#64748B" />
+              ) : (
+                <>
+                  <Ionicons name="navigate-outline" size={18} color="#475569" />
+                  <Text style={styles.planLuxuryOverviewMapBtnText}>Maps</Text>
+                </>
+              )}
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[
+                styles.planLuxuryOverviewMapBtn,
+                styles.planLuxuryOverviewMapBtnFlex,
+                styles.planLuxuryOverviewAddBtn,
+                planReadOnly && { opacity: 0.45 },
+              ]}
+              onPress={() => {
+                if (planReadOnly) return
+                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {})
+                setShowSearchModal(true)
+              }}
+              disabled={planReadOnly}
+              activeOpacity={0.85}
+              accessibilityRole="button"
+              accessibilityLabel="Add a stop from the catalog"
+            >
+              <Ionicons name="add-circle-outline" size={18} color="#0096FF" />
+              <Text style={styles.planLuxuryOverviewAddBtnText}>Add stop</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.planLuxuryReelContent}
+          accessibilityRole="scrollbar"
+          accessibilityLabel="Spot photo previews"
+        >
+          {reel.map(({ key, uri }) => (
+            <View key={String(key)} style={styles.planLuxuryReelThumbWrap}>
+              {uri ? (
+                <PreviewImage uri={uri} style={styles.planLuxuryReelThumbImg} noFade />
+              ) : (
+                <View style={[styles.planLuxuryReelThumbImg, styles.planLuxuryReelThumbEmpty]}>
+                  <Ionicons name="image-outline" size={18} color="#C7C7CC" />
+                </View>
+              )}
+            </View>
+          ))}
+        </ScrollView>
+      </View>
+    )
+  }, [
+    dayPlan,
+    allPlaceMarkers,
+    openingMaps,
+    handleOpenInGoogleMaps,
+    handleSharePlanWithFriends,
+    setShowSearchModal,
+    sharedCollaboration,
+    planReadOnly,
+    handleSavePlanToCloud,
+    savePlanBusy,
+    handleOpenShareModal,
+    shareModalBusy,
+    activeSavedPlanId,
+    savedPlansList,
+    handleOpenEditSavedPlanTitle,
+  ])

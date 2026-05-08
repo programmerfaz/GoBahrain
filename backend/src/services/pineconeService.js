@@ -1,24 +1,41 @@
 const PINECONE_API_KEY = process.env.PINECONE_API_KEY;
-const PINECONE_HOST = 'https://gobahrain-1pj8txc.svc.aped-4627-b74a.pinecone.io';
+const PINECONE_HOST = (process.env.PINECONE_HOST || '').trim() || 'https://gobahrain-1pj8txc.svc.aped-4627-b74a.pinecone.io';
 const PINECONE_QUERY_URL = `${PINECONE_HOST}/query`;
+const PINECONE_API_VERSION = '2024-07';
+const FETCH_TIMEOUT_MS = 45000;
+
+async function fetchWithTimeout(url, options = {}, timeoutMs = FETCH_TIMEOUT_MS) {
+  const ctrl = new AbortController();
+  const id = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: ctrl.signal });
+  } finally {
+    clearTimeout(id);
+  }
+}
 
 /**
  * Direct fetch to Pinecone query — same approach as the frontend.
  */
-async function pineconeQuery(vector, topK, filter, namespace = '') {
-  const res = await fetch(PINECONE_QUERY_URL, {
+export async function pineconeQuery(vector, topK, filter = undefined, namespace = '') {
+  const body = {
+    vector,
+    topK,
+    includeMetadata: true,
+    includeValues: false,
+  };
+  if (filter != null && typeof filter === 'object' && Object.keys(filter).length > 0) {
+    body.filter = filter;
+  }
+  if (namespace) body.namespace = namespace;
+  const res = await fetchWithTimeout(PINECONE_QUERY_URL, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       'Api-Key': PINECONE_API_KEY,
+      'X-Pinecone-Api-Version': PINECONE_API_VERSION,
     },
-    body: JSON.stringify({
-      vector,
-      topK,
-      filter,
-      includeMetadata: true,
-      namespace,
-    }),
+    body: JSON.stringify(body),
   });
 
   const json = await res.json();
@@ -71,6 +88,23 @@ export async function queryClients(embedding, options = {}) {
   return matches.map((m) => ({
     score: m.score,
     id: m.id,
+    metadata: m.metadata || {},
+  }));
+}
+
+/**
+ * Broad semantic search for RAG — no metadata filter so clients and events can rank together.
+ * @param {number[]} embedding
+ * @param {{ topK?: number, namespace?: string }} options
+ */
+export async function queryRagTopMatches(embedding, options = {}) {
+  const topK = options.topK ?? 5;
+  const namespace =
+    typeof options.namespace === 'string' ? options.namespace : process.env.PINECONE_RAG_NAMESPACE?.trim?.() ?? '';
+  const matches = await pineconeQuery(embedding, topK, undefined, namespace || undefined);
+  return matches.map((m) => ({
+    id: m.id,
+    score: typeof m.score === 'number' ? m.score : Number(m.score) || 0,
     metadata: m.metadata || {},
   }));
 }

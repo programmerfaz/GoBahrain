@@ -3,66 +3,130 @@
  * - GENERAL_PREFERENCES: unique, general "about you" options (understand the user). Used everywhere.
  * - PREFERENCES: activity types for plan generation only.
  * - FOOD_CATEGORIES: food types for plan generation only.
+ * Colors use a modern, muted palette (see theme/designTokens.js).
  */
+
+// Muted palette for chips — Bahrain red accent, not blue
+const M = {
+  primary: '#C8102E',
+  success: '#059669',
+  morning: '#B45309',
+  afternoon: '#A61E32',
+  evening: '#5B21B6',
+  dining: '#B91C1C',
+  event: '#9D174D',
+  muted: '#64748B',
+  indigo: '#9D174D',
+};
 
 /** General "about you" options — who they are, how they travel, what they value. Not the same as plan activities/food. */
 export const GENERAL_PREFERENCES = [
-  { id: 'solo', label: 'Solo traveler', icon: 'person-outline', color: '#64748B', group: 'companion' },
-  { id: 'couples', label: 'Couples', icon: 'heart-outline', color: '#EC4899', group: 'companion' },
-  { id: 'family', label: 'Family', icon: 'people-outline', color: '#10B981', group: 'companion' },
-  { id: 'friends', label: 'Friends', icon: 'people-circle-outline', color: '#0EA5E9', group: 'companion' },
-  { id: 'business', label: 'Business', icon: 'briefcase-outline', color: '#6366F1', group: 'companion' },
-  { id: 'pace-relaxed', label: 'Relaxed pace', icon: 'leaf-outline', color: '#22C55E', group: 'pace' },
-  { id: 'pace-balanced', label: 'Balanced', icon: 'swap-horizontal-outline', color: '#F59E0B', group: 'pace' },
-  { id: 'pace-packed', label: 'Packed schedule', icon: 'flash-outline', color: '#EF4444', group: 'pace' },
-  { id: 'budget-friendly', label: 'Budget-friendly', icon: 'wallet-outline', color: '#10B981', group: 'budget' },
-  { id: 'moderate', label: 'Moderate', icon: 'card-outline', color: '#0EA5E9', group: 'budget' },
-  { id: 'splurge', label: 'Splurge', icon: 'diamond-outline', color: '#8B5CF6', group: 'budget' },
-  { id: 'culture-history', label: 'Culture & history', icon: 'library-outline', color: '#6366F1', group: 'interests' },
-  { id: 'nature-outdoors', label: 'Nature & outdoors', icon: 'earth-outline', color: '#22C55E', group: 'interests' },
-  { id: 'foodie', label: 'Foodie', icon: 'restaurant-outline', color: '#C8102E', group: 'interests' },
-  { id: 'nightlife', label: 'Nightlife', icon: 'moon-outline', color: '#7C3AED', group: 'interests' },
-  { id: 'shopping', label: 'Shopping', icon: 'bag-outline', color: '#EC4899', group: 'interests' },
-  { id: 'relaxation-wellness', label: 'Relaxation & wellness', icon: 'sparkles-outline', color: '#14B8A6', group: 'interests' },
-  { id: 'adventure', label: 'Adventure', icon: 'rocket-outline', color: '#EF4444', group: 'interests' },
-  { id: 'instagram-spots', label: 'Instagram spots', icon: 'camera-outline', color: '#EC4899', group: 'interests' },
-  { id: 'local-authentic', label: 'Local & authentic', icon: 'compass-outline', color: '#F59E0B', group: 'interests' },
-  { id: 'family-friendly', label: 'Family-friendly', icon: 'happy-outline', color: '#10B981', group: 'interests' },
-  { id: 'art-museums', label: 'Art & museums', icon: 'color-palette-outline', color: '#818CF8', group: 'interests' },
-  { id: 'beaches-sun', label: 'Beaches & sun', icon: 'sunny-outline', color: '#F97316', group: 'interests' },
-  { id: 'quiet-peaceful', label: 'Quiet & peaceful', icon: 'volume-mute-outline', color: '#64748B', group: 'interests' },
-  { id: 'social-lively', label: 'Social & lively', icon: 'chatbubbles-outline', color: '#0EA5E9', group: 'interests' },
+  { id: 'solo', label: 'Mostly solo', icon: 'person-outline', color: M.muted, group: 'companion' },
+  { id: 'family', label: 'Family outings', icon: 'people-outline', color: M.success, group: 'companion' },
+  { id: 'friends', label: 'Friends & social', icon: 'people-circle-outline', color: M.afternoon, group: 'companion' },
+  /** What the user wants AI / personalization to optimize for (not venue types). */
+  { id: 'focus-discover', label: "Spots I wouldn't find alone", icon: 'compass-outline', color: M.morning, group: 'coach_focus' },
+  { id: 'focus-dayflow', label: 'Smooth schedule & timing', icon: 'calendar-outline', color: M.indigo, group: 'coach_focus' },
+  { id: 'focus-people', label: 'Clear picks—less decision fatigue', icon: 'checkmark-done-outline', color: M.success, group: 'coach_focus' },
+  { id: 'focus-host', label: 'Birthdays, milestones & visitors', icon: 'star-outline', color: M.afternoon, group: 'coach_focus' },
+  { id: 'focus-shake', label: 'New picks, not my same loop', icon: 'shuffle-outline', color: M.evening, group: 'coach_focus' },
+  { id: 'pace-relaxed', label: 'Relaxed — lighter day', icon: 'leaf-outline', color: M.success, group: 'pace' },
+  { id: 'pace-balanced', label: 'Balanced — steady full day', icon: 'scale-outline', color: M.morning, group: 'pace' },
+  { id: 'pace-packed', label: 'Packed — max the schedule', icon: 'flash-outline', color: M.dining, group: 'pace' },
+  { id: 'budget-friendly', label: 'Budget-smart', icon: 'wallet-outline', color: M.success, group: 'budget' },
+  { id: 'moderate', label: 'Moderate — mid-range', icon: 'card-outline', color: M.afternoon, group: 'budget' },
+  { id: 'splurge', label: 'Happy to splurge', icon: 'diamond-outline', color: M.evening, group: 'budget' },
+  { id: 'culture-history', label: 'Culture', icon: 'library-outline', color: M.indigo, group: 'interests' },
+  { id: 'nature-outdoors', label: 'Nature', icon: 'earth-outline', color: M.success, group: 'interests' },
+  { id: 'foodie', label: 'Foodie', icon: 'restaurant-outline', color: M.dining, group: 'interests' },
+  { id: 'shopping', label: 'Shopping', icon: 'storefront-outline', color: M.event, group: 'interests' },
+  { id: 'adventure', label: 'Adventure', icon: 'bicycle-outline', color: M.dining, group: 'interests' },
+  { id: 'instagram-spots', label: 'Instagram', icon: 'images-outline', color: M.event, group: 'interests' },
+  { id: 'local-authentic', label: 'Local', icon: 'compass-outline', color: M.morning, group: 'interests' },
+  { id: 'family-friendly', label: 'Kids', icon: 'happy-outline', color: M.success, group: 'interests' },
+  { id: 'art-museums', label: 'Art', icon: 'brush-outline', color: M.indigo, group: 'interests' },
+  { id: 'beaches-sun', label: 'Beaches', icon: 'umbrella-outline', color: M.morning, group: 'interests' },
+  { id: 'quiet-peaceful', label: 'Quiet', icon: 'volume-mute-outline', color: M.muted, group: 'interests' },
+  { id: 'social-lively', label: 'Social', icon: 'chatbubbles-outline', color: M.afternoon, group: 'interests' },
+  /** Day-to-day context for tone & timing—not venue picks. */
+  { id: 'lens-exploring', label: 'Still learning Bahrain', icon: 'map-outline', color: M.morning, group: 'life_lens' },
+  { id: 'lens-local', label: 'Local — deeper & fresher picks', icon: 'home-outline', color: M.success, group: 'life_lens' },
+  { id: 'lens-weekends', label: 'Mostly free Fri–Sun', icon: 'calendar-outline', color: M.indigo, group: 'life_lens' },
+  { id: 'lens-evenings', label: 'Evenings / off-hours outings', icon: 'moon-outline', color: M.evening, group: 'life_lens' },
+  { id: 'lens-between', label: 'Split time—here sometimes', icon: 'trail-sign-outline', color: M.muted, group: 'life_lens' },
+  { id: 'choose-research', label: 'Research & reviews first', icon: 'search-outline', color: M.indigo, group: 'choose_style' },
+  { id: 'choose-circle', label: 'Trusted people’s picks', icon: 'chatbubbles-outline', color: M.afternoon, group: 'choose_style' },
+  { id: 'choose-mood', label: 'Mood in the moment', icon: 'color-filter-outline', color: M.evening, group: 'choose_style' },
+  { id: 'choose-blend', label: 'Depends — I mix styles', icon: 'options-outline', color: M.muted, group: 'choose_style' },
+  { id: 'plan-structured', label: 'Structured', icon: 'list-outline', color: M.morning, group: 'planning' },
+  { id: 'plan-flexible', label: 'Flexible', icon: 'shuffle-outline', color: M.success, group: 'planning' },
+  { id: 'plan-mix', label: 'Mixed', icon: 'git-compare-outline', color: M.afternoon, group: 'planning' },
+  { id: 'time-early', label: 'Early', icon: 'alarm-outline', color: M.morning, group: 'timing' },
+  { id: 'time-afternoon', label: 'Afternoon', icon: 'partly-sunny-outline', color: M.success, group: 'timing' },
+  { id: 'time-late', label: 'Late', icon: 'moon-outline', color: M.evening, group: 'timing' },
 ];
 
 /** Activity types — for plan generation only (what to do). */
 export const PREFERENCES = [
-  { id: 'sightseeing', label: 'Sightseeing', icon: 'eye-outline', color: '#0EA5E9' },
-  { id: 'instagram', label: 'Instagram', icon: 'camera-outline', color: '#EC4899' },
-  { id: 'leisure', label: 'Leisure', icon: 'leaf-outline', color: '#10B981' },
-  { id: 'nature', label: 'Nature', icon: 'earth-outline', color: '#22C55E' },
-  { id: 'historical', label: 'Historical', icon: 'time-outline', color: '#818CF8' },
-  { id: 'cultural', label: 'Cultural', icon: 'color-palette-outline', color: '#6366F1' },
-  { id: 'adventure', label: 'Adventure', icon: 'rocket-outline', color: '#EF4444' },
+  { id: 'culture', label: 'Culture', icon: 'library-outline', color: M.indigo },
+  { id: 'art', label: 'Art', icon: 'brush-outline', color: M.event },
+  { id: 'shopping', label: 'Shopping', icon: 'storefront-outline', color: M.afternoon },
+  { id: 'waterfronts', label: 'Waterfronts', icon: 'boat-outline', color: M.morning },
+  { id: 'beaches', label: 'Beaches', icon: 'umbrella-outline', color: M.morning },
+  { id: 'fun', label: 'Fun', icon: 'happy-outline', color: M.success },
+  { id: 'parks', label: 'Parks', icon: 'leaf-outline', color: M.success },
+  { id: 'historical', label: 'Historical', icon: 'time-outline', color: M.indigo },
+  { id: 'nature', label: 'Nature', icon: 'earth-outline', color: M.success },
+];
+
+/** How far the user will travel for the AI day plan — drives catalog size, ordering, and prompts. */
+export const TRAVEL_EXPLORE_OPTIONS = [
+  {
+    id: 'nearby',
+    label: 'Not much',
+    description: 'Nearby spots only (quick, close experiences)',
+    icon: 'walk-outline',
+  },
+  {
+    id: 'balanced',
+    label: 'Normal',
+    description: 'A balanced mix of nearby and slightly farther places',
+    icon: 'trail-sign-outline',
+  },
+  {
+    id: 'wide',
+    label: 'Anything',
+    description: 'No limits — include the best options across wider areas',
+    icon: 'globe-outline',
+  },
 ];
 
 /** Food types — for plan generation only (what to eat). */
 export const FOOD_CATEGORIES = [
-  { id: 'cuisine', label: 'Cuisine', icon: 'restaurant-outline', color: '#C8102E' },
-  { id: 'seafood', label: 'Seafood', icon: 'fish-outline', color: '#0EA5E9' },
-  { id: 'american', label: 'American', icon: 'fast-food-outline', color: '#F97316' },
-  { id: 'international', label: 'International', icon: 'globe-outline', color: '#6366F1' },
-  { id: 'cafe', label: 'Cafe', icon: 'cafe-outline', color: '#A16207' },
-  { id: 'asian', label: 'Asian', icon: 'nutrition-outline', color: '#DC2626' },
-  { id: 'italian', label: 'Italian', icon: 'pizza-outline', color: '#16A34A' },
-  { id: 'south-asian', label: 'South Asian', icon: 'flame-outline', color: '#F59E0B' },
-  { id: 'fast-food', label: 'Fast Food', icon: 'fast-food-outline', color: '#EF4444' },
+  { id: 'local-arabic', label: 'Local & Arabic', icon: 'home-outline', color: M.dining },
+  { id: 'asian', label: 'Asian', icon: 'layers-outline', color: M.dining },
+  { id: 'thai', label: 'Thai', icon: 'leaf-outline', color: M.success },
+  { id: 'japanese-korean', label: 'Japanese/Korean', icon: 'sparkles-outline', color: M.evening },
+  { id: 'indian-pakistani', label: 'Indian/Pakistani', icon: 'flame-outline', color: M.morning },
+  { id: 'italian', label: 'Italian', icon: 'pizza-outline', color: M.success },
+  { id: 'american', label: 'American', icon: 'fast-food-outline', color: M.afternoon },
+  { id: 'seafood', label: 'Seafood', icon: 'fish-outline', color: M.indigo },
+  { id: 'turkish-lebanese', label: 'Turkish/Lebanese', icon: 'restaurant-outline', color: M.dining },
+  { id: 'cafe-desserts', label: 'Cafe & Desserts', icon: 'cafe-outline', color: M.morning },
+  { id: 'international', label: 'International', icon: 'globe-outline', color: M.indigo },
+  { id: 'fast-food', label: 'Fast Food', icon: 'fast-food-outline', color: M.event },
 ];
 
 export const GENERAL_GROUPS = [
-  { key: 'companion', label: "Who you're with" },
-  { key: 'pace', label: 'Pace' },
-  { key: 'budget', label: 'Budget' },
-  { key: 'interests', label: "What you love" },
+  { key: 'companion', label: 'Who do you usually travel with?' },
+  { key: 'coach_focus', label: 'What should the AI help you with most?' },
+  { key: 'pace', label: 'How do you like your day to feel?' },
+  { key: 'budget', label: 'What budget level do you prefer?' },
+  { key: 'interests', label: 'Which experiences do you enjoy most?' },
+  { key: 'life_lens', label: 'What’s your day-to-day context in Bahrain?' },
+  { key: 'choose_style', label: 'How do you pick where to go?' },
+  { key: 'planning', label: 'How do you like your plans organized?' },
+  { key: 'timing', label: 'When do you usually enjoy going out?' },
 ];
 
 export function getLabelsFromIds(ids, list) {

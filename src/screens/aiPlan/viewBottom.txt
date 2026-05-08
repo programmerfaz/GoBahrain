@@ -1,0 +1,905 @@
+
+      {/* Stop detail — centered dialog over map / sheet */}
+      <Modal
+        visible={!!stopDetailPayload}
+        transparent
+        animationType="fade"
+        onRequestClose={closeStopDetailDialog}
+      >
+        {stopDetailPayload ? (
+          <KeyboardAvoidingView
+            style={styles.stopDialogKb}
+            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          >
+            <View style={styles.stopDialogRoot}>
+              <TouchableOpacity
+                style={styles.stopDialogDim}
+                activeOpacity={1}
+                onPress={closeStopDetailDialog}
+                accessibilityLabel="Dismiss"
+                accessibilityRole="button"
+              />
+              <View style={styles.stopDialogTinderWrap} accessibilityViewIsModal pointerEvents="box-none">
+                <View style={styles.stopDialogTinderRow}>
+                  <TouchableOpacity
+                    style={[
+                      styles.stopDialogArrowFab,
+                      styles.stopDialogArrowFabLeft,
+                      (stopDetailIndex || 0) <= 0 && styles.stopDialogArrowFabDisabled,
+                    ]}
+                    activeOpacity={0.88}
+                    onPress={() => {
+                      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {})
+                      goToStopDetailIndex((stopDetailIndex || 0) - 1)
+                    }}
+                    disabled={(stopDetailIndex || 0) <= 0}
+                    accessibilityRole="button"
+                    accessibilityLabel="View previous itinerary stop"
+                  >
+                    <Ionicons name="chevron-back" size={20} color="#0F172A" />
+                  </TouchableOpacity>
+                  <View style={[styles.stopDialogCardShell, { width: STOP_DIALOG_SLIDE_WIDTH }]}>
+                    {stopDetailStackPeekNext ? (
+                      <Reanimated.View
+                        style={[styles.stopDialogStackBack, stopDetailPeekAnimatedStyle]}
+                        pointerEvents="none"
+                      >
+                        <LinearGradient
+                          colors={[`${stopDetailStackPeekNext.accent}66`, '#0f172a']}
+                          start={{ x: 0, y: 0 }}
+                          end={{ x: 1, y: 1 }}
+                          style={StyleSheet.absoluteFill}
+                        />
+                        <View style={styles.stopDialogStackBackInner}>
+                          <Ionicons
+                            name={stopDetailStackPeekNext.isEat ? 'restaurant' : stopDetailStackPeekNext.isEvent ? 'calendar' : 'location'}
+                            size={15}
+                            color="#FFFFFF"
+                          />
+                          <Text style={styles.stopDialogStackBackTitle} numberOfLines={2}>
+                            {stopDetailStackPeekNext.item.spot}
+                          </Text>
+                        </View>
+                      </Reanimated.View>
+                    ) : null}
+                    <GestureDetector gesture={stopDetailPanGesture}>
+                      <Reanimated.View
+                        style={[
+                          styles.stopDialogCard,
+                          { width: STOP_DIALOG_SLIDE_WIDTH, maxWidth: '100%' },
+                          stopDetailCardAnimatedStyle,
+                        ]}
+                      >
+                        <View style={styles.stopDialogExploreHero}>
+                          <View style={[styles.stopDialogExploreImageFrame, { height: STOP_DIALOG_IMAGE_H }]}>
+                            <StopDetailGallery
+                              images={Array.isArray(stopDetailPayload.images) ? stopDetailPayload.images : []}
+                              singleUri={
+                                stopDetailPayload.hasImages
+                                  ? (stopDetailPayload.images[0] || stopDetailPayload.item.image)
+                                  : (stopDetailPayload.item.image || null)
+                              }
+                              accent={stopDetailPayload.accent}
+                              isEat={stopDetailPayload.isEat}
+                              isEvent={stopDetailPayload.isEvent}
+                              slideWidth={STOP_DIALOG_IMAGE_W}
+                              imageHeight={STOP_DIALOG_IMAGE_H}
+                              bottomRadius={0}
+                              hideBottomDotsRow
+                            />
+                            <LinearGradient
+                              colors={['transparent', 'rgba(0,0,0,0.08)', 'rgba(0,0,0,0.5)', 'rgba(0,0,0,0.92)']}
+                              locations={[0, 0.3, 0.6, 1]}
+                              style={styles.stopDialogExploreGrad}
+                              pointerEvents="none"
+                            />
+                            <TouchableOpacity
+                              style={styles.stopDialogExploreClose}
+                              onPress={closeStopDetailDialog}
+                              accessibilityRole="button"
+                              accessibilityLabel="Close"
+                              activeOpacity={0.88}
+                            >
+                              <Ionicons name="close" size={20} color="#FFFFFF" />
+                            </TouchableOpacity>
+                            {stopDetailPayload.category ? (
+                              <View style={styles.stopDialogExploreBadgeWrap}>
+                                <BlurView intensity={Platform.OS === 'ios' ? 60 : 0} tint="dark" style={styles.stopDialogExploreBadge}>
+                                  <View style={styles.stopDialogExploreBadgeDot} />
+                                  <Text style={styles.stopDialogExploreBadgeText} numberOfLines={1}>
+                                    {stopDetailPayload.category.label}
+                                  </Text>
+                                </BlurView>
+                              </View>
+                            ) : null}
+                            <View style={styles.stopDialogExploreNumberWrap} pointerEvents="none">
+                              <Text style={styles.stopDialogExploreNumber}>
+                                {String((stopDetailIndex ?? 0) + 1).padStart(2, '0')}
+                              </Text>
+                            </View>
+                            <View style={styles.stopDialogExploreBottom}>
+                              <Text style={styles.stopDialogExploreTitle} numberOfLines={2}>
+                                {stopDetailPayload.item.spot}
+                              </Text>
+                              {stopDetailPayload.item.rating != null ? (
+                                <View style={styles.stopDialogExploreInfoRow}>
+                                  <View style={styles.stopDialogExploreInfoPill}>
+                                    <Ionicons name="star" size={12} color="#FF9F00" />
+                                    <Text style={styles.stopDialogExploreInfoText} numberOfLines={1}>
+                                      {Number(stopDetailPayload.item.rating).toFixed(1)}
+                                    </Text>
+                                  </View>
+                                </View>
+                              ) : null}
+                            </View>
+                          </View>
+                        </View>
+                        <View style={styles.stopDialogBodyStatic}>
+                          <View style={styles.stopDialogScrollContent}>
+                          <View style={styles.stopDialogLuxurySectionCard}>
+                            <View style={styles.stopDialogLuxurySectionTitleRow}>
+                              <View style={styles.stopDialogLuxurySectionAccentBar} accessibilityElementsHidden />
+                              <Text style={styles.stopDialogLuxurySectionTitle}>
+                                {stopDetailPayload.isEvent ? 'About this event' : 'About this place'}
+                              </Text>
+                            </View>
+                            <Text style={styles.stopDialogLuxuryBody}>
+                              {getStopAboutPrimaryText(stopDetailPayload.item, stopDetailPayload.isEvent)}
+                            </Text>
+                          </View>
+
+                          {stopDetailPayload.isEvent ? (
+                            <View style={[styles.stopDialogLuxurySectionCard, styles.stopDialogLuxurySectionCardEvent]}>
+                              <View style={styles.stopDialogLuxurySectionTitleRow}>
+                                <View style={styles.stopDialogLuxurySectionAccentBar} accessibilityElementsHidden />
+                                <Text style={styles.stopDialogLuxurySectionTitle}>Event details</Text>
+                              </View>
+                              <Text style={styles.stopDialogLuxuryBody}>
+                                {formatStopEventDetailsText(stopDetailPayload.item)}
+                              </Text>
+                            </View>
+                          ) : (
+                            <View style={[styles.stopDialogLuxurySectionCard, styles.stopDialogLuxurySectionCardNotes]}>
+                              <View style={styles.stopDialogLuxuryNotesHeading}>
+                                <View style={styles.stopDialogLuxuryNotesTag}>
+                                  <Text style={styles.stopDialogLuxuryNotesTagText}>Notes</Text>
+                                </View>
+                                <Text style={styles.stopDialogLuxuryNotesAccent}>from the Community</Text>
+                              </View>
+                              <Text style={styles.stopDialogLuxuryBody}>
+                                {(() => {
+                                  const r = String(stopDetailPayload.item.reason || '').trim()
+                                  if (!r) return 'Community tips will appear here when available.'
+                                  const parts = r.split(/(?<=[.!?])\s+/).filter(Boolean)
+                                  const rest = parts.slice(1).join(' ').trim()
+                                  if (rest) return rest
+                                  return 'Share your take after you visit — short notes help the next traveler plan with confidence.'
+                                })()}
+                              </Text>
+                            </View>
+                          )}
+
+                          <View style={styles.stopDialogUnifiedActionsStrip}>
+                            <TouchableOpacity
+                              style={styles.stopDialogUnifiedActionBtn}
+                              activeOpacity={0.88}
+                              onPress={() => {
+                                if (stopDetailPayload.item.lat != null && stopDetailPayload.item.lng != null) {
+                                  openGoogleMapsDirections(stopDetailPayload.item.lat, stopDetailPayload.item.lng)
+                                  closeStopDetailDialog()
+                                }
+                              }}
+                              disabled={stopDetailPayload.item.lat == null || stopDetailPayload.item.lng == null}
+                              accessibilityRole="button"
+                              accessibilityLabel="Get directions"
+                            >
+                              <Ionicons name="navigate-outline" size={16} color={themeColors.primary} />
+                              <Text style={styles.stopDialogUnifiedActionBtnText} numberOfLines={2}>
+                                Directions
+                              </Text>
+                            </TouchableOpacity>
+                            <TouchableOpacity
+                              style={styles.stopDialogUnifiedActionBtn}
+                              activeOpacity={0.88}
+                              onPress={() => {
+                                if (stopDetailPayload.item.lat != null && stopDetailPayload.item.lng != null) {
+                                  navigation.navigate('AR', {
+                                    navigateTo: {
+                                      lat: stopDetailPayload.item.lat,
+                                      lng: stopDetailPayload.item.lng,
+                                      name: stopDetailPayload.item.spot,
+                                    },
+                                  })
+                                  closeStopDetailDialog()
+                                }
+                              }}
+                              disabled={stopDetailPayload.item.lat == null || stopDetailPayload.item.lng == null}
+                              accessibilityRole="button"
+                              accessibilityLabel="Open in AR"
+                            >
+                              <Ionicons name="cube-outline" size={16} color={themeColors.primary} />
+                              <Text style={styles.stopDialogUnifiedActionBtnText} numberOfLines={2}>
+                                AR
+                              </Text>
+                            </TouchableOpacity>
+                            {stopDetailPayload.hasProfile ? (
+                              <TouchableOpacity
+                                style={styles.stopDialogUnifiedActionBtn}
+                                activeOpacity={0.88}
+                                onPress={() => {
+                                  setProfileClientId(stopDetailPayload.item.clientId)
+                                  closeStopDetailDialog()
+                                }}
+                                accessibilityRole="button"
+                                accessibilityLabel="Open host profile"
+                              >
+                                <Ionicons name="person-circle-outline" size={16} color={themeColors.primary} />
+                                <Text style={styles.stopDialogUnifiedActionBtnText} numberOfLines={2}>
+                                  Profile
+                                </Text>
+                              </TouchableOpacity>
+                            ) : (
+                              <View style={styles.stopDialogUnifiedActionPlaceholder} pointerEvents="none" />
+                            )}
+                          </View>
+                          </View>
+                        </View>
+                      </Reanimated.View>
+                    </GestureDetector>
+                    <View style={styles.stopDialogTinderDots} pointerEvents="none">
+                      {stopDetailSlides.map((_, dotIdx) => (
+                        <View
+                          key={`stop-dot-${dotIdx}`}
+                          style={[
+                            styles.stopDialogTinderDot,
+                            dotIdx === stopDetailIndex && styles.stopDialogTinderDotActive,
+                          ]}
+                        />
+                      ))}
+                    </View>
+                  </View>
+                  <TouchableOpacity
+                    style={[
+                      styles.stopDialogArrowFab,
+                      styles.stopDialogArrowFabRight,
+                      (stopDetailIndex || 0) >= stopDetailSlides.length - 1 && styles.stopDialogArrowFabDisabled,
+                    ]}
+                    activeOpacity={0.88}
+                    onPress={() => {
+                      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {})
+                      goToStopDetailIndex((stopDetailIndex || 0) + 1)
+                    }}
+                    disabled={(stopDetailIndex || 0) >= stopDetailSlides.length - 1}
+                    accessibilityRole="button"
+                    accessibilityLabel="View next itinerary stop"
+                  >
+                    <Ionicons name="chevron-forward" size={20} color="#0F172A" />
+                  </TouchableOpacity>
+                </View>
+              </View>
+            </View>
+          </KeyboardAvoidingView>
+        ) : null}
+      </Modal>
+
+      {/* Plan modal — Home AI design (blur overlay, question block, glass options) */}
+      <Modal visible={showPlanModal} transparent animationType="none">
+        <KeyboardAvoidingView
+          style={styles.planModalRoot}
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        >
+          <Animated.View style={[styles.planModalBackdropWrap, { opacity: planModalBackdrop }]}>
+            <LinearGradient
+              colors={['#B80E21', '#CE1126', '#9E0B1C', '#CE1126', '#B80E21']}
+              locations={[0, 0.25, 0.5, 0.75, 1]}
+              style={StyleSheet.absoluteFill}
+            />
+            <TouchableOpacity
+              style={StyleSheet.absoluteFill}
+              activeOpacity={1}
+              onPress={() => closePlanModal()}
+              disabled={loading || planGenerationSuccess}
+            />
+          </Animated.View>
+
+          <Animated.View
+            style={[
+              styles.planModalContentWrap,
+              {
+                opacity: planModalOpacity,
+                transform: [{ scale: planModalScale }],
+              },
+            ]}
+          >
+            <View style={styles.planModalGlassShell}>
+              <BlurView intensity={Platform.OS === 'ios' ? 52 : 32} tint="light" style={styles.planMastheadBlur} />
+              <View style={styles.planMastheadFrost} pointerEvents="none" />
+              <View style={styles.planModalGlassBody}>
+            {loading || planGenerationSuccess ? (
+              <View style={styles.planModalPresenceLayer}>
+                <PlanModalLoadingView
+                  loadingStatus={loadingStatus}
+                  showSuccess={planGenerationSuccess}
+                  spotPreviews={spotPreviews}
+                />
+              </View>
+            ) : (
+              <View style={styles.planModalPresenceLayer}>
+                <PlanStepBubble step={planModalStep}>
+                      {/* Hero question area — step 1 travel, 2 activities, 3 food */}
+                      <View style={styles.pmHero}>
+                        <PopIn delay={60} trigger={planModalStep}>
+                          <View style={styles.pmStepBadge}>
+                            <Text style={styles.pmStepBadgeText}>
+                              {`STEP ${planModalStep} OF 3`}
+                            </Text>
+                            <View style={styles.pmStepDots}>
+                              <View style={[styles.pmStepDotSmall, planModalStep >= 1 && styles.pmStepDotSmallActive]} />
+                              <View style={[styles.pmStepDotSmall, planModalStep >= 2 && styles.pmStepDotSmallActive]} />
+                              <View style={[styles.pmStepDotSmall, planModalStep >= 3 && styles.pmStepDotSmallActive]} />
+                            </View>
+                          </View>
+                        </PopIn>
+
+                        <PopIn delay={140} trigger={planModalStep}>
+                          <Text style={styles.pmTitle}>
+                            {planModalStep === 1
+                              ? 'How far are you willing to travel to explore?'
+                              : planModalStep === 2
+                                ? 'What excites you?'
+                                : 'What are you craving?'}
+                          </Text>
+                        </PopIn>
+                        <PopIn delay={200} trigger={planModalStep}>
+                          <Text style={[styles.pmSub, planModalStep === 1 && { maxWidth: 320 }]}>
+                            {planModalStep === 1
+                              ? 'This helps us decide how many places and how wide an area to include in your plan.'
+                              : planModalStep === 2
+                                ? 'Pick the vibes that match your Bahrain trip'
+                                : 'Choose your food mood for the day'}
+                          </Text>
+                        </PopIn>
+
+                        {(planModalStep === 1 ||
+                          (planModalStep === 2 && selectedPreferences.length > 0) ||
+                          (planModalStep === 3 && selectedFoodCategories.length > 0)) && (
+                          <PopIn delay={240} trigger={planModalStep}>
+                            <View style={styles.pmSelectedPill}>
+                              <Ionicons name="checkmark-circle" size={14} color={themeColors.primary} />
+                              <Text style={styles.pmSelectedText}>
+                                {planModalStep === 1
+                                  ? (TRAVEL_EXPLORE_OPTIONS.find((o) => o.id === travelExploreId)?.label || 'Travel')
+                                  : planModalStep === 2
+                                    ? `${selectedPreferences.length} picked`
+                                    : `${selectedFoodCategories.length} picked`}
+                              </Text>
+                            </View>
+                          </PopIn>
+                        )}
+                      </View>
+
+                      <View style={styles.pmChipsWrap}>
+                        <ScrollView
+                          style={styles.pmChipsScroll}
+                          contentContainerStyle={styles.pmChipsScrollContent}
+                          showsVerticalScrollIndicator={false}
+                        >
+                          {planModalStep === 1 ? (
+                            <View style={styles.pmChipsPanel}>
+                              <View style={styles.pmTravelList}>
+                                {TRAVEL_EXPLORE_OPTIONS.map((opt, idx) => {
+                                  const selected = travelExploreId === opt.id
+                                  return (
+                                    <PopIn key={opt.id} delay={280 + idx * 40} trigger={planModalStep}>
+                                      <TouchableOpacity
+                                        style={[styles.pmTravelCard, selected && styles.pmTravelCardSelected]}
+                                        activeOpacity={0.88}
+                                        onPress={() => {
+                                          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {})
+                                          setTravelExploreId(opt.id)
+                                        }}
+                                        accessibilityRole="button"
+                                        accessibilityState={{ selected }}
+                                        accessibilityLabel={`${opt.label}. ${opt.description}`}
+                                      >
+                                        <Text style={styles.pmTravelTitle}>{opt.label}</Text>
+                                        <Text style={styles.pmTravelDesc}>{opt.description}</Text>
+                                      </TouchableOpacity>
+                                    </PopIn>
+                                  )
+                                })}
+                              </View>
+                            </View>
+                          ) : (
+                            <View style={styles.pmChipsPanel}>
+                              <View style={styles.pmChipsGrid}>
+                                {(() => {
+                                  const items = planModalStep === 2 ? PREFERENCES : FOOD_CATEGORIES
+                                  const isSelectedFn = (item) =>
+                                    planModalStep === 2
+                                      ? selectedPreferences.includes(item.id)
+                                      : selectedFoodCategories.includes(item.id)
+                                  const handlePressItem = (item) => {
+                                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {})
+                                    return planModalStep === 2 ? togglePreference(item.id) : toggleFoodCategory(item.id)
+                                  }
+                                  return items.map((item, idx) => (
+                                    <PopIn key={`${planModalStep}-${item.id}`} delay={280 + idx * 30} trigger={planModalStep}>
+                                      <AnimatedOptionChip
+                                        item={item}
+                                        isSelected={isSelectedFn(item)}
+                                        onPress={() => handlePressItem(item)}
+                                      />
+                                    </PopIn>
+                                  ))
+                                })()}
+                              </View>
+                            </View>
+                          )}
+                        </ScrollView>
+
+                        <PopIn delay={500} trigger={planModalStep}>
+                        <View style={styles.planModalActionRow}>
+                          {planModalStep === 1 ? (
+                            <>
+                              <TouchableOpacity
+                                style={styles.planModalBackBtn}
+                                activeOpacity={0.7}
+                                onPress={() => closePlanModal()}
+                                accessibilityLabel="Close"
+                                accessibilityRole="button"
+                              >
+                                <Ionicons name="close" size={20} color="#374151" />
+                              </TouchableOpacity>
+                              <TouchableOpacity
+                                style={styles.planModalContinueBtn}
+                                activeOpacity={0.85}
+                                onPress={() => setPlanModalStep(2)}
+                                accessibilityLabel="Continue to activity preferences"
+                                accessibilityRole="button"
+                              >
+                                <LinearGradient
+                                  colors={['#FFFFFF', '#F0F0F0']}
+                                  start={{ x: 0, y: 0 }}
+                                  end={{ x: 1, y: 0 }}
+                                  style={styles.planModalBtnGradient}
+                                >
+                                  <Text style={[styles.planModalContinueBtnText, { color: '#B80E21' }]}>Continue</Text>
+                                  <Ionicons name="arrow-forward" size={20} color="#B80E21" />
+                                </LinearGradient>
+                              </TouchableOpacity>
+                            </>
+                          ) : planModalStep === 2 ? (
+                            <>
+                              <TouchableOpacity
+                                style={styles.planModalBackBtn}
+                                activeOpacity={0.7}
+                                onPress={() => setPlanModalStep(1)}
+                                accessibilityLabel="Go back"
+                                accessibilityRole="button"
+                              >
+                                <Ionicons name="chevron-back" size={22} color="#374151" />
+                              </TouchableOpacity>
+                              <TouchableOpacity
+                                style={styles.planModalContinueBtn}
+                                activeOpacity={0.85}
+                                onPress={() => {
+                                  const prefLabels = selectedPreferences
+                                    .map((id) => PREFERENCES.find((p) => p.id === id)?.label)
+                                    .filter(Boolean)
+                                  startBackgroundPrefetch(prefLabels)
+                                  setPlanModalStep(3)
+                                }}
+                                accessibilityLabel="Continue to food preferences"
+                                accessibilityRole="button"
+                              >
+                                <LinearGradient
+                                  colors={['#FFFFFF', '#F0F0F0']}
+                                  start={{ x: 0, y: 0 }}
+                                  end={{ x: 1, y: 0 }}
+                                  style={styles.planModalBtnGradient}
+                                >
+                                  <Text style={[styles.planModalContinueBtnText, { color: '#B80E21' }]}>Continue</Text>
+                                  <Ionicons name="arrow-forward" size={20} color="#B80E21" />
+                                </LinearGradient>
+                              </TouchableOpacity>
+                            </>
+                          ) : (
+                            <>
+                              <TouchableOpacity
+                                style={styles.planModalBackBtn}
+                                activeOpacity={0.7}
+                                onPress={() => setPlanModalStep(2)}
+                                accessibilityLabel="Go back"
+                                accessibilityRole="button"
+                              >
+                                <Ionicons name="chevron-back" size={22} color="#374151" />
+                              </TouchableOpacity>
+                              <TouchableOpacity
+                                style={styles.planModalGenerateBtn}
+                                activeOpacity={0.85}
+                                onPress={() => {
+                                  handleGenerate(() => closePlanModal())
+                                }}
+                                accessibilityLabel="Generate your plan"
+                                accessibilityRole="button"
+                              >
+                                <LinearGradient
+                                  colors={['#FFFFFF', '#F0F0F0']}
+                                  start={{ x: 0, y: 0 }}
+                                  end={{ x: 1, y: 0 }}
+                                  style={styles.planModalBtnGradient}
+                                >
+                                  <Ionicons name="sparkles" size={20} color="#B80E21" />
+                                  <Text style={[styles.planModalGenerateBtnText, { color: '#B80E21' }]}>Generate My Plan</Text>
+                                </LinearGradient>
+                              </TouchableOpacity>
+                            </>
+                          )}
+                        </View>
+                        </PopIn>
+                      </View>
+                    </PlanStepBubble>
+              </View>
+            )}
+              </View>
+            </View>
+          </Animated.View>
+        </KeyboardAvoidingView>
+      </Modal>
+
+      {/* Clients search modal — all clients by Restaurants, Places, Events */}
+      <Modal
+        visible={showSearchModal}
+        animationType="slide"
+        presentationStyle="pageSheet"
+        onRequestClose={() => {
+          if (addingPlanStop) return
+          setShowSearchModal(false)
+        }}
+      >
+        <View style={[styles.searchModalRoot, { paddingTop: insets.top + 4 }]}>
+          {searchModalLoading ? (
+            <View style={styles.searchModalLoading}>
+              <ActivityIndicator size="large" color={themeColors.primary} />
+              <Text style={styles.searchModalLoadingText}>Loading clients…</Text>
+            </View>
+          ) : (
+            <>
+              <View style={styles.searchModalHeadingWrap}>
+                <Text style={styles.searchModalHeading}>
+                  {addToPlanMode ? 'Add to your day' : 'Browse clients'}
+                </Text>
+                {addToPlanMode ? (
+                  <Text style={styles.searchModalSubheading}>
+                    Tap a restaurant, place, or event — it is added to the end of your list. Long-press a card to reorder anytime.
+                  </Text>
+                ) : null}
+              </View>
+              <View style={styles.searchModalHeaderRow}>
+                <View style={styles.searchModalSearchWrap}>
+                  <Ionicons name="search" size={20} color={themeColors.primary} style={styles.searchModalSearchIcon} />
+                  <TextInput
+                    style={styles.searchModalSearchInput}
+                    placeholder="Search restaurants, places, events…"
+                    placeholderTextColor="#94A3B8"
+                    value={searchModalQuery}
+                    onChangeText={setSearchModalQuery}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    returnKeyType="search"
+                  />
+                  {searchModalQuery.length > 0 && (
+                    <TouchableOpacity
+                      onPress={() => setSearchModalQuery('')}
+                      style={styles.searchModalSearchClear}
+                      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                    >
+                      <Ionicons name="close-circle" size={20} color="#94A3B8" />
+                    </TouchableOpacity>
+                  )}
+                </View>
+                <TouchableOpacity
+                  style={styles.searchModalCloseBtn}
+                  activeOpacity={0.8}
+                  onPress={() => {
+                    if (addingPlanStop) return
+                    setShowSearchModal(false)
+                  }}
+                  accessibilityState={{ disabled: addingPlanStop }}
+                >
+                  <Ionicons name="close" size={20} color={themeColors.primary} />
+                </TouchableOpacity>
+              </View>
+              <ScrollView
+                style={styles.searchModalScroll}
+                contentContainerStyle={styles.searchModalContent}
+                showsVerticalScrollIndicator={false}
+                keyboardShouldPersistTaps="handled"
+              >
+                {['restaurants', 'places', 'events'].map((key) => {
+                  const sectionLabel = key === 'restaurants' ? 'Restaurants' : key === 'places' ? 'Places' : 'Events';
+                  const rawItems = searchModalClients[key] || [];
+                  const q = (searchModalQuery || '').trim().toLowerCase();
+                  const items = q
+                    ? rawItems.filter(
+                        (c) =>
+                          (c.name || c.business_name || '').toLowerCase().includes(q) ||
+                          (c.business_name_ar || '').toLowerCase().includes(q)
+                      )
+                    : rawItems;
+                const accent = key === 'restaurants' ? colors.dining : key === 'events' ? colors.event : colors.textSecondary;
+                if (q && items.length === 0) return null;
+                return (
+                  <View key={key} style={styles.searchModalSection}>
+                    <View style={styles.searchModalSectionHeader}>
+                      <View style={[styles.searchModalSectionIcon, { backgroundColor: `${accent}18` }]}>
+                        <Ionicons
+                          name={key === 'restaurants' ? 'restaurant' : key === 'events' ? 'calendar' : 'location'}
+                          size={20}
+                          color={accent}
+                        />
+                      </View>
+                      <Text style={[styles.searchModalSectionTitle, { color: accent }]}>{sectionLabel}</Text>
+                    </View>
+                    {items.length === 0 ? (
+                      <Text style={styles.searchModalEmpty}>
+                        {q ? `No ${sectionLabel.toLowerCase()} match "${searchModalQuery.trim()}"` : `No ${sectionLabel.toLowerCase()} yet`}
+                      </Text>
+                    ) : (
+                      <ScrollView
+                        horizontal
+                        showsHorizontalScrollIndicator={false}
+                        contentContainerStyle={styles.searchModalHorizontalContent}
+                      >
+                        {items.map((client) => {
+                          const imageUrl = resolvePublicImageUrl(client.client_image);
+                          return (
+                            <TouchableOpacity
+                              key={client.client_a_uuid || client.clientId}
+                              style={styles.searchModalClientCard}
+                              activeOpacity={0.7}
+                              disabled={addingPlanStop}
+                              onPress={() => {
+                                if (addToPlanMode) {
+                                  handleAddClientToPlan(client)
+                                  return
+                                }
+                                setShowSearchModal(false);
+                                setProfileClientId(client.client_a_uuid || client.clientId);
+                              }}
+                            >
+                              <View style={[styles.searchModalClientCircle, { borderColor: accent }]}>
+                                {imageUrl ? (
+                                  <CachedImage source={{ uri: imageUrl }} style={styles.searchModalClientImage} recyclingKey={imageUrl} resizeMode="cover" />
+                                ) : (
+                                  <Ionicons
+                                    name={key === 'restaurants' ? 'restaurant' : key === 'events' ? 'calendar' : 'location'}
+                                    size={32}
+                                    color={accent}
+                                  />
+                                )}
+                              </View>
+                              <Text style={styles.searchModalClientName} numberOfLines={2}>
+                                {client.name || client.business_name || 'Spot'}
+                              </Text>
+                            </TouchableOpacity>
+                          );
+                        })}
+                      </ScrollView>
+                    )}
+                  </View>
+                );
+              })}
+              </ScrollView>
+            </>
+          )}
+          {addingPlanStop && !searchModalLoading ? (
+            <View style={styles.searchModalAddingOverlay} pointerEvents="box-none">
+              <ActivityIndicator size="large" color={themeColors.primary} />
+              <Text style={styles.searchModalAddingOverlayText}>Adding to your plan…</Text>
+            </View>
+          ) : null}
+        </View>
+      </Modal>
+
+      <Modal
+        visible={showSharePlanModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowSharePlanModal(false)}
+      >
+        <View style={styles.sharePlanModalRoot}>
+          <TouchableOpacity
+            style={StyleSheet.absoluteFill}
+            activeOpacity={1}
+            onPress={() => setShowSharePlanModal(false)}
+            accessibilityLabel="Dismiss share dialog"
+            accessibilityRole="button"
+          />
+          <View style={styles.sharePlanModalCard} pointerEvents="box-none">
+            <Text style={styles.sharePlanModalTitle}>Share plan</Text>
+            <Text style={styles.sharePlanModalSub}>
+              Friends open this in SiyahaBH using your link or code. Choose view-only, or let them edit the same plan.
+            </Text>
+            {shareModalCode ? (
+              <View style={styles.sharePlanModalCodeBox}>
+                <Text style={styles.sharePlanModalCode}>{shareModalCode}</Text>
+              </View>
+            ) : (
+              <Text style={[styles.sharePlanModalSub, { marginBottom: 12 }]}>Enable sharing to create a code.</Text>
+            )}
+            <View style={styles.sharePlanModalPermRow}>
+              <TouchableOpacity
+                style={[
+                  styles.sharePlanModalPermChip,
+                  sharePermissionDraft === 'view' && styles.sharePlanModalPermChipActive,
+                ]}
+                onPress={() => setSharePermissionDraft('view')}
+                accessibilityRole="button"
+                accessibilityLabel="View only"
+              >
+                <Text style={styles.sharePlanModalPermChipText}>View only</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[
+                  styles.sharePlanModalPermChip,
+                  sharePermissionDraft === 'edit' && styles.sharePlanModalPermChipActive,
+                ]}
+                onPress={() => setSharePermissionDraft('edit')}
+                accessibilityRole="button"
+                accessibilityLabel="Can edit"
+              >
+                <Text style={styles.sharePlanModalPermChipText}>Can edit</Text>
+              </TouchableOpacity>
+            </View>
+            <View style={styles.sharePlanModalActions}>
+              <TouchableOpacity
+                style={[styles.sharePlanModalBtn, styles.sharePlanModalBtnSecondary]}
+                onPress={handleCopyShareLinkOnly}
+                disabled={!shareModalCode || shareModalBusy}
+              >
+                <Text style={[styles.sharePlanModalBtnText, styles.sharePlanModalBtnTextDark]}>Copy</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.sharePlanModalBtn}
+                onPress={handleConfirmShareSettings}
+                disabled={shareModalBusy}
+              >
+                <Text style={styles.sharePlanModalBtnText}>
+                  {shareModalBusy ? '…' : shareModalCode ? 'Apply' : 'Enable'}
+                </Text>
+              </TouchableOpacity>
+            </View>
+            {shareModalCode ? (
+              <TouchableOpacity
+                onPress={handleDisableSharing}
+                style={{ marginTop: 14, alignItems: 'center' }}
+                accessibilityRole="button"
+                accessibilityLabel="Turn off sharing"
+              >
+                <Text style={{ fontSize: 13, fontWeight: '700', color: '#DC2626' }}>Turn off sharing</Text>
+              </TouchableOpacity>
+            ) : null}
+            <TouchableOpacity
+              onPress={() => setShowSharePlanModal(false)}
+              style={{ marginTop: 16, alignItems: 'center' }}
+              accessibilityRole="button"
+            >
+              <Text style={{ fontSize: 15, fontWeight: '700', color: '#64748B' }}>Close</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal
+        visible={showEditSavedPlanTitleModal}
+        transparent
+        animationType="fade"
+        onRequestClose={handleCloseEditSavedPlanTitleModal}
+      >
+        <View style={styles.sharePlanModalRoot}>
+          <TouchableOpacity
+            style={StyleSheet.absoluteFill}
+            activeOpacity={1}
+            onPress={handleCloseEditSavedPlanTitleModal}
+            accessibilityLabel="Dismiss rename dialog"
+            accessibilityRole="button"
+          />
+          <KeyboardAvoidingView
+            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+            style={{ zIndex: 2, maxWidth: 400, width: '100%', alignSelf: 'center' }}
+          >
+            <View style={styles.sharePlanModalCard} pointerEvents="box-none">
+              <Text style={styles.sharePlanModalTitle}>Plan name</Text>
+              <Text style={styles.sharePlanModalSub}>Choose a short name so you can find this plan later.</Text>
+              <TextInput
+                style={styles.editSavedPlanTitleModalInput}
+                value={editSavedPlanTitleDraft}
+                onChangeText={setEditSavedPlanTitleDraft}
+                placeholder="My plan"
+                placeholderTextColor="#94A3B8"
+                maxLength={120}
+                editable={!editSavedPlanTitleBusy}
+                autoFocus
+                accessibilityLabel="Plan title"
+                returnKeyType="done"
+                onSubmitEditing={handleSubmitEditSavedPlanTitle}
+              />
+              <View style={styles.sharePlanModalActions}>
+                <TouchableOpacity
+                  style={[styles.sharePlanModalBtn, styles.sharePlanModalBtnSecondary]}
+                  onPress={handleCloseEditSavedPlanTitleModal}
+                  disabled={editSavedPlanTitleBusy}
+                  accessibilityRole="button"
+                  accessibilityLabel="Cancel rename"
+                >
+                  <Text style={[styles.sharePlanModalBtnText, styles.sharePlanModalBtnTextDark]}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.sharePlanModalBtn}
+                  onPress={handleSubmitEditSavedPlanTitle}
+                  disabled={editSavedPlanTitleBusy}
+                  accessibilityRole="button"
+                  accessibilityLabel="Save plan name"
+                >
+                  <Text style={styles.sharePlanModalBtnText}>{editSavedPlanTitleBusy ? '…' : 'Save'}</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </KeyboardAvoidingView>
+        </View>
+      </Modal>
+
+      <ClientProfileModal
+        visible={!!profileClientId}
+        clientId={profileClientId}
+        onClose={() => setProfileClientId(null)}
+        insets={insets}
+        onOpenARNavigate={(dest) => {
+          setProfileClientId(null);
+          if (dest?.lat != null && dest?.lng != null) {
+            navigation.navigate('AR', { navigateTo: { lat: dest.lat, lng: dest.lng, name: dest.name || 'Destination' } });
+          }
+        }}
+      />
+
+      {doorVisible && (() => {
+        const TOOTH_COUNT = 5
+        const toothH = SCREEN_HEIGHT / TOOTH_COUNT
+        const toothW = SCREEN_WIDTH * 0.12
+        return (
+          <Animated.View style={[styles.doorOverlay, { opacity: doorFade }]} pointerEvents="box-none">
+            <Animated.View style={[styles.doorHalf, styles.doorLeft, { transform: [{ translateX: doorLeft }] }]}>
+              <View style={[StyleSheet.absoluteFill, { backgroundColor: '#FFFFFF' }]} />
+            </Animated.View>
+            <Animated.View style={[styles.doorHalf, styles.doorRight, { transform: [{ translateX: doorRight }] }]}>
+              <View style={[StyleSheet.absoluteFill, { backgroundColor: '#CE1126' }]} />
+            </Animated.View>
+            <Animated.View style={[styles.doorZigzag, { transform: [{ translateX: doorLeft }] }]}>
+              {Array.from({ length: TOOTH_COUNT }, (_, i) => (
+                <View key={i} style={{
+                  width: 0,
+                  height: 0,
+                  borderTopWidth: toothH / 2,
+                  borderBottomWidth: toothH / 2,
+                  borderLeftWidth: toothW,
+                  borderTopColor: 'transparent',
+                  borderBottomColor: 'transparent',
+                  borderLeftColor: '#FFFFFF',
+                }} />
+              ))}
+            </Animated.View>
+            <Animated.View style={[styles.doorIconWrap, { transform: [{ scale: doorIconScale }], opacity: doorIconOpacity }]}>
+              <View style={styles.doorLogoShadow}>
+                <CachedImage
+                  source={require('../../../assets/ai-button-logo.png')}
+                  style={styles.doorLogoImage}
+                  resizeMode="cover"
+                />
+              </View>
+              <Text style={styles.doorFlagLabel}>SiyahaBH</Text>
+            </Animated.View>
+          </Animated.View>
+        )
+      })()}

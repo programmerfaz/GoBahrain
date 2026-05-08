@@ -1,0 +1,131 @@
+  const handleSurpriseMe = () => {
+    if (surpriseSpinning) return;
+    setSurpriseSpinning(true);
+    setSurprisePicked(null);
+
+    let tick = 0;
+    const totalTicks = 20;
+    const finalIdx = Math.floor(Math.random() * SURPRISE_THEMES.length);
+
+    const interval = setInterval(() => {
+      tick += 1;
+      setSurpriseIndex(tick % SURPRISE_THEMES.length);
+      if (tick >= totalTicks) {
+        clearInterval(interval);
+        setSurpriseIndex(finalIdx);
+        setSurprisePicked(SURPRISE_THEMES[finalIdx]);
+        setSurpriseSpinning(false);
+
+        // Auto-generate after a short reveal pause
+        setTimeout(() => {
+          const theme = SURPRISE_THEMES[finalIdx];
+          const prefLabels = theme.prefs;
+          const foodLabels = theme.food;
+
+          setActiveSavedPlanId(null);
+          setSharedCollaboration(null);
+          setDayPlan(null);
+          setPineconeMatches([]);
+          setError(null);
+          setLoading(true);
+          setLoadingStatus('Getting your location…');
+          setDrawerStep(3);
+          lastPrefLabelsRef.current = prefLabels;
+          lastFoodLabelsRef.current = foodLabels;
+
+          getCachedFeedImages()
+            .then((cached) => {
+              const c = Array.isArray(cached) ? cached : [];
+              if (c.length > 0) setSpotPreviews(c);
+              return c;
+            })
+            .then((c) =>
+              fetchSpotPreviewsFromSupabase().then((fresh) => {
+                const f = Array.isArray(fresh) ? fresh : [];
+                if (f.length > c.length) setSpotPreviews(f);
+              }),
+            )
+            .catch(() => {});
+
+          (async () => {
+            let generatedPlan = null;
+            try {
+              const { originLat, originLng } = await resolveOriginCoordsForPlanGeneration({ preferFreshFix: true })
+              setLoadingStatus(`Scouting venues & live posts for your ${theme.label.toLowerCase()} day…`)
+
+              const [
+                places,
+                restaurants,
+                breakfastSpots,
+                events,
+              ] = await Promise.all([
+                fetchPlaces(prefLabels),
+                fetchRestaurants(foodLabels),
+                fetchBreakfastSpots(),
+                fetchEvents(prefLabels),
+              ]);
+
+              console.log(`[Surprise ${theme.label}] ${places.length}P ${restaurants.length}R ${breakfastSpots.length}B ${events.length}E`);
+
+              const allMatches = [...places, ...restaurants, ...breakfastSpots, ...events];
+              setPineconeMatches(allMatches);
+
+              setLoadingStatus('Shortlisting restaurants & cafés that fit your vibe…');
+              await new Promise((res) => setTimeout(res, 380));
+              setLoadingStatus(`Khalid is crafting your ${theme.label.toLowerCase()} day…`);
+              const plan = await generateDayPlan(places, restaurants, breakfastSpots, events, prefLabels, foodLabels, {
+                profileGeneral: generalLabels,
+                profileActivity: activityLabels,
+                profileFood: savedProfileFoodLabels,
+                profileNarrative: preferences?.profileSummary || '',
+                profileAnswers: preferences?.profileAnswers || {},
+                travelExplore: 'balanced',
+                originLat,
+                originLng,
+              });
+              generatedPlan = plan;
+              const enriched = await enrichPlanWithClientData(plan, allMatches, allPlaceMarkers);
+              setDayPlan(attachPlanRowKeys(enriched));
+              setError(null);
+
+              const validMarkers = buildMapMarkers(plan, allPlaceMarkers).filter(m => m.lat && m.lng);
+              const coords = validMarkers.map(m => ({ latitude: m.lat, longitude: m.lng }));
+              const u = userLocationRef.current;
+              if (u?.latitude != null && u?.longitude != null) {
+                coords.push({ latitude: u.latitude, longitude: u.longitude });
+              }
+              if (coords.length > 0 && mapRef.current) {
+                markProgrammaticMapMove(2200);
+                mapRef.current.fitToCoordinates(coords, {
+                  edgePadding: { top: 80, right: 60, bottom: SCREEN_HEIGHT * 0.35, left: 60 },
+                  animated: true,
+                });
+              }
+    } catch (err) {
+      console.warn('[AI Plan] API error:', err?.message);
+      generatedPlan = null;
+      setDayPlan(null);
+      setError(err?.message || 'Could not generate your plan. Try again.');
+    } finally {
+      setLoading(false);
+      setLoadingStatus('');
+      if (generatedPlan && generatedPlan.length > 0) {
+                setRevealingPins(true);
+                setVisiblePinCount(0);
+                sheetOpacity.setValue(0);
+              } else {
+                sheetOpacity.setValue(1);
+                lastSnap.current = SNAP_POINTS[0];
+                Animated.spring(sheetAnim, {
+                  toValue: SNAP_POINTS[0],
+                  useNativeDriver: true,
+                  tension: 80,
+                  friction: 12,
+                }).start();
+              }
+            }
+          })();
+        }, 1200);
+      }
+    }, 80 + tick * 8);
+  };

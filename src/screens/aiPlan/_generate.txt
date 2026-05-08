@@ -1,0 +1,152 @@
+  const handleGenerate = async (onComplete) => {
+    const prefLabels = selectedPreferences
+      .map((id) => PREFERENCES.find((p) => p.id === id)?.label)
+      .filter(Boolean);
+    const foodLabels = selectedFoodCategories
+      .map((id) => FOOD_CATEGORIES.find((f) => f.id === id)?.label)
+      .filter(Boolean);
+
+    setLoading(true);
+    setPlanGenerationSuccess(false);
+    setLoadingStatus('Getting your location for this plan…');
+    setError(null);
+    setActiveSavedPlanId(null);
+    setSharedCollaboration(null);
+    setDayPlan(null);
+    setPineconeMatches([]);
+    setDrawerStep(3);
+    lastPrefLabelsRef.current = prefLabels;
+    lastFoodLabelsRef.current = foodLabels;
+
+    // Get cached feed images immediately, fetch more in background
+    getCachedFeedImages()
+      .then((cached) => {
+        const c = Array.isArray(cached) ? cached : [];
+        if (c.length > 0) setSpotPreviews(c);
+        return c;
+      })
+      .then((c) =>
+        fetchSpotPreviewsFromSupabase().then((fresh) => {
+          const f = Array.isArray(fresh) ? fresh : [];
+          if (f.length > c.length) setSpotPreviews(f);
+        }),
+      )
+      .catch(() => {});
+
+    let generatedPlan = null;
+    try {
+      const { originLat, originLng } = await resolveOriginCoordsForPlanGeneration({ preferFreshFix: true })
+      setLoadingStatus('Khalid is scouting live posts for standout venues…')
+
+      const prefsKey = prefLabels.join('|');
+      const cached = prefetchRef.current;
+
+      let places;
+      let breakfastSpots;
+      let events;
+      let restaurants;
+
+      const hasCached =
+        cached.prefsKey === prefsKey &&
+        Array.isArray(cached.places) &&
+        cached.places.length > 0 &&
+        Array.isArray(cached.events) &&
+        cached.events.length > 0;
+
+      if (hasCached) {
+        places = cached.places;
+        events = cached.events;
+        [restaurants, breakfastSpots] = await Promise.all([
+          fetchRestaurants(foodLabels),
+          fetchBreakfastSpots(),
+        ]);
+      } else {
+        const [
+          placesResult,
+          restaurantsResult,
+          breakfastResult,
+          eventsResult,
+        ] = await Promise.all([
+          fetchPlaces(prefLabels),
+          fetchRestaurants(foodLabels),
+          fetchBreakfastSpots(),
+          fetchEvents(prefLabels),
+        ]);
+        places = placesResult;
+        restaurants = restaurantsResult;
+        breakfastSpots = breakfastResult;
+        events = eventsResult;
+      }
+
+      const allMatches = [...places, ...restaurants, ...breakfastSpots, ...events];
+      setPineconeMatches(allMatches);
+
+      console.log(`Pinecone: ${places.length} places, ${restaurants.length} restaurants, ${breakfastSpots.length} breakfast, ${events.length} events`);
+
+      // Pipeline Step 5 — GPT builds a smart day plan from all results
+      setLoadingStatus('Shortlisting restaurants & experiences for you…');
+      await new Promise((res) => setTimeout(res, 380));
+      setLoadingStatus('Khalid is crafting your perfect day…');
+      const plan = await generateDayPlan(places, restaurants, breakfastSpots, events, prefLabels, foodLabels, {
+        profileGeneral: generalLabels,
+        profileActivity: activityLabels,
+        profileFood: savedProfileFoodLabels,
+        profileNarrative: preferences?.profileSummary || '',
+        profileAnswers: preferences?.profileAnswers || {},
+        travelExplore: travelExploreId,
+        originLat,
+        originLng,
+      });
+      generatedPlan = plan;
+      const enriched = await enrichPlanWithClientData(plan, allMatches, allPlaceMarkers);
+      setDayPlan(attachPlanRowKeys(enriched));
+      setError(null);
+
+      // Debug markers
+      const markers = buildMapMarkers(plan || [], allPlaceMarkers);
+      console.log(`Map markers: ${markers.length}/${plan.length} spots have coordinates`);
+
+      // Fit map to show all markers
+      const validMarkers = buildMapMarkers(plan, allPlaceMarkers).filter(m => m.lat && m.lng);
+      const coords = validMarkers.map(m => ({ latitude: m.lat, longitude: m.lng }));
+      const u = userLocationRef.current;
+      if (u?.latitude != null && u?.longitude != null) {
+        coords.push({ latitude: u.latitude, longitude: u.longitude });
+      }
+      if (coords.length > 0 && mapRef.current) {
+        markProgrammaticMapMove(2200);
+        mapRef.current.fitToCoordinates(coords, {
+          edgePadding: { top: 80, right: 60, bottom: SCREEN_HEIGHT * 0.35, left: 60 },
+          animated: true,
+        });
+      }
+
+    } catch (err) {
+      console.warn('[AI Plan] API error:', err?.message);
+      generatedPlan = null;
+      setDayPlan(null);
+      setError(err?.message || 'Could not generate your plan. Try again.');
+    } finally {
+      setLoading(false);
+      setLoadingStatus('');
+      const succeeded = generatedPlan != null && generatedPlan.length > 0;
+      if (succeeded) {
+        setPlanGenerationSuccess(true);
+        setTimeout(() => {
+          onComplete?.();
+          setRevealingPins(true);
+          setVisiblePinCount(0);
+          sheetOpacity.setValue(0);
+        }, 3200);
+      } else {
+        sheetOpacity.setValue(1);
+        lastSnap.current = SNAP_POINTS[0];
+        Animated.spring(sheetAnim, {
+          toValue: SNAP_POINTS[0],
+          useNativeDriver: true,
+          tension: 80,
+          friction: 12,
+        }).start();
+        onComplete?.();
+      }
+    }
