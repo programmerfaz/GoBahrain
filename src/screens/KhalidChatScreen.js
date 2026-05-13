@@ -15,7 +15,6 @@ import {
   TouchableWithoutFeedback,
   LayoutAnimation,
   UIManager,
-  ScrollView,
   useWindowDimensions,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
@@ -1755,7 +1754,7 @@ function KhalidCardRow({ item, onViewProfile, onAskAbout }) {
 const BAHRAIN_RED = '#C8102E'
 const BAHRAIN_RED_DEEP = '#8B0719'
 const BAHRAIN_GOLD = '#E9C877'
-const KHALID_SIYAHA_LOGO = require('../../assets/logo_siyaha.png')
+const KHALID_AVATAR = require('../../assets/khalid.png')
 
 /* Aurora backdrop — two drifting gradient blobs tinted gold/red that breathe
  * behind the blurred panel for a premium cinematic look. */
@@ -1825,56 +1824,6 @@ function ChatAuroraBackdrop({ isDark = true }) {
           end={{ x: 1, y: 1 }}
         />
       </Animated.View>
-    </View>
-  )
-}
-
-/* Breathing halo ring behind the avatar — a rotating conic-like gradient
- * (faked with a LinearGradient ring) plus a subtle pulse scale. */
-function AvatarHaloRing({ size = 48, children, active = true, innerBackgroundColor = '#0F1626' }) {
-  const rotate = useRef(new Animated.Value(0)).current
-  const pulse = useRef(new Animated.Value(0)).current
-  useEffect(() => {
-    if (!active) return undefined
-    const r = Animated.loop(
-      Animated.timing(rotate, { toValue: 1, duration: 6000, easing: Easing.linear, useNativeDriver: true })
-    )
-    const p = Animated.loop(
-      Animated.sequence([
-        Animated.timing(pulse, { toValue: 1, duration: 1800, easing: Easing.inOut(Easing.sin), useNativeDriver: true }),
-        Animated.timing(pulse, { toValue: 0, duration: 1800, easing: Easing.inOut(Easing.sin), useNativeDriver: true }),
-      ])
-    )
-    r.start(); p.start()
-    return () => { r.stop(); p.stop() }
-  }, [active, rotate, pulse])
-  const rot = rotate.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '360deg'] })
-  const s = pulse.interpolate({ inputRange: [0, 1], outputRange: [1, 1.06] })
-  const op = pulse.interpolate({ inputRange: [0, 1], outputRange: [0.7, 1] })
-  const ringSize = size + 6
-  return (
-    <View style={{ width: ringSize, height: ringSize, alignItems: 'center', justifyContent: 'center' }}>
-      <Animated.View
-        pointerEvents="none"
-        style={{
-          position: 'absolute',
-          width: ringSize,
-          height: ringSize,
-          borderRadius: ringSize / 2,
-          opacity: op,
-          transform: [{ rotate: rot }, { scale: s }],
-        }}
-      >
-        <LinearGradient
-          colors={[BAHRAIN_GOLD, BAHRAIN_RED, 'rgba(233,200,119,0)', BAHRAIN_GOLD]}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 1 }}
-          style={{ flex: 1, borderRadius: ringSize / 2 }}
-        />
-      </Animated.View>
-      <View style={{ width: size, height: size, borderRadius: size / 2, backgroundColor: innerBackgroundColor, alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
-        {children}
-      </View>
     </View>
   )
 }
@@ -2017,12 +1966,7 @@ function KhalidStaggerSuggestionRow({ suggestions, onPick, chipInnerBg, chipText
         <Ionicons name="map-outline" size={13} color={labelColor} />
         <Text style={[styles.khalidSuggestionsLabel, { color: labelColor }]}>Try asking</Text>
       </View>
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        keyboardShouldPersistTaps="handled"
-        contentContainerStyle={styles.khalidSuggestionsScrollContent}
-      >
+      <View style={styles.khalidSuggestionsRow}>
         {suggestions.map((s, i) => {
           const v = anims[i];
           if (!v) return null;
@@ -2048,7 +1992,7 @@ function KhalidStaggerSuggestionRow({ suggestions, onPick, chipInnerBg, chipText
             </Animated.View>
           );
         })}
-      </ScrollView>
+      </View>
     </View>
   );
 }
@@ -2255,7 +2199,6 @@ export default function KhalidChatScreen({ navigation, route }) {
         suggestionsBorder: 'rgba(233,200,119,0.12)',
         chipInnerBg: 'rgba(10,14,28,0.94)',
         chipText: 'rgba(248,250,252,0.96)',
-        avatarRingInner: '#0A0E18',
         suggestionsLabel: BAHRAIN_GOLD,
         disabledSend: ['rgba(71,85,105,0.78)', 'rgba(51,65,85,0.78)'],
         inputFocusGlow: ['rgba(233,200,119,0.55)', 'rgba(200,16,46,0.45)'],
@@ -2296,7 +2239,6 @@ export default function KhalidChatScreen({ navigation, route }) {
       suggestionsBorder: 'rgba(200,16,46,0.1)',
       chipInnerBg: colors.surface,
       chipText: colors.textPrimary,
-      avatarRingInner: '#FFFFFF',
       suggestionsLabel: colors.primary,
       disabledSend: ['rgba(226,232,240,0.95)', 'rgba(203,213,225,0.85)'],
       inputFocusGlow: ['rgba(200,16,46,0.32)', 'rgba(233,200,119,0.4)'],
@@ -3296,9 +3238,9 @@ export default function KhalidChatScreen({ navigation, route }) {
           <View style={styles.khalidAssistantTurnHead}>
             <View style={styles.khalidAssistantTurnAvatar}>
               <Image
-                source={KHALID_SIYAHA_LOGO}
+                source={KHALID_AVATAR}
                 style={styles.khalidAssistantTurnAvatarImg}
-                resizeMode="contain"
+                resizeMode="cover"
               />
             </View>
             <Text style={[styles.khalidAssistantTurnName, { color: khalidSurface.headerTitle }]}>Khalid</Text>
@@ -3351,9 +3293,9 @@ export default function KhalidChatScreen({ navigation, route }) {
           <View style={styles.khalidAssistantTurnHead}>
             <View style={styles.khalidAssistantTurnAvatar}>
               <Image
-                source={KHALID_SIYAHA_LOGO}
+                source={KHALID_AVATAR}
                 style={styles.khalidAssistantTurnAvatarImg}
-                resizeMode="contain"
+                resizeMode="cover"
               />
             </View>
             <Text style={[styles.khalidAssistantTurnName, { color: khalidSurface.headerTitle }]}>Khalid</Text>
@@ -3456,32 +3398,24 @@ export default function KhalidChatScreen({ navigation, route }) {
         <View
           style={[styles.khalidHeader, { borderBottomColor: khalidSurface.headerBorder }]}
           accessibilityRole="header"
-          accessibilityLabel="Khalid, SiyahaBH tourism guide"
+          accessibilityLabel="Khalid, travel guide"
         >
           <View style={styles.khalidHeaderInner}>
             <View style={styles.khalidHeaderCompactRow}>
-              <View style={[styles.khalidHeaderAvatarGlow, { borderColor: isDark ? 'rgba(233,200,119,0.2)' : 'rgba(200,16,46,0.12)' }]}>
-                <LinearGradient
-                  colors={
-                    isDark
-                      ? ['rgba(233,200,119,0.12)', 'rgba(14,165,233,0.05)', 'rgba(200,16,46,0.08)']
-                      : ['rgba(233,200,119,0.16)', 'rgba(255,255,255,0.35)', 'rgba(14,165,233,0.09)']
-                  }
-                  start={{ x: 0, y: 0 }}
-                  end={{ x: 1, y: 1 }}
-                  style={[StyleSheet.absoluteFillObject, styles.khalidHeaderAvatarGlowFill]}
-                  pointerEvents="none"
-                />
-                <View style={styles.khalidHeaderAvatarRingSlot}>
-                  <AvatarHaloRing size={34} active innerBackgroundColor={khalidSurface.avatarRingInner}>
-                    <Image source={KHALID_SIYAHA_LOGO} style={styles.khalidHeaderAvatarImage} resizeMode="contain" />
-                  </AvatarHaloRing>
-                </View>
-                <View style={styles.khalidHeaderOnlineDot} />
+              <View
+                style={[
+                  styles.khalidHeaderAvatarWrap,
+                  {
+                    borderColor: isDark ? 'rgba(233,200,119,0.28)' : 'rgba(200,16,46,0.22)',
+                    backgroundColor: isDark ? 'rgba(10,14,24,0.6)' : 'rgba(255,255,255,0.9)',
+                  },
+                ]}
+              >
+                <Image source={KHALID_AVATAR} style={styles.khalidHeaderAvatarImage} resizeMode="cover" />
               </View>
               <View style={styles.khalidHeaderTextStack}>
                 <Text style={[styles.khalidHeaderEyebrowCompact, { color: khalidSurface.headerEyebrow }]}>
-                  SiyahaBH · tourism
+                  Travel guide
                 </Text>
                 <View style={styles.khalidHeaderTitleRow}>
                   <Text style={[styles.khalidHeaderTitle, { color: khalidSurface.headerTitle }]}>Khalid</Text>
@@ -3748,51 +3682,17 @@ const styles = StyleSheet.create({
     opacity: 0.9,
     marginBottom: 1,
   },
-  khalidHeaderAvatarGlow: {
-    position: 'relative',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 3,
-    paddingHorizontal: 3,
-    borderRadius: 999,
-    borderWidth: 1,
+  khalidHeaderAvatarWrap: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
     overflow: 'hidden',
+    borderWidth: 1,
     flexShrink: 0,
-    ...Platform.select({
-      ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.08, shadowRadius: 8 },
-      android: { elevation: 2 },
-    }),
-  },
-  khalidHeaderAvatarGlowFill: {
-    zIndex: 0,
-    borderRadius: 999,
-  },
-  khalidHeaderAvatarRingSlot: {
-    zIndex: 2,
-    alignItems: 'center',
-    justifyContent: 'center',
   },
   khalidHeaderAvatarImage: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
-    padding: 1,
-  },
-  khalidHeaderOnlineDot: {
-    position: 'absolute',
-    bottom: 2,
-    right: 2,
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: '#4ADE80',
-    borderWidth: 2,
-    borderColor: 'rgba(10,18,34,0.95)',
-    zIndex: 4,
-    ...Platform.select({
-      ios: { shadowColor: '#4ADE80', shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.85, shadowRadius: 4 },
-      android: { elevation: 2 },
-    }),
+    width: '100%',
+    height: '100%',
   },
   khalidHeaderTitle: {
     fontFamily: FONT_POPPINS_BOLD,
@@ -3848,13 +3748,6 @@ const styles = StyleSheet.create({
   khalidSuggestionsBlock: {
     gap: 2,
   },
-  khalidSuggestionsScrollContent: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    paddingVertical: 4,
-    paddingRight: 4,
-  },
   khalidTurnUserOuter: {
     width: '100%',
     alignItems: 'flex-end',
@@ -3893,18 +3786,16 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
   },
   khalidAssistantTurnAvatar: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
     overflow: 'hidden',
-    borderWidth: 1,
-    borderColor: 'rgba(233,200,119,0.35)',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(148,163,184,0.45)',
   },
   khalidAssistantTurnAvatarImg: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    padding: 1,
+    width: '100%',
+    height: '100%',
   },
   khalidAssistantTurnName: {
     fontFamily: FONT_POPPINS_SEMIBOLD,
@@ -5276,7 +5167,12 @@ const styles = StyleSheet.create({
   khalidSuggestionsRow: {
     flexDirection: 'row',
     flexWrap: 'wrap',
+    alignItems: 'flex-start',
     gap: 8,
+    width: '100%',
+    paddingTop: 4,
+    paddingBottom: 4,
+    paddingHorizontal: 2,
   },
   khalidSuggestionChipWrap: {
     borderRadius: 22,

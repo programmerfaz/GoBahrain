@@ -76,6 +76,10 @@ import {
   disableSharingForPlan,
   normalizeShareCode,
 } from '../../services/savedPlans'
+import {
+  fetchSavedPostBoostContextForPlan,
+  applyFromSavesPlanTags,
+} from '../../services/savedPosts'
 import ClientProfileModal from '../../components/ClientProfileModal'
 import { ensureImageUrl, parseStorageImageUrl, resolvePublicImageUrl } from '../../utils/imageUrl'
 import {
@@ -495,6 +499,16 @@ export function useAIPlanScreenOuter() {
       mid.setLoadingStatus('Khalid is crafting your perfect day…');
       const lastSavedPlanSpots = []
       const recentVisitedSpots = []
+      let savedPostBoostClientIds = []
+      let savedPostFeedHintNames = []
+      try {
+        const ctx = await fetchSavedPostBoostContextForPlan()
+        savedPostBoostClientIds = ctx.clientIds
+        savedPostFeedHintNames = ctx.hintNames
+      } catch (e) {
+        console.warn('[AI Plan] saved post boost context', e?.message)
+      }
+
       const plan = await generateDayPlan(places, restaurants, breakfastSpots, events, prefLabels, foodLabels, {
         profileGeneral: mid.generalLabels,
         profileActivity: mid.activityLabels,
@@ -505,13 +519,16 @@ export function useAIPlanScreenOuter() {
         originLat,
         originLng,
         viewerUType: mid.viewerUType,
+        savedPostClientIds: savedPostBoostClientIds,
+        savedPostFeedHintNames,
       });
       generatedPlan = plan;
       const initialKeyedPlan = attachPlanRowKeys(plan);
       mid.setDayPlan(initialKeyedPlan);
       const enriched = await enrichPlanWithClientData(plan, allMatches, mid.allPlaceMarkers);
+      const enrichedTagged = applyFromSavesPlanTags(enriched, savedPostBoostClientIds)
       const enrichedWithStableKeys = attachPlanRowKeys(
-        enriched.map((item, idx) => ({
+        enrichedTagged.map((item, idx) => ({
           ...item,
           _planRowKey: initialKeyedPlan[idx]?._planRowKey || item?._planRowKey,
         })),

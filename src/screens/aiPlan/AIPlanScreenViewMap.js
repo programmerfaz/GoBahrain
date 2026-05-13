@@ -85,6 +85,7 @@ import {
   pickPlanStopGalleryUris,
   pickPlanStopThumbUri,
 } from './planMatching'
+import { PLAN_TAG_FROM_SAVES, isPlanStopFromSavesTag } from '../../services/savedPosts'
 
 const markerMatchesShowcase = (mk, showcaseMk) => {
   if (!mk || !showcaseMk) return false
@@ -1282,6 +1283,12 @@ export function AIPlanScreenViewMap({ screen }) {
                                       <View style={styles.planLuxuryUserPickPill} accessibilityRole="text" accessibilityLabel="You added this stop">
                                         <Ionicons name="person" size={11} color={screen.isDark ? '#34D399' : '#059669'} />
                                         <Text style={styles.planLuxuryUserPickPillText}>Your pick</Text>
+                                      </View>
+                                    ) : null}
+                                    {isPlanStopFromSavesTag(item.planListTag) ? (
+                                      <View style={styles.planLuxuryFromSavesPill} accessibilityRole="text" accessibilityLabel="From your saved posts">
+                                        <Ionicons name="bookmark" size={11} color={screen.isDark ? '#A5B4FC' : '#4F46E5'} />
+                                        <Text style={styles.planLuxuryFromSavesPillText}>{PLAN_TAG_FROM_SAVES}</Text>
                                       </View>
                                     ) : null}
                                     {venueExtraTags.map((tag) => (

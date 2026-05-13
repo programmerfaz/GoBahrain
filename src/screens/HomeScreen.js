@@ -27,6 +27,7 @@ if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental
   UIManager.setLayoutAnimationEnabledExperimental(true);
 }
 import * as Location from 'expo-location';
+import * as Haptics from 'expo-haptics';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import { BlurView } from 'expo-blur';
@@ -38,7 +39,9 @@ import ClientProfileModal from '../components/ClientProfileModal';
 import { useAuth } from '../context/AuthContext';
 import { useUserPreferences } from '../context/UserPreferencesContext';
 import { useDoorTransition } from '../context/DoorTransitionContext';
+import { useAddedToPlanToast } from '../context/AddedToPlanToastContext';
 import { supabase } from '../config/supabase';
+import { listSavedPostIds, savePostForUser, unsavePostForUser } from '../services/savedPosts';
 import { ensureImageUrl } from '../utils/imageUrl';
 import {
   fetchFeedPage,
@@ -439,6 +442,7 @@ function getHomeStyles(colors) {
       flexDirection: 'row',
       alignItems: 'center',
       gap: 10,
+      flexShrink: 1,
     },
     igActionBtn: {
       width: 38,
@@ -809,7 +813,21 @@ function interleaveTouristInfoCards(posts = []) {
   return out;
 }
 
-function PostCard({ item, isHighlighted = false, onHighlightDone, onUpvoteToggle, onClientPress, onViewReviews, upvoteScaleAnim, styles, COLORS, ACTION_BUTTONS_LEFT, UPVOTE_COLOR }) {
+function PostCard({
+  item,
+  isHighlighted = false,
+  onHighlightDone,
+  onUpvoteToggle,
+  onClientPress,
+  onViewReviews,
+  upvoteScaleAnim,
+  styles,
+  COLORS,
+  ACTION_BUTTONS_LEFT,
+  UPVOTE_COLOR,
+  savedPostIds,
+  onToggleSavedPost,
+}) {
   const [descExpanded, setDescExpanded] = useState(false);
   const hasUpvoted = item.hasUpvoted ?? false;
   const displayUpvotes = item.upvotes ?? 0;
@@ -911,6 +929,14 @@ function PostCard({ item, isHighlighted = false, onHighlightDone, onUpvoteToggle
     }
     onUpvoteToggle?.(item, { nativeEvent: { pageX, pageY } });
   };
+
+  const postIsSaved = item?.id && savedPostIds ? savedPostIds.has(item.id) : false;
+
+  const handleSavePostPress = useCallback(() => {
+    if (!item?.id || !item?.clientId) return;
+    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    onToggleSavedPost?.(item);
+  }, [item, onToggleSavedPost]);
 
   const glowOpacity = highlightGlow.interpolate({
     inputRange: [0, 1],
@@ -1056,6 +1082,31 @@ function PostCard({ item, isHighlighted = false, onHighlightDone, onUpvoteToggle
               )
             })}
           </View>
+          {item.clientId && item.id ? (
+            <TouchableOpacity
+              style={[
+                styles.igActionBtn,
+                postIsSaved
+                  ? { borderColor: COLORS.primary, borderWidth: 1.5, backgroundColor: `${COLORS.primary}14` }
+                  : { borderColor: COLORS.border, borderWidth: 1, backgroundColor: 'transparent' },
+              ]}
+              activeOpacity={0.7}
+              onPress={handleSavePostPress}
+              accessibilityRole="button"
+              accessibilityLabel={
+                postIsSaved
+                  ? `Remove this post from saved`
+                  : `Save this post from ${item.businessName || 'this business'}`
+              }
+              accessibilityState={{ selected: postIsSaved }}
+            >
+              <Ionicons
+                name={postIsSaved ? 'bookmark' : 'bookmark-outline'}
+                size={22}
+                color={postIsSaved ? COLORS.primary : COLORS.textPrimary}
+              />
+            </TouchableOpacity>
+          ) : null}
         </View>
         {displayUpvotes > 0 ? (
           <Text style={styles.igLikesLine}>
@@ -1383,6 +1434,7 @@ export default function HomeScreen() {
   const { profile, session } = useAuth();
   const { preferences } = useUserPreferences();
   const { isAwaitingHomeOpen, notifyHomeReady } = useDoorTransition();
+  const { showAddedToPlanToast } = useAddedToPlanToast();
 
   const COLORS = useMemo(() => ({
     primary: colors.primary,
@@ -1430,6 +1482,70 @@ export default function HomeScreen() {
   const [highlightedPostId, setHighlightedPostId] = useState(null);
   const searchInputRef = useRef(null);
   const [posts, setPosts] = useState([]);
+  const [savedPostIds, setSavedPostIds] = useState(() => new Set());
+  const savedPostIdsRef = useRef(savedPostIds);
+  useEffect(() => {
+    savedPostIdsRef.current = savedPostIds;
+  }, [savedPostIds]);
+
+  const loadSavedPostIds = useCallback(async () => {
+    if (!session?.user?.id) {
+      setSavedPostIds(new Set());
+      return;
+    }
+    try {
+      const ids = await listSavedPostIds();
+      setSavedPostIds(new Set(ids));
+    } catch (e) {
+      console.warn('[Home] listSavedPostIds', e?.message);
+    }
+  }, [session?.user?.id]);
+
+  useEffect(() => {
+    loadSavedPostIds();
+  }, [loadSavedPostIds]);
+
+  const handleToggleSavedPost = useCallback(
+    async (item) => {
+      const postUuid = item?.id;
+      const clientAUuid = item?.clientId;
+      if (!postUuid || !clientAUuid) return;
+      if (!session?.user?.id) {
+        Alert.alert('Sign in to save', 'Create an account or sign in to save posts.');
+        return;
+      }
+      const wasSaved = savedPostIdsRef.current.has(postUuid);
+      setSavedPostIds((prev) => {
+        const next = new Set(prev);
+        if (wasSaved) next.delete(postUuid);
+        else next.add(postUuid);
+        return next;
+      });
+      try {
+        if (wasSaved) await unsavePostForUser(postUuid);
+        else {
+          await savePostForUser({ postUuid, clientAUuid });
+          showAddedToPlanToast();
+        }
+      } catch (e) {
+        setSavedPostIds((prev) => {
+          const next = new Set(prev);
+          if (wasSaved) next.add(postUuid);
+          else next.delete(postUuid);
+          return next;
+        });
+        const msg =
+          e?.message === 'Sign in to save posts'
+            ? 'Please sign in to save posts.'
+            : typeof e?.message === 'string' && e.message.length
+              ? e.message
+              : 'Could not update saved posts. Try again.';
+        Alert.alert('Save failed', msg);
+      }
+    },
+    [session?.user?.id, showAddedToPlanToast],
+  );
+
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [fetchError, setFetchError] = useState(null);
@@ -1864,12 +1980,14 @@ export default function HomeScreen() {
     } finally {
       setRefreshing(false);
       refreshingRef.current = false;
+      void loadSavedPostIds();
     }
   }, [
     userPosition?.latitude,
     userPosition?.longitude,
     searchQuery,
     preferences?.profileSummary,
+    loadSavedPostIds,
   ]);
   
   const handleLoadMore = useCallback(() => {
@@ -2065,6 +2183,8 @@ export default function HomeScreen() {
             COLORS={COLORS}
             ACTION_BUTTONS_LEFT={ACTION_BUTTONS_LEFT}
             UPVOTE_COLOR={UPVOTE_COLOR}
+            savedPostIds={savedPostIds}
+            onToggleSavedPost={handleToggleSavedPost}
           />
         </StaggeredFeedItem>
       );
@@ -2078,6 +2198,8 @@ export default function HomeScreen() {
       handleUpvoteToggle,
       upvoteAnimations,
       navigation,
+      savedPostIds,
+      handleToggleSavedPost,
     ],
   );
 

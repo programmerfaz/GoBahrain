@@ -2199,6 +2199,7 @@ const normalizePlanRankingSpotKey = (name) =>
  * @param {string[]} [options.foodLabels]
  * @param {Set<string>} [options.feedbackDownrankSet] — normalized venue names user disliked (thumbs down)
  * @param {Set<string>} [options.feedbackBoostSet] — normalized venue names user liked (thumbs up)
+ * @param {Set<string>} [options.savedPostClientBoostSet] — client_a_uuid (lowercase) from home-feed saved posts
  */
 function selectMatchesForPlan(places, restaurants, breakfastSpots, events, options = {}) {
   const tier = normalizeTravelTier(options.travelExplore)
@@ -2227,6 +2228,8 @@ function selectMatchesForPlan(places, restaurants, breakfastSpots, events, optio
   const feedbackDown =
     options.feedbackDownrankSet instanceof Set ? options.feedbackDownrankSet : new Set()
   const feedbackBoost = options.feedbackBoostSet instanceof Set ? options.feedbackBoostSet : new Set()
+  const savedPostClientBoost =
+    options.savedPostClientBoostSet instanceof Set ? options.savedPostClientBoostSet : new Set()
 
   // When specific gated place themes are selected (e.g. Beach, Museum), apply a much
   // heavier preference weight so theme-matched venues dominate the catalog slice sent to GPT.
@@ -2245,6 +2248,7 @@ function selectMatchesForPlan(places, restaurants, breakfastSpots, events, optio
 
   /** Higher = better candidate for GPT catalog slice */
   const compositeBucketRank = (m) => {
+    const meta = m?.metadata || {}
     const pc = pineconeScore(m)
     const pref =
       combinedPrefFoodLabels.length > 0
@@ -2253,6 +2257,8 @@ function selectMatchesForPlan(places, restaurants, breakfastSpots, events, optio
     const nk = rankingSpotKey(m)
     const downW = nk && feedbackDown.has(nk) ? 26 : 0
     const upW = nk && feedbackBoost.has(nk) ? 16 : 0
+    const cidBoost = String(meta.client_a_uuid || '').trim().toLowerCase()
+    const savedPostW = cidBoost && savedPostClientBoost.has(cidBoost) ? 18 : 0
     let geo = 0
     if (hasOrigin) {
       const c = coordsFromMatch(m)
@@ -2270,7 +2276,7 @@ function selectMatchesForPlan(places, restaurants, breakfastSpots, events, optio
     // Use a higher preference multiplier when specific gated labels (Beach, Museum, etc.)
     // are selected so the catalog slice GPT receives is dominated by theme-matching venues.
     const prefWeight = hasGatedPrefLabels ? 9.0 : 3.4
-    return pc * 52 + pref * prefWeight + geo + upW - downW
+    return pc * 52 + pref * prefWeight + geo + upW + savedPostW - downW
   }
 
   const takeBucket = (arr, cap, diversifyMaxPerFacet) => {
@@ -3171,6 +3177,8 @@ ${profileSummary ? `Traveler vibe: ${profileSummary}` : ''}`
  * @param {string[]} [personalization.strictAvoidSpots] — hard exclusion list (never repeat)
  * @param {string[]} [personalization.feedbackDownrankSpots] — thumbs-down venues (normalized client-side)
  * @param {string[]} [personalization.feedbackBoostSpots] — thumbs-up venues to prefer when still in-catalog
+ * @param {string[]} [personalization.savedPostClientIds] — client_a_uuid from home-feed saved posts (catalog + model boost)
+ * @param {string[]} [personalization.savedPostFeedHintNames] — display names for GPT hint line
  * @param {'local'|'tourist'} [personalization.viewerUType] — resident vs visitor tone and itinerary bias
  */
 export async function generateDayPlan(
@@ -3206,6 +3214,11 @@ export async function generateDayPlan(
       .map((x) => normalizePlanRankingSpotKey(x))
       .filter(Boolean),
   )
+  const savedPostClientBoostSet = new Set(
+    (Array.isArray(personalization.savedPostClientIds) ? personalization.savedPostClientIds : [])
+      .map((x) => String(x || '').trim().toLowerCase())
+      .filter(Boolean),
+  )
   const baseMatches = selectMatchesForPlan(places, restaurants, breakfastSpots, eventsForPlan, {
     travelExplore: travelTier,
     originLat,
@@ -3214,6 +3227,7 @@ export async function generateDayPlan(
     foodLabels,
     feedbackDownrankSet,
     feedbackBoostSet,
+    savedPostClientBoostSet,
   })
   const strictFilteredMatches = applyStrictAvoidWithFallback(baseMatches, personalization?.strictAvoidSpots, 12)
   const limitedMatches = applyRecentHistoryDiversity(strictFilteredMatches, personalization?.recentVisitedSpots, 12)
@@ -3406,9 +3420,21 @@ Return only JSON array, no markdown:
   }
 ]`;
 
+  const savedFeedHints = (Array.isArray(personalization.savedPostFeedHintNames)
+    ? personalization.savedPostFeedHintNames
+    : []
+  )
+    .map((x) => String(x || '').trim())
+    .filter(Boolean)
+    .slice(0, 12)
+  const savedPostsPreferencesLine =
+    savedFeedHints.length > 0
+      ? `💾 Home feed saves — the user bookmarked posts from these venues; strongly prefer including at least one when the catalog, today’s strict activity/food rules, and routing still allow: ${savedFeedHints.join('; ')}.`
+      : ''
+
   const userMsg = `${viewerUType === 'tourist' ? '🧭 Visitor mode: smooth routing and light orientation when helpful.' : '🏠 Local mode: insider-feel picks; skip lengthy introductions to obvious sights.'}
 🚗 Travel willingness this session: ${travelTier} (nearby = stay local; balanced = mix; wide = island-wide when worth it).
-${hasPref ? `🎯 Today’s activity preferences (STRICT — place stops must ONLY match these types): ${prefLabels.join(', ')}` : '🎯 Today: no activity prefs — diverse mix'}
+${savedPostsPreferencesLine ? `${savedPostsPreferencesLine}\n` : ''}${hasPref ? `🎯 Today’s activity preferences (STRICT — place stops must ONLY match these types): ${prefLabels.join(', ')}` : '🎯 Today: no activity prefs — diverse mix'}
 ${hasFood ? `🍽️ Today’s food types: ${foodLabels.join(', ')} — each meal must use catalogue rows whose Cuisine line matches one of these types (no substitutes).` : hasPersonaSummary ? '🍽️ Today: open on food — personalize from persona summary' : '🍽️ Today: open on food'}
 
 Catalog (${promptCatalogMatches.length} rows):

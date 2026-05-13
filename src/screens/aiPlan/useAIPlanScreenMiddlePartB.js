@@ -73,6 +73,11 @@ import {
   disableSharingForPlan,
   normalizeShareCode,
 } from '../../services/savedPlans'
+import {
+  fetchSavedPostBoostContextForPlan,
+  applyFromSavesPlanTags,
+  isPlanStopFromSavesTag,
+} from '../../services/savedPosts'
 import ClientProfileModal from '../../components/ClientProfileModal'
 import { ensureImageUrl, parseStorageImageUrl, resolvePublicImageUrl } from '../../utils/imageUrl'
 import {
@@ -209,6 +214,15 @@ export function useAIPlanScreenMiddlePartB(midA) {
               midA.setLoadingStatus('Shortlisting restaurants & cafés that fit your vibe…');
               await new Promise((res) => setTimeout(res, 380));
               midA.setLoadingStatus(`Khalid is crafting your ${theme.label.toLowerCase()} day…`);
+              let savedPostBoostClientIds = []
+              let savedPostFeedHintNames = []
+              try {
+                const ctx = await fetchSavedPostBoostContextForPlan()
+                savedPostBoostClientIds = ctx.clientIds
+                savedPostFeedHintNames = ctx.hintNames
+              } catch (e) {
+                console.warn('[AI Plan] surprise saved post boost', e?.message)
+              }
               const plan = await generateDayPlan(places, restaurants, breakfastSpots, events, prefLabels, foodLabels, {
                 profileGeneral: midA.generalLabels,
                 profileActivity: midA.activityLabels,
@@ -219,13 +233,16 @@ export function useAIPlanScreenMiddlePartB(midA) {
                 originLat,
                 originLng,
                 viewerUType: midA.viewerUType,
+                savedPostClientIds: savedPostBoostClientIds,
+                savedPostFeedHintNames,
               });
               generatedPlan = plan;
               const initialKeyedPlan = attachPlanRowKeys(plan);
               midA.setDayPlan(initialKeyedPlan);
               const enriched = await enrichPlanWithClientData(plan, allMatches, midA.allPlaceMarkers);
+              const enrichedTagged = applyFromSavesPlanTags(enriched, savedPostBoostClientIds)
               const enrichedWithStableKeys = attachPlanRowKeys(
-                enriched.map((item, idx) => ({
+                enrichedTagged.map((item, idx) => ({
                   ...item,
                   _planRowKey: initialKeyedPlan[idx]?._planRowKey || item?._planRowKey,
                 })),
@@ -430,6 +447,7 @@ export function useAIPlanScreenMiddlePartB(midA) {
     const rowForTitle = midA.savedPlansList.find((p) => p.id === midA.activeSavedPlanId)
     const savedTitleRaw = typeof rowForTitle?.title === 'string' ? rowForTitle.title.trim() : ''
     const primaryTitle = savedTitleRaw || titleLabel
+    const fromSavesCount = midA.dayPlan.filter((s) => isPlanStopFromSavesTag(s?.planListTag)).length
     const darkBackBtnStyle = isDark
       ? {
         backgroundColor: 'rgba(30,41,59,0.92)',
@@ -512,12 +530,12 @@ export function useAIPlanScreenMiddlePartB(midA) {
                 </View>
               <Text
                 style={[styles.planLuxuryOverviewSubtitle, darkSubtitleStyle]}
-                numberOfLines={1}
-                accessibilityLabel={`${midA.dayPlan.length} stops, ${mealCount} meals`}
+                numberOfLines={2}
+                accessibilityLabel={`${midA.dayPlan.length} stops, ${mealCount} meals${fromSavesCount ? `, ${fromSavesCount} from your saves` : ''}`}
               >
                 {mealCount === 0
-                  ? `${midA.dayPlan.length} stops`
-                  : `${midA.dayPlan.length} stops · ${mealCount} meals`}
+                  ? `${midA.dayPlan.length} stops${fromSavesCount ? ` · ${fromSavesCount} from saves` : ''}`
+                  : `${midA.dayPlan.length} stops · ${mealCount} meals${fromSavesCount ? ` · ${fromSavesCount} from saves` : ''}`}
               </Text>
             </View>
           </View>

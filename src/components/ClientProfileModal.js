@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import {
   StyleSheet,
   View,
@@ -33,7 +33,10 @@ import {
   FONT_POPPINS_REGULAR,
   FONT_POPPINS_SEMIBOLD,
 } from '../constants/brandFont';
+import * as Haptics from 'expo-haptics';
 import { openGoogleMapsDirections } from '../utils/googleMapsDirections';
+import { useSavedPlaces } from '../context/SavedPlacesContext';
+import { useAddedToPlanToast } from '../context/AddedToPlanToastContext';
 
 const PROFILE_TAB_POSTS = 'posts';
 const PROFILE_TAB_REVIEWS = 'reviews';
@@ -1531,6 +1534,37 @@ function getModalStyles(C, isDark) {
       color: isDark ? GOLD_LIGHT : '#8A6A14',
       letterSpacing: 0.4,
     },
+    saveProfileBtnWrap: {
+      alignItems: 'center',
+      marginHorizontal: 18,
+    },
+    saveProfileBtn: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: 5,
+      paddingVertical: 6,
+      paddingHorizontal: 12,
+      borderRadius: 999,
+      backgroundColor: glassTint,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: isDark ? 'rgba(255,255,255,0.14)' : 'rgba(15,23,42,0.12)',
+      alignSelf: 'center',
+      ...Platform.select({
+        ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.06, shadowRadius: 4 },
+        android: { elevation: 2 },
+      }),
+    },
+    saveProfileBtnActive: {
+      borderColor: 'rgba(212,175,55,0.55)',
+      backgroundColor: isDark ? 'rgba(200,16,46,0.12)' : 'rgba(200,16,46,0.08)',
+    },
+    saveProfileBtnText: {
+      fontSize: 12,
+      fontFamily: FONT_POPPINS_SEMIBOLD,
+      color: C.textPrimary,
+      letterSpacing: 0.2,
+    },
 
     /* ===================  TABS  =================== */
     tabs: {
@@ -1837,6 +1871,8 @@ export default function ClientProfileModal({
   const { colors, isDark } = useTheme();
   const COLORS = React.useMemo(() => getModalColors(colors), [colors]);
   const styles = React.useMemo(() => StyleSheet.create(getModalStyles(COLORS, isDark)), [COLORS, isDark]);
+  const { isSaved, toggle: toggleSavedPlace } = useSavedPlaces();
+  const { showAddedToPlanToast } = useAddedToPlanToast();
   const { width: screenWidth = 375, height: screenHeight = 812 } = useWindowDimensions();
   const [client, setClient] = useState(null);
   const [activeClientId, setActiveClientId] = useState(clientId || null);
@@ -2389,6 +2425,34 @@ export default function ClientProfileModal({
     })
   ).current;
 
+  const clientSavePayload = useMemo(() => {
+    if (!client) return null;
+    const uuid = client.client_a_uuid || client.id;
+    if (!uuid) return null;
+    const latRaw = client.lat;
+    const lngRaw = client.long != null ? client.long : client.lng;
+    const lat = latRaw != null && String(latRaw).trim() !== '' ? parseFloat(String(latRaw)) : null;
+    const lng = lngRaw != null && String(lngRaw).trim() !== '' ? parseFloat(String(lngRaw)) : null;
+    return {
+      client_a_uuid: uuid,
+      id: uuid,
+      name: client.business_name || client.name || 'Spot',
+      business_name: client.business_name || client.name,
+      lat: Number.isFinite(lat) ? lat : undefined,
+      lng: Number.isFinite(lng) ? lng : undefined,
+    };
+  }, [client]);
+
+  const profileVenueIsSaved = clientSavePayload ? isSaved(clientSavePayload) : false;
+
+  const handleSaveProfilePress = useCallback(() => {
+    if (!clientSavePayload) return;
+    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    const adding = !profileVenueIsSaved;
+    toggleSavedPlace(clientSavePayload);
+    if (adding) showAddedToPlanToast();
+  }, [clientSavePayload, profileVenueIsSaved, toggleSavedPlace, showAddedToPlanToast]);
+
   if (!visible) return null;
 
   const name = client?.business_name || client?.name || client?.business_name_ar || 'Business';
@@ -2763,6 +2827,34 @@ export default function ClientProfileModal({
                   >
                     <Ionicons name="map-outline" size={18} color={isDark ? GOLD_LIGHT : '#8A6A14'} />
                     <Text style={styles.mapsBtnText}>Open in Maps</Text>
+                  </TouchableOpacity>
+                </View>
+              ) : null}
+              {clientSavePayload ? (
+                <View
+                  style={[
+                    styles.saveProfileBtnWrap,
+                    client?.lat != null && client?.long != null ? { marginTop: 12 } : { marginTop: 22 },
+                  ]}
+                >
+                  <TouchableOpacity
+                    style={[styles.saveProfileBtn, profileVenueIsSaved && styles.saveProfileBtnActive]}
+                    onPress={handleSaveProfilePress}
+                    activeOpacity={0.85}
+                    accessibilityRole="button"
+                    accessibilityLabel={
+                      profileVenueIsSaved ? `Remove ${name} from saved places` : `Save ${name} to saved places`
+                    }
+                    accessibilityState={{ selected: profileVenueIsSaved }}
+                  >
+                    <Ionicons
+                      name={profileVenueIsSaved ? 'bookmark' : 'bookmark-outline'}
+                      size={17}
+                      color={profileVenueIsSaved ? COLORS.primary : COLORS.textPrimary}
+                    />
+                    <Text style={[styles.saveProfileBtnText, profileVenueIsSaved && { color: COLORS.primary }]}>
+                      {profileVenueIsSaved ? 'Saved' : 'Save'}
+                    </Text>
                   </TouchableOpacity>
                 </View>
               ) : null}

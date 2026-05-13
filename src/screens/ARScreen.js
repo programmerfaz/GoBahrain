@@ -30,6 +30,7 @@ import { useRoute } from '@react-navigation/native'
 import { fetchNearbyPOIs, fetchEvents, fetchPineconeARRecommended } from '../services/aiPipeline'
 import ClientProfileModal from '../components/ClientProfileModal'
 import { useSavedPlaces } from '../context/SavedPlacesContext'
+import { useAddedToPlanToast } from '../context/AddedToPlanToastContext'
 import { colors as themeColors } from '../theme/designTokens'
 import { LUXURY, luxuryElevated } from '../theme/luxuryPremium'
 import { useTheme } from '../context/ThemeContext'
@@ -995,6 +996,15 @@ export default function ARScreen({ navigation }) {
   const { width, height } = useWindowDimensions()
   const insets = useSafeAreaInsets()
   const { savedIds, toggle: toggleSave, isSaved } = useSavedPlaces()
+  const { showAddedToPlanToast } = useAddedToPlanToast()
+  const handlePoiToggleSave = useCallback(
+    (poi) => {
+      const willAdd = !isSaved(poi)
+      toggleSave(poi)
+      if (willAdd) showAddedToPlanToast()
+    },
+    [toggleSave, isSaved, showAddedToPlanToast],
+  )
   const [permission, requestPermission] = useCameraPermissions()
   const [location, setLocation] = useState(null)
   const [heading, setHeading] = useState(0)
@@ -1463,7 +1473,7 @@ export default function ARScreen({ navigation }) {
       <POIDetailModal
         visible={!!selectedPoi} poi={selectedPoi} onClose={closeModal} onRequestClose={() => setSelectedPoi(null)}
         insets={insets} openDirections={openDirections}
-        onViewProfile={handleViewProfile} onToggleSave={toggleSave} isSaved={selectedPoi ? isSaved(selectedPoi) : false}
+        onViewProfile={handleViewProfile} onToggleSave={handlePoiToggleSave} isSaved={selectedPoi ? isSaved(selectedPoi) : false}
       />
       <ClientProfileModal
         visible={!!profileClientId} clientId={profileClientId} onClose={() => setProfileClientId(null)}
