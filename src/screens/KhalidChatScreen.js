@@ -119,11 +119,11 @@ async function fetchPostsByQuery(query) {
   const clientIds = [...new Set(matches.map((r) => r.client_a_uuid).filter(Boolean))];
   let clientMap = {};
   if (clientIds.length > 0) {
-    const { data: clients } = await supabase.from('client').select('client_a_uuid, business_name, name').in('client_a_uuid', clientIds);
+    const { data: clients } = await supabase.from('client').select('client_a_uuid, business_name').in('client_a_uuid', clientIds);
     const safeClients = Array.isArray(clients) ? clients : []
     safeClients.forEach((c) => {
       const id = c.client_a_uuid;
-      clientMap[id] = c?.business_name || c?.name || null;
+      clientMap[id] = c?.business_name || null;
     });
   }
   return matches.map((r) => ({

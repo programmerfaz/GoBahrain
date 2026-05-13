@@ -61,7 +61,7 @@ export const fetchClientDisplayNamesForUuids = async (uuids) => {
 
   const { data, error } = await supabase
     .from('client')
-    .select('client_a_uuid, business_name, name')
+    .select('client_a_uuid, business_name')
     .in('client_a_uuid', clean)
 
   if (error) {
@@ -73,7 +73,7 @@ export const fetchClientDisplayNamesForUuids = async (uuids) => {
   for (const row of Array.isArray(data) ? data : []) {
     const id = String(row?.client_a_uuid || '').trim()
     if (!id) continue
-    const label = String(row?.business_name || row?.name || '').trim()
+    const label = String(row?.business_name || '').trim()
     if (label) byId.set(id, label)
   }
   return clean.map((id) => byId.get(id) || null)
