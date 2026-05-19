@@ -85,6 +85,8 @@ const INTEREST_KEYWORDS = {
   'focus-people': ['guide', 'picks', 'curated', 'shortlist', 'worth', 'honest', 'roundup', 'best'],
   'focus-host': ['birthday', 'anniversary', 'celebrate', 'milestone', 'special', 'visitor', 'visiting', 'guest'],
   'focus-shake': ['routine', 'try', 'different', 'fresh', 'change'],
+  'route-efficient': ['route', 'nearby', 'close', 'cluster', 'drive', 'short', 'efficient', 'tight'],
+  'route-flexible': ['island', 'worth', 'drive', 'far', 'spread', 'flexible'],
   'lens-exploring': ['new', 'first', 'exploring', 'discover', 'guide', 'tip'],
   'lens-local': ['local', 'resident', 'neighborhood', 'rotation', 'insider'],
   'lens-weekends': ['weekend', 'friday', 'saturday', 'sunday', 'off'],

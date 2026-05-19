@@ -143,15 +143,15 @@ function OrbitTile({ uri, accent, accentRing, delay = 0 }) {
 const styles = StyleSheet.create({
   wrap: {
     width: '100%',
-    paddingTop: 3,
-    paddingBottom: 1,
+    paddingTop: 2,
+    paddingBottom: 2,
   },
   overlineRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    paddingHorizontal: 12,
-    paddingBottom: 6,
+    paddingHorizontal: 14,
+    paddingBottom: 8,
   },
   overlineDot: {
     width: 6,
@@ -199,14 +199,14 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(15,23,42,0.16)',
   },
   reelFrame: {
-    height: ITEM_H + 24,
+    height: ITEM_H + 10,
     justifyContent: 'center',
     position: 'relative',
     overflow: 'visible',
   },
   scrollContent: {
-    paddingHorizontal: 10,
-    paddingVertical: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 4,
     alignItems: 'center',
   },
   tileWrap: {

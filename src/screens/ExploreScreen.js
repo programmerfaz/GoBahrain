@@ -961,116 +961,380 @@ function LoadingSkeleton({ width: w, height: h }) {
   )
 }
 
-/** Curated Bahrain guide categories shown in the "Personalized For You" section */
+/**
+ * Structured Bahrain guide categories shown in the "Your Bahrain Guide" section.
+ * Ordered intentionally: arrival essentials → culture → exploration → lifestyle → safety.
+ * Each card opens a detail page that reads like a mini-blog with imagery and cultural facts.
+ *
+ * Per-category fields:
+ *   id, section, title, label, subtitle, accent, gradientColors, bgImage
+ *   activities[]   — 5 items with { id, title, subtitle, icon, tag, image? }
+ *   tips[]         — 3 local tips
+ *   quickFacts[]   — 3 stat tiles { icon, value, label }
+ *   didYouKnow     — short cultural fact paragraph
+ *   arabicTitle    — optional Arabic title for visual flair
+ */
 const BAHRAIN_FOR_YOU_CATEGORIES = [
+  // ── ESSENTIALS (first things every visitor needs) ───────────────────────────
+  {
+    id: 'visa',
+    section: 'ESSENTIALS',
+    title: 'Visa &\nEntry',
+    arabicTitle: 'تأشيرة الدخول',
+    label: 'BEFORE YOU LAND',
+    subtitle: 'Know your options for entering Bahrain — fast and stress-free',
+    accent: '#10B981',
+    gradientColors: ['#02110a', '#063b29', '#0F9760'],
+    bgImage: 'https://images.unsplash.com/photo-1436491865332-7a61a109cc05?w=1200&q=80',
+    activities: [
+      { id: 'v1', title: 'eVisa Online', subtitle: 'Apply via evisa.gov.bh — 14-day & 30-day tourist options', icon: 'laptop-outline', tag: 'ONLINE', image: 'https://images.unsplash.com/photo-1517245386807-bb43f82c33c4?w=800&q=80' },
+      { id: 'v2', title: 'Visa on Arrival', subtitle: '100+ nationalities eligible — fees from BHD 5 to 25', icon: 'airplane-outline', tag: 'ARRIVAL', image: 'https://images.unsplash.com/photo-1436491865332-7a61a109cc05?w=800&q=80' },
+      { id: 'v3', title: 'GCC Residents & Nationals', subtitle: 'Visa-free entry for GCC citizens and select residents', icon: 'people-outline', tag: 'GCC', image: 'https://images.unsplash.com/photo-1582719471384-894fbb16e074?w=800&q=80' },
+      { id: 'v4', title: 'Required Documents', subtitle: 'Passport valid 6+ months, hotel booking & return ticket', icon: 'document-text-outline', tag: 'CHECKLIST', image: 'https://images.unsplash.com/photo-1521295121783-8a321d551ad2?w=800&q=80' },
+      { id: 'v5', title: 'Multi-Entry Visas', subtitle: '3-month and 1-year options for frequent visitors', icon: 'repeat-outline', tag: 'LONG STAY', image: 'https://images.unsplash.com/photo-1488646953014-85cb44e25828?w=800&q=80' },
+    ],
+    tips: [
+      'Apply for the eVisa at least 3 days before flying — approvals are usually fast but rarely instant.',
+      'Print and save a digital copy of your visa before arrival.',
+      'Israeli passport holders cannot enter Bahrain — check restrictions carefully.',
+    ],
+    quickFacts: [
+      { icon: 'globe-outline', value: '100+', label: 'eligible nationalities' },
+      { icon: 'time-outline', value: '24 h', label: 'typical approval time' },
+      { icon: 'calendar-outline', value: '30 days', label: 'standard tourist visa' },
+    ],
+    didYouKnow: "Bahrain pioneered the GCC's first fully online eVisa system in 2014 — most applications are approved in under 24 hours.",
+  },
+  {
+    id: 'apps',
+    section: 'ESSENTIALS',
+    title: 'Essential\nApps',
+    arabicTitle: 'التطبيقات الأساسية',
+    label: 'DOWNLOAD FIRST',
+    subtitle: 'The apps locals use daily — install them before you arrive',
+    accent: '#6366F1',
+    gradientColors: ['#0a0a1a', '#1e1b4b', '#4F46E5'],
+    bgImage: 'https://images.unsplash.com/photo-1512941937669-90a1b58e7e9c?w=1200&q=80',
+    activities: [
+      { id: 'ap1', title: 'BenefitPay', subtitle: 'Pay anywhere via QR — Bahrain’s most-used payment app', icon: 'card-outline', tag: 'PAYMENTS', image: 'https://images.unsplash.com/photo-1556742400-b5b7c5121f8c?w=800&q=80' },
+      { id: 'ap2', title: 'Talabat & Jahez', subtitle: 'Food, groceries & pharmacy delivery in 30 minutes', icon: 'restaurant-outline', tag: 'DELIVERY', image: 'https://images.unsplash.com/photo-1565299624946-b28f40a0ae38?w=800&q=80' },
+      { id: 'ap3', title: 'Careem & Uber', subtitle: 'Reliable ride-hailing across the entire island', icon: 'car-outline', tag: 'TRANSPORT', image: 'https://images.unsplash.com/photo-1502877338535-766e1452684a?w=800&q=80' },
+      { id: 'ap4', title: 'eGovernment (Bahrain.bh)', subtitle: 'Official portal for permits, fines and public services', icon: 'shield-checkmark-outline', tag: 'OFFICIAL', image: 'https://images.unsplash.com/photo-1551836022-d5d88e9218df?w=800&q=80' },
+      { id: 'ap5', title: 'Google Maps & Waze', subtitle: 'Best routes, live traffic, and parking around the kingdom', icon: 'map-outline', tag: 'NAVIGATION', image: 'https://images.unsplash.com/photo-1524661135-423995f22d0b?w=800&q=80' },
+    ],
+    tips: [
+      'BenefitPay works at almost every shop — link an international card via Apple/Google Pay.',
+      'Tipping in apps is appreciated but never mandatory; 10% is generous.',
+      'Most apps offer both Arabic and English interfaces.',
+    ],
+    quickFacts: [
+      { icon: 'phone-portrait-outline', value: '5', label: 'apps to install first' },
+      { icon: 'wallet-outline', value: '85%', label: 'use BenefitPay daily' },
+      { icon: 'language-outline', value: 'AR/EN', label: 'bilingual interfaces' },
+    ],
+    didYouKnow: 'BenefitPay launched in 2017 and is now used by more than 85% of Bahraini adults — you can pay at street stalls, taxis, and even barbers via QR.',
+  },
+  {
+    id: 'money',
+    section: 'ESSENTIALS',
+    title: 'Money &\nConnectivity',
+    arabicTitle: 'العملة والاتصال',
+    label: 'STAY CONNECTED',
+    subtitle: 'Cash, cards, SIMs — sorted within your first hour',
+    accent: '#F59E0B',
+    gradientColors: ['#1a0f00', '#3d2300', '#B45309'],
+    bgImage: 'https://images.unsplash.com/photo-1580519542036-c47de6196ba5?w=1200&q=80',
+    activities: [
+      { id: 'm1', title: 'Bahraini Dinar (BHD)', subtitle: '1 BHD ≈ 2.65 USD — one of the world’s strongest currencies', icon: 'cash-outline', tag: 'CURRENCY', image: 'https://images.unsplash.com/photo-1554224155-6726b3ff858f?w=800&q=80' },
+      { id: 'm2', title: 'ATMs Everywhere', subtitle: 'Most accept Visa & Mastercard with low or no fees', icon: 'card-outline', tag: 'ATMS', image: 'https://images.unsplash.com/photo-1556742502-ec7c0e9f34b1?w=800&q=80' },
+      { id: 'm3', title: 'Local SIM Cards', subtitle: 'Batelco, STC & Zain — tourist SIMs from BHD 5 at the airport', icon: 'cellular-outline', tag: 'SIM', image: 'https://images.unsplash.com/photo-1567793942-8e8a8b3a6c70?w=800&q=80' },
+      { id: 'm4', title: 'eSIM Options', subtitle: 'Airalo, Holafly & Saily — activate before you land', icon: 'phone-portrait-outline', tag: 'eSIM', image: 'https://images.unsplash.com/photo-1512941937669-90a1b58e7e9c?w=800&q=80' },
+      { id: 'm5', title: 'Free Wi-Fi Hotspots', subtitle: 'Malls, cafés and hotels — fast and reliable across the island', icon: 'wifi-outline', tag: 'WI-FI', image: 'https://images.unsplash.com/photo-1531497865144-0464ef8fb9a9?w=800&q=80' },
+    ],
+    tips: [
+      'Withdraw BHD at airport ATMs — better rates than exchange counters.',
+      'Cards are accepted almost everywhere; carry small notes for taxis and souqs.',
+      '4G and 5G coverage is excellent across the entire kingdom.',
+    ],
+    quickFacts: [
+      { icon: 'cash-outline', value: '1 BHD', label: '≈ 2.65 USD' },
+      { icon: 'wifi-outline', value: '5G', label: 'island-wide coverage' },
+      { icon: 'card-outline', value: '24/7', label: 'ATMs everywhere' },
+    ],
+    didYouKnow: 'The Bahraini Dinar is the world’s second-strongest currency, behind only the Kuwaiti Dinar — first issued in 1965 after independence from the rupee.',
+  },
+  {
+    id: 'transport',
+    section: 'ESSENTIALS',
+    title: 'Getting\nAround',
+    arabicTitle: 'التنقل في البحرين',
+    label: 'TRANSPORT GUIDE',
+    subtitle: 'From taxis to rentals — the smartest way to move',
+    accent: '#0EA5E9',
+    gradientColors: ['#001a2e', '#003a5c', '#0284C7'],
+    bgImage: 'https://images.unsplash.com/photo-1449965408869-eaa3f722e40d?w=1200&q=80',
+    activities: [
+      { id: 't1', title: 'Careem & Uber', subtitle: 'Cleanest option — most rides cost between BHD 2 and 6', icon: 'car-outline', tag: 'RIDE-HAILING', image: 'https://images.unsplash.com/photo-1449965408869-eaa3f722e40d?w=800&q=80' },
+      { id: 't2', title: 'Public Buses', subtitle: 'Just 300 fils per trip via Bahrain Public Transport Co.', icon: 'bus-outline', tag: 'BUDGET', image: 'https://images.unsplash.com/photo-1556122071-e404cb6f31c0?w=800&q=80' },
+      { id: 't3', title: 'Car Rentals', subtitle: 'Driving is on the right — international license accepted', icon: 'car-sport-outline', tag: 'SELF-DRIVE', image: 'https://images.unsplash.com/photo-1492144534655-ae79c964c9d7?w=800&q=80' },
+      { id: 't4', title: 'Taxi Etiquette', subtitle: 'Insist on the meter or pre-agree the fare before moving', icon: 'cash-outline', tag: 'TAXIS', image: 'https://images.unsplash.com/photo-1490375336733-0caea1f8f24c?w=800&q=80' },
+      { id: 't5', title: 'Walkable Districts', subtitle: 'Adliya, Block 338 & Manama Souq are best explored on foot', icon: 'walk-outline', tag: 'WALKABLE', image: 'https://images.unsplash.com/photo-1605127001321-1f4e1c2d8c33?w=800&q=80' },
+    ],
+    tips: [
+      'Skip unmetered airport taxis — use the official Careem kiosk at arrivals.',
+      'Friday mornings have nearly empty roads — perfect for sightseeing drives.',
+      'Bahrain is small — most cross-island journeys take only 20-30 minutes.',
+    ],
+    quickFacts: [
+      { icon: 'speedometer-outline', value: '20 min', label: 'coast to coast' },
+      { icon: 'car-outline', value: 'BHD 2-6', label: 'most ride-hail trips' },
+      { icon: 'bus-outline', value: '300 fils', label: 'bus fare per trip' },
+    ],
+    didYouKnow: 'Despite being just 50 km long, Bahrain has over 4,000 km of paved roads — one of the densest road networks per capita in the world.',
+  },
+
+  // ── CULTURE (essential local context) ───────────────────────────────────────
+  {
+    id: 'etiquette',
+    section: 'CULTURE',
+    title: 'Culture &\nEtiquette',
+    arabicTitle: 'الثقافة والآداب',
+    label: 'LOCAL CUSTOMS',
+    subtitle: 'Travel respectfully — Bahrain rewards thoughtful visitors',
+    accent: '#CE1126',
+    gradientColors: ['#1a0005', '#5a000e', '#991021'],
+    bgImage: 'https://images.unsplash.com/photo-1585036156171-384164a8c675?w=1200&q=80',
+    activities: [
+      { id: 'e1', title: 'Dress Code', subtitle: 'Modest in public — shoulders and knees covered in most places', icon: 'shirt-outline', tag: 'ATTIRE', image: 'https://images.unsplash.com/photo-1545569310-c376bc4a98a0?w=800&q=80' },
+      { id: 'e2', title: 'Ramadan Etiquette', subtitle: 'No eating or drinking in public from dawn to sunset', icon: 'moon-outline', tag: 'RAMADAN', image: 'https://images.unsplash.com/photo-1585036156171-384164a8c675?w=800&q=80' },
+      { id: 'e3', title: 'Greetings & Hospitality', subtitle: 'Greet with the right hand — always accept the Arabic coffee', icon: 'cafe-outline', tag: 'GREETINGS', image: 'https://images.unsplash.com/photo-1559494007-9f5847c49d94?w=800&q=80' },
+      { id: 'e4', title: 'Prayer Times', subtitle: 'Five daily prayers — shops briefly pause; plan around them', icon: 'time-outline', tag: 'PRAYER', image: 'https://images.unsplash.com/photo-1568652552047-a01dbf6233ca?w=800&q=80' },
+      { id: 'e5', title: 'Photography Rules', subtitle: 'Always ask before photographing locals, women or mosques', icon: 'camera-outline', tag: 'RESPECT', image: 'https://images.unsplash.com/photo-1542038784456-1ea8e935640e?w=800&q=80' },
+    ],
+    tips: [
+      'Bahrain is among the most liberal Gulf countries — but respect goes a long way.',
+      'Beachwear belongs at the beach or pool — not in streets or malls.',
+      'Friday is the holy day — some venues open later and souqs run shorter hours.',
+    ],
+    quickFacts: [
+      { icon: 'time-outline', value: '5', label: 'daily prayers' },
+      { icon: 'moon-outline', value: '1 mo.', label: 'Ramadan annually' },
+      { icon: 'language-outline', value: 'العربية', label: 'official language' },
+    ],
+    didYouKnow: 'Bahrain was the first Gulf country to legalise women’s suffrage in 2002 — and remains one of the most diverse societies in the GCC, blending Sunni, Shia, Christian, Hindu and Bahá’í communities.',
+  },
+
+  // ── EXPLORATION (sights, sites & flavors) ───────────────────────────────────
   {
     id: 'highlights',
+    section: 'EXPLORE',
     title: 'Must-See\nHighlights',
+    arabicTitle: 'أبرز المعالم',
     label: 'ICONIC LANDMARKS',
     subtitle: 'Unforgettable sights every visitor should experience',
     accent: '#C8860A',
     gradientColors: ['#1a0f00', '#3d2200', '#A06A00'],
-    bgImage: 'https://images.unsplash.com/photo-1580834341580-8c17a3a630ca?w=800&q=80',
+    bgImage: 'https://images.unsplash.com/photo-1565552645632-d725f8bfc19a?w=1200&q=80',
     activities: [
-      { id: 'h1', title: 'Al Fateh Grand Mosque', subtitle: "One of the world's largest mosques, open to all visitors", icon: 'business-outline', tag: 'HERITAGE' },
-      { id: 'h2', title: 'Bahrain Fort (Qal\'at al-Bahrain)', subtitle: 'UNESCO World Heritage Site with 4,000 years of history', icon: 'shield-outline', tag: 'UNESCO' },
-      { id: 'h3', title: 'Bahrain World Trade Center', subtitle: 'Iconic twin towers with wind turbines between them', icon: 'business', tag: 'ARCHITECTURE' },
-      { id: 'h4', title: 'Bahrain National Museum', subtitle: "Journey through Bahrain's rich history and antiquities", icon: 'library-outline', tag: 'MUSEUM' },
-      { id: 'h5', title: 'Tree of Life', subtitle: 'A mysterious 400-year-old tree standing alone in the desert', icon: 'leaf-outline', tag: 'NATURE' },
+      { id: 'h1', title: 'Al Fateh Grand Mosque', subtitle: "One of the world's largest mosques, open to all visitors", icon: 'business-outline', tag: 'HERITAGE', image: 'https://images.unsplash.com/photo-1542816417-0983c9c9ad53?w=800&q=80' },
+      { id: 'h2', title: "Bahrain Fort (Qal'at al-Bahrain)", subtitle: 'UNESCO World Heritage Site with 4,000 years of history', icon: 'shield-outline', tag: 'UNESCO', image: 'https://images.unsplash.com/photo-1565552645632-d725f8bfc19a?w=800&q=80' },
+      { id: 'h3', title: 'Bahrain World Trade Center', subtitle: 'Iconic twin towers with wind turbines built between them', icon: 'business', tag: 'ARCHITECTURE', image: 'https://images.unsplash.com/photo-1605552055839-13ec88de2a55?w=800&q=80' },
+      { id: 'h4', title: 'Bahrain National Museum', subtitle: "Journey through Bahrain's rich history and antiquities", icon: 'library-outline', tag: 'MUSEUM', image: 'https://images.unsplash.com/photo-1564769625392-651b2c1c4e9d?w=800&q=80' },
+      { id: 'h5', title: 'Tree of Life', subtitle: 'A mysterious 400-year-old tree standing alone in the desert', icon: 'leaf-outline', tag: 'NATURE', image: 'https://images.unsplash.com/photo-1509316785289-025f5b846b35?w=800&q=80' },
     ],
     tips: [
       'Visit mosques and heritage sites in the cooler morning hours.',
       'Carry a light scarf — required for modesty at Al Fateh.',
       'Combine the Fort with the nearby Barbar Temple for a full day.',
     ],
-  },
-  {
-    id: 'coastal',
-    title: 'Coastal\nEscapes',
-    label: 'ISLAND ADVENTURES',
-    subtitle: 'Crystal waters, island retreats, and ocean thrills',
-    accent: '#0EA5E9',
-    gradientColors: ['#001832', '#003a6b', '#0369A1'],
-    bgImage: 'https://images.unsplash.com/photo-1507525428034-b723cf961d3e?w=800&q=80',
-    activities: [
-      { id: 'c1', title: 'Al Dar Islands', subtitle: 'Private island retreat with pristine beaches and water sports', icon: 'boat-outline', tag: 'ISLAND' },
-      { id: 'c2', title: 'Scuba Diving Sites', subtitle: 'Explore vibrant coral reefs and historic Gulf shipwrecks', icon: 'water-outline', tag: 'DIVING' },
-      { id: 'c3', title: 'Amwaj Islands Waterfront', subtitle: 'Upscale waterfront dining, yacht clubs, and leisure', icon: 'restaurant-outline', tag: 'WATERFRONT' },
-      { id: 'c4', title: 'Al Jazayer Beach', subtitle: 'Serene public beach with family-friendly BBQ areas', icon: 'sunny-outline', tag: 'BEACH' },
-      { id: 'c5', title: 'Hawar Islands Day Trip', subtitle: 'Remote islands near Qatar with flamingos and rare wildlife', icon: 'airplane-outline', tag: 'WILDLIFE' },
+    quickFacts: [
+      { icon: 'business-outline', value: '240 m', label: 'Bahrain WTC height' },
+      { icon: 'shield-outline', value: '4,000', label: 'years of Bahrain Fort' },
+      { icon: 'leaf-outline', value: '400 yrs', label: 'age of Tree of Life' },
     ],
-    tips: [
-      'Book Al Dar Islands boat trips early — they fill up fast.',
-      'Snorkelling gear can be rented at most coastal venues.',
-      "Best diving visibility is between October and April.",
-    ],
+    didYouKnow: 'The Bahrain World Trade Center, completed in 2008, was the world’s first skyscraper to integrate wind turbines into its design — generating 11-15% of its own electricity.',
   },
   {
     id: 'culture',
+    section: 'EXPLORE',
     title: 'Cultural\nJourneys',
+    arabicTitle: 'الرحلات الثقافية',
     label: 'HERITAGE & SOUQS',
     subtitle: "Immerse yourself in Bahrain's storied traditions",
-    accent: '#CE1126',
-    gradientColors: ['#1a0005', '#5a000e', '#991021'],
-    bgImage: 'https://images.unsplash.com/photo-1558618666-fcd25c85cd64?w=800&q=80',
+    accent: '#7C3AED',
+    gradientColors: ['#0e0118', '#2d0a52', '#6D28D9'],
+    bgImage: 'https://images.unsplash.com/photo-1568652552047-a01dbf6233ca?w=1200&q=80',
     activities: [
-      { id: 'cu1', title: 'Manama Souq Walking Tour', subtitle: 'Navigate the traditional labyrinthine marketplace on foot', icon: 'walk-outline', tag: 'WALKING TOUR' },
-      { id: 'cu2', title: 'Al Khamis Mosque', subtitle: "Bahrain's oldest mosque, dating back to the 7th century", icon: 'home-outline', tag: 'HISTORIC' },
-      { id: 'cu3', title: 'Muharraq Old Town', subtitle: 'Pearling-era heritage buildings and merchant houses', icon: 'map-outline', tag: 'UNESCO' },
-      { id: 'cu4', title: 'Bahrain Gold Souk', subtitle: "Gleaming traditional jewelry in one of the Gulf's finest souqs", icon: 'diamond-outline', tag: 'SHOPPING' },
-      { id: 'cu5', title: 'Beit Al Quran Museum', subtitle: 'A breathtaking collection of Qurans and Islamic manuscripts', icon: 'book-outline', tag: 'CULTURE' },
+      { id: 'cu1', title: 'Manama Souq Walking Tour', subtitle: 'Navigate the traditional labyrinthine marketplace on foot', icon: 'walk-outline', tag: 'WALKING TOUR', image: 'https://images.unsplash.com/photo-1568652552047-a01dbf6233ca?w=800&q=80' },
+      { id: 'cu2', title: 'Al Khamis Mosque', subtitle: "Bahrain's oldest mosque, dating back to the 7th century", icon: 'home-outline', tag: 'HISTORIC', image: 'https://images.unsplash.com/photo-1542816417-0983c9c9ad53?w=800&q=80' },
+      { id: 'cu3', title: 'Muharraq Old Town', subtitle: 'Pearling-era heritage buildings and merchant houses', icon: 'map-outline', tag: 'UNESCO', image: 'https://images.unsplash.com/photo-1601295859015-ff8c5d11b430?w=800&q=80' },
+      { id: 'cu4', title: 'Bahrain Gold Souk', subtitle: "Gleaming traditional jewelry in one of the Gulf's finest souqs", icon: 'diamond-outline', tag: 'SHOPPING', image: 'https://images.unsplash.com/photo-1599643478518-a784e5dc4c8f?w=800&q=80' },
+      { id: 'cu5', title: 'Beit Al Quran Museum', subtitle: 'A breathtaking collection of Qurans and Islamic manuscripts', icon: 'book-outline', tag: 'CULTURE', image: 'https://images.unsplash.com/photo-1564769625392-651b2c1c4e9d?w=800&q=80' },
     ],
     tips: [
       'Friday mornings are quieter — great for photography.',
       'Haggling is expected and part of the souq experience.',
       'Wear comfortable shoes for the cobblestone Muharraq lanes.',
     ],
+    quickFacts: [
+      { icon: 'sparkles-outline', value: '5,000 yr', label: 'Dilmun civilization' },
+      { icon: 'home-outline', value: '7th c.', label: 'oldest mosque' },
+      { icon: 'diamond-outline', value: '100+', label: 'gold souk shops' },
+    ],
+    didYouKnow: 'Bahrain was once known as "Dilmun" — a paradise trading hub mentioned in Sumerian texts more than 5,000 years ago, making it one of the world’s oldest continuously inhabited civilizations.',
   },
   {
     id: 'dining',
+    section: 'EXPLORE',
     title: 'Taste of\nBahrain',
+    arabicTitle: 'مذاق البحرين',
     label: 'CULINARY ODYSSEY',
     subtitle: 'A journey through flavors old, bold, and local',
     accent: '#F97316',
     gradientColors: ['#1a0700', '#4d1f00', '#C2590C'],
-    bgImage: 'https://images.unsplash.com/photo-1476224203421-9ac39bcb3327?w=800&q=80',
+    bgImage: 'https://images.unsplash.com/photo-1414235077428-338989a2e8c0?w=1200&q=80',
     activities: [
-      { id: 'd1', title: 'Machboos Experience', subtitle: 'The national dish — spiced rice with lamb or shrimp', icon: 'restaurant-outline', tag: 'CUISINE' },
-      { id: 'd2', title: 'Manama Waterfront Dining', subtitle: 'Sunset views paired with fresh seafood and mezze', icon: 'water-outline', tag: 'DINING' },
-      { id: 'd3', title: 'Karak Tea at Bab Al Bahrain', subtitle: 'Sip traditional spiced tea near the iconic gateway', icon: 'cafe-outline', tag: 'CAFÉ' },
-      { id: 'd4', title: 'Muharraq Bakeries at Dawn', subtitle: 'Freshly baked khubz bread and Bahraini sweets at sunrise', icon: 'pizza-outline', tag: 'BAKERY' },
-      { id: 'd5', title: 'Khaleeji Breakfast Spread', subtitle: 'Balaleet, shakshuka, and fresh dates to start your day', icon: 'sunny-outline', tag: 'BREAKFAST' },
+      { id: 'd1', title: 'Machboos Experience', subtitle: 'The national dish — spiced rice with lamb or shrimp', icon: 'restaurant-outline', tag: 'CUISINE', image: 'https://images.unsplash.com/photo-1601050690597-df0568f70950?w=800&q=80' },
+      { id: 'd2', title: 'Manama Waterfront Dining', subtitle: 'Sunset views paired with fresh seafood and mezze', icon: 'water-outline', tag: 'DINING', image: 'https://images.unsplash.com/photo-1414235077428-338989a2e8c0?w=800&q=80' },
+      { id: 'd3', title: 'Karak Tea at Bab Al Bahrain', subtitle: 'Sip traditional spiced tea near the iconic gateway', icon: 'cafe-outline', tag: 'CAFÉ', image: 'https://images.unsplash.com/photo-1559494007-9f5847c49d94?w=800&q=80' },
+      { id: 'd4', title: 'Muharraq Bakeries at Dawn', subtitle: 'Freshly baked khubz bread and Bahraini sweets at sunrise', icon: 'pizza-outline', tag: 'BAKERY', image: 'https://images.unsplash.com/photo-1509440159596-0249088772ff?w=800&q=80' },
+      { id: 'd5', title: 'Khaleeji Breakfast Spread', subtitle: 'Balaleet, shakshuka, and fresh dates to start your day', icon: 'sunny-outline', tag: 'BREAKFAST', image: 'https://images.unsplash.com/photo-1601493700518-7d33a4dac6e3?w=800&q=80' },
     ],
     tips: [
       'Ramadan evenings transform the food scene — try iftar outdoors.',
       'Ask for "Bahraini-style" at local restaurants for authentic prep.',
       'Dates from local markets make perfect and affordable souvenirs.',
     ],
+    quickFacts: [
+      { icon: 'restaurant-outline', value: '1 dish', label: 'machboos = national' },
+      { icon: 'leaf-outline', value: '20+', label: 'date varieties' },
+      { icon: 'cafe-outline', value: '100 fils', label: 'a cup of karak tea' },
+    ],
+    didYouKnow: 'Machboos, the spiced-rice national dish, is traditionally cooked in a single pot with caramelised onions, dried lime (loomi) and saffron — every Bahraini household claims its own recipe.',
+  },
+  {
+    id: 'coastal',
+    section: 'EXPLORE',
+    title: 'Coastal\nEscapes',
+    arabicTitle: 'الواحات الساحلية',
+    label: 'ISLAND ADVENTURES',
+    subtitle: 'Crystal waters, island retreats, and ocean thrills',
+    accent: '#0891B2',
+    gradientColors: ['#001832', '#003a6b', '#0369A1'],
+    bgImage: 'https://images.unsplash.com/photo-1505228395891-9a51e7e86bf6?w=1200&q=80',
+    activities: [
+      { id: 'c1', title: 'Al Dar Islands', subtitle: 'Private island retreat with pristine beaches and water sports', icon: 'boat-outline', tag: 'ISLAND', image: 'https://images.unsplash.com/photo-1505228395891-9a51e7e86bf6?w=800&q=80' },
+      { id: 'c2', title: 'Scuba Diving Sites', subtitle: 'Explore vibrant coral reefs and historic Gulf shipwrecks', icon: 'water-outline', tag: 'DIVING', image: 'https://images.unsplash.com/photo-1544551763-46a013bb70d5?w=800&q=80' },
+      { id: 'c3', title: 'Amwaj Islands Waterfront', subtitle: 'Upscale waterfront dining, yacht clubs, and leisure', icon: 'restaurant-outline', tag: 'WATERFRONT', image: 'https://images.unsplash.com/photo-1551269901-5c5e14c25df7?w=800&q=80' },
+      { id: 'c4', title: 'Al Jazayer Beach', subtitle: 'Serene public beach with family-friendly BBQ areas', icon: 'sunny-outline', tag: 'BEACH', image: 'https://images.unsplash.com/photo-1519046904884-53103b34b206?w=800&q=80' },
+      { id: 'c5', title: 'Hawar Islands Day Trip', subtitle: 'Remote islands near Qatar with flamingos and rare wildlife', icon: 'airplane-outline', tag: 'WILDLIFE', image: 'https://images.unsplash.com/photo-1535941339077-2dd1c7963098?w=800&q=80' },
+    ],
+    tips: [
+      'Book Al Dar Islands boat trips early — they fill up fast.',
+      'Snorkelling gear can be rented at most coastal venues.',
+      'Best diving visibility is between October and April.',
+    ],
+    quickFacts: [
+      { icon: 'boat-outline', value: '33', label: 'islands in Bahrain' },
+      { icon: 'thermometer-outline', value: '24°C', label: 'avg sea temperature' },
+      { icon: 'water-outline', value: '50+', label: 'recognised dive sites' },
+    ],
+    didYouKnow: "Bahrain's name means 'Two Seas' — referring to the sweet freshwater springs that historically emerged through the salty Gulf, nurturing the island's famous pearl beds.",
   },
   {
     id: 'adventure',
+    section: 'EXPLORE',
     title: 'Desert\nAdventures',
+    arabicTitle: 'مغامرات الصحراء',
     label: 'WILD & TIMELESS',
     subtitle: 'Golden dunes, ancient skies, and wild landscapes',
     accent: '#92400E',
     gradientColors: ['#1c1000', '#4a2d00', '#7A3A0C'],
-    bgImage: 'https://images.unsplash.com/photo-1509316785289-025f5b846b35?w=800&q=80',
+    bgImage: 'https://images.unsplash.com/photo-1547036967-23d11aacaee0?w=1200&q=80',
     activities: [
-      { id: 'a1', title: 'Camel Riding at Sakhir', subtitle: 'Experience a timeless desert ride at golden hour', icon: 'paw-outline', tag: 'EXPERIENCE' },
-      { id: 'a2', title: 'Quad Biking in Riffa', subtitle: 'Adrenaline-fueled rides across the southern desert', icon: 'car-sport-outline', tag: 'SPORTS' },
-      { id: 'a3', title: 'Royal Camel Farm Visit', subtitle: "Meet and feed Bahrain's famous royal camels up close", icon: 'paw-outline', tag: 'WILDLIFE' },
-      { id: 'a4', title: 'Desert Stargazing Night', subtitle: 'Far from city lights, Bahrain offers a stunning night sky', icon: 'star-outline', tag: 'NIGHT SKY' },
-      { id: 'a5', title: 'Sakhir Sunrise Drive', subtitle: 'Chase the sunrise across golden plains at the edge of the island', icon: 'car-outline', tag: 'SCENIC' },
+      { id: 'a1', title: 'Camel Riding at Sakhir', subtitle: 'Experience a timeless desert ride at golden hour', icon: 'paw-outline', tag: 'EXPERIENCE', image: 'https://images.unsplash.com/photo-1551634979-2b11f8c218da?w=800&q=80' },
+      { id: 'a2', title: 'Quad Biking in Riffa', subtitle: 'Adrenaline-fueled rides across the southern desert', icon: 'car-sport-outline', tag: 'SPORTS', image: 'https://images.unsplash.com/photo-1547036967-23d11aacaee0?w=800&q=80' },
+      { id: 'a3', title: 'Royal Camel Farm Visit', subtitle: "Meet and feed Bahrain's famous royal camels up close", icon: 'paw-outline', tag: 'WILDLIFE', image: 'https://images.unsplash.com/photo-1471973055544-86b97fd9c5e6?w=800&q=80' },
+      { id: 'a4', title: 'Desert Stargazing Night', subtitle: 'Far from city lights, Bahrain offers a stunning night sky', icon: 'star-outline', tag: 'NIGHT SKY', image: 'https://images.unsplash.com/photo-1419242902214-272b3f66ee7a?w=800&q=80' },
+      { id: 'a5', title: 'Sakhir Sunrise Drive', subtitle: 'Chase the sunrise across golden plains at the edge of the island', icon: 'car-outline', tag: 'SCENIC', image: 'https://images.unsplash.com/photo-1547036346-4ad8f9f47edc?w=800&q=80' },
     ],
     tips: [
       'Bring a lightweight jacket — desert nights drop quickly after sunset.',
       'Book camel and quad tours through certified local operators.',
       'A full-moon night at the Tree of Life is magical and rarely crowded.',
     ],
+    quickFacts: [
+      { icon: 'leaf-outline', value: '50 m', label: 'Tree of Life root depth' },
+      { icon: 'partly-sunny-outline', value: '15°C', label: 'desert night avg' },
+      { icon: 'star-outline', value: '360°', label: 'open sky stargazing' },
+    ],
+    didYouKnow: 'The 400-year-old Tree of Life thrives with no visible water source — botanists believe its roots reach almost 50 metres into a hidden aquifer.',
+  },
+
+  // ── LIFESTYLE (family) ─────────────────────────────────────────────────────
+  {
+    id: 'family',
+    section: 'LIFESTYLE',
+    title: 'Family &\nKids',
+    arabicTitle: 'العائلة والأطفال',
+    label: 'FOR EVERY AGE',
+    subtitle: 'Bahrain shines as a family destination — here is where to start',
+    accent: '#EC4899',
+    gradientColors: ['#1a0014', '#4a0e3c', '#BE185D'],
+    bgImage: 'https://images.unsplash.com/photo-1530549387789-4c1017266635?w=1200&q=80',
+    activities: [
+      { id: 'f1', title: 'Lost Paradise of Dilmun', subtitle: "The island's biggest waterpark, themed on ancient Dilmun", icon: 'water-outline', tag: 'WATERPARK', image: 'https://images.unsplash.com/photo-1530549387789-4c1017266635?w=800&q=80' },
+      { id: 'f2', title: 'Bahrain Bay Family Park', subtitle: 'Open green spaces with stunning skyline views', icon: 'leaf-outline', tag: 'PARK', image: 'https://images.unsplash.com/photo-1503249023995-51b0f3778ccf?w=800&q=80' },
+      { id: 'f3', title: 'Wahooo! Waterpark', subtitle: 'Indoor adventure inside City Centre Mall — open year-round', icon: 'rainy-outline', tag: 'INDOOR', image: 'https://images.unsplash.com/photo-1530549387789-4c1017266635?w=800&q=80' },
+      { id: 'f4', title: 'Al Areen Wildlife Park', subtitle: 'Safari-style animal encounters across native landscapes', icon: 'paw-outline', tag: 'WILDLIFE', image: 'https://images.unsplash.com/photo-1546182990-dffeafbe841d?w=800&q=80' },
+      { id: 'f5', title: 'Saar Discovery Centers', subtitle: 'Hands-on museums and play-based learning for kids', icon: 'school-outline', tag: 'LEARNING', image: 'https://images.unsplash.com/photo-1503676260728-1c00da094a0b?w=800&q=80' },
+    ],
+    tips: [
+      'Most malls have free soft-play areas — perfect for hot afternoons.',
+      'Seef Mall and The Avenues are fully stroller-friendly.',
+      'Bahrain is consistently ranked among the safest GCC countries for family travel.',
+    ],
+    quickFacts: [
+      { icon: 'water-outline', value: '4', label: 'major waterparks' },
+      { icon: 'paw-outline', value: '100+', label: 'species at Al Areen' },
+      { icon: 'shield-checkmark-outline', value: 'Top 3', label: 'safest in MENA' },
+    ],
+    didYouKnow: 'Lost Paradise of Dilmun was designed around the ancient Dilmun civilisation — its waterslides and pools weave through replicas of Bronze Age temples and bathhouses.',
+  },
+
+  // ── SAFETY (good to know before any trip) ───────────────────────────────────
+  {
+    id: 'safety',
+    section: 'PRACTICAL',
+    title: 'Safety &\nHealth',
+    arabicTitle: 'السلامة والصحة',
+    label: 'EMERGENCY READY',
+    subtitle: 'Hospitals, hotlines and good-to-know health facts',
+    accent: '#EF4444',
+    gradientColors: ['#1a0000', '#4d0606', '#B91C1C'],
+    bgImage: 'https://images.unsplash.com/photo-1551601651-2a8555f1a136?w=1200&q=80',
+    activities: [
+      { id: 's1', title: 'Emergency Number 999', subtitle: 'Police, ambulance and fire — English-language support', icon: 'call-outline', tag: 'HOTLINE', image: 'https://images.unsplash.com/photo-1521295121783-8a321d551ad2?w=800&q=80' },
+      { id: 's2', title: 'Top Hospitals', subtitle: 'Salmaniya, BDF & KIMS — international medical standards', icon: 'medical-outline', tag: 'CARE', image: 'https://images.unsplash.com/photo-1551601651-2a8555f1a136?w=800&q=80' },
+      { id: 's3', title: '24/7 Pharmacies', subtitle: 'Nahdi, Al Hayat & more — found across every district', icon: 'medkit-outline', tag: 'PHARMACY', image: 'https://images.unsplash.com/photo-1576091160550-2173dba999ef?w=800&q=80' },
+      { id: 's4', title: 'Travel Insurance', subtitle: 'Strongly recommended — required for some long-stay visas', icon: 'shield-checkmark-outline', tag: 'INSURANCE', image: 'https://images.unsplash.com/photo-1450101499163-c8848c66ca85?w=800&q=80' },
+      { id: 's5', title: 'Sun & Heat Safety', subtitle: 'Summer peaks at 40°C+ — hydrate and seek shade midday', icon: 'sunny-outline', tag: 'CLIMATE', image: 'https://images.unsplash.com/photo-1517466787929-bc90951d0974?w=800&q=80' },
+    ],
+    tips: [
+      'Tap water is treated but locals prefer bottled — readily available everywhere.',
+      'Pack high-SPF sunscreen — UV is intense from April through October.',
+      'Many medications are available over the counter without a prescription.',
+    ],
+    quickFacts: [
+      { icon: 'call-outline', value: '999', label: 'emergency hotline' },
+      { icon: 'thermometer-outline', value: '40°C+', label: 'summer peak heat' },
+      { icon: 'medkit-outline', value: '24/7', label: 'pharmacy access' },
+    ],
+    didYouKnow: 'Bahrain consistently ranks among the safest Middle Eastern countries — the entire kingdom is patrolled by a single, highly responsive Ministry of Interior force using English & Arabic dispatch.',
   },
 ]
 
-/** Artistic card for the Personalized For You section */
+/** Artistic card for the "Your Bahrain Guide" section */
 const ForYouCard = ({ category, onPress, winW }) => {
   const isMobile = winW < 430
   const cardW = isMobile ? 220 : 260
@@ -2239,7 +2503,7 @@ const srStyles = StyleSheet.create({
 
 export default function ExploreScreen({ navigation }) {
   const { colors, isDark } = useTheme()
-  const { activityLabels, foodLabels, preferences } = useUserPreferences()
+  const { preferences } = useUserPreferences()
   const { session } = useAuth()
   const insets = useSafeAreaInsets()
   const { width: winW = 375, height = 667 } = useWindowDimensions()
@@ -2429,9 +2693,9 @@ export default function ExploreScreen({ navigation }) {
     try {
       const profileNarrative = preferences?.profileSummary || ''
       const [pPlaces, pRestaurants, pEvents] = await Promise.all([
-        fetchPlaces(activityLabels || [], { profileNarrative }),
-        fetchRestaurants(foodLabels || [], { profileNarrative }),
-        fetchEvents(activityLabels || [], { profileNarrative }),
+        fetchPlaces([], { profileNarrative }),
+        fetchRestaurants([], { profileNarrative }),
+        fetchEvents([], { profileNarrative }),
       ])
       let rails = {
         places: (pPlaces || []).slice(0, 10).map((m) => normalizePersonalizedCard(m, 'place')),
@@ -2492,7 +2756,7 @@ export default function ExploreScreen({ navigation }) {
     } finally {
       setCommunityPlansLoading(false)
     }
-  }, [activityLabels, foodLabels, preferences?.profileSummary])
+  }, [preferences?.profileSummary])
 
   useEffect(() => {
     loadExplore({ pullRefresh: false })
@@ -3195,15 +3459,15 @@ export default function ExploreScreen({ navigation }) {
                 <Text style={[s.browseInlineError, { color: colors.error }]}>{browseLoadError}</Text>
               ) : null}
 
-              {/* ── Personalized For You section ── */}
+              {/* ── Your Bahrain Guide section ── */}
               <View style={s.forYouWrap}>
                 <View style={s.forYouHeaderRow}>
                   <View style={s.forYouHeaderTextCol}>
                     <Text style={[s.forYouHeading, { color: colors.textPrimary, fontSize: isMobile ? 26 : 34 }]}>
-                      Personalized For You
+                      Your Bahrain Guide
                     </Text>
                     <Text style={[s.forYouSub, { color: colors.textSecondary }]}>
-                      Plans, guides & things to do in Bahrain — curated to your style
+                      Everything you need — from visas and essential apps to culture, food and hidden gems
                     </Text>
                   </View>
                 </View>

@@ -15,6 +15,7 @@ import { fetchMyCommunityPosts, getCommunityUserId } from '../services/community
 import { UpvoteParticles } from '../components/FeedUpvoteInteractions'
 import { useCommunityUpvoteToggle } from '../hooks/useCommunityUpvoteToggle'
 import { useTheme } from '../context/ThemeContext'
+import ClientProfileModal from '../components/ClientProfileModal'
 
 const TAB_BAR_HEIGHT = Platform.OS === 'ios' ? 70 : 60
 
@@ -30,6 +31,7 @@ export default function MyReviewsScreen() {
   const [refreshing, setRefreshing] = useState(false)
   const [selectedPost, setSelectedPost] = useState(null)
   const [focusReplyWhenOpen, setFocusReplyWhenOpen] = useState(false)
+  const [profileClientId, setProfileClientId] = useState(null)
 
   const fabBottom = TAB_BAR_HEIGHT + 24 + (Platform.OS === 'android' ? insets.bottom : 0)
 
@@ -105,6 +107,9 @@ export default function MyReviewsScreen() {
             C={C}
             styles={feedStyles}
             onPress={setSelectedPost}
+            onTaggedClientPress={({ clientId }) => {
+              if (clientId) setProfileClientId(clientId)
+            }}
             onCommentPress={(it) => {
               setSelectedPost(it)
               setFocusReplyWhenOpen(true)
@@ -140,6 +145,15 @@ export default function MyReviewsScreen() {
         upvoteScaleAnim={selectedPost ? getUpvoteScaleAnim(selectedPost.id) : null}
         focusReplyWhenOpen={focusReplyWhenOpen}
         onClearFocusReply={() => setFocusReplyWhenOpen(false)}
+        onTaggedClientPress={({ clientId }) => {
+          if (clientId) setProfileClientId(clientId)
+        }}
+      />
+      <ClientProfileModal
+        visible={!!profileClientId}
+        clientId={profileClientId}
+        onClose={() => setProfileClientId(null)}
+        insets={insets}
       />
       <UpvoteParticles
         visible={particlesVisible}

@@ -58,6 +58,7 @@ import {
   buildCommunityFeedStyles,
   CommunityReviewCard,
 } from '../components/community/CommunityReviewViews'
+import ClientProfileModal from '../components/ClientProfileModal'
 const DEFAULT_PROFILE_IMAGE = require('../../assets/pfp.png')
 
 // Community page top filter: All, Trending + hashtags (no AI chip — AI results show temporarily until another filter is tapped)
@@ -324,6 +325,7 @@ function CreatePostModal({ visible, onClose, onPosted, initialPlace, initialClie
   const C = useMemo(() => getCommunityPalette(isDark), [isDark])
   const s = useMemo(() => buildCommunitiesScreenStyles(C, isDark), [C, isDark])
   const insets = useSafeAreaInsets();
+  const [postMode, setPostMode] = useState('post');
   const [body, setBody] = useState('');
   const [place, setPlace] = useState('');
   const [selectedClientUuid, setSelectedClientUuid] = useState(null);
@@ -339,17 +341,21 @@ function CreatePostModal({ visible, onClose, onPosted, initialPlace, initialClie
 
   useEffect(() => {
     if (visible && (initialPlace != null || initialClientUuid != null)) {
+      setPostMode('review');
       if (initialPlace != null) setPlace(initialPlace);
       if (initialClientUuid != null) setSelectedClientUuid(initialClientUuid);
     }
   }, [visible, initialPlace, initialClientUuid]);
 
   const handleClose = () => {
+    setPostMode('post');
     setBody(''); setPlace(''); setSelectedClientUuid(null);
     setRating(0); setSelectedTopicIds([]); setCustomHashtag(''); setImageEntries([]);
     setShowClientPicker(false); setClientSearch('');
     onClose();
   };
+
+  const isReview = postMode === 'review';
 
   const MAX_CUSTOM_HASHTAG_LEN = 15;
   const onCustomHashtagChange = (text) => {
@@ -415,11 +421,11 @@ function CreatePostModal({ visible, onClose, onPosted, initialPlace, initialClie
       await createCommunityPost({
         user_a_uuid: userId,
         review_text: body.trim(),
-        rating: rating > 0 ? rating : null,
+        rating: isReview && rating > 0 ? rating : null,
         hashtags: hashtagsValue,
         imageUrls,
-        badge: place.trim() || null,
-        client_a_uuid: selectedClientUuid || null,
+        badge: isReview ? (place.trim() || null) : null,
+        client_a_uuid: isReview ? (selectedClientUuid || null) : null,
       });
       handleClose();
       onPosted?.();
@@ -432,7 +438,9 @@ function CreatePostModal({ visible, onClose, onPosted, initialPlace, initialClie
   };
 
   const hasTopic = selectedTopicIds.length > 0 || customHashtag.trim().replace(/^#+/, '').length > 0;
-  const canPost = body.trim().length > 0 && place.trim().length > 0 && hasTopic && rating > 0;
+  const canPost = isReview
+    ? body.trim().length > 0 && place.trim().length > 0 && hasTopic && rating > 0
+    : body.trim().length > 0;
 
   const ratingPhrase = useMemo(() => {
     const r = rating
@@ -445,15 +453,18 @@ function CreatePostModal({ visible, onClose, onPosted, initialPlace, initialClie
   }, [rating])
 
   const progressSteps = useMemo(
-    () => [
-      { ok: place.trim().length > 0 },
-      { ok: rating > 0 },
-      { ok: body.trim().length > 0 },
-      { ok: hasTopic },
-    ],
-    [place, rating, body, hasTopic],
+    () => (isReview
+      ? [
+          { ok: place.trim().length > 0 },
+          { ok: rating > 0 },
+          { ok: body.trim().length > 0 },
+          { ok: hasTopic },
+        ]
+      : [{ ok: body.trim().length > 0 }]),
+    [isReview, place, rating, body, hasTopic],
   )
   const progressCount = progressSteps.filter((x) => x.ok).length
+  const progressTotal = progressSteps.length
 
   const selectClient = (client) => {
     setPlace(client.business_name);
@@ -484,9 +495,9 @@ function CreatePostModal({ visible, onClose, onPosted, initialPlace, initialClie
             <Ionicons name="close" size={21} color={C.text} />
           </TouchableOpacity>
           <View style={s.createHeaderCenter}>
-            <Text style={s.createTitle}>New review</Text>
+            <Text style={s.createTitle}>{isReview ? 'New review' : 'New post'}</Text>
             <Text style={s.createSubtitle}>
-              {canPost ? 'Ready to post' : `${progressCount}/4 complete`}
+              {canPost ? 'Ready to post' : `${progressCount}/${progressTotal} complete`}
             </Text>
           </View>
           <TouchableOpacity
@@ -495,7 +506,7 @@ function CreatePostModal({ visible, onClose, onPosted, initialPlace, initialClie
             activeOpacity={0.8}
             style={[s.postBtn, canPost && s.postBtnActive]}
             accessibilityRole="button"
-            accessibilityLabel={canPost ? 'Publish review' : 'Complete all sections to post'}
+            accessibilityLabel={canPost ? (isReview ? 'Publish review' : 'Publish post') : 'Complete required fields to post'}
             hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}
           >
             {posting ? <ActivityIndicator size="small" color="#FFF" /> : <Text style={[s.postBtnText, canPost && s.postBtnTextActive]}>Post</Text>}
@@ -508,7 +519,7 @@ function CreatePostModal({ visible, onClose, onPosted, initialPlace, initialClie
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
         >
-          <View style={s.createProgressRow} accessibilityLabel={`Form progress: ${progressCount} of 4 sections complete`}>
+          <View style={s.createProgressRow} accessibilityLabel={`Form progress: ${progressCount} of ${progressTotal} sections complete`}>
             {progressSteps.map((step, i) => (
               <View
                 key={`p-${i}`}
@@ -519,6 +530,139 @@ function CreatePostModal({ visible, onClose, onPosted, initialPlace, initialClie
             ))}
           </View>
 
+          <View style={s.postModeRow}>
+            <TouchableOpacity
+              style={[s.postModeChip, postMode === 'post' && s.postModeChipOn]}
+              onPress={() => setPostMode('post')}
+              activeOpacity={0.85}
+              accessibilityRole="button"
+              accessibilityState={{ selected: postMode === 'post' }}
+            >
+              <Text style={[s.postModeChipLabel, postMode === 'post' && s.postModeChipLabelOn]}>Post</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[s.postModeChip, postMode === 'review' && s.postModeChipOn]}
+              onPress={() => setPostMode('review')}
+              activeOpacity={0.85}
+              accessibilityRole="button"
+              accessibilityState={{ selected: postMode === 'review' }}
+            >
+              <Text style={[s.postModeChipLabel, postMode === 'review' && s.postModeChipLabelOn]}>Review</Text>
+            </TouchableOpacity>
+          </View>
+
+          {!isReview ? (
+            <>
+              <View style={s.createCard}>
+                <View style={s.createCardHeader}>
+                  <View style={s.createIconPill}>
+                    <Ionicons name="chatbubble-ellipses" size={15} color={C.red} />
+                  </View>
+                  <Text style={s.createCardTitle}>What&apos;s on your mind?</Text>
+                </View>
+                <TextInput
+                  style={s.createTextInput}
+                  placeholder="Share a thought, tip, or update…"
+                  placeholderTextColor={C.muted}
+                  value={body}
+                  onChangeText={setBody}
+                  multiline
+                  maxLength={500}
+                  textAlignVertical="top"
+                />
+                <View style={s.charCountRow}>
+                  <Text style={[s.charCount, body.length >= 450 && s.charCountWarn]}>{body.length}/500</Text>
+                </View>
+              </View>
+
+              <View style={s.createCard}>
+                <View style={s.createCardHeader}>
+                  <View style={s.createIconPill}>
+                    <Ionicons name="images" size={15} color={C.red} />
+                  </View>
+                  <Text style={s.createCardTitle}>Photos</Text>
+                  <Text style={s.photoCountBadge}>{imageEntries.length}/2</Text>
+                </View>
+                <Text style={s.createFieldHint}>Optional · up to 2 images.</Text>
+                <View style={s.photoRow}>
+                  {imageEntries.length === 0 ? (
+                    <TouchableOpacity style={s.photoAddSingle} onPress={pickImage} activeOpacity={0.7}>
+                      <View style={s.photoAddIconWrap}>
+                        <Ionicons name="add" size={22} color={C.red} />
+                      </View>
+                      <Text style={s.photoAddText}>Add up to 2 photos</Text>
+                    </TouchableOpacity>
+                  ) : (
+                    <>
+                      <View style={s.photoHalf}>
+                        {imageEntries[0] ? (
+                          <View style={s.photoThumb}>
+                            <Image source={{ uri: imageEntries[0].uri }} style={s.photoThumbImg} resizeMode="cover" />
+                            <TouchableOpacity style={s.photoRemove} onPress={() => removeImage(0)}>
+                              <Ionicons name="close" size={16} color="#FFF" />
+                            </TouchableOpacity>
+                          </View>
+                        ) : null}
+                      </View>
+                      <View style={s.photoGap} />
+                      <View style={s.photoHalf}>
+                        {imageEntries[1] ? (
+                          <View style={s.photoThumb}>
+                            <Image source={{ uri: imageEntries[1].uri }} style={s.photoThumbImg} resizeMode="cover" />
+                            <TouchableOpacity style={s.photoRemove} onPress={() => removeImage(1)}>
+                              <Ionicons name="close" size={16} color="#FFF" />
+                            </TouchableOpacity>
+                          </View>
+                        ) : (
+                          <TouchableOpacity style={s.photoAdd} onPress={pickImage} activeOpacity={0.7}>
+                            <Ionicons name="add" size={20} color={C.red} />
+                            <Text style={s.photoAddText}>Add</Text>
+                          </TouchableOpacity>
+                        )}
+                      </View>
+                    </>
+                  )}
+                </View>
+              </View>
+
+              <View style={s.createCard}>
+                <View style={s.createCardHeader}>
+                  <View style={s.createIconPill}>
+                    <Ionicons name="pricetags" size={15} color={C.red} />
+                  </View>
+                  <Text style={s.createCardTitle}>Tags</Text>
+                </View>
+                <Text style={s.createCardDesc}>Optional — helps others find your post.</Text>
+                <View style={s.topicGrid}>
+                  {CREATE_POST_TOPICS.map((t) => {
+                    const on = selectedTopicIds.includes(t.id);
+                    return (
+                      <TouchableOpacity key={t.id} style={[s.topicChip, on && s.topicChipOn]} onPress={() => toggleTopic(t.id)} activeOpacity={0.8}>
+                        <Ionicons name={CREATE_POST_TOPIC_ICONS[t.id] || 'pricetag-outline'} size={15} color={on ? C.red : C.sub} />
+                        <Text style={[s.topicChipLabel, on && s.topicChipLabelOn]}>{t.label}</Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+                <View style={s.customHashtagRow}>
+                  <Text style={s.customHashtagPrefix}>#</Text>
+                  <TextInput
+                    style={s.customHashtagInput}
+                    placeholder="Add your own tag"
+                    placeholderTextColor={C.muted}
+                    value={customHashtag}
+                    onChangeText={onCustomHashtagChange}
+                    maxLength={MAX_CUSTOM_HASHTAG_LEN}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                  />
+                </View>
+              </View>
+            </>
+          ) : null}
+
+          {isReview ? (
+          <>
           {/* 1. Place or venue */}
           <View style={s.createCard}>
             <View style={s.createCardHeader}>
@@ -699,8 +843,10 @@ function CreatePostModal({ visible, onClose, onPosted, initialPlace, initialClie
               {customHashtag.length > 0 && <Text style={s.customHashtagCount}>{customHashtag.length}/{MAX_CUSTOM_HASHTAG_LEN}</Text>}
             </View>
           </View>
+          </>
+          ) : null}
 
-          {!canPost && (body.length > 0 || place.length > 0 || selectedTopicIds.length > 0 || rating > 0) && (
+          {!canPost && isReview && (body.length > 0 || place.length > 0 || selectedTopicIds.length > 0 || rating > 0) && (
             <View style={s.createChecklist}>
               {[
                 { ok: place.trim().length > 0, text: 'Venue or place' },
@@ -969,6 +1115,7 @@ export default function CommunitiesScreen() {
   const [hasMore, setHasMore] = useState(true);
   const [activeTopic, setActiveTopic] = useState('all');
   const [activeClientFilter, setActiveClientFilter] = useState(null);
+  const [profileClientId, setProfileClientId] = useState(null);
   const [showCreate, setShowCreate] = useState(false);
   const [showScanner, setShowScanner] = useState(false);
   const [scanInitialPlace, setScanInitialPlace] = useState(null);
@@ -1204,10 +1351,10 @@ export default function CommunitiesScreen() {
     navigation.navigate('CommunityPostDetail', { post, focusComposer: true });
   }, [navigation]);
 
-  const handleTaggedClientPress = useCallback(({ clientId, businessName }) => {
+  const handleTaggedClientPress = useCallback(({ clientId }) => {
     if (!clientId) return
-    setActiveClientFilter({ clientId, businessName: businessName || null })
-    setActiveTopic('all')
+    setActiveClientFilter(null)
+    setProfileClientId(clientId)
   }, [])
 
   pagingRef.current = {
@@ -1219,6 +1366,7 @@ export default function CommunitiesScreen() {
   }
 
   return (
+    <>
     <ScreenContainer style={s.screen}>
       <View style={s.communityFeedRoot}>
         <Animated.View
@@ -1361,8 +1509,8 @@ export default function CommunitiesScreen() {
                 <View style={feedStyles.emptyIcon}>
                   <Ionicons name="people" size={48} color={palette.red} />
                 </View>
-                <Text style={feedStyles.emptyTitle}>No reviews yet</Text>
-                <Text style={feedStyles.emptySub}>Be the first to share your experience and help build our community</Text>
+                <Text style={feedStyles.emptyTitle}>No posts yet</Text>
+                <Text style={feedStyles.emptySub}>Be the first to share a post or review with the community</Text>
               </View>
             )
           }
@@ -1406,6 +1554,17 @@ export default function CommunitiesScreen() {
         accentColor={palette.green}
       />
     </ScreenContainer>
+    <ClientProfileModal
+      visible={!!profileClientId}
+      clientId={profileClientId}
+      onClose={() => setProfileClientId(null)}
+      insets={insets}
+      onOpenARNavigate={(dest) => {
+        setProfileClientId(null)
+        navigation.navigate('AR', { navigateTo: dest })
+      }}
+    />
+    </>
   );
 }
 
@@ -1929,6 +2088,33 @@ function buildCommunitiesScreenStyles(C, isDark = false) {
   },
   createProgressChunkOn: {
     backgroundColor: C.red,
+  },
+  postModeRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: 12,
+  },
+  postModeChip: {
+    flex: 1,
+    paddingVertical: 10,
+    borderRadius: 12,
+    alignItems: 'center',
+    backgroundColor: isDark ? C.chip : '#F7F9F9',
+    borderWidth: 1.5,
+    borderColor: isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.08)',
+  },
+  postModeChipOn: {
+    backgroundColor: isDark ? 'rgba(230,57,80,0.22)' : C.redSoft,
+    borderColor: C.red,
+  },
+  postModeChipLabel: {
+    fontSize: 14,
+    fontFamily: FONT_POPPINS_SEMIBOLD,
+    color: C.sub,
+  },
+  postModeChipLabelOn: {
+    color: C.red,
+    fontFamily: FONT_POPPINS_BOLD,
   },
   createCard: {
     backgroundColor: isDark ? '#1C1C1E' : '#FFF', borderRadius: 14, padding: 12, marginBottom: 10,

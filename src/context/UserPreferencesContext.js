@@ -4,11 +4,11 @@ import {
   PREFERENCES,
   FOOD_CATEGORIES,
   GENERAL_PREFERENCES,
-  getLabelsFromIds,
   getGeneralLabelsFromIds,
 } from '../constants/preferences';
 import { fetchUserPersonalization } from '../services/personalization';
 import { supabase } from '../config/supabase';
+import { useAuth } from './AuthContext';
 
 const ONBOARDING_KEY = '@gobahrain_onboarding_complete';
 const PREFERENCES_KEY = '@gobahrain_user_preferences';
@@ -24,6 +24,7 @@ const defaultPreferences = {
 const UserPreferencesContext = createContext(null);
 
 export function UserPreferencesProvider({ children }) {
+  const { authLoading, isAuthenticated } = useAuth();
   const [isOnboardingComplete, setIsOnboardingComplete] = useState(null);
   const [preferences, setPreferencesState] = useState(defaultPreferences);
   const [isLoading, setIsLoading] = useState(true);
@@ -65,6 +66,16 @@ export function UserPreferencesProvider({ children }) {
     try {
       const remote = await fetchUserPersonalization();
       if (!remote) return;
+      const hasRemoteData =
+        remote.generalIds.length > 0 ||
+        remote.activityIds.length > 0 ||
+        remote.foodIds.length > 0 ||
+        Object.keys(remote.profileAnswers || {}).length > 0 ||
+        (remote.personaSummary && remote.personaSummary.length > 0);
+      if (hasRemoteData) {
+        setIsOnboardingComplete(true);
+        AsyncStorage.setItem(ONBOARDING_KEY, 'true').catch(() => {});
+      }
       setPreferencesState((prev) => {
         const merged = {
           generalIds: remote.generalIds.length ? remote.generalIds : (prev?.generalIds ?? []),
@@ -84,16 +95,25 @@ export function UserPreferencesProvider({ children }) {
   }, []);
 
   useEffect(() => {
+    if (authLoading || !isAuthenticated) return;
     hydrateFromSupabase();
-    const { data: sub } = supabase.auth.onAuthStateChange((event) => {
-      if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED' || event === 'INITIAL_SESSION') {
+  }, [authLoading, isAuthenticated, hydrateFromSupabase]);
+
+  useEffect(() => {
+    if (authLoading) return;
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event) => {
+      if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') {
         hydrateFromSupabase();
+      } else if (event === 'SIGNED_OUT') {
+        AsyncStorage.multiRemove([ONBOARDING_KEY, PREFERENCES_KEY]).catch(() => {});
+        setIsOnboardingComplete(false);
+        setPreferencesState(defaultPreferences);
       }
     });
     return () => {
-      try { sub?.subscription?.unsubscribe?.(); } catch (_) {}
+      subscription.unsubscribe();
     };
-  }, [hydrateFromSupabase]);
+  }, [authLoading, hydrateFromSupabase]);
 
   const setPreferences = useCallback(async (next) => {
     let merged = null;
@@ -136,9 +156,17 @@ export function UserPreferencesProvider({ children }) {
     }
   }, [setPreferences]);
 
+  const resetOnboarding = useCallback(async () => {
+    try {
+      await AsyncStorage.multiRemove([ONBOARDING_KEY, PREFERENCES_KEY]);
+      setIsOnboardingComplete(false);
+      setPreferencesState(defaultPreferences);
+    } catch (e) {
+      console.warn('[UserPreferences] onboarding reset failed', e?.message);
+    }
+  }, []);
+
   const generalLabels = getGeneralLabelsFromIds(preferences.generalIds);
-  const activityLabels = getLabelsFromIds(preferences.activityIds, PREFERENCES);
-  const foodLabels = getLabelsFromIds(preferences.foodIds, FOOD_CATEGORIES);
 
   const value = {
     isOnboardingComplete: isOnboardingComplete === true,
@@ -146,9 +174,8 @@ export function UserPreferencesProvider({ children }) {
     preferences,
     setPreferences,
     completeOnboarding,
+    resetOnboarding,
     generalLabels,
-    activityLabels,
-    foodLabels,
     GENERAL_PREFERENCES,
     PREFERENCES,
     FOOD_CATEGORIES,

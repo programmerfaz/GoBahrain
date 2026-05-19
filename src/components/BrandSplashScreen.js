@@ -1,12 +1,14 @@
 import React, { useCallback, useEffect, useRef } from 'react'
-import { View, Text, Image, StyleSheet } from 'react-native'
+import { View, Image, StyleSheet } from 'react-native'
 import { useTheme } from '../context/ThemeContext'
 
 /** Replaces former splash video end — overlay can dismiss without waiting for 12s failsafe */
 const SPLASH_HOLD_MS = 2000
 
+const LOGO = require('../../assets/siyahalogo nobg.png')
+
 export default function BrandSplashScreen({ onComplete }) {
-  const { isDark } = useTheme()
+  const { colors } = useTheme()
   const didCompleteRef = useRef(false)
 
   const completeSplash = useCallback(() => {
@@ -21,18 +23,15 @@ export default function BrandSplashScreen({ onComplete }) {
     return () => clearTimeout(t)
   }, [onComplete, completeSplash])
 
-  const bg = isDark ? '#000000' : '#FFFFFF'
-
   return (
-    <View style={[styles.wrap, { backgroundColor: bg }]} accessibilityLabel="SiyahaBH loading">
+    <View style={[styles.wrap, { backgroundColor: colors.background }]} accessibilityLabel="SiyahaBH loading">
       <View style={styles.center}>
         <Image
-          source={require('../../assets/nobg.png')}
+          source={LOGO}
           style={styles.logo}
           resizeMode="contain"
           accessibilityLabel="SiyahaBH"
         />
-
       </View>
     </View>
   )
@@ -51,7 +50,7 @@ const styles = StyleSheet.create({
   },
   logo: {
     width: '88%',
-    maxWidth: 340,
-    height: 96,
+    maxWidth: 360,
+    aspectRatio: 1080 / 476,
   },
 })

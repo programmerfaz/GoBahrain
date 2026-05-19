@@ -110,7 +110,7 @@ import {
   clampRegionToBahrain,
   formatPlanShareMessage,
   parseShareCodeFromUrl,
-  openAllStopsInGoogleMaps,
+  openGoogleMapsRouteForMarkers,
   parsePlanItemCoords,
 } from './planGeoAndShare'
 import { attachPlanRowKeys, buildDraftStopFromClient, getLuxuryCategoryStyle } from './planRowModel'
@@ -119,6 +119,7 @@ import {
   getStopAboutPrimaryText,
   pickPlanStopGalleryUris,
   pickPlanStopThumbUri,
+  collectPlanRouteMarkers,
 } from './planMatching'
 import {
   buildSpotPreviews,
@@ -143,7 +144,7 @@ export function useAIPlanScreenInner() {
   const insets = useSafeAreaInsets();
   const route = useRoute();
   const navigation = useNavigation();
-  const { preferences, generalLabels, activityLabels, foodLabels: savedProfileFoodLabels } = useUserPreferences();
+  const { preferences, generalLabels } = useUserPreferences();
   const { user, profile } = useAuth();
   const viewerUType = useMemo(() => normalizeViewerUType(profile?.user?.u_type), [profile?.user?.u_type])
 
@@ -532,7 +533,7 @@ export function useAIPlanScreenInner() {
   const [surprisePicked, setSurprisePicked] = useState(null);
   const [showPlanModal, setShowPlanModal] = useState(false);
   const [planModalStep, setPlanModalStep] = useState(1);
-  /** 'menu' | 'quickKind' | 'quickSub' — build flow on plan sheet (step 0), not a modal */
+  /** 'menu' | 'quickKind' | 'joinCode' — build mode picker modal phases */
   const [buildDayModalPhase, setBuildDayModalPhase] = useState('menu');
   /** 'place' | 'restaurant' | 'event' — quick find only */
   const [quickFindKind, setQuickFindKind] = useState(null);
@@ -621,7 +622,7 @@ export function useAIPlanScreenInner() {
   const stopDetailSwipeRotate = useSharedValue(0);
   const stopDetailIndexSV = useSharedValue(0);
   const stopDetailSlidesLenSV = useSharedValue(0);
-  const [openingMaps, setOpeningMaps] = useState(false);
+  const openingMapsRef = useRef(false);
   const [shareCopyHint, setShareCopyHint] = useState(false);
   const shareCopyHintTimerRef = useRef(null);
   const [allPlaceMarkers, setAllPlaceMarkers] = useState([]);
@@ -823,14 +824,15 @@ export function useAIPlanScreenInner() {
   }, [])
 
   const handleOpenInGoogleMaps = useCallback(async () => {
-    if (!dayPlan || openingMaps) return
-    setOpeningMaps(true)
+    if (!dayPlan?.length || openingMapsRef.current) return
+    openingMapsRef.current = true
+    const markers = collectPlanRouteMarkers(dayPlan, allPlaceMarkers)
     try {
-      await openAllStopsInGoogleMaps(dayPlan)
+      await openGoogleMapsRouteForMarkers(markers)
     } finally {
-      setOpeningMaps(false)
+      openingMapsRef.current = false
     }
-  }, [dayPlan, openingMaps])
+  }, [dayPlan, allPlaceMarkers])
 
   const closeStopDetailDialog = useCallback(() => {
     setStopDetailIndex(null);
@@ -1416,5 +1418,5 @@ export function useAIPlanScreenInner() {
     }
   }, [])
 
-  return { colors, isDark, preferences, generalLabels, activityLabels, savedProfileFoodLabels, user, viewerUType, insets, route, navigation, mapRegion, setMapRegion, isMarkerShowcaseActive, setIsMarkerShowcaseActive, showcaseMarkerMk, setShowcaseMarkerMk, showcaseMorphAnchor, setShowcaseMorphAnchor, showcaseOrbitPostUris, activePlanMapClientFilter, setActivePlanMapClientFilter, focusedMapClientId, setFocusedMapClientId, markerMatchesFocusedClient, handleFocusClientFromSearch, drawerStep, setDrawerStep, buildDayCtaAttentionKey, selectedPreferences, setSelectedPreferences, selectedFoodCategories, setSelectedFoodCategories, customPreferenceInput, setCustomPreferenceInput, customFoodInput, setCustomFoodInput, loading, setLoading, loadingStatus, setLoadingStatus, error, setError, dayPlan, setDayPlan, pineconeMatches, setPineconeMatches, visiblePinCount, setVisiblePinCount, revealingPins, setRevealingPins, surpriseSpinning, setSurpriseSpinning, surpriseIndex, setSurpriseIndex, surprisePicked, setSurprisePicked, showPlanModal, setShowPlanModal, planModalStep, setPlanModalStep, buildDayModalPhase, setBuildDayModalPhase, quickFindKind, setQuickFindKind, customPlanDraftActive, setCustomPlanDraftActive, quickFindMapOnly, setQuickFindMapOnly, quickFindLastKind, setQuickFindLastKind, quickFindLastLabel, setQuickFindLastLabel, quickFindExcludedFingerprints, setQuickFindExcludedFingerprints, quickFindLastChosenFingerprints, setQuickFindLastChosenFingerprints, resetQuickFindRotationState, showBuildModePickerModal, setShowBuildModePickerModal, travelExploreId, setTravelExploreId, doorVisible, setDoorVisible, planGenerationSuccess, setPlanGenerationSuccess, spotPreviews, setSpotPreviews, profileClientId, setProfileClientId, stopDetailIndex, setStopDetailIndex, openingMaps, setOpeningMaps, shareCopyHint, setShareCopyHint, allPlaceMarkers, setAllPlaceMarkers, allPlaceMarkersLoading, showSearchModal, setShowSearchModal, addingPlanStop, setAddingPlanStop, searchModalClients, setSearchModalClients, searchModalLoading, setSearchModalLoading, searchModalQuery, setSearchModalQuery, searchModalDisplayClients, searchModalSemanticSearching, searchModalCatalogFilter, setSearchModalCatalogFilter, enhancingIndex, setEnhancingIndex, visibleStopCount, setVisibleStopCount, savedPlansList, setSavedPlansList, savedPlansLoading, setSavedPlansLoading, activeSavedPlanId, setActiveSavedPlanId, sharedCollaboration, setSharedCollaboration, joinCodeInput, setJoinCodeInput, joinCodeBusy, setJoinCodeBusy, showSharePlanModal, setShowSharePlanModal, sharePermissionDraft, setSharePermissionDraft, shareModalBusy, setShareModalBusy, shareModalCode, setShareModalCode, savePlanBusy, setSavePlanBusy, showEditSavedPlanTitleModal, setShowEditSavedPlanTitleModal, editSavedPlanTitleId, setEditSavedPlanTitleId, editSavedPlanTitleDraft, setEditSavedPlanTitleDraft, editSavedPlanTitleBusy, setEditSavedPlanTitleBusy, mapRef, userLocation, userLocationRef, dayPlanRef, locationWatchRef, mapProgrammaticMoveRef, mapProgrammaticMoveClearTimerRef, hasInitialUserCenterRef, markerShowcaseRef, orbitSheetExtraTranslateY, planSheetSnapIndex, setPlanSheetSnapIndex, sheetAnim, lastSnap, currentYRef, prefetchRef, lastPrefLabelsRef, lastFoodLabelsRef, doorLeft, doorRight, doorIconScale, doorIconOpacity, doorFade, skipOpenAnim, shareCopyHintTimerRef, stopRevealTimers, planModalBackdrop, planModalScale, planModalOpacity, sheetOpacity, stopDetailSwipeX, stopDetailSwipeRotate, stopDetailIndexSV, stopDetailSlidesLenSV, communityPalette, stopDetailSlides, stopDetailPayload, stopDetailStackPeekNext, stopDetailPanGesture, handlePlanMapClientFilterPress, markProgrammaticMapMove, clearMarkerShowcaseTimers, clearMarkerShowcase, exitMarkerShowcase, handleMapPress, centerMapOnPlaceMarker, runMarkerShowcaseOrbitForMarker, handlePlaceMarkerPress, clearStopRevealTimers, scheduleStaggeredStopReveal, handleOpenInGoogleMaps, closeStopDetailDialog, goToStopDetailIndex, handleStopDetailSwipeNext, handleStopDetailSwipePrev, refreshSavedPlans, resolveOriginCoordsForPlanGeneration, planReadOnly, planCollaboratorEdit, STOP_REVEAL_STAGGER_MS, stopDetailCardAnimatedStyle, stopDetailPeekAnimatedStyle }
+  return { colors, isDark, preferences, generalLabels, user, viewerUType, insets, route, navigation, mapRegion, setMapRegion, isMarkerShowcaseActive, setIsMarkerShowcaseActive, showcaseMarkerMk, setShowcaseMarkerMk, showcaseMorphAnchor, setShowcaseMorphAnchor, showcaseOrbitPostUris, activePlanMapClientFilter, setActivePlanMapClientFilter, focusedMapClientId, setFocusedMapClientId, markerMatchesFocusedClient, handleFocusClientFromSearch, drawerStep, setDrawerStep, buildDayCtaAttentionKey, selectedPreferences, setSelectedPreferences, selectedFoodCategories, setSelectedFoodCategories, customPreferenceInput, setCustomPreferenceInput, customFoodInput, setCustomFoodInput, loading, setLoading, loadingStatus, setLoadingStatus, error, setError, dayPlan, setDayPlan, pineconeMatches, setPineconeMatches, visiblePinCount, setVisiblePinCount, revealingPins, setRevealingPins, surpriseSpinning, setSurpriseSpinning, surpriseIndex, setSurpriseIndex, surprisePicked, setSurprisePicked, showPlanModal, setShowPlanModal, planModalStep, setPlanModalStep, buildDayModalPhase, setBuildDayModalPhase, quickFindKind, setQuickFindKind, customPlanDraftActive, setCustomPlanDraftActive, quickFindMapOnly, setQuickFindMapOnly, quickFindLastKind, setQuickFindLastKind, quickFindLastLabel, setQuickFindLastLabel, quickFindExcludedFingerprints, setQuickFindExcludedFingerprints, quickFindLastChosenFingerprints, setQuickFindLastChosenFingerprints, resetQuickFindRotationState, showBuildModePickerModal, setShowBuildModePickerModal, travelExploreId, setTravelExploreId, doorVisible, setDoorVisible, planGenerationSuccess, setPlanGenerationSuccess, spotPreviews, setSpotPreviews, profileClientId, setProfileClientId, stopDetailIndex, setStopDetailIndex, shareCopyHint, setShareCopyHint, allPlaceMarkers, setAllPlaceMarkers, allPlaceMarkersLoading, showSearchModal, setShowSearchModal, addingPlanStop, setAddingPlanStop, searchModalClients, setSearchModalClients, searchModalLoading, setSearchModalLoading, searchModalQuery, setSearchModalQuery, searchModalDisplayClients, searchModalSemanticSearching, searchModalCatalogFilter, setSearchModalCatalogFilter, enhancingIndex, setEnhancingIndex, visibleStopCount, setVisibleStopCount, savedPlansList, setSavedPlansList, savedPlansLoading, setSavedPlansLoading, activeSavedPlanId, setActiveSavedPlanId, sharedCollaboration, setSharedCollaboration, joinCodeInput, setJoinCodeInput, joinCodeBusy, setJoinCodeBusy, showSharePlanModal, setShowSharePlanModal, sharePermissionDraft, setSharePermissionDraft, shareModalBusy, setShareModalBusy, shareModalCode, setShareModalCode, savePlanBusy, setSavePlanBusy, showEditSavedPlanTitleModal, setShowEditSavedPlanTitleModal, editSavedPlanTitleId, setEditSavedPlanTitleId, editSavedPlanTitleDraft, setEditSavedPlanTitleDraft, editSavedPlanTitleBusy, setEditSavedPlanTitleBusy, mapRef, userLocation, userLocationRef, dayPlanRef, locationWatchRef, mapProgrammaticMoveRef, mapProgrammaticMoveClearTimerRef, hasInitialUserCenterRef, markerShowcaseRef, orbitSheetExtraTranslateY, planSheetSnapIndex, setPlanSheetSnapIndex, sheetAnim, lastSnap, currentYRef, prefetchRef, lastPrefLabelsRef, lastFoodLabelsRef, doorLeft, doorRight, doorIconScale, doorIconOpacity, doorFade, skipOpenAnim, shareCopyHintTimerRef, stopRevealTimers, planModalBackdrop, planModalScale, planModalOpacity, sheetOpacity, stopDetailSwipeX, stopDetailSwipeRotate, stopDetailIndexSV, stopDetailSlidesLenSV, communityPalette, stopDetailSlides, stopDetailPayload, stopDetailStackPeekNext, stopDetailPanGesture, handlePlanMapClientFilterPress, markProgrammaticMapMove, clearMarkerShowcaseTimers, clearMarkerShowcase, exitMarkerShowcase, handleMapPress, centerMapOnPlaceMarker, runMarkerShowcaseOrbitForMarker, handlePlaceMarkerPress, clearStopRevealTimers, scheduleStaggeredStopReveal, handleOpenInGoogleMaps, closeStopDetailDialog, goToStopDetailIndex, handleStopDetailSwipeNext, handleStopDetailSwipePrev, refreshSavedPlans, resolveOriginCoordsForPlanGeneration, planReadOnly, planCollaboratorEdit, STOP_REVEAL_STAGGER_MS, stopDetailCardAnimatedStyle, stopDetailPeekAnimatedStyle }
 }

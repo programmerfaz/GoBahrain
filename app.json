@@ -8,6 +8,7 @@
     "userInterfaceStyle": "light",
     "newArchEnabled": true,
     "splash": {
+      "image": "./assets/siyahalogo nobg.png",
       "resizeMode": "contain",
       "backgroundColor": "#F8FAFC"
     },
@@ -28,7 +29,21 @@
       "package": "com.esmailooo576.gobahrain"
     },
     "plugins": [
-      "expo-asset"
+      "expo-asset",
+      "expo-font",
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/siyahalogo nobg.png",
+          "resizeMode": "contain",
+          "backgroundColor": "#F8FAFC",
+          "dark": {
+            "image": "./assets/siyahalogo nobg.png",
+            "resizeMode": "contain",
+            "backgroundColor": "#000000"
+          }
+        }
+      ]
     ]
   }
 }

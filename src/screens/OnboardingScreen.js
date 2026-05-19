@@ -19,7 +19,7 @@ import { useTheme } from '../context/ThemeContext'
 import { gradients } from '../theme/designTokens'
 import { FadeInView, AnimatedPressable, GradientButton } from '../components/AnimatedUI'
 import { LUXURY, luxurySoftShadow } from '../theme/luxuryPremium'
-import { buildAndPersistUserPersona, deriveActivityIdsFromInterestIds } from '../services/personalization'
+import { buildAndPersistUserPersona } from '../services/personalization'
 import { useDoorTransition } from '../context/DoorTransitionContext'
 
 const FloatingBubble = ({ size, color, startX, startY, duration, delay }) => {
@@ -88,7 +88,7 @@ const FloatingBubble = ({ size, color, startX, startY, duration, delay }) => {
   )
 }
 
-/** Venue/cuisine stays on plan build. Coach goal + companionship → Khalid’s tone: discovery, flow, visitors, variety. */
+/** Venue/cuisine stays on plan build. Route efficiency + coach/companion shape persona and day-plan geography. */
 const ONBOARDING_QUESTIONS = [
   {
     key: 'general-companion',
@@ -121,22 +121,12 @@ const ONBOARDING_QUESTIONS = [
     selectionMode: 'single',
   },
   {
-    key: 'general-budget',
+    key: 'route-efficiency',
     type: 'general-group',
-    groupKey: 'budget',
-    title: 'Typical day-out spend',
-    subtitle: 'Rough tier for restaurants and paid spots—adjust anytime in profile.',
-    icon: 'wallet-outline',
-    minSelected: 1,
-    selectionMode: 'single',
-  },
-  {
-    key: 'life-lens',
-    type: 'general-group',
-    groupKey: 'life_lens',
-    title: 'What’s your Bahrain day-to-day like?',
-    subtitle: 'Timing and tone for Khalid—not beaches vs museums (you pick those when you plan).',
-    icon: 'information-circle-outline',
+    groupKey: 'route_efficiency',
+    title: 'How important is a tight driving route?',
+    subtitle: 'We can order your day plan to avoid doubling back—or prioritize the best spots even if you drive farther.',
+    icon: 'navigate-outline',
     minSelected: 1,
     selectionMode: 'single',
   },
@@ -1046,19 +1036,18 @@ export default function OnboardingScreen() {
     toggleSelection(groupSetter, currentGroupIds, id, mode, maxSelected)
   }
   const persistPersona = useCallback(async () => {
-    const activityIds = deriveActivityIdsFromInterestIds(generalIds)
     const viewerUType =
       String(profile?.user?.u_type || '').toLowerCase() === 'tourist' ? 'tourist' : 'local'
     const profileSummary = await buildAndPersistUserPersona({
       generalIds,
-      activityIds,
+      activityIds: [],
       foodIds: [],
       profileAnswers: {},
       viewerUType,
     })
     await setPreferences({
       generalIds,
-      activityIds,
+      activityIds: [],
       foodIds: [],
       profileAnswers: {},
       profileSummary,

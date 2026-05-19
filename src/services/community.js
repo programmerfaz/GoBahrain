@@ -107,7 +107,7 @@ export async function fetchClientByQrPayload(payload) {
   };
 }
 
-const COMMUNITY_SELECT_WITH_AUTHOR = '*, user(account(user_name))';
+const COMMUNITY_SELECT_WITH_AUTHOR = '*, user(account(user_name), u_type)';
 const PERSONALIZED_TOPIC_BOOSTS = {
   foodie: ['food', 'restaurant', 'cafe', 'dessert', 'brunch', 'dining'],
   'culture-history': ['culture', 'museum', 'heritage', 'history', 'traditional', 'fort'],
@@ -177,9 +177,7 @@ function buildTrendingKeysetOr(votes, createdAt, communityUuid) {
 
 function buildCommunityPreferenceSignals(preferences) {
   const generalIds = Array.isArray(preferences?.generalIds) ? preferences.generalIds : []
-  const activityIds = Array.isArray(preferences?.activityIds) ? preferences.activityIds : []
-  const foodIds = Array.isArray(preferences?.foodIds) ? preferences.foodIds : []
-  const all = [...generalIds, ...activityIds, ...foodIds]
+  const all = [...generalIds]
   if (!all.length) return { hasSignals: false, keywords: [] }
 
   const keywords = new Set()
@@ -213,15 +211,7 @@ function scoreCommunityPostForPreference(post, prefSignals) {
   const upvoteScore = Math.min(1, Math.log10(Number(post.upvotes ?? 0) + 1) / Math.log10(101))
   const commentScore = Math.min(1, Math.log10(Number(post.comments ?? 0) + 1) / Math.log10(41))
 
-  // Keep freshness as a light signal so old posts can still win if they strongly match preference.
-  let recencyScore = 0.4
-  if (typeof post.time === 'string') {
-    if (post.time === 'now') recencyScore = 1
-    else if (post.time.endsWith('m')) recencyScore = 0.95
-    else if (post.time.endsWith('h')) recencyScore = 0.85
-    else if (post.time.endsWith('d')) recencyScore = 0.65
-    else if (post.time.endsWith('mo')) recencyScore = 0.45
-  }
+  const recencyScore = scorePostRecencyFromCreatedAt(post.created_at)
 
   return keywordScore * 0.44 + ratingScore * 0.28 + upvoteScore * 0.12 + commentScore * 0.08 + recencyScore * 0.08
 }
@@ -371,7 +361,7 @@ function mapRowToPost(row, clientMap = {}) {
     avatar: null,
     client_image: clientImage,
     client_a_uuid: row.client_a_uuid || null,
-    time: formatTimeAgo(row.created_at),
+    created_at: row.created_at || null,
     topic: row.hashtags || 'tips',
     place: row.badge || null,
     rating: row.rating != null ? Number(row.rating) : null,
@@ -383,6 +373,7 @@ function mapRowToPost(row, clientMap = {}) {
     reposts: 0,
     upvoted: false,
     user_a_uuid: row.user_a_uuid,
+    uType: normalizeCommunityUType(row.user?.u_type),
   };
 }
 
@@ -494,19 +485,21 @@ export async function searchCommunityWithOpenAI(userQuery) {
     .map((p) => ({ ...p, aiSuggestion: suggestionById[p.id] }));
 }
 
-function formatTimeAgo(iso) {
-  if (!iso) return '';
-  const d = new Date(iso);
-  const now = new Date();
-  const sec = Math.floor((now - d) / 1000);
-  if (sec < 60) return 'now';
-  if (sec < 3600) return `${Math.floor(sec / 60)}m`;
-  if (sec < 86400) return `${Math.floor(sec / 3600)}h`;
-  if (sec < 2592000) return `${Math.floor(sec / 86400)}d`;
-  return `${Math.floor(sec / 2592000)}mo`;
+function scorePostRecencyFromCreatedAt(createdAt) {
+  if (!createdAt) return 0.4
+  const sec = Math.floor((Date.now() - new Date(createdAt).getTime()) / 1000)
+  if (sec < 60) return 1
+  if (sec < 3600) return 0.95
+  if (sec < 86400) return 0.85
+  if (sec < 2592000) return 0.65
+  return 0.45
 }
 
-const COMMENT_SELECT = 'comment_uuid, body, created_at, user_a_uuid, user(account(user_name))';
+const COMMENT_SELECT = 'comment_uuid, body, created_at, user_a_uuid, user(account(user_name), u_type)';
+
+function normalizeCommunityUType(raw) {
+  return String(raw || '').trim().toLowerCase() === 'tourist' ? 'tourist' : 'local';
+}
 
 function mapCommentRow(row) {
   if (!row) return null;
@@ -517,7 +510,7 @@ function mapCommentRow(row) {
     id: row.comment_uuid,
     body: row.body || '',
     author,
-    time: formatTimeAgo(row.created_at),
+    uType: normalizeCommunityUType(row.user?.u_type),
   };
 }
 

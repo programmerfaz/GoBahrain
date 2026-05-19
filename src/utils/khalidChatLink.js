@@ -16,11 +16,13 @@ const notifySubscribers = () => {
 }
 
 export const openKhalidChat = (payload = {}) => {
+  const clientId = String(payload.clientId || payload.client_id || '').trim()
   latestPayload = {
     ts: Date.now(),
     source: payload.source || 'unknown',
     place: payload.place || '',
     summary: payload.summary || '',
+    ...(clientId ? { clientId } : {}),
   }
   notifySubscribers()
 }

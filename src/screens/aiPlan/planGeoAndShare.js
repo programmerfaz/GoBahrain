@@ -103,31 +103,41 @@ export function parseShareCodeFromUrl(url) {
   }
   return null;
 }
-export const openAllStopsInGoogleMaps = async (plan) => {
-  const markers = (plan || []).map((item) => {
-    const lat = parseFloat(item.lat);
-    const lng = parseFloat(item.lng);
-    return isNaN(lat) || isNaN(lng) ? null : { lat, lng };
-  }).filter(Boolean);
-  if (markers.length === 0) return;
+export const openGoogleMapsRouteForMarkers = async (markers) => {
+  const route = (markers || []).filter(
+    (m) => m && Number.isFinite(m.lat) && Number.isFinite(m.lng),
+  )
+  if (route.length === 0) {
+    Alert.alert(
+      'No map locations',
+      'None of your stops have coordinates yet. Open a venue profile or add stops from the catalog.',
+    )
+    return
+  }
   try {
-    const { status } = await Location.requestForegroundPermissionsAsync();
+    const { status } = await Location.requestForegroundPermissionsAsync()
     if (status !== 'granted') {
-      Alert.alert('Location needed', 'Enable location access to get directions from your current position.');
-      return;
+      Alert.alert('Location needed', 'Enable location access to get directions from your current position.')
+      return
     }
     const { coords } = await Location.getCurrentPositionAsync({
       accuracy: Location.Accuracy.Balanced,
-    });
-    const origin = `${coords.latitude},${coords.longitude}`;
-    const destination = `${markers[markers.length - 1].lat},${markers[markers.length - 1].lng}`;
-    const waypoints = markers.length > 1
-      ? markers.slice(0, -1).map((m) => `${m.lat},${m.lng}`).join('|')
-      : null;
-    let url = `https://www.google.com/maps/dir/?api=1&origin=${encodeURIComponent(origin)}&destination=${encodeURIComponent(destination)}&travelmode=driving`;
-    if (waypoints) url += `&waypoints=${encodeURIComponent(waypoints)}`;
-    Linking.openURL(url).catch(() => {});
+    })
+    const origin = `${coords.latitude},${coords.longitude}`
+    const destination = `${route[route.length - 1].lat},${route[route.length - 1].lng}`
+    const waypoints = route.length > 1
+      ? route.slice(0, -1).map((m) => `${m.lat},${m.lng}`).join('|')
+      : null
+    let url = `https://www.google.com/maps/dir/?api=1&origin=${encodeURIComponent(origin)}&destination=${encodeURIComponent(destination)}&travelmode=driving`
+    if (waypoints) url += `&waypoints=${encodeURIComponent(waypoints)}`
+    Linking.openURL(url).catch(() => {})
   } catch (e) {
-    Alert.alert('Location error', e?.message ?? 'Could not get your location. Enable location and try again.');
+    Alert.alert('Location error', e?.message ?? 'Could not get your location. Enable location and try again.')
   }
-};
+}
+
+/** Opens a multi-stop route; pass `loadedClientMarkers` when stops may lack inline coords. */
+export const openAllStopsInGoogleMaps = async (plan, loadedClientMarkers = []) => {
+  const { collectPlanRouteMarkers } = require('./planMatching')
+  await openGoogleMapsRouteForMarkers(collectPlanRouteMarkers(plan, loadedClientMarkers))
+}

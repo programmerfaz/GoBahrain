@@ -300,7 +300,7 @@ const eventPassesThemeGate = (label, hayLower) => {
 /**
  * Deterministic composite: vector score + metadata match to the picked chip (no random shuffle).
  */
-const getQuickFindMatchScore = (m, kind, rawLabel, normalizedSubLabel, markerIds) => {
+const getQuickFindMatchScore = (m, kind, rawLabel, normalizedSubLabel, markerIds, profileLabels = []) => {
   const meta = m?.metadata || {}
   const metaText = [
     meta.business_name,
@@ -330,8 +330,16 @@ const getQuickFindMatchScore = (m, kind, rawLabel, normalizedSubLabel, markerIds
   const metaNorm = normalizeText(metaText)
   const labelTokens = tokenSet(normalizedSubLabel)
 
+  const prefSources = (() => {
+    const fromProfile = (Array.isArray(profileLabels) ? profileLabels : [])
+      .map((x) => String(x || '').trim())
+      .filter(Boolean)
+    if (fromProfile.length) return fromProfile
+    return rawLabel ? [rawLabel] : []
+  })()
+
   let score = pineconeStrength(m) * 1.12
-  score += preferenceAlignmentScore(m, rawLabel ? [rawLabel] : []) * 3.25
+  score += preferenceAlignmentScore(m, prefSources) * 3.25
   score += tokenRecallInHaystack(labelTokens, metaNorm) * 52
 
   if (normalizedSubLabel && metaNorm.includes(normalizedSubLabel)) score += 46
@@ -471,9 +479,15 @@ export const buildQuickFindSingleStopPlan = async (
 
   const rawLabel = String(subCategoryLabel || '').trim()
   const normalizedSubLabel = normalizeText(subCategoryLabel)
+  const profileLabels = (Array.isArray(options.profileLabels) ? options.profileLabels : [])
+    .map((x) => String(x || '').trim())
+    .filter(Boolean)
+  const categoryLabel = String(options.categoryLabel || '').trim()
+  const useProfileOnly = !rawLabel && profileLabels.length > 0
   const markerIds = markerClientIdSet(allPlaceMarkers)
 
   const gated = rawPool.filter((m) => {
+    if (useProfileOnly) return true
     const hay = buildMetadataHaystackLower(m)
     const meta = m?.metadata || {}
     return quickFindPassThemeGate(kind, rawLabel, hay, meta)
@@ -545,7 +559,8 @@ export const buildQuickFindSingleStopPlan = async (
 
   const proximityCtx = reference ? { reference, markerCoordsMap: coordsMapForProximity } : null
 
-  const scoreFn = (m) => getQuickFindMatchScore(m, kind, rawLabel, normalizedSubLabel, markerIds)
+  const scoreFn = (m) =>
+    getQuickFindMatchScore(m, kind, rawLabel, normalizedSubLabel, markerIds, profileLabels)
 
   const tryPickFromPool = async (poolIn, exclEff) => {
     // Rank by distance first (closest to user), then by relevance score as tiebreaker.
@@ -557,6 +572,10 @@ export const buildQuickFindSingleStopPlan = async (
       const draft = planDraftFromMatch(m, kind)
       if (rawLabel) {
         draft.reason = `Quick find picked this for ${rawLabel}.`
+      } else if (categoryLabel) {
+        draft.reason = `Nearest ${categoryLabel.toLowerCase()} match for your profile.`
+      } else if (profileLabels.length) {
+        draft.reason = 'Nearest match for your profile.'
       }
       try {
         const enriched = await enrichPlanWithClientData([draft], rawPool, allPlaceMarkers || [], {

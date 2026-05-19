@@ -1,8 +1,8 @@
 /**
  * Shared preference options.
  * - GENERAL_PREFERENCES: unique, general "about you" options (understand the user). Used everywhere.
- * - PREFERENCES: activity types for plan generation only.
- * - FOOD_CATEGORIES: food types for plan generation only.
+ * - PREFERENCES: experience types — chosen in the AI Plan builder only (not profile).
+ * - FOOD_CATEGORIES: food / cuisine styles — chosen in the AI Plan builder only (not profile).
  * Colors use a modern, muted palette (see theme/designTokens.js).
  */
 
@@ -48,7 +48,10 @@ export const GENERAL_PREFERENCES = [
   { id: 'beaches-sun', label: 'Beaches', icon: 'umbrella-outline', color: M.morning, group: 'interests' },
   { id: 'quiet-peaceful', label: 'Quiet', icon: 'volume-mute-outline', color: M.muted, group: 'interests' },
   { id: 'social-lively', label: 'Social', icon: 'chatbubbles-outline', color: M.afternoon, group: 'interests' },
-  /** Day-to-day context for tone & timing—not venue picks. */
+  /** Saved profile: how much day plans should minimize driving / backtracking. */
+  { id: 'route-efficient', label: 'Short drives between stops', icon: 'navigate-outline', color: M.success, group: 'route_efficiency' },
+  { id: 'route-flexible', label: 'Best picks over short drives', icon: 'map-outline', color: M.indigo, group: 'route_efficiency' },
+  /** Legacy life_lens chips (profile only — no longer asked in onboarding). */
   { id: 'lens-exploring', label: 'Still learning Bahrain', icon: 'map-outline', color: M.morning, group: 'life_lens' },
   { id: 'lens-local', label: 'Local — deeper & fresher picks', icon: 'home-outline', color: M.success, group: 'life_lens' },
   { id: 'lens-weekends', label: 'Mostly free Fri–Sun', icon: 'calendar-outline', color: M.indigo, group: 'life_lens' },
@@ -123,7 +126,8 @@ export const GENERAL_GROUPS = [
   { key: 'pace', label: 'How do you like your day to feel?' },
   { key: 'budget', label: 'What budget level do you prefer?' },
   { key: 'interests', label: 'Which experiences do you enjoy most?' },
-  { key: 'life_lens', label: 'What’s your day-to-day context in Bahrain?' },
+  { key: 'route_efficiency', label: 'How should we order stops on your day plan?' },
+  { key: 'life_lens', label: 'What’s your day-to-day context in Bahrain? (legacy)' },
   { key: 'choose_style', label: 'How do you pick where to go?' },
   { key: 'planning', label: 'How do you like your plans organized?' },
   { key: 'timing', label: 'When do you usually enjoy going out?' },
@@ -137,4 +141,12 @@ export function getLabelsFromIds(ids, list) {
 
 export function getGeneralLabelsFromIds(ids) {
   return getLabelsFromIds(ids, GENERAL_PREFERENCES);
+}
+
+/** Profile route preference for day-plan ordering — default tight routes. */
+export const getRouteEfficiencyFromGeneralIds = (ids) => {
+  const list = Array.isArray(ids) ? ids : []
+  if (list.includes('route-flexible')) return 'flexible'
+  if (list.includes('route-efficient')) return 'efficient'
+  return 'efficient'
 }
