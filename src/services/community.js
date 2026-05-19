@@ -308,21 +308,31 @@ export async function fetchCommunityPostsPage({
   return { posts: ranked, hasMore, nextCursor }
 }
 
-/** Count comments per post from community_comment (empty map if table missing or error). */
+/** Count comments per post from community_comment using optimized batch RPC. */
 export async function fetchCommentCountsByCommunityIds(communityUuids) {
-  const ids = [...new Set((communityUuids || []).filter(Boolean))];
-  if (ids.length === 0) return {};
-  const map = Object.fromEntries(ids.map((id) => [id, 0]));
-  const { data, error } = await supabase.from('community_comment').select('community_uuid').in('community_uuid', ids);
-  if (error || !data) {
-    if (error) console.warn('[Community] fetchCommentCountsByCommunityIds:', error.message);
-    return map;
+  const ids = [...new Set((communityUuids || []).filter(Boolean))]
+  if (ids.length === 0) return {}
+
+  const map = Object.fromEntries(ids.map((id) => [id, 0]))
+
+  const { data, error } = await supabase.rpc('get_community_comment_counts', {
+    p_community_uuids: ids,
+  })
+
+  if (error) {
+    console.warn('[Community] fetchCommentCountsByCommunityIds RPC error:', error.message)
+    return map
   }
-  data.forEach((row) => {
-    const id = row.community_uuid;
-    if (id) map[id] = (map[id] || 0) + 1;
-  });
-  return map;
+
+  if (data && Array.isArray(data)) {
+    data.forEach((row) => {
+      if (row.community_uuid) {
+        map[row.community_uuid] = Number(row.comment_count) || 0
+      }
+    })
+  }
+
+  return map
 }
 
 /**
@@ -636,48 +646,31 @@ export async function createCommunityPost({
 }
 
 /**
- * Increment upvote count for a community post.
+ * Increment upvote count for a community post atomically (no race condition).
  */
 export async function upvoteCommunityPost(communityUuid) {
-  const { data: row } = await supabase
-    .from('community')
-    .select('num_of_upvote')
-    .eq('community_uuid', communityUuid)
-    .single();
-
-  const currentCount = Number(row?.num_of_upvote ?? 0) + 1;
-  const { error } = await supabase
-    .from('community')
-    .update({ num_of_upvote: currentCount })
-    .eq('community_uuid', communityUuid);
+  const { data, error } = await supabase.rpc('increment_community_upvote', {
+    p_community_uuid: communityUuid,
+  })
 
   if (error) {
-    console.error('[Community] upvoteCommunityPost error:', error);
-    throw error;
+    console.error('[Community] upvoteCommunityPost error:', error)
+    throw error
   }
-  return currentCount;
+  return data
 }
 
 /**
- * Decrement upvote count for a community post (min 0). Used for toggle-off.
+ * Decrement upvote count for a community post atomically (min 0). Used for toggle-off.
  */
 export async function removeUpvoteCommunityPost(communityUuid) {
-  const { data: row } = await supabase
-    .from('community')
-    .select('num_of_upvote')
-    .eq('community_uuid', communityUuid)
-    .single();
-
-  const current = Number(row?.num_of_upvote ?? 0);
-  const newCount = Math.max(0, current - 1);
-  const { error } = await supabase
-    .from('community')
-    .update({ num_of_upvote: newCount })
-    .eq('community_uuid', communityUuid);
+  const { data, error } = await supabase.rpc('decrement_community_upvote', {
+    p_community_uuid: communityUuid,
+  })
 
   if (error) {
-    console.error('[Community] removeUpvoteCommunityPost error:', error);
-    throw error;
+    console.error('[Community] removeUpvoteCommunityPost error:', error)
+    throw error
   }
-  return newCount;
+  return data
 }
