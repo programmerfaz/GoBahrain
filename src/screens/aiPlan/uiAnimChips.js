@@ -1,7 +1,7 @@
-import React, { useMemo, useEffect } from 'react'
+import React, { useMemo, useEffect, memo } from 'react'
 import { StyleSheet, Text, View, TouchableOpacity } from 'react-native'
 import Reanimated, {
-  FadeInDown,
+  FadeInUp,
   FadeIn,
   Easing,
   useSharedValue,
@@ -15,21 +15,21 @@ import styles from '../AIPlanScreen.styles'
 
 
 export const AnimatedStopRow = ({ isVisible, children, style }) => {
-  const scale = useSharedValue(0)
+  const translateY = useSharedValue(22)
   const opacity = useSharedValue(0)
 
   React.useEffect(() => {
     if (isVisible) {
-      scale.value = withSpring(1, { damping: 12, stiffness: 200, mass: 0.7 })
-      opacity.value = withSpring(1, { damping: 12, stiffness: 200, mass: 0.7 })
+      translateY.value = withSpring(0, { damping: 15, stiffness: 200, mass: 0.72 })
+      opacity.value = withSpring(1, { damping: 15, stiffness: 200, mass: 0.72 })
     } else {
-      scale.value = 0
+      translateY.value = 22
       opacity.value = 0
     }
   }, [isVisible])
 
   const animatedStyle = useAnimatedStyle(() => ({
-    transform: [{ scale: scale.value }],
+    transform: [{ translateY: translateY.value }],
     opacity: opacity.value,
   }))
 
@@ -40,7 +40,7 @@ export const AnimatedStopRow = ({ isVisible, children, style }) => {
   )
 }
 export function AiStagger({ children, delay = 0, style, entering }) {
-  const defaultEntering = FadeInDown.springify()
+  const defaultEntering = FadeInUp.springify()
     .damping(17)
     .stiffness(210)
     .mass(0.65)
@@ -52,12 +52,12 @@ export function AiStagger({ children, delay = 0, style, entering }) {
   )
 }
 
-/** Quiet staggered fade + slide — no bounce / scale pop */
+/** Quiet staggered fade + slide up — no bounce / scale pop */
 export function PopIn({ delay = 0, children, style }) {
   const entering = useMemo(
     () =>
-      FadeInDown.delay(delay)
-        .duration(380)
+      FadeInUp.delay(delay)
+        .duration(420)
         .easing(Easing.out(Easing.cubic)),
     [delay],
   )
@@ -91,13 +91,13 @@ const hexToRgba = (hex, alpha) => {
 const PM_TILE_RADIUS = 16
 
 /** 3-column grid tile — stacked icon + label; `variant`: light modal vs cinematic overlay */
-export function AnimatedOptionChip({ item, isSelected, onPress, variant = 'light' }) {
+function AnimatedOptionChipImpl({ item, isSelected, onPress, variant = 'light' }) {
   const isDark = variant === 'dark'
   const rimLight = useSharedValue(isSelected ? 1 : 0)
 
   useEffect(() => {
     rimLight.value = withTiming(isSelected ? 1 : 0, {
-      duration: 240,
+      duration: 150,
       easing: Easing.out(Easing.cubic),
     })
   }, [isSelected, rimLight])
@@ -179,7 +179,7 @@ export function AnimatedOptionChip({ item, isSelected, onPress, variant = 'light
 
         {isSelected ? (
           <Reanimated.View
-            entering={FadeIn.duration(200).easing(Easing.out(Easing.cubic))}
+            entering={FadeIn.duration(120).easing(Easing.out(Easing.cubic))}
             style={styles.pmOptTileCheckSlot}
           >
             <LinearGradient
@@ -196,3 +196,12 @@ export function AnimatedOptionChip({ item, isSelected, onPress, variant = 'light
     </View>
   )
 }
+
+export const AnimatedOptionChip = memo(AnimatedOptionChipImpl, (prev, next) => {
+  return (
+    prev.item?.id === next.item?.id &&
+    prev.isSelected === next.isSelected &&
+    prev.variant === next.variant &&
+    prev.onPress === next.onPress
+  )
+})

@@ -21,11 +21,19 @@ import {
   buildCommunityFeedStyles,
   CommunityReviewCard,
 } from '../components/community/CommunityReviewViews'
-import { fetchCommunityComments, createCommunityComment } from '../services/community'
+import { fetchCommunityComments, createCommunityComment, fetchClients } from '../services/community'
 import { UpvoteParticles } from '../components/FeedUpvoteInteractions'
 import { useCommunityUpvoteToggle } from '../hooks/useCommunityUpvoteToggle'
 import { useTheme } from '../context/ThemeContext'
 import { LUXURY, luxurySoftShadow } from '../theme/luxuryPremium'
+import ClientProfileModal from '../components/ClientProfileModal'
+import { ClientMentionText } from '../components/community/ClientMentionText'
+import { ClientMentionSuggestions } from '../components/community/ClientMentionSuggestions'
+import {
+  getActiveMentionTrigger,
+  applyMentionSelection,
+} from '../utils/communityMentions'
+import { CommunityUserTypeBadge } from '../components/community/CommunityUserTypeBadge'
 
 const DEFAULT_PROFILE_IMAGES = [
   require('../../assets/pfp.png'),
@@ -58,8 +66,24 @@ export default function CommunityPostDetailScreen() {
   const [comments, setComments] = useState([])
   const [loadingComments, setLoadingComments] = useState(true)
   const [draft, setDraft] = useState('')
+  const [selection, setSelection] = useState({ start: 0, end: 0 })
   const [sending, setSending] = useState(false)
+  const [clients, setClients] = useState([])
+  const [profileClientId, setProfileClientId] = useState(null)
   const inputRef = useRef(null)
+
+  const mentionTrigger = useMemo(
+    () => getActiveMentionTrigger(draft, selection.end),
+    [draft, selection.end],
+  )
+
+  useEffect(() => {
+    let cancelled = false
+    fetchClients().then((list) => {
+      if (!cancelled) setClients(list || [])
+    })
+    return () => { cancelled = true }
+  }, [])
 
   useLayoutEffect(() => {
     navigation.setOptions({
@@ -122,6 +146,34 @@ export default function CommunityPostDetailScreen() {
     [handleUpvoteToggle, syncDetailPost],
   )
 
+  const handleTaggedClientPress = useCallback(({ clientId }) => {
+    if (!clientId) return
+    setProfileClientId(clientId)
+  }, [])
+
+  const handleDraftChange = useCallback((text) => {
+    setDraft(text)
+    setSelection((prev) => ({
+      start: prev.start,
+      end: Math.min(text.length, Math.max(prev.end, text.length)),
+    }))
+  }, [])
+
+  const handleSelectionChange = useCallback((e) => {
+    const { start, end } = e.nativeEvent.selection
+    setSelection({ start, end })
+  }, [])
+
+  const handleMentionSelect = useCallback((client) => {
+    if (!mentionTrigger) return
+    const { text, cursor } = applyMentionSelection(draft, mentionTrigger, client)
+    setDraft(text)
+    setSelection({ start: cursor, end: cursor })
+    setTimeout(() => {
+      inputRef.current?.setNativeProps?.({ selection: { start: cursor, end: cursor } })
+    }, 0)
+  }, [draft, mentionTrigger])
+
   const handleSendComment = useCallback(async () => {
     const text = draft.trim()
     if (!text || !post?.id) return
@@ -129,6 +181,7 @@ export default function CommunityPostDetailScreen() {
     try {
       const created = await createCommunityComment(post.id, text)
       setDraft('')
+      setSelection({ start: 0, end: 0 })
       setComments((prev) => [...prev, created])
     } catch (e) {
       Alert.alert(
@@ -171,6 +224,7 @@ export default function CommunityPostDetailScreen() {
           hideCardBottomBorder
           onPress={null}
           onCommentPress={null}
+          onTaggedClientPress={handleTaggedClientPress}
           onUpvoteToggle={onDetailUpvoteToggle}
           upvoteScaleAnim={getUpvoteScaleAnim(post.id)}
         />
@@ -213,9 +267,14 @@ export default function CommunityPostDetailScreen() {
                   <Text style={[styles.commentAuthor, { color: C.text }]} numberOfLines={1}>
                     {c.author}
                   </Text>
-                  <Text style={[styles.commentTime, { color: C.sub }]}>{c.time}</Text>
+                  <CommunityUserTypeBadge uType={c.uType} compact />
                 </View>
-                <Text style={[styles.commentText, { color: C.text }]}>{c.body}</Text>
+                <ClientMentionText
+                  text={c.body}
+                  style={[styles.commentText, { color: C.text }]}
+                  mentionStyle={[styles.commentText, styles.commentMention]}
+                  onMentionPress={handleTaggedClientPress}
+                />
               </View>
             </View>
           ))
@@ -230,6 +289,13 @@ export default function CommunityPostDetailScreen() {
           },
         ]}
       >
+        <ClientMentionSuggestions
+          visible={!!mentionTrigger}
+          clients={clients}
+          query={mentionTrigger?.query}
+          onSelect={handleMentionSelect}
+          palette={C}
+        />
         <View style={[styles.composerGlassOuter, { borderColor: isDark ? 'rgba(255,255,255,0.12)' : 'rgba(142,142,147,0.22)' }]}>
           <BlurView intensity={Platform.OS === 'ios' ? 52 : 32} tint={isDark ? 'dark' : 'light'} style={StyleSheet.absoluteFillObject} />
           <View style={[styles.composerGlassFrost, isDark && styles.composerGlassFrostDark]} pointerEvents="none" />
@@ -241,10 +307,11 @@ export default function CommunityPostDetailScreen() {
               <TextInput
                 ref={inputRef}
                 style={[styles.composerInput, { color: C.text }]}
-                placeholder="Post your reply"
+                placeholder="Post your reply — type @ to tag a venue"
                 placeholderTextColor={C.muted}
                 value={draft}
-                onChangeText={setDraft}
+                onChangeText={handleDraftChange}
+                onSelectionChange={handleSelectionChange}
                 multiline
                 maxLength={2000}
                 editable={!sending}
@@ -276,6 +343,16 @@ export default function CommunityPostDetailScreen() {
         visible={particlesVisible}
         position={particlePosition}
         accentColor={C.green}
+      />
+      <ClientProfileModal
+        visible={!!profileClientId}
+        clientId={profileClientId}
+        onClose={() => setProfileClientId(null)}
+        insets={insets}
+        onOpenARNavigate={(dest) => {
+          setProfileClientId(null)
+          navigation.navigate('AR', { navigateTo: dest })
+        }}
       />
     </KeyboardAvoidingView>
   )
@@ -364,6 +441,7 @@ const styles = StyleSheet.create({
   commentAuthor: { fontSize: 13, fontWeight: '700', flexShrink: 1 },
   commentTime: { fontSize: 11 },
   commentText: { fontSize: 13, lineHeight: 18 },
+  commentMention: { color: '#1D9BF0', fontWeight: '700' },
   composerWrap: {
     paddingHorizontal: 10,
     paddingTop: 8,

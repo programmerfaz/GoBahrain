@@ -91,6 +91,7 @@ export default function BottomControlBar(tabBarProps) {
           ts,
           place: payload.place || '',
           summary: payload.summary || '',
+          clientId: payload.clientId || '',
         },
       })
     })

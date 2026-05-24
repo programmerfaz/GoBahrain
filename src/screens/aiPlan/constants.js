@@ -9,10 +9,10 @@ export const PLAN_MAP_CLIENT_TYPE_FILTERS = [
   { id: 'event', label: 'Events', icon: 'calendar-outline' },
 ]
 
-/** Quick find: pick a category then a subcategory (same three groups as map filters, without “All”). */
+/** Quick find: three categories only (same groups as map filters, without “All”). */
 export const QUICK_FIND_KIND_OPTIONS = PLAN_MAP_CLIENT_TYPE_FILTERS.filter((f) => f.id !== 'all')
 
-/** Sub-vibe labels per kind — passed into retrieval + scoring (`quickFindFromMatches`). */
+/** Legacy sub-vibe labels — kept for embedding hints in aiPipeline; UI no longer shows these. */
 export const QUICK_FIND_SUBLABELS_BY_KIND = {
   restaurant: [
     'Local & Arabic',
@@ -46,14 +46,14 @@ export const ORBIT_SLIDER_TOP_FRACTION = 0.22
  * Orbit “Done” — `top` offset added to safe-area top so the pill sits centered, just under the
  * map filter row (`topBarWrap` + chip row ~52–56pt + bar padding).
  */
-export const ORBIT_DONE_BELOW_FILTER_OFFSET = 150
-/** Extra gap above the tab bar stack for the “View details” pill (orbit mode) */
-export const ORBIT_VIEW_DETAILS_ABOVE_DOCK = 0
+export const ORBIT_DONE_BELOW_FILTER_OFFSET = 118
+/** Extra gap above the tab bar stack for orbit bottom highlights (orbit mode) */
+export const ORBIT_VIEW_DETAILS_ABOVE_DOCK = 14
 /**
  * Orbit bottom chrome: subtract from the usual map bottom offset so the card sits lower (closer to the dock).
  * Larger value = more map visible above the card (so the tapped marker isn't covered).
  */
-export const ORBIT_BOTTOM_CHROME_PULL_DOWN = 96
+export const ORBIT_BOTTOM_CHROME_PULL_DOWN = 44
 /**
  * Map orbit: keep the BottomControlBar + plan sheet in their normal position. The orbit chrome floats
  * above them without displacing the navbar to avoid a jarring tab-bar shift when entering orbit.

@@ -73,6 +73,11 @@ import {
   disableSharingForPlan,
   normalizeShareCode,
 } from '../../services/savedPlans'
+import {
+  fetchSavedPostBoostContextForPlan,
+  applyFromSavesPlanTags,
+  isPlanStopFromSavesTag,
+} from '../../services/savedPosts'
 import ClientProfileModal from '../../components/ClientProfileModal'
 import { ensureImageUrl, parseStorageImageUrl, resolvePublicImageUrl } from '../../utils/imageUrl'
 import {
@@ -129,7 +134,14 @@ export function useAIPlanScreenMiddlePartB(midA) {
   const planHeaderReelOffsetRef = useRef(0)
   const REEL_ITEM_STEP = 74
   const [showShareActionPickerModal, setShowShareActionPickerModal] = useState(false)
-  const [shareActionModalPhase, setShareActionModalPhase] = useState('settings')
+  const [sharePickerPermission, setSharePickerPermission] = useState('view')
+  const [sharePickerPreparing, setSharePickerPreparing] = useState(false)
+  const [sharePickerSharing, setSharePickerSharing] = useState(false)
+  const [sharePickerCode, setSharePickerCode] = useState(null)
+  const [sharePickerCopyHint, setSharePickerCopyHint] = useState(false)
+  const sharePickerPrepareGenRef = useRef(0)
+  const sharePickerPlanIdRef = useRef(null)
+  const sharePickerCopyHintTimerRef = useRef(null)
 
   const handleSurpriseMe = () => {
     if (midA.surpriseSpinning) return;
@@ -164,7 +176,7 @@ export function useAIPlanScreenMiddlePartB(midA) {
           midA.resetQuickFindRotationState();
           midA.setShowBuildModePickerModal(false);
           midA.setLoading(true);
-          midA.setLoadingStatus('Getting your location…');
+          midA.setLoadingStatus('Finding your location…');
           midA.setDrawerStep(3);
           midA.lastPrefLabelsRef.current = prefLabels;
           midA.lastFoodLabelsRef.current = foodLabels;
@@ -187,11 +199,10 @@ export function useAIPlanScreenMiddlePartB(midA) {
             let generatedPlan = null;
             try {
               const { originLat, originLng } = await midA.resolveOriginCoordsForPlanGeneration({ preferFreshFix: true })
-              midA.setLoadingStatus(`Scouting venues & live posts for your ${theme.label.toLowerCase()} day…`)
+              midA.setLoadingStatus(`Scouting venues for your ${theme.label.toLowerCase()} day…`)
 
               const retrievalOpts = {
                 profileNarrative: midA.preferences?.profileSummary || '',
-                profileActivity: midA.activityLabels,
                 profileAnswers: midA.preferences?.profileAnswers || {},
               }
               const [
@@ -206,26 +217,37 @@ export function useAIPlanScreenMiddlePartB(midA) {
               const allMatches = [...places, ...restaurants, ...breakfastSpots, ...events];
               midA.setPineconeMatches(allMatches);
 
-              midA.setLoadingStatus('Shortlisting restaurants & cafés that fit your vibe…');
+              midA.setLoadingStatus('Shortlisting picks…');
               await new Promise((res) => setTimeout(res, 380));
-              midA.setLoadingStatus(`Khalid is crafting your ${theme.label.toLowerCase()} day…`);
+              midA.setLoadingStatus(`Building your ${theme.label.toLowerCase()} route…`);
+              let savedPostBoostClientIds = []
+              let savedPostFeedHintNames = []
+              try {
+                const ctx = await fetchSavedPostBoostContextForPlan()
+                savedPostBoostClientIds = ctx.clientIds
+                savedPostFeedHintNames = ctx.hintNames
+              } catch (e) {
+                console.warn('[AI Plan] surprise saved post boost', e?.message)
+              }
               const plan = await generateDayPlan(places, restaurants, breakfastSpots, events, prefLabels, foodLabels, {
                 profileGeneral: midA.generalLabels,
-                profileActivity: midA.activityLabels,
-                profileFood: midA.savedProfileFoodLabels,
+                generalIds: midA.preferences?.generalIds || [],
                 profileNarrative: midA.preferences?.profileSummary || '',
                 profileAnswers: midA.preferences?.profileAnswers || {},
                 travelExplore: 'balanced',
                 originLat,
                 originLng,
                 viewerUType: midA.viewerUType,
+                savedPostClientIds: savedPostBoostClientIds,
+                savedPostFeedHintNames,
               });
               generatedPlan = plan;
               const initialKeyedPlan = attachPlanRowKeys(plan);
               midA.setDayPlan(initialKeyedPlan);
               const enriched = await enrichPlanWithClientData(plan, allMatches, midA.allPlaceMarkers);
+              const enrichedTagged = applyFromSavesPlanTags(enriched, savedPostBoostClientIds)
               const enrichedWithStableKeys = attachPlanRowKeys(
-                enriched.map((item, idx) => ({
+                enrichedTagged.map((item, idx) => ({
                   ...item,
                   _planRowKey: initialKeyedPlan[idx]?._planRowKey || item?._planRowKey,
                 })),
@@ -341,39 +363,140 @@ export function useAIPlanScreenMiddlePartB(midA) {
       Alert.alert('Nothing to share', 'Create a plan first.')
       return
     }
+    if (midA.planReadOnly) {
+      Alert.alert('View only', 'You cannot change sharing on a view-only plan.')
+      return
+    }
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {})
-    setShareActionModalPhase('settings')
+    setSharePickerPermission(midA.sharePermissionDraft === 'edit' ? 'edit' : 'view')
+    setSharePickerCode(null)
+    sharePickerPlanIdRef.current = null
+    setSharePickerCopyHint(false)
     setShowShareActionPickerModal(true)
-  }, [midA.dayPlan])
+    const gen = sharePickerPrepareGenRef.current + 1
+    sharePickerPrepareGenRef.current = gen
+    setSharePickerPreparing(true)
+    void (async () => {
+      try {
+        const result = await midA.prepareSharePicker()
+        if (sharePickerPrepareGenRef.current !== gen) return
+        setSharePickerPermission(result.permission === 'edit' ? 'edit' : 'view')
+        setSharePickerCode(result.code || null)
+        sharePickerPlanIdRef.current = result.planId || null
+      } catch (e) {
+        if (sharePickerPrepareGenRef.current !== gen) return
+        setShowShareActionPickerModal(false)
+        const msg = e?.message === 'View only'
+          ? 'You cannot change sharing on a view-only plan.'
+          : e?.message === 'Nothing to share'
+            ? 'Create a plan first.'
+            : e?.message ?? 'Try again.'
+        Alert.alert('Could not prepare sharing', msg)
+      } finally {
+        if (sharePickerPrepareGenRef.current === gen) {
+          setSharePickerPreparing(false)
+        }
+      }
+    })()
+  }, [midA.dayPlan, midA.planReadOnly, midA.sharePermissionDraft, midA.prepareSharePicker])
+
+  const handleCloseShareActionPickerModal = useCallback(() => {
+    sharePickerPrepareGenRef.current += 1
+    setShowShareActionPickerModal(false)
+    setSharePickerPreparing(false)
+    setSharePickerSharing(false)
+    setSharePickerCode(null)
+    sharePickerPlanIdRef.current = null
+    setSharePickerCopyHint(false)
+    if (sharePickerCopyHintTimerRef.current) {
+      clearTimeout(sharePickerCopyHintTimerRef.current)
+      sharePickerCopyHintTimerRef.current = null
+    }
+  }, [])
+
+  const handleSharePickerPermissionSelect = useCallback(
+    (perm) => {
+      const next = perm === 'edit' ? 'edit' : 'view'
+      setSharePickerPermission(next)
+      const planId = sharePickerPlanIdRef.current
+      if (!planId || !sharePickerCode || sharePickerPreparing) return
+      void midA
+        .handleConfirmShareSettings({
+          planId,
+          permission: next,
+          skipClipboard: true,
+          skipSuccessAlert: true,
+          skipBusy: true,
+        })
+        .then((code) => {
+          if (code) setSharePickerCode(code)
+        })
+        .catch(() => {})
+    },
+    [sharePickerCode, sharePickerPreparing, midA.handleConfirmShareSettings],
+  )
+
+  const handleCopySharePickerCode = useCallback(async () => {
+    if (!sharePickerCode) return
+    try {
+      await Clipboard.setStringAsync(sharePickerCode)
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {})
+      if (sharePickerCopyHintTimerRef.current) clearTimeout(sharePickerCopyHintTimerRef.current)
+      setSharePickerCopyHint(true)
+      sharePickerCopyHintTimerRef.current = setTimeout(() => {
+        setSharePickerCopyHint(false)
+        sharePickerCopyHintTimerRef.current = null
+      }, 2000)
+    } catch (_) {
+      Alert.alert('Copy failed', 'Could not copy the code. Try again.')
+    }
+  }, [sharePickerCode])
 
   const handleSharePlanCode = useCallback(async () => {
-    let code = midA.shareModalCode || midA.sharedCollaboration?.code || null
-    if (!code) {
-      await midA.handleOpenShareModal({ openModal: false })
-      if (!midA.activeSavedPlanId) return
-      code = await midA.handleConfirmShareSettings({ skipClipboard: true, skipSuccessAlert: true })
-      if (!code) return
-    }
-    const link = ExpoLinking.createURL(`plan/${code}`)
-    const message = `${link}\nCode: ${code}`
+    if (sharePickerPreparing || sharePickerSharing) return
+    setSharePickerSharing(true)
     try {
+      let planId = sharePickerPlanIdRef.current
+      let code = sharePickerCode
+      if (!planId || !code) {
+        const prepared = await midA.prepareSharePicker()
+        planId = prepared.planId
+        code = prepared.code
+        sharePickerPlanIdRef.current = planId
+        setSharePickerCode(code)
+      }
+      const finalCode = await midA.handleConfirmShareSettings({
+        planId,
+        permission: sharePickerPermission,
+        skipClipboard: true,
+        skipSuccessAlert: true,
+        skipBusy: true,
+      })
+      if (!finalCode) return
+      code = finalCode
+      setSharePickerCode(finalCode)
+      const link = ExpoLinking.createURL(`plan/${code}`)
+      const message = `${link}\nCode: ${code}`
       await Clipboard.setStringAsync(message)
       await Share.share(
         Platform.OS === 'ios'
           ? { message, title: 'Share plan' }
           : { message, title: 'SiyahaBH' },
       )
+      handleCloseShareActionPickerModal()
     } catch (_) {
-      /* dismissed */
+      /* dismissed or failed — alerts handled upstream */
     } finally {
-      setShowShareActionPickerModal(false)
+      setSharePickerSharing(false)
     }
   }, [
-    midA.shareModalCode,
-    midA.sharedCollaboration,
-    midA.handleOpenShareModal,
-    midA.activeSavedPlanId,
+    sharePickerPreparing,
+    sharePickerSharing,
+    sharePickerPermission,
+    sharePickerCode,
+    midA.prepareSharePicker,
     midA.handleConfirmShareSettings,
+    handleCloseShareActionPickerModal,
   ])
 
   const handleShareActionEnableAndBack = useCallback(async () => {
@@ -412,7 +535,7 @@ export function useAIPlanScreenMiddlePartB(midA) {
     return () => clearInterval(timer)
   }, [planHeaderReel])
 
-  const renderPlanTimelineOverviewHeader = useCallback(() => {
+  const planTimelineOverviewHeader = useMemo(() => {
     if (!midA.dayPlan?.length) return null
     const mealCount = midA.dayPlan.filter((i) => i.type === 'restaurant').length
     const sharedBanner =
@@ -430,6 +553,7 @@ export function useAIPlanScreenMiddlePartB(midA) {
     const rowForTitle = midA.savedPlansList.find((p) => p.id === midA.activeSavedPlanId)
     const savedTitleRaw = typeof rowForTitle?.title === 'string' ? rowForTitle.title.trim() : ''
     const primaryTitle = savedTitleRaw || titleLabel
+    const fromSavesCount = midA.dayPlan.filter((s) => isPlanStopFromSavesTag(s?.planListTag)).length
     const darkBackBtnStyle = isDark
       ? {
         backgroundColor: 'rgba(30,41,59,0.92)',
@@ -512,12 +636,12 @@ export function useAIPlanScreenMiddlePartB(midA) {
                 </View>
               <Text
                 style={[styles.planLuxuryOverviewSubtitle, darkSubtitleStyle]}
-                numberOfLines={1}
-                accessibilityLabel={`${midA.dayPlan.length} stops, ${mealCount} meals`}
+                numberOfLines={2}
+                accessibilityLabel={`${midA.dayPlan.length} stops, ${mealCount} meals${fromSavesCount ? `, ${fromSavesCount} from your saves` : ''}`}
               >
                 {mealCount === 0
-                  ? `${midA.dayPlan.length} stops`
-                  : `${midA.dayPlan.length} stops · ${mealCount} meals`}
+                  ? `${midA.dayPlan.length} stops${fromSavesCount ? ` · ${fromSavesCount} from saves` : ''}`
+                  : `${midA.dayPlan.length} stops · ${mealCount} meals${fromSavesCount ? ` · ${fromSavesCount} from saves` : ''}`}
               </Text>
             </View>
           </View>
@@ -529,20 +653,16 @@ export function useAIPlanScreenMiddlePartB(midA) {
             <View style={styles.planLuxuryOverviewMapRowSplit}>
               <TouchableOpacity
                 style={[styles.planLuxuryOverviewMapBtn, styles.planLuxuryOverviewMapBtnFlex, darkMapBtnStyle]}
-                onPress={midA.handleOpenInGoogleMaps}
-                disabled={midA.openingMaps}
+                onPress={() => {
+                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {})
+                  void midA.handleOpenInGoogleMaps()
+                }}
                 activeOpacity={0.85}
                 accessibilityRole="button"
-                accessibilityLabel="Open midA.route in Google Maps"
+                accessibilityLabel="Open route in Google Maps"
               >
-                {midA.openingMaps ? (
-                  <ActivityIndicator size="small" color={actionIconColor} />
-                ) : (
-                  <>
-                    <Ionicons name="navigate-outline" size={19} color={actionIconColor} />
-                    <Text style={[styles.planLuxuryOverviewMapBtnText, darkMapTextStyle]}>Maps</Text>
-                  </>
-                )}
+                <Ionicons name="navigate-outline" size={19} color={actionIconColor} />
+                <Text style={[styles.planLuxuryOverviewMapBtnText, darkMapTextStyle]}>Maps</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={[
@@ -582,29 +702,42 @@ export function useAIPlanScreenMiddlePartB(midA) {
     )
   }, [
     midA.dayPlan,
-    midA.openingMaps,
     midA.handleOpenInGoogleMaps,
     handleOpenShareActionPickerModal,
     midA.setShowSearchModal,
     midA.sharedCollaboration,
     midA.planReadOnly,
-    midA.handleOpenShareModal,
-    midA.shareModalBusy,
     midA.activeSavedPlanId,
     midA.savedPlansList,
+    midA.setQuickFindMapOnly,
+    midA.resetQuickFindRotationState,
+    midA.setDrawerStep,
+    midA.setDayPlan,
+    midA.setError,
+    midA.setActiveSavedPlanId,
+    midA.setSharedCollaboration,
     isDark,
   ])
 
 
   return {
     ...midA,
-    renderPlanTimelineOverviewHeader,
+    planTimelineOverviewHeader,
+    /** @deprecated use planTimelineOverviewHeader element */
+    renderPlanTimelineOverviewHeader: () => planTimelineOverviewHeader,
     handleSurpriseMe,
     startSetup,
     showShareActionPickerModal,
     setShowShareActionPickerModal,
-    shareActionModalPhase,
-    setShareActionModalPhase,
+    sharePickerPermission,
+    setSharePickerPermission,
+    handleSharePickerPermissionSelect,
+    sharePickerCode,
+    sharePickerPreparing,
+    sharePickerSharing,
+    sharePickerCopyHint,
+    handleCopySharePickerCode,
+    handleCloseShareActionPickerModal,
     handleSharePlanCode,
     handleShareActionEnableAndBack,
   }

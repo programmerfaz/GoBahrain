@@ -39,6 +39,7 @@ import { UserPreferencesProvider, useUserPreferences } from './src/context/UserP
 import { DoorTransitionProvider } from './src/context/DoorTransitionContext'
 import { AuthProvider, useAuth } from './src/context/AuthContext'
 import { SavedPlacesProvider } from './src/context/SavedPlacesContext'
+import { AddedToPlanToastProvider } from './src/context/AddedToPlanToastContext'
 import AuthScreen from './src/screens/AuthScreen'
 import { BRAND_WORDMARK_FONT, FONT_POPPINS_SEMIBOLD } from './src/constants/brandFont'
 import BrandSplashScreen from './src/components/BrandSplashScreen'
@@ -313,15 +314,17 @@ export default function App() {
             <CartProvider>
             <AuthProvider>
               <SavedPlacesProvider>
-                <UserPreferencesProvider>
-                  <DoorTransitionProvider>
-                    <SafeAreaView style={styles.safeArea} edges={['left', 'right']}>
-                      <View style={Platform.OS === 'web' ? styles.webAppColumn : styles.appFill}>
-                        <AppContent />
-                      </View>
-                    </SafeAreaView>
-                  </DoorTransitionProvider>
-                </UserPreferencesProvider>
+                <AddedToPlanToastProvider>
+                  <UserPreferencesProvider>
+                    <DoorTransitionProvider>
+                      <SafeAreaView style={styles.safeArea} edges={['left', 'right']}>
+                        <View style={Platform.OS === 'web' ? styles.webAppColumn : styles.appFill}>
+                          <AppContent />
+                        </View>
+                      </SafeAreaView>
+                    </DoorTransitionProvider>
+                  </UserPreferencesProvider>
+                </AddedToPlanToastProvider>
               </SavedPlacesProvider>
             </AuthProvider>
             </CartProvider>

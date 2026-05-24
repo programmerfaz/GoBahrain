@@ -18,12 +18,8 @@ import {
 } from 'react-native'
 import * as Haptics from 'expo-haptics'
 import Reanimated, {
-  FadeIn,
   FadeOut,
-  FadeInDown,
-  FadeOutUp,
-  ZoomInEasyDown,
-  ZoomOutEasyDown,
+  FadeInUp,
   Easing as REasing,
   interpolate,
   useAnimatedStyle,
@@ -85,6 +81,7 @@ import {
   pickPlanStopGalleryUris,
   pickPlanStopThumbUri,
 } from './planMatching'
+import { PLAN_TAG_FROM_SAVES, isPlanStopFromSavesTag } from '../../services/savedPosts'
 
 const markerMatchesShowcase = (mk, showcaseMk) => {
   if (!mk || !showcaseMk) return false
@@ -421,7 +418,10 @@ export function AIPlanScreenViewMap({ screen }) {
             ]}
             pointerEvents="box-none"
           >
-            <View style={[styles.orbitProfileChromeCard, { borderColor: orbitUi.glassBorder }]}>
+            <Reanimated.View
+              entering={FadeInUp.duration(440).springify().damping(18).stiffness(205).mass(0.82)}
+              style={[styles.orbitProfileChromeCard, { borderColor: orbitUi.glassBorder }]}
+            >
               <BlurView
                 pointerEvents="none"
                 intensity={orbitUi.blurChromeInt}
@@ -561,6 +561,10 @@ export function AIPlanScreenViewMap({ screen }) {
                         source: 'orbit',
                         place: String(screen.showcaseMarkerMk?.spot || 'this place'),
                         summary: orbitPlaceAiSummary,
+                        clientId:
+                          screen.showcaseMarkerMk?.clientId ||
+                          screen.showcaseMarkerMk?.client_a_uuid ||
+                          '',
                       })
                     }}
                     accessibilityRole="button"
@@ -608,7 +612,7 @@ export function AIPlanScreenViewMap({ screen }) {
                   </Pressable>
                 </View>
               </View>
-            </View>
+            </Reanimated.View>
           </View>
 
           {screen.showcaseOrbitPostUris?.length > 0 ? (
@@ -626,7 +630,8 @@ export function AIPlanScreenViewMap({ screen }) {
               ]}
               pointerEvents="box-none"
             >
-              <View
+              <Reanimated.View
+                entering={FadeInUp.delay(90).duration(420).springify().damping(17).stiffness(200).mass(0.8)}
                 style={[
                   styles.orbitPlaceUnifiedCard,
                   styles.orbitFilmstripDockCard,
@@ -639,30 +644,28 @@ export function AIPlanScreenViewMap({ screen }) {
                   },
                 ]}
               >
-                <BlurView intensity={orbitUi.blurDockInt} tint={orbitUi.blurTint} style={StyleSheet.absoluteFill} />
-                <LinearGradient
-                  pointerEvents="none"
-                  colors={orbitUi.dockBaseGradColors}
-                  locations={[0, 0.5, 1]}
-                  style={StyleSheet.absoluteFill}
-                />
-                <LinearGradient
-                  pointerEvents="none"
-                  colors={orbitUi.dockWashGradColors}
-                  start={{ x: 0, y: 0 }}
-                  end={{ x: 1, y: 0.6 }}
-                  style={StyleSheet.absoluteFill}
-                />
-                <View style={styles.orbitBottomHighlightsWrap}>
-                  <View style={[styles.orbitBottomHighlightsTray, !orbitUi.dark && styles.orbitBottomHighlightsTrayLight]}>
-                    <OrbitClientPostsStrip
-                      imageUris={screen.showcaseOrbitPostUris}
-                      accent={screen.showcaseMarkerAccent}
-                      isDark={orbitUi.dark}
-                    />
-                  </View>
+                <View style={styles.orbitFilmstripDockBackdrop} pointerEvents="none">
+                  <BlurView intensity={orbitUi.blurDockInt} tint={orbitUi.blurTint} style={StyleSheet.absoluteFill} />
+                  <LinearGradient
+                    colors={orbitUi.dockBaseGradColors}
+                    locations={[0, 0.5, 1]}
+                    style={StyleSheet.absoluteFill}
+                  />
+                  <LinearGradient
+                    colors={orbitUi.dockWashGradColors}
+                    start={{ x: 0, y: 0 }}
+                    end={{ x: 1, y: 0.6 }}
+                    style={StyleSheet.absoluteFill}
+                  />
                 </View>
-              </View>
+                <View style={styles.orbitBottomHighlightsWrap}>
+                  <OrbitClientPostsStrip
+                    imageUris={screen.showcaseOrbitPostUris}
+                    accent={screen.showcaseMarkerAccent}
+                    isDark={orbitUi.dark}
+                  />
+                </View>
+              </Reanimated.View>
             </View>
           ) : null}
         </>
@@ -830,8 +833,9 @@ export function AIPlanScreenViewMap({ screen }) {
                   <>
                     <View style={[styles.d0FixedBottomCta, { paddingHorizontal: 0, paddingTop: 0 }, screen.isMarkerShowcaseActive && styles.d0FixedBottomCtaMinimized]}>
                       {!screen.isMarkerShowcaseActive ? (
-                        <Reanimated.View style={[{ width: '100%', marginBottom: 0 }, buildDayCtaPulseStyle]}>
-                          <View style={styles.d0CtaDualRow}>
+                        <PopIn delay={36}>
+                          <Reanimated.View style={[{ width: '100%', marginBottom: 0 }, buildDayCtaPulseStyle]}>
+                            <View style={styles.d0CtaDualRow}>
                             <View style={styles.d0CtaCol}>
                               <Pressable
                                 style={({ pressed }) => [
@@ -897,21 +901,24 @@ export function AIPlanScreenViewMap({ screen }) {
                               </Pressable>
                             </View>
                           </View>
-                        </Reanimated.View>
+                          </Reanimated.View>
+                        </PopIn>
                       ) : null}
                       {!screen.isMarkerShowcaseActive && (screen.allPlaceMarkersLoading || nearbySuggestions.length) ? (
                         <View style={styles.d0NearbySection}>
-                          <View style={[styles.d0NearbyTopDivider, { backgroundColor: screen.isDark ? 'rgba(148,163,184,0.26)' : 'rgba(15,23,42,0.12)' }]} />
-                          <Text style={[styles.d0NearbyEyebrow, { color: screen.isDark ? 'rgba(245,210,122,0.92)' : '#8A6A14' }]}>Curated for you</Text>
-                          <View style={styles.d0NearbyHeaderRow}>
-                            <View style={[styles.d0NearbyHeaderIconWrap, { backgroundColor: screen.isDark ? 'rgba(212,175,55,0.16)' : 'rgba(212,175,55,0.13)' }]}>
-                              <Ionicons name="compass-outline" size={14} color={screen.isDark ? '#F5D27A' : '#8A6A14'} />
+                          <PopIn delay={90}>
+                            <View style={[styles.d0NearbyTopDivider, { backgroundColor: screen.isDark ? 'rgba(148,163,184,0.26)' : 'rgba(15,23,42,0.12)' }]} />
+                            <Text style={[styles.d0NearbyEyebrow, { color: screen.isDark ? 'rgba(245,210,122,0.92)' : '#8A6A14' }]}>Curated for you</Text>
+                            <View style={styles.d0NearbyHeaderRow}>
+                              <View style={[styles.d0NearbyHeaderIconWrap, { backgroundColor: screen.isDark ? 'rgba(212,175,55,0.16)' : 'rgba(212,175,55,0.13)' }]}>
+                                <Ionicons name="compass-outline" size={14} color={screen.isDark ? '#F5D27A' : '#8A6A14'} />
+                              </View>
+                              <View style={styles.d0NearbyHeaderTextWrap}>
+                                <Text style={[styles.d0NearbyTitle, { color: innerTextPrimary }]}>Nearby</Text>
+                                <Text style={[styles.d0NearbySubtitle, { color: innerTextSecondary }]}>Elegant picks around your current map</Text>
+                              </View>
                             </View>
-                            <View style={styles.d0NearbyHeaderTextWrap}>
-                              <Text style={[styles.d0NearbyTitle, { color: innerTextPrimary }]}>Nearby</Text>
-                              <Text style={[styles.d0NearbySubtitle, { color: innerTextSecondary }]}>Elegant picks around your current map</Text>
-                            </View>
-                          </View>
+                          </PopIn>
                           <ScrollView
                             horizontal
                             showsHorizontalScrollIndicator={false}
@@ -919,40 +926,47 @@ export function AIPlanScreenViewMap({ screen }) {
                           >
                             {screen.allPlaceMarkersLoading
                               ? nearbySkeletonItems.map((idx) => (
-                                <View
+                                <Reanimated.View
                                   key={`nearby-skeleton-${idx}`}
-                                  style={[
-                                    styles.d0NearbyCard,
-                                    styles.d0NearbyCardSkeleton,
-                                    {
-                                      borderColor: screen.isDark ? 'rgba(148,163,184,0.24)' : 'rgba(226,232,240,0.95)',
-                                      backgroundColor: innerCardBg,
-                                    },
-                                  ]}
+                                  entering={FadeInUp.delay(Math.min(idx, 8) * 40).duration(320).easing(REasing.out(REasing.cubic))}
                                 >
-                                  <View style={[styles.d0NearbyCardImageWrap, styles.d0NearbySkeletonBlock, { backgroundColor: screen.isDark ? 'rgba(148,163,184,0.17)' : '#E2E8F0' }]} />
-                                  <View style={styles.d0NearbyCardBody}>
-                                    <View style={[styles.d0NearbySkeletonLineLg, { backgroundColor: screen.isDark ? 'rgba(148,163,184,0.2)' : '#E2E8F0' }]} />
-                                    <View style={[styles.d0NearbySkeletonLineSm, { backgroundColor: screen.isDark ? 'rgba(148,163,184,0.15)' : '#EDF2F7' }]} />
+                                  <View
+                                    style={[
+                                      styles.d0NearbyCard,
+                                      styles.d0NearbyCardSkeleton,
+                                      {
+                                        borderColor: screen.isDark ? 'rgba(148,163,184,0.24)' : 'rgba(226,232,240,0.95)',
+                                        backgroundColor: innerCardBg,
+                                      },
+                                    ]}
+                                  >
+                                    <View style={[styles.d0NearbyCardImageWrap, styles.d0NearbySkeletonBlock, { backgroundColor: screen.isDark ? 'rgba(148,163,184,0.17)' : '#E2E8F0' }]} />
+                                    <View style={styles.d0NearbyCardBody}>
+                                      <View style={[styles.d0NearbySkeletonLineLg, { backgroundColor: screen.isDark ? 'rgba(148,163,184,0.2)' : '#E2E8F0' }]} />
+                                      <View style={[styles.d0NearbySkeletonLineSm, { backgroundColor: screen.isDark ? 'rgba(148,163,184,0.15)' : '#EDF2F7' }]} />
+                                    </View>
                                   </View>
-                                </View>
+                                </Reanimated.View>
                               ))
                               : nearbyVisibleSuggestions.map((item, idx) => (
-                                <TouchableOpacity
+                                <Reanimated.View
                                   key={`${item.clientId || item.spot}-${idx}`}
-                                  style={[
-                                    styles.d0NearbyCard,
-                                    {
-                                      borderColor: screen.isDark ? 'rgba(148,163,184,0.3)' : 'rgba(226,232,240,0.95)',
-                                      backgroundColor: innerCardBg,
-                                      shadowColor: screen.isDark ? '#000000' : '#0F172A',
-                                    },
-                                  ]}
-                                  activeOpacity={0.86}
-                                  onPress={() => screen.handlePlaceMarkerPress(item)}
-                                  accessibilityRole="button"
-                                  accessibilityLabel={`Open ${item.spot} on map`}
+                                  entering={FadeInUp.delay(Math.min(idx, 10) * 46).duration(400).easing(REasing.out(REasing.cubic))}
                                 >
+                                  <TouchableOpacity
+                                    style={[
+                                      styles.d0NearbyCard,
+                                      {
+                                        borderColor: screen.isDark ? 'rgba(148,163,184,0.3)' : 'rgba(226,232,240,0.95)',
+                                        backgroundColor: innerCardBg,
+                                        shadowColor: screen.isDark ? '#000000' : '#0F172A',
+                                      },
+                                    ]}
+                                    activeOpacity={0.86}
+                                    onPress={() => screen.handlePlaceMarkerPress(item)}
+                                    accessibilityRole="button"
+                                    accessibilityLabel={`Open ${item.spot} on map`}
+                                  >
                                   <View style={styles.d0NearbyCardImageWrap}>
                                     {item.image ? (
                                       <Image source={{ uri: item.image }} style={styles.d0NearbyCardImage} />
@@ -989,6 +1003,7 @@ export function AIPlanScreenViewMap({ screen }) {
                                     </View>
                                   </View>
                                 </TouchableOpacity>
+                                </Reanimated.View>
                               ))}
                           </ScrollView>
                         </View>
@@ -1011,6 +1026,10 @@ export function AIPlanScreenViewMap({ screen }) {
                   activeOpacity={0.65}
                   hitSlop={{ top: 14, bottom: 14, left: 14, right: 14 }}
                   onPress={() => {
+                    if (screen.customPlanDraftActive) {
+                      screen.dismissCustomPlanDraft()
+                      return
+                    }
                     void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light)
                     screen.setQuickFindMapOnly(false)
                     screen.resetQuickFindRotationState()
@@ -1051,7 +1070,7 @@ export function AIPlanScreenViewMap({ screen }) {
             {screen.loading ? (
               <Reanimated.View
                 style={[styles.planContentFill, styles.loadingWrap]}
-                entering={FadeInDown.duration(400).springify().damping(17).stiffness(200).mass(0.85)}
+                entering={FadeInUp.duration(400).springify().damping(17).stiffness(200).mass(0.85)}
               >
                 <View style={styles.planSheetLoadingGlassOuter}>
                   <BlurView intensity={Platform.OS === 'ios' ? 52 : 32} tint={blurTint} style={styles.planMastheadBlur} />
@@ -1075,7 +1094,7 @@ export function AIPlanScreenViewMap({ screen }) {
             ) : screen.error ? (
               <Reanimated.View
                 style={[styles.planContentFill, styles.errorWrap]}
-                entering={ZoomInEasyDown.duration(360).springify().damping(16).stiffness(220)}
+                entering={FadeInUp.duration(400).springify().damping(16).stiffness(220).mass(0.82)}
               >
                 <View style={[styles.errorCard, { backgroundColor: innerCardBg, borderColor: innerBorder }]}>
                   <View style={styles.errorIconWrap}>
@@ -1092,9 +1111,9 @@ export function AIPlanScreenViewMap({ screen }) {
             ) : !screen.dayPlan || screen.dayPlan.length === 0 ? (
               <Reanimated.View
                 style={[styles.planContentFill, { paddingHorizontal: 20, justifyContent: 'center' }]}
-                entering={FadeIn.duration(320)}
+                entering={FadeInUp.duration(340).easing(REasing.out(REasing.cubic))}
               >
-                {screen.customPlanDraftActive ? (
+                {screen.customPlanDraftActive && !screen.showSearchModal ? (
                   <View style={{ alignItems: 'center', gap: 14 }}>
                     <Text style={[styles.emptyResults, { textAlign: 'center' }]}>Custom plan</Text>
                     <Text style={[styles.d0CopyHint, { textAlign: 'center', maxWidth: 320 }]}>
@@ -1144,7 +1163,7 @@ export function AIPlanScreenViewMap({ screen }) {
             ) : screen.quickFindMapOnly && screen.dayPlan?.length === 1 ? (
               <Reanimated.View
                 style={[styles.planContentFill, { paddingHorizontal: 24, justifyContent: 'center', alignItems: 'center' }]}
-                entering={FadeIn.duration(280)}
+                entering={FadeInUp.duration(300).easing(REasing.out(REasing.cubic))}
               >
                 <Text style={[styles.emptyResults, { textAlign: 'center', marginBottom: 8 }]}>Your pick is on the map</Text>
                 <Text style={[styles.d0BuildHint, { textAlign: 'center', marginBottom: 18 }]}>
@@ -1194,7 +1213,7 @@ export function AIPlanScreenViewMap({ screen }) {
                     contentInsetAdjustmentBehavior="never"
                     showsVerticalScrollIndicator={false}
                     keyboardShouldPersistTaps="handled"
-                    ListHeaderComponent={screen.renderPlanTimelineOverviewHeader}
+                    ListHeaderComponent={screen.planTimelineOverviewHeader}
                     ListFooterComponent={
                       <View style={styles.planListEndFooter}>
                         <Text style={styles.planListEndFooterText}>
@@ -1227,7 +1246,11 @@ export function AIPlanScreenViewMap({ screen }) {
                     <ScaleDecorator>
                       <AnimatedStopRow isVisible={isVisible} style={styles.planRowEnterWrap}>
                         <Reanimated.View
-                          entering={item.userAdded ? FadeInDown.duration(320) : undefined}
+                          entering={
+                            item.userAdded
+                              ? FadeInUp.duration(360).easing(REasing.out(REasing.cubic))
+                              : undefined
+                          }
                           style={item.userAdded ? styles.planLuxuryNewPlaceGlow : undefined}
                         >
                         <View style={styles.planLuxuryStopBlock}>
@@ -1282,6 +1305,12 @@ export function AIPlanScreenViewMap({ screen }) {
                                       <View style={styles.planLuxuryUserPickPill} accessibilityRole="text" accessibilityLabel="You added this stop">
                                         <Ionicons name="person" size={11} color={screen.isDark ? '#34D399' : '#059669'} />
                                         <Text style={styles.planLuxuryUserPickPillText}>Your pick</Text>
+                                      </View>
+                                    ) : null}
+                                    {isPlanStopFromSavesTag(item.planListTag) ? (
+                                      <View style={styles.planLuxuryFromSavesPill} accessibilityRole="text" accessibilityLabel="From your saved posts">
+                                        <Ionicons name="bookmark" size={11} color={screen.isDark ? '#A5B4FC' : '#4F46E5'} />
+                                        <Text style={styles.planLuxuryFromSavesPillText}>{PLAN_TAG_FROM_SAVES}</Text>
                                       </View>
                                     ) : null}
                                     {venueExtraTags.map((tag) => (
@@ -1432,7 +1461,7 @@ function QuickFindCinematicLoader({ subtitle }) {
 
   return (
     <Reanimated.View
-      entering={FadeIn.duration(340)}
+      entering={FadeInUp.duration(340).easing(REasing.out(REasing.cubic))}
       exiting={FadeOut.duration(420)}
       style={styles.quickFindCinematicRoot}
       pointerEvents="auto"
@@ -1447,7 +1476,7 @@ function QuickFindCinematicLoader({ subtitle }) {
       />
       <View style={styles.quickFindCinematicCenter}>
         <Reanimated.View
-          entering={FadeInDown.duration(520).springify().damping(20).stiffness(200).mass(0.88)}
+          entering={FadeInUp.duration(520).springify().damping(20).stiffness(200).mass(0.88)}
         >
           <Text style={styles.quickFindCinematicEyebrow} pointerEvents="none">
             Bahrain in motion

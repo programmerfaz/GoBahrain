@@ -1,3 +1,8 @@
+/**
+ * AI Plan tab — builds personalized Bahrain day itineraries via OpenAI/Pinecone,
+ * renders them on an interactive map (orbit view, markers, quick-find), and handles
+ * draggable stops plus save, share, and collaboration flows. Styles: AIPlanScreen.styles.js.
+ */
 import React, { useRef, useEffect, useLayoutEffect, useState, useMemo, useCallback } from 'react';
 import {
   StyleSheet,

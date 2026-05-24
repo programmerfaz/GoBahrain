@@ -1,4 +1,4 @@
-import React from 'react'
+import React, { memo, useCallback, useLayoutEffect, useRef, useState } from 'react'
 import {
   StyleSheet,
   Text,
@@ -70,13 +70,95 @@ import {
   pickPlanStopThumbUri,
 } from './planMatching'
 
+/** One plan-modal preference/food chip — stable press handler; toggles draft state only (no full-screen re-render) */
+const PlanModalOptionChipTile = memo(function PlanModalOptionChipTile({
+  item,
+  staggerDelay,
+  variant,
+  isSelected,
+  isPrefStep,
+  isAtLimit,
+  onTogglePreferenceId,
+  onToggleFoodCategoryId,
+}) {
+  const pressCtxRef = useRef({})
+  pressCtxRef.current = {
+    isPrefStep,
+    isSelected,
+    isAtLimit,
+    id: item.id,
+    onTogglePreferenceId,
+    onToggleFoodCategoryId,
+  }
+
+  const handlePress = useCallback(() => {
+    const c = pressCtxRef.current
+    if (!c.isPrefStep && !c.isSelected && c.isAtLimit) {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning).catch(() => {})
+      return
+    }
+    if (c.isPrefStep) c.onTogglePreferenceId(c.id)
+    else c.onToggleFoodCategoryId(c.id)
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {})
+  }, [])
+
+  return (
+    <PopIn delay={staggerDelay}>
+      <AnimatedOptionChip item={item} variant={variant} isSelected={isSelected} onPress={handlePress} />
+    </PopIn>
+  )
+})
 
 export function AIPlanScreenViewDialogsA({ screen }) {
   const iconColor = screen.isDark ? '#CBD5E1' : '#0F172A'
   const modalBackdrop = screen.isDark ? '#020617' : '#07060A'
   const isPrefStep = screen.planModalStep === 1
   const hasSelectionLimit = !isPrefStep
-  const selectedCount = isPrefStep ? screen.selectedPreferences.length : screen.selectedFoodCategories.length
+
+  /** Draft picks live only in this subtree so chip taps do not re-render the map + rest of the plan screen */
+  const [draftPreferences, setDraftPreferences] = useState([])
+  const [draftFoodCategories, setDraftFoodCategories] = useState([])
+
+  const draftPreferencesRef = useRef(draftPreferences)
+  const draftFoodRef = useRef(draftFoodCategories)
+  draftPreferencesRef.current = draftPreferences
+  draftFoodRef.current = draftFoodCategories
+
+  const showPlanModalPrevRef = useRef(screen.showPlanModal)
+
+  useLayoutEffect(() => {
+    const next = screen.showPlanModal
+    const prev = showPlanModalPrevRef.current
+
+    if (next && !prev) {
+      setDraftPreferences(Array.isArray(screen.selectedPreferences) ? [...screen.selectedPreferences] : [])
+      setDraftFoodCategories(Array.isArray(screen.selectedFoodCategories) ? [...screen.selectedFoodCategories] : [])
+    }
+
+    if (prev && !next) {
+      screen.setSelectedPreferences(draftPreferencesRef.current)
+      screen.setSelectedFoodCategories(draftFoodRef.current)
+    }
+
+    showPlanModalPrevRef.current = next
+  }, [screen.showPlanModal, screen.setSelectedPreferences, screen.setSelectedFoodCategories])
+
+  const toggleDraftPreference = useCallback((id) => {
+    setDraftPreferences((prev) => {
+      if (prev.includes(id)) return prev.filter((p) => p !== id)
+      return [...prev, id]
+    })
+  }, [])
+
+  const toggleDraftFoodCategory = useCallback((id) => {
+    setDraftFoodCategories((prev) => {
+      if (prev.includes(id)) return prev.filter((f) => f !== id)
+      if (prev.length >= PLAN_MODAL_MAX_FOOD_CATEGORIES) return prev
+      return [...prev, id]
+    })
+  }, [])
+
+  const selectedCount = isPrefStep ? draftPreferences.length : draftFoodCategories.length
   const maxSelected = PLAN_MODAL_MAX_FOOD_CATEGORIES
   const isAtLimit = hasSelectionLimit && selectedCount >= maxSelected
   return (
@@ -139,8 +221,8 @@ export function AIPlanScreenViewDialogsA({ screen }) {
                           </PopIn>
                           <PopIn key={`cine-sub-${screen.planModalStep}`} delay={200}>
                             {(() => {
-                              const prefCount = screen.selectedPreferences.length
-                              const foodCount = screen.selectedFoodCategories.length
+                              const prefCount = draftPreferences.length
+                              const foodCount = draftFoodCategories.length
                               const isFoodStep = screen.planModalStep === 2
                               const pickedCount = isFoodStep ? foodCount : prefCount
                               const hasPick = pickedCount > 0
@@ -190,32 +272,25 @@ export function AIPlanScreenViewDialogsA({ screen }) {
                             showsVerticalScrollIndicator={false}
                           >
                             <View style={styles.pmOptionGrid}>
-                              {(() => {
-                                const items = screen.planModalStep === 1 ? PREFERENCES : FOOD_CATEGORIES
-                                const isSelectedFn = (item) =>
+                              {(screen.planModalStep === 1 ? PREFERENCES : FOOD_CATEGORIES).map((item, idx) => {
+                                const selected =
                                   screen.planModalStep === 1
-                                    ? screen.selectedPreferences.includes(item.id)
-                                    : screen.selectedFoodCategories.includes(item.id)
-                                const handlePressItem = (item) => {
-                                  const isSelected = isSelectedFn(item)
-                                  if (!isSelected && isAtLimit) {
-                                    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning).catch(() => {})
-                                    return
-                                  }
-                                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {})
-                                  return screen.planModalStep === 1 ? screen.togglePreference(item.id) : screen.toggleFoodCategory(item.id)
-                                }
-                                return items.map((item, idx) => (
-                                  <PopIn key={`${screen.planModalStep}-cchip-${item.id}`} delay={280 + idx * 30}>
-                                    <AnimatedOptionChip
-                                      item={item}
-                                      variant="dark"
-                                      isSelected={isSelectedFn(item)}
-                                      onPress={() => handlePressItem(item)}
-                                    />
-                                  </PopIn>
-                                ))
-                              })()}
+                                    ? draftPreferences.includes(item.id)
+                                    : draftFoodCategories.includes(item.id)
+                                return (
+                                  <PlanModalOptionChipTile
+                                    key={`${screen.planModalStep}-cchip-${item.id}`}
+                                    item={item}
+                                    staggerDelay={280 + idx * 30}
+                                    variant="dark"
+                                    isSelected={selected}
+                                    isPrefStep={isPrefStep}
+                                    isAtLimit={isAtLimit}
+                                    onTogglePreferenceId={toggleDraftPreference}
+                                    onToggleFoodCategoryId={toggleDraftFoodCategory}
+                                  />
+                                )
+                              })}
                             </View>
                           </ScrollView>
                           {hasSelectionLimit && isAtLimit ? (
@@ -241,7 +316,10 @@ export function AIPlanScreenViewDialogsA({ screen }) {
                                     style={styles.pmCinematicPrimaryBtn}
                                     activeOpacity={0.88}
                                     onPress={() => {
-                                      const prefLabels = screen.getSelectedPreferenceLabels()
+                                      screen.setSelectedPreferences(draftPreferences)
+                                      const prefLabels = draftPreferences
+                                        .map((id) => PREFERENCES.find((p) => p.id === id)?.label)
+                                        .filter(Boolean)
                                       screen.startBackgroundPrefetch(prefLabels)
                                       screen.setPlanModalStep(2)
                                     }}
@@ -274,6 +352,8 @@ export function AIPlanScreenViewDialogsA({ screen }) {
                                     style={styles.pmCinematicPrimaryBtn}
                                     activeOpacity={0.88}
                                     onPress={() => {
+                                      screen.setSelectedPreferences(draftPreferences)
+                                      screen.setSelectedFoodCategories(draftFoodCategories)
                                       screen.handleGenerate(() => screen.closePlanModal())
                                     }}
                                     accessibilityLabel="Generate your plan"

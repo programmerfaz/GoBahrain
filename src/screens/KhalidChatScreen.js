@@ -15,7 +15,6 @@ import {
   TouchableWithoutFeedback,
   LayoutAnimation,
   UIManager,
-  ScrollView,
   useWindowDimensions,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
@@ -39,14 +38,25 @@ import {
   fetchPineconePlacesForChat,
   buildKhalidPineconeQueryText,
   extractKhalidTopicHintFromPriorTurns,
+  isUserLocationInBahrain,
   normalizeViewerUType,
+  resolvePlanRetrievalBuckets,
+  generateDayPlan,
 } from '../services/aiPipeline';
 import { useUserPreferences } from '../context/UserPreferencesContext';
 import { useAuth } from '../context/AuthContext';
 import { useTheme } from '../context/ThemeContext';
 import ClientProfileModal from '../components/ClientProfileModal';
+import {
+  buildKhalidIntroParts,
+  buildKhalidSystemPrompt,
+  sanitizeKhalidAssistantReplyPlain,
+  splitKhalidReplyAndFollowUp,
+} from '../services/khalidPrompt';
 import { coerceImageValueToString, resolvePublicImageUrl } from '../utils/imageUrl';
 import { resolveFeedPostImageUri } from '../services/feedService';
+import { openGoogleMapsDirections } from '../utils/googleMapsDirections';
+import { openGoogleMapsRouteForMarkers } from './aiPlan/planGeoAndShare';
 import { PinchZoomPostImage } from '../components/FeedUpvoteInteractions';
 import { CachedImage } from '../components/CachedImage';
 const DEFAULT_PROFILE_IMAGE = require('../../assets/pfp.png')
@@ -59,14 +69,8 @@ const KHALID_APP_CONTROL_ACTION_TYPES = new Set([
   'open_plan_builder',
   'navigate_tab',
   'open_saved_plans',
+  'generate_inline_plan',
 ]);
-
-/** GPT sometimes emits **markdown** — chat bubbles are plain text (matches Ask-chip replies). */
-const sanitizeKhalidAssistantReplyPlain = (t) =>
-  String(t || '')
-    .replace(/\*\*([^*]+)\*\*/g, '$1')
-    .replace(/\*([^*\n]+)\*/g, '$1')
-    .trim();
 
 const PICS_LIKE_QUERIES = ['pic', 'pics', 'photo', 'photos', 'image', 'images', 'picture', 'pictures', 'show me', 'posts', 'feed'];
 
@@ -120,11 +124,11 @@ async function fetchPostsByQuery(query) {
   const clientIds = [...new Set(matches.map((r) => r.client_a_uuid).filter(Boolean))];
   let clientMap = {};
   if (clientIds.length > 0) {
-    const { data: clients } = await supabase.from('client').select('client_a_uuid, business_name, name').in('client_a_uuid', clientIds);
+    const { data: clients } = await supabase.from('client').select('client_a_uuid, business_name').in('client_a_uuid', clientIds);
     const safeClients = Array.isArray(clients) ? clients : []
     safeClients.forEach((c) => {
       const id = c.client_a_uuid;
-      clientMap[id] = c?.business_name || c?.name || null;
+      clientMap[id] = c?.business_name || null;
     });
   }
   return matches.map((r) => ({
@@ -218,7 +222,7 @@ function doesClientMatchSearchQuery(client, query) {
   return searchText.includes(lowerQuery)
 }
 
-const KHALID_GEO_CACHE_TTL_MS = 5 * 60 * 1000
+const KHALID_GEO_CACHE_TTL_MS = 60 * 1000
 
 function khalidHaversineKm(lat1, lon1, lat2, lon2) {
   const r = 6371
@@ -513,8 +517,6 @@ function buildKhalidVarietyQuery({
   currentQuery,
   currentClientType,
   generalLabels = [],
-  activityLabels = [],
-  foodLabels = [],
   personaSummary = '',
 }) {
   const baseAssist = buildKhalidBrowseAssist(userText, replyText, topicHintFromPrior)
@@ -527,16 +529,7 @@ function buildKhalidVarietyQuery({
   const lowerUser = String(userText || '').toLowerCase()
   const inferredType =
     String(currentClientType || '').trim() || String(baseAssist.clientTypeHint || '').trim()
-  const useFoodHints = inferredType === 'restaurant' || /\b(food|restaurant|cafe|coffee|breakfast|lunch|dinner)\b/.test(lowerUser)
-  const useActivityHints = inferredType === 'place' || /\b(place|attraction|beach|park|museum|mall|things to do|fun)\b/.test(lowerUser)
-
   const labelHints = []
-  if (useFoodHints && Array.isArray(foodLabels) && foodLabels.length > 0) {
-    labelHints.push(String(foodLabels[0]).toLowerCase())
-  }
-  if (useActivityHints && Array.isArray(activityLabels) && activityLabels.length > 0) {
-    labelHints.push(String(activityLabels[0]).toLowerCase())
-  }
   if (Array.isArray(generalLabels) && generalLabels.length > 0) {
     labelHints.push(String(generalLabels[0]).toLowerCase())
   }
@@ -579,6 +572,45 @@ function extractKhalidSpecificPlaceName(text) {
     if (candidate.length >= 2) return candidate.slice(0, 160)
   }
   return ''
+}
+
+const KHALID_LISTING_CARD_ACTION_TYPES = new Set([
+  'go_show_clients',
+  'go_home_highlight_post',
+  'go_community_filter_reviews',
+])
+
+/** User explicitly asked to browse listings / photos (not general Q&A). */
+function isKhalidExplicitListingAsk(userText) {
+  if (isKhalidVenueInfoAsk(userText) || isKhalidSmallTalkOrCapabilitiesAsk(userText)) return false
+  const s = String(userText || '').trim().toLowerCase()
+  if (!s) return false
+  if (/\b(show\s+(me\s+)?(some\s+)?(pics?|photos?|images?)|^(pics?|photos?)\s*[!.?]*$)/i.test(s)) return true
+  if (/\b(show|browse|open)\s+(me\s+)?(the\s+)?(cards?|listings?)\b/i.test(s)) return true
+  if (isKhalidBroadDiscoveryAsk(userText)) return true
+  if (
+    /\b(show|find|list|pull up)\s+(me\s+)?/.test(s) &&
+    /\b(restaurants?|cafes?|coffee shops?|places?|beaches|events?|spots?|options|listings?)\b/i.test(s)
+  ) {
+    return true
+  }
+  return false
+}
+
+const stripKhalidListingCardActions = (actions) =>
+  (Array.isArray(actions) ? actions : []).filter((a) => a && !KHALID_LISTING_CARD_ACTION_TYPES.has(a.type))
+
+/** User wants a text answer about one venue — no listing cards / photos. */
+function isKhalidVenueInfoAsk(userText) {
+  const userMsgLower = String(userText || '').trim().toLowerCase()
+  const isBroadTellMeAsk =
+    /tell me (about|more)\s+(restaurants?|food|cuisine|cuisines|cafes?|coffee|tea|places|spots|options|things|attractions?|beaches|museums?|malls?|shopping|events?|breakfast|lunch|dinner|nightlife)/i.test(
+      userMsgLower,
+    ) || /tell me about good\b/i.test(userMsgLower)
+  if (isBroadTellMeAsk) return false
+  return /(tell me (about|more)\s+\S+|is\s+.+\s+good\b|what do you know about|information about|details about)/i.test(
+    userMsgLower,
+  )
 }
 
 function doesKhalidClientNameMatchTarget(clientName, targetName) {
@@ -870,22 +902,18 @@ async function fetchClientsByQuery(query, clientType = '', fetchOpts = {}) {
       }
       
       if (data && data.length > 0) {
-        rows = data.filter((r) => doesClientMatchSearchQuery(r, q));
-        
-        if (rows.length === 0 && !strictQueryMatch) {
-          rows = data;
-        }
-        console.log('[Khalid] Found', rows.length, 'clients with broader search');
+        rows = data.filter((r) => doesClientMatchSearchQuery(r, q))
+        console.log('[Khalid] Found', rows.length, 'clients with broader search (tag-aware only)');
       }
     }
 
-    if (rows.length === 0 && q && strictQueryMatch) {
-      console.log('[Khalid] Strict query match enabled and no matches found, skipping generic fallback');
-      return []
+    if (rows.length === 0 && q.length >= 2) {
+      console.log('[Khalid] No matches for query — skipping generic top-rated fallback:', q);
+      return [];
     }
     
-    // Strategy 3: Get top-rated clients by type
-    if (rows.length === 0) {
+    // Strategy 3: top-rated by type only when there is no search query (open browse)
+    if (rows.length === 0 && !q) {
       console.log('[Khalid] No specific results, fetching top-rated clients');
       let topQuery = supabase
         .from('client')
@@ -907,49 +935,8 @@ async function fetchClientsByQuery(query, clientType = '', fetchOpts = {}) {
       }
     }
     
-    // Strategy 4: If still no results, get ANY clients
     if (rows.length === 0) {
-      console.log('[Khalid] No rated clients, fetching any clients');
-      const { data, error } = await supabase
-        .from('client')
-        .select('*')
-        .limit(fetchLimit);
-      
-      if (error) {
-        console.error('[Khalid] Query error in Strategy 4:', error);
-      }
-      
-      if (data && data.length > 0) {
-        rows = data;
-        console.log('[Khalid] Found', rows.length, 'any clients');
-      }
-    }
-    
-    if (rows.length === 0) {
-      console.warn('[Khalid] No clients found in database at all');
-      console.log('[Khalid] This might mean: 1) Empty database, 2) Wrong table name, 3) No matching data');
-      console.log('[Khalid] Attempting one final query without filters...');
-      
-      // Final attempt: just get SOMETHING from the table to confirm it exists
-      const { data: anyData, error: anyError } = await supabase
-        .from('client')
-        .select('*')
-        .limit(5);
-      
-      if (anyError) {
-        console.error('[Khalid] Even basic query failed:', anyError);
-        console.error('[Khalid] This suggests the "client" table might not exist or there are permission issues');
-      } else {
-        console.log('[Khalid] Basic query returned:', anyData?.length || 0, 'rows');
-        if (anyData && anyData.length > 0) {
-          console.log('[Khalid] Sample client data:', anyData[0]);
-          rows = anyData;
-        }
-      }
-      
-      if (rows.length === 0) {
-        return [];
-      }
+      return [];
     }
     
     // Fetch images and review counts from community posts
@@ -1155,33 +1142,13 @@ const KHALID_SUGGESTIONS_LOCAL = [
   'Quiet spots for dinner outside mall crowds',
   'New openings worth a look right now',
   'Best karak paired with a late stroll?',
-  'Show me hidden gems photo sets',
+  'Tell me more about Adliya Block 338',
 ];
 
-function getSmartSuggestions(generalLabels = [], activityLabels = [], foodLabels = [], viewerUType = 'local') {
+function getSmartSuggestions(generalLabels = [], viewerUType = 'local') {
   const out = [];
   out.push("What's closest to me?");
 
-  // Food preference-based suggestions
-  if (foodLabels.length > 0) {
-    out.push(`Best ${foodLabels[0].toLowerCase()} restaurants`);
-    if (foodLabels.length > 1) out.push(`Where can I find ${foodLabels[1].toLowerCase()} food?`);
-  }
-  
-  // Activity preference-based suggestions
-  if (activityLabels.length > 0) {
-    const activity = activityLabels[0].toLowerCase();
-    if (activity.includes('beach') || activity.includes('water')) {
-      out.push('Show me beaches and water activities');
-    } else if (activity.includes('culture') || activity.includes('history')) {
-      out.push('Historical and cultural sites');
-    } else if (activity.includes('shop')) {
-      out.push('Best shopping destinations');
-    } else {
-      out.push(`Places for ${activity}`);
-    }
-  }
-  
   // General label-based suggestions
   if (generalLabels.some((l) => /family/i.test(l))) {
     out.push('Family-friendly places to visit');
@@ -1191,11 +1158,6 @@ function getSmartSuggestions(generalLabels = [], activityLabels = [], foodLabels
     out.push('Upscale dining experiences');
   } else if (generalLabels.some((l) => /budget|cheap/i.test(l))) {
     out.push('Good budget-friendly options');
-  }
-  
-  // Always include a photo suggestion if not present
-  if (!out.some((s) => /photo|pic/i.test(s))) {
-    out.push('Show me photos of places');
   }
   
   const fallbackPool =
@@ -1755,7 +1717,373 @@ function KhalidCardRow({ item, onViewProfile, onAskAbout }) {
 const BAHRAIN_RED = '#C8102E'
 const BAHRAIN_RED_DEEP = '#8B0719'
 const BAHRAIN_GOLD = '#E9C877'
-const KHALID_SIYAHA_LOGO = require('../../assets/logo_siyaha.png')
+const KHALID_AVATAR = require('../../assets/khalid.png')
+
+/* ── Inline plan card (rendered inside chat when Khalid generates a plan) ── */
+
+const PLAN_TIME_ICON = { Morning: 'sunny-outline', Afternoon: 'partly-sunny-outline', Evening: 'moon-outline' }
+const PLAN_TIME_COLOR = { Morning: '#F59E0B', Afternoon: '#F97316', Evening: '#7C3AED' }
+const PLAN_TYPE_ICON = { restaurant: 'restaurant-outline', place: 'location-outline', event: 'calendar-outline' }
+
+const InlinePlanStop = ({ stop, index, isDark, colors, onPress, onNavigate }) => {
+  const timeColor = PLAN_TIME_COLOR[stop.time] || '#94A3B8'
+  const typeIcon = PLAN_TYPE_ICON[stop.type] || 'location-outline'
+  const timeIcon = PLAN_TIME_ICON[stop.time] || 'time-outline'
+  const guide = stop.guide || {}
+  const hasCoords = Number.isFinite(stop.lat) && Number.isFinite(stop.lng)
+
+  return (
+    <TouchableOpacity
+      activeOpacity={0.7}
+      onPress={() => onPress?.(stop)}
+      accessibilityRole="button"
+      accessibilityLabel={`Open ${stop.spot}`}
+      style={[
+        inlinePlanStyles.stop,
+        {
+          backgroundColor: isDark ? 'rgba(255,255,255,0.06)' : colors.surface,
+          borderColor: isDark ? 'rgba(255,255,255,0.1)' : colors.border,
+        },
+      ]}
+    >
+      {/* Timeline dot + connector */}
+      <View style={inlinePlanStyles.timeline}>
+        <View style={[inlinePlanStyles.timelineDot, { backgroundColor: timeColor }]}>
+          <Text style={inlinePlanStyles.timelineDotText}>{index + 1}</Text>
+        </View>
+        <View style={[inlinePlanStyles.timelineLine, { backgroundColor: isDark ? 'rgba(255,255,255,0.08)' : colors.borderLight }]} />
+      </View>
+
+      {/* Content */}
+      <View style={inlinePlanStyles.stopContent}>
+        <View style={inlinePlanStyles.stopHeader}>
+          <Ionicons name={timeIcon} size={12} color={timeColor} />
+          <Text style={[inlinePlanStyles.stopTime, { color: timeColor }]}>{stop.time}</Text>
+          <Ionicons name={typeIcon} size={12} color={colors.textMuted} style={{ marginLeft: 6 }} />
+          <Text style={[inlinePlanStyles.stopType, { color: colors.textMuted }]}>
+            {stop.type === 'restaurant' ? 'Dining' : stop.type === 'event' ? 'Event' : 'Visit'}
+          </Text>
+        </View>
+        <Text style={[inlinePlanStyles.stopName, { color: colors.textPrimary }]} numberOfLines={2}>
+          {stop.spot}
+        </Text>
+        {guide.highlight ? (
+          <Text style={[inlinePlanStyles.stopHighlight, { color: timeColor }]} numberOfLines={1}>
+            {guide.highlight}
+          </Text>
+        ) : null}
+        {(guide.why || stop.reason) ? (
+          <Text style={[inlinePlanStyles.stopReason, { color: colors.textSecondary }]} numberOfLines={2}>
+            {guide.why || stop.reason}
+          </Text>
+        ) : null}
+        <View style={inlinePlanStyles.stopFooter}>
+          {guide.tip ? (
+            <View style={inlinePlanStyles.stopTipRow}>
+              <Ionicons name="bulb-outline" size={11} color={colors.textMuted} />
+              <Text style={[inlinePlanStyles.stopTip, { color: colors.textMuted }]} numberOfLines={1}>
+                {guide.tip}
+              </Text>
+            </View>
+          ) : null}
+          {hasCoords ? (
+            <TouchableOpacity
+              activeOpacity={0.7}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              onPress={(e) => {
+                e.stopPropagation?.()
+                onNavigate?.(stop)
+              }}
+              style={[inlinePlanStyles.navBtn, { backgroundColor: `${timeColor}18` }]}
+              accessibilityRole="button"
+              accessibilityLabel={`Navigate to ${stop.spot}`}
+            >
+              <Ionicons name="navigate-outline" size={12} color={timeColor} />
+              <Text style={[inlinePlanStyles.navBtnText, { color: timeColor }]}>Navigate</Text>
+            </TouchableOpacity>
+          ) : null}
+        </View>
+      </View>
+    </TouchableOpacity>
+  )
+}
+
+const InlinePlanCard = ({ plan, loading, error, isDark, colors, onStopPress, onNavigateStop, onOpenFullRoute }) => {
+  if (loading) {
+    return (
+      <View style={[
+        inlinePlanStyles.card,
+        {
+          backgroundColor: isDark ? 'rgba(255,255,255,0.04)' : colors.surface,
+          borderColor: isDark ? 'rgba(255,255,255,0.1)' : colors.border,
+        },
+      ]}>
+        <View style={inlinePlanStyles.loadingWrap}>
+          <ActivityIndicator size="small" color={BAHRAIN_RED} />
+          <Text style={[inlinePlanStyles.loadingText, { color: colors.textSecondary }]}>
+            Building your perfect day...
+          </Text>
+        </View>
+      </View>
+    )
+  }
+
+  if (error) {
+    return (
+      <View style={[
+        inlinePlanStyles.card,
+        {
+          backgroundColor: isDark ? 'rgba(255,255,255,0.04)' : colors.surface,
+          borderColor: isDark ? 'rgba(239,68,68,0.2)' : 'rgba(185,28,28,0.15)',
+        },
+      ]}>
+        <Text style={[inlinePlanStyles.errorText, { color: colors.error }]}>
+          Could not build a plan right now — try again in a moment.
+        </Text>
+      </View>
+    )
+  }
+
+  if (!Array.isArray(plan) || plan.length === 0) return null
+
+  const morningStops = plan.filter((s) => s.time === 'Morning')
+  const afternoonStops = plan.filter((s) => s.time === 'Afternoon')
+  const eveningStops = plan.filter((s) => s.time === 'Evening')
+  const hasAnyCoords = plan.some((s) => Number.isFinite(s.lat) && Number.isFinite(s.lng))
+
+  return (
+    <View style={[
+      inlinePlanStyles.card,
+      {
+        backgroundColor: isDark ? 'rgba(255,255,255,0.04)' : colors.surface,
+        borderColor: isDark ? 'rgba(255,255,255,0.1)' : colors.border,
+      },
+    ]}>
+      {/* Header */}
+      <View style={inlinePlanStyles.cardHeader}>
+        <View style={[inlinePlanStyles.cardHeaderIcon, { backgroundColor: isDark ? 'rgba(200,16,46,0.2)' : 'rgba(200,16,46,0.1)' }]}>
+          <Ionicons name="map-outline" size={16} color={BAHRAIN_RED} />
+        </View>
+        <View style={{ flex: 1 }}>
+          <Text style={[inlinePlanStyles.cardTitle, { color: colors.textPrimary }]}>Your Day Plan</Text>
+          <Text style={[inlinePlanStyles.cardSub, { color: colors.textMuted }]}>
+            {plan.length} stops · {morningStops.length} morning · {afternoonStops.length} afternoon · {eveningStops.length} evening
+          </Text>
+        </View>
+      </View>
+
+      <Text style={[inlinePlanStyles.tapHint, { color: colors.textMuted }]}>Tap a stop to view details</Text>
+
+      {/* Stops */}
+      {plan.map((stop, idx) => (
+        <InlinePlanStop
+          key={`plan-${idx}`}
+          stop={stop}
+          index={idx}
+          isDark={isDark}
+          colors={colors}
+          onPress={onStopPress}
+          onNavigate={onNavigateStop}
+        />
+      ))}
+
+      {/* Open full route in Google Maps */}
+      {hasAnyCoords && onOpenFullRoute ? (
+        <TouchableOpacity
+          style={[inlinePlanStyles.openFullBtn, { borderColor: isDark ? 'rgba(200,16,46,0.3)' : 'rgba(200,16,46,0.2)' }]}
+          activeOpacity={0.8}
+          onPress={() => onOpenFullRoute(plan)}
+          accessibilityRole="button"
+          accessibilityLabel="Open full route in Google Maps"
+        >
+          <Ionicons name="map" size={14} color={BAHRAIN_RED} />
+          <Text style={[inlinePlanStyles.openFullBtnText, { color: BAHRAIN_RED }]}>Open Full Route in Google Maps</Text>
+        </TouchableOpacity>
+      ) : null}
+    </View>
+  )
+}
+
+const inlinePlanStyles = StyleSheet.create({
+  card: {
+    borderRadius: 16,
+    borderWidth: 1,
+    marginTop: 8,
+    marginBottom: 4,
+    overflow: 'hidden',
+    ...Platform.select({
+      ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.06, shadowRadius: 8 },
+      android: { elevation: 3 },
+    }),
+  },
+  cardHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingHorizontal: 14,
+    paddingTop: 14,
+    paddingBottom: 10,
+  },
+  cardHeaderIcon: {
+    width: 32,
+    height: 32,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  cardTitle: {
+    fontSize: 15,
+    fontFamily: FONT_POPPINS_SEMIBOLD,
+    letterSpacing: -0.2,
+  },
+  cardSub: {
+    fontSize: 11,
+    fontFamily: FONT_POPPINS_REGULAR,
+    marginTop: 1,
+  },
+  stop: {
+    flexDirection: 'row',
+    marginHorizontal: 10,
+    marginBottom: 6,
+    borderRadius: 12,
+    borderWidth: 1,
+    padding: 10,
+  },
+  timeline: {
+    width: 28,
+    alignItems: 'center',
+    marginRight: 8,
+  },
+  timelineDot: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  timelineDotText: {
+    color: '#FFFFFF',
+    fontSize: 10,
+    fontFamily: FONT_POPPINS_BOLD,
+  },
+  timelineLine: {
+    width: 2,
+    flex: 1,
+    marginTop: 4,
+    borderRadius: 1,
+  },
+  stopContent: {
+    flex: 1,
+    minWidth: 0,
+  },
+  stopHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    marginBottom: 4,
+  },
+  stopTime: {
+    fontSize: 10,
+    fontFamily: FONT_POPPINS_SEMIBOLD,
+    letterSpacing: 0.3,
+  },
+  stopType: {
+    fontSize: 10,
+    fontFamily: FONT_POPPINS_REGULAR,
+  },
+  stopName: {
+    fontSize: 14,
+    fontFamily: FONT_POPPINS_SEMIBOLD,
+    letterSpacing: -0.2,
+    lineHeight: 18,
+    marginBottom: 2,
+  },
+  stopHighlight: {
+    fontSize: 11,
+    fontFamily: FONT_POPPINS_MEDIUM,
+    letterSpacing: 0.2,
+    marginBottom: 2,
+  },
+  stopReason: {
+    fontSize: 11,
+    fontFamily: FONT_POPPINS_REGULAR,
+    lineHeight: 15,
+    marginBottom: 2,
+  },
+  stopFooter: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: 2,
+  },
+  stopTipRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    flex: 1,
+    marginRight: 6,
+  },
+  stopTip: {
+    flex: 1,
+    fontSize: 10,
+    fontFamily: FONT_POPPINS_REGULAR,
+    lineHeight: 14,
+  },
+  navBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 8,
+  },
+  navBtnText: {
+    fontSize: 10,
+    fontFamily: FONT_POPPINS_SEMIBOLD,
+    letterSpacing: 0.2,
+  },
+  tapHint: {
+    fontSize: 10,
+    fontFamily: FONT_POPPINS_REGULAR,
+    textAlign: 'center',
+    marginBottom: 6,
+    marginTop: -2,
+  },
+  loadingWrap: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    padding: 20,
+    justifyContent: 'center',
+  },
+  loadingText: {
+    fontSize: 13,
+    fontFamily: FONT_POPPINS_MEDIUM,
+  },
+  errorText: {
+    fontSize: 13,
+    fontFamily: FONT_POPPINS_REGULAR,
+    padding: 16,
+    textAlign: 'center',
+  },
+  openFullBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    marginHorizontal: 10,
+    marginTop: 4,
+    marginBottom: 12,
+    paddingVertical: 10,
+    borderRadius: 10,
+    borderWidth: 1,
+  },
+  openFullBtnText: {
+    fontSize: 13,
+    fontFamily: FONT_POPPINS_SEMIBOLD,
+    letterSpacing: 0.2,
+  },
+})
 
 /* Aurora backdrop — two drifting gradient blobs tinted gold/red that breathe
  * behind the blurred panel for a premium cinematic look. */
@@ -1825,56 +2153,6 @@ function ChatAuroraBackdrop({ isDark = true }) {
           end={{ x: 1, y: 1 }}
         />
       </Animated.View>
-    </View>
-  )
-}
-
-/* Breathing halo ring behind the avatar — a rotating conic-like gradient
- * (faked with a LinearGradient ring) plus a subtle pulse scale. */
-function AvatarHaloRing({ size = 48, children, active = true, innerBackgroundColor = '#0F1626' }) {
-  const rotate = useRef(new Animated.Value(0)).current
-  const pulse = useRef(new Animated.Value(0)).current
-  useEffect(() => {
-    if (!active) return undefined
-    const r = Animated.loop(
-      Animated.timing(rotate, { toValue: 1, duration: 6000, easing: Easing.linear, useNativeDriver: true })
-    )
-    const p = Animated.loop(
-      Animated.sequence([
-        Animated.timing(pulse, { toValue: 1, duration: 1800, easing: Easing.inOut(Easing.sin), useNativeDriver: true }),
-        Animated.timing(pulse, { toValue: 0, duration: 1800, easing: Easing.inOut(Easing.sin), useNativeDriver: true }),
-      ])
-    )
-    r.start(); p.start()
-    return () => { r.stop(); p.stop() }
-  }, [active, rotate, pulse])
-  const rot = rotate.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '360deg'] })
-  const s = pulse.interpolate({ inputRange: [0, 1], outputRange: [1, 1.06] })
-  const op = pulse.interpolate({ inputRange: [0, 1], outputRange: [0.7, 1] })
-  const ringSize = size + 6
-  return (
-    <View style={{ width: ringSize, height: ringSize, alignItems: 'center', justifyContent: 'center' }}>
-      <Animated.View
-        pointerEvents="none"
-        style={{
-          position: 'absolute',
-          width: ringSize,
-          height: ringSize,
-          borderRadius: ringSize / 2,
-          opacity: op,
-          transform: [{ rotate: rot }, { scale: s }],
-        }}
-      >
-        <LinearGradient
-          colors={[BAHRAIN_GOLD, BAHRAIN_RED, 'rgba(233,200,119,0)', BAHRAIN_GOLD]}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 1 }}
-          style={{ flex: 1, borderRadius: ringSize / 2 }}
-        />
-      </Animated.View>
-      <View style={{ width: size, height: size, borderRadius: size / 2, backgroundColor: innerBackgroundColor, alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
-        {children}
-      </View>
     </View>
   )
 }
@@ -1992,7 +2270,14 @@ function KhalidIndeterminateBar({ active, windowWidth, tintA, tintB }) {
   );
 }
 
-function KhalidStaggerSuggestionRow({ suggestions, onPick, chipInnerBg, chipTextColor, labelColor }) {
+function KhalidStaggerSuggestionRow({
+  suggestions,
+  onPick,
+  chipInnerBg,
+  chipTextColor,
+  labelColor,
+  labelText = 'Try asking',
+}) {
   const animKey = suggestions.join('\u0001');
   const anims = useMemo(() => suggestions.map(() => new Animated.Value(0)), [animKey]);
 
@@ -2015,14 +2300,9 @@ function KhalidStaggerSuggestionRow({ suggestions, onPick, chipInnerBg, chipText
     <View style={styles.khalidSuggestionsBlock}>
       <View style={styles.khalidSuggestionsLabelRow}>
         <Ionicons name="map-outline" size={13} color={labelColor} />
-        <Text style={[styles.khalidSuggestionsLabel, { color: labelColor }]}>Try asking</Text>
+        <Text style={[styles.khalidSuggestionsLabel, { color: labelColor }]}>{labelText}</Text>
       </View>
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        keyboardShouldPersistTaps="handled"
-        contentContainerStyle={styles.khalidSuggestionsScrollContent}
-      >
+      <View style={styles.khalidSuggestionsRow}>
         {suggestions.map((s, i) => {
           const v = anims[i];
           if (!v) return null;
@@ -2048,170 +2328,9 @@ function KhalidStaggerSuggestionRow({ suggestions, onPick, chipInnerBg, chipText
             </Animated.View>
           );
         })}
-      </ScrollView>
+      </View>
     </View>
   );
-}
-
-function buildKhalidSystemPrompt(pineconePlacesContext, userPreferences = {}, orbitVenuePin = null, userLocationApprox = null) {
-  const rawPlaces = pineconePlacesContext && String(pineconePlacesContext).trim()
-    ? String(pineconePlacesContext).trim()
-    : '';
-  const hasAllowedList = rawPlaces.includes('ALLOWED PLACES');
-  const placesBlock = rawPlaces
-    ? `\n\n${rawPlaces}\n`
-    : `\n\nNO LIVE DIRECTORY LINES LOADED THIS TURN:\n- Do NOT invent venue names, street addresses, hours, phone numbers, menu items, UNESCO status, rankings, or review quotes.\n- Prefer go_show_clients with a sensible query + client_type so the app renders real listings and photos—or a short Bahrain welcome without naming specific venues.\n`;
-  const groundingWhenList = hasAllowedList
-    ? `\nGROUNDING OVERRIDE:\nWhen ALLOWED PLACES appears above, every factual claim about a venue MUST be supported only by its bullet line. If the snippet is thin, say the app shows only a brief blurb and they should open the venue card—you must not fill gaps.\n`
-    : '';
-
-  const generalLabels = userPreferences.generalLabels || [];
-  const activityLabels = userPreferences.activityLabels || [];
-  const foodLabels = userPreferences.foodLabels || [];
-  const personaSummary = typeof userPreferences.personaSummary === 'string' ? userPreferences.personaSummary.trim() : '';
-  const viewerUType = String(userPreferences.viewerUType || 'local').toLowerCase() === 'tourist' ? 'tourist' : 'local'
-  const audienceKhalid =
-    viewerUType === 'tourist'
-      ? '\n\nAUDIENCE: User is visiting Bahrain — be welcoming with light orientation when helpful; still never invent venues.\n'
-      : '\n\nAUDIENCE: User lives in Bahrain — prioritize efficient, insider-style answers; skip tourist basics unless they ask.\n'
-  const hasPersona = personaSummary.length > 0;
-  const hasGeneral = generalLabels.length > 0;
-  const hasPlanPrefs = activityLabels.length > 0 || foodLabels.length > 0;
-  const personaBlock = hasPersona
-    ? `\n\n═══ WHO YOU'RE TALKING TO (tone + personalization only—not extra venue facts) ═══
-${personaSummary}
-Mirror their vibe in wording; never invent venues to match the persona.\n`
-    : '';
-  const prefsBlock = (hasGeneral || hasPlanPrefs)
-    ? `\n\nUSER PREFERENCES (use when choosing browse queries—not to manufacture facts):\n${hasGeneral ? `Travel style: ${generalLabels.join(', ')}.\n` : ''}${hasPlanPrefs ? `Activities: ${activityLabels.length ? activityLabels.join(', ') : 'open'}\nFood: ${foodLabels.length ? foodLabels.join(', ') : 'open'}\n` : ''}\n`
-    : '';
-
-  const pinnedName =
-    orbitVenuePin && typeof orbitVenuePin.placeName === 'string'
-      ? String(orbitVenuePin.placeName).trim().slice(0, 160)
-      : ''
-  const curatedPin =
-    orbitVenuePin && typeof orbitVenuePin.curatedSummary === 'string'
-      ? String(orbitVenuePin.curatedSummary).trim().slice(0, 1200)
-      : ''
-  const hasOrbitVenuePin = pinnedName.length > 0
-  const orbitVenuePinBlock = hasOrbitVenuePin
-    ? `\n\n═══ PLANNER MAP PIN (user tapped Ask Khalid on this venue) ═══\nFocused venue name: "${pinnedName}"${curatedPin.length > 0
-        ? `\nCurated venue notes from our listings (when they align with ALLOWED PLACES bullets, treat as authoritative):\n${curatedPin}\n`
-        : `\nNo long curated paragraph is stored for this listing in the index—still help in a Khalid-local way using WHO YOU'RE TALKING TO + USER PREFERENCES + Bahrain-sensible guidance within safety/grounding rules. Use directory retrieval when relevant (go_show_clients for alternatives or pics).\nIMPORTANT: Never reply with apologies like "no AI summary", "no profile summary", or "I don't have notes"—answer practically (vibe fit, timings, pairing with stops, quieter alternatives).\n`
-      }`
-    : ''
-  const hasOrbitVenuePinForRules = hasOrbitVenuePin
-
-  const hasUserLoc =
-    userLocationApprox &&
-    Number.isFinite(Number(userLocationApprox.lat)) &&
-    Number.isFinite(Number(userLocationApprox.lng))
-  const userLocBlock = hasUserLoc
-    ? `\n\n═══ USER APPROXIMATE LOCATION (this session)\nCoarse coordinates: latitude ${userLocationApprox.lat}, longitude ${userLocationApprox.lng}.\nWhen they ask what is near them, closest to them, nearby, or \"around here\", you may reference that the app is using their approximate area. Use go_show_clients with a fitting query and client_type—the venue cards below the reply are ordered nearest-first when they use that kind of wording. Do not invent exact street addresses or pinpoint GPS from this.\n`
-    : ''
-
-  return `You are Khalid, Bahrain guide for SiyahaBH. You output a SINGLE JSON OBJECT with keys "reply" (string) and "actions" (array). No markdown fences, no extra keys.
-${audienceKhalid}${personaBlock}${prefsBlock}${orbitVenuePinBlock}${userLocBlock}
-
-REPLY STYLE (critical — matches the in-app Ask button on venue cards):
-- Write the "reply" as the answer itself—direct, conversational Bahrain-local tips. Never open with meta lines like “You asked about …”, “go ahead with your questions”, “I will answer using…”, or a recap of what they typed unless one short clause is truly needed for clarity.
-- Paraphrase every time: do NOT copy wording from GROUNDED EXAMPLES or repeat identical openers across turns—the examples are patterns only.
-- No markdown formatting in "reply": no **bold**, no # headings, no bullet markdown—plain sentences only.
-
-PERSONALITY: Warm, concise (1–2 short sentences), proactive—prefer showing cards when users want choices.
-
-VISUAL INTENT: Users usually want tap-to-see listings with photos. Use go_show_clients whenever they browse categories (food, beaches, nightlife, cafes, pics, what's good nearby, cuisines, moods).
-
-DISCOVERY BALANCE:
-- Broad discovery asks ("show random places", "show restaurants", "show places", "show fun things to do") should prioritize variety from today's ALLOWED PLACES and include a mild preference tilt from USER PREFERENCES / persona (not strict filtering to one niche).
-- Keep broad discovery mixed and fresh; avoid always returning the same narrow style.
-- If the user asks for something specific (a named venue or clear exact constraint), switch to exact matching and stay strict.
-
-NEARBY / CLOSEST: When the user asks for places near them, closest, nearest, or \"around here\", keep your reply short and friendly and always include go_show_clients so the app can show distance-sorted cards when location is available${hasUserLoc ? ' (it is this session)' : ''}.
-
-BAHRAIN KNOWLEDGE:
-- You understand Bahrain's governorates and common districts (e.g. Muharraq, Amwaj, Diyar Al Muharraq, Hidd, Busaiteen; Manama, Seef, Diplomatic Area, Bab Al Bahrain; Adliya and Block 338; Saar / Janabiyah / Budaiya; Riffa; Zallaq / Al Areen).
-- When the user mentions a governorate or area, interpret it the way locals do and choose queries and examples that fit that part of Bahrain, but still only name specific venues that come from ALLOWED PLACES or the app's listings.
-- You may speak more freely about general culture, typical vibes of areas, or local customs, but must NOT invent specific venue facts (hours, awards, menus) beyond the directory bullets.
-
-CONTINUATION / CO-REFERENCE (critical):
-- If the latest user line is a short follow-up (e.g. "show some pics", "photos?", "more", "that place", "same one") and does NOT name a new venue, resolve what they mean from the **previous user and assistant messages in this thread**.
-- Then use go_show_clients with a **query** that includes that venue name or distinctive keywords from the thread — not an empty generic browse — unless they clearly widened the topic to all of Bahrain.
-
-WHEN TO use go_show_clients (PRIMARY for discovery):
-• Set "query" to the user’s concrete words (cuisine, meal, beach, mall name, neighbourhood, vibe)—never leave it blank when they named a topic; blank query causes the same generic top list every time.
-• Plural/category asks: restaurants, breakfasts, italian, mall, attractions, pics, beaches, karak…
-• "Tell me about [category]" (e.g. restaurants in general)—show listings unless they clearly name ONE venue.
-
-WHEN replies have actions: [], still stay grounded ${hasAllowedList ? '—see ALLOWED PLACES lines.' : '—avoid fake venue trivia.'}
-
-SPECIFIC NAMED VENUES:
-${hasAllowedList
-    ? `- If the name CLEARLY matches a bullet in ALLOWED PLACES (fuzzy match OK), reply with ONLY what that line supports (+ type/cuisine/tags already there). Invite them to open the card for fuller info.
-- If the name does NOT match any bullet: say it's not in the current matches, then EITHER go_show_clients with query derived from their text (best effort) OR point to the closest name from the list—never invent missing venues.`
-    : hasOrbitVenuePinForRules
-      ? `- User pinned a planner venue (${pinnedName}). Help using persona/preferences and grounding rules—even without a dense directory line. Prefer go_show_clients when they want photos, comparisons, or "similar spots". Avoid inventing hard facts not in bullets or PLANNER PIN notes.`
-      : '- Without directory lines loaded, avoid detailed answers about named venues—use go_show_clients or steer them to typed search.'}
-
-${placesBlock}${groundingWhenList}
-
-RESPONSE SCHEMA (exactly):
-{"reply":"string","actions":[...]}
-Actions may be empty. Each action is ONE of:
-
-Directory / cards (discovery):
-{"type":"go_show_clients","query":"terms or empty","client_type":"restaurant"|"place"|"event"|""}
-
-App control (ONLY when the user clearly asks to change how the app looks or to open a specific app area—not for travel tips):
-{"type":"set_app_theme","scheme":"light"|"dark"|"system"} — dark mode / light mode / match phone setting
-{"type":"open_plan_builder"} — they want to build a day plan, itinerary, "plan my Saturday", AI trip plan, etc.
-{"type":"navigate_tab","tab":"Home"|"Explore"|"AI Plan"|"Khalid"|"Community"|"Profile"} — jump to a main tab
-{"type":"open_saved_plans"} — open their saved itineraries list
-
-Do NOT use app-control actions for normal Bahrain food/place/event questions. Use go_show_clients for those.
-
-QUERY CHEATSHEET:
-• Meals / cuisines / drinks → client_type restaurant + query keywords
-• Beaches, museums, malls, parks → client_type place + query
-• Events / gigs → client_type event
-• Generic browse / pics → query "" client_type ""
-
-INTENT → client_type (do not swap):
-• If the user explicitly asks for restaurants / food / cafes / coffee / breakfast-lunch-dinner / cuisine → client_type MUST be "restaurant"
-• If the user explicitly asks for places / attractions / beaches / parks / museums / malls / shopping / views / walks → client_type MUST be "place"
-• If the user explicitly asks for events / festivals / concerts / gigs / shows → client_type MUST be "event"
-• If the user says "near me / closest / nearby" but does not clearly say category, inherit from the user's earlier category in the conversation (otherwise default to "place")
-
-GROUNDED EXAMPLES (do not hallucinate extras beyond these patterns):
-
-{"reply":"Opening live picks from the app's listings—browse the cards below for ratings, photos and details.","actions":[{"type":"go_show_clients","query":"","client_type":"restaurant"}]}
-User context: italian food recommendation
-Same pattern with query italian.
-
-{"reply":"I only have the short line the app indexed for that spot—tap View on the card for photos and fuller details rather than guesses.","actions":[]}
-Use only when venue matches ALLOWED bullet.
-
-{"reply":"I'm not seeing that venue in today's directory matches—I can pull similar spots instead.","actions":[{"type":"go_show_clients","query":"user cue","client_type":"restaurant"}]}
-
-{"reply":"Here are seaside-style picks from today's listings—swipe through the cards.","actions":[{"type":"go_show_clients","query":"beach","client_type":"place"}]}
-
-{"reply":"Hi! Ask for food, sights, cafés—or say 'show me pics'—and I'll load real venues from our database.","actions":[]}
-
-{"reply":"Done — switched you to dark mode.","actions":[{"type":"set_app_theme","scheme":"dark"}]}
-{"reply":"Light mode it is.","actions":[{"type":"set_app_theme","scheme":"light"}]}
-{"reply":"Opening the plan builder so you can craft your day.","actions":[{"type":"open_plan_builder"}]}
-{"reply":"Taking you to Explore.","actions":[{"type":"navigate_tab","tab":"Explore"}]}
-{"reply":"Here are your saved plans.","actions":[{"type":"open_saved_plans"}]}
-
-CRITICAL RULES:
-1. Accuracy beats creativity: never state facts unsupported by ALLOWED bullets (when present) or by what the app's cards will fetch.
-2. Prefer go_show_clients for exploratory questions; reserve action [] for greetings, disclaimers, or tight summaries when a lone venue line truly matches.
-3. Never stall with clarification questions—pick a sensible query.
-4. Short follow-ups about pics or "more" inherit the active venue/topic from prior turns; keep retrieval aligned with that thread.
-5. Return strict JSON every turn.
-6. Never put markdown (**, *, # ) inside "reply"; user sees plain bubbles.
-7. When they ask to change theme or open plan builder / a tab, include the matching app-control action and a short confirming reply.`;
 }
 
 export default function KhalidChatScreen({ navigation, route }) {
@@ -2255,7 +2374,6 @@ export default function KhalidChatScreen({ navigation, route }) {
         suggestionsBorder: 'rgba(233,200,119,0.12)',
         chipInnerBg: 'rgba(10,14,28,0.94)',
         chipText: 'rgba(248,250,252,0.96)',
-        avatarRingInner: '#0A0E18',
         suggestionsLabel: BAHRAIN_GOLD,
         disabledSend: ['rgba(71,85,105,0.78)', 'rgba(51,65,85,0.78)'],
         inputFocusGlow: ['rgba(233,200,119,0.55)', 'rgba(200,16,46,0.45)'],
@@ -2296,7 +2414,6 @@ export default function KhalidChatScreen({ navigation, route }) {
       suggestionsBorder: 'rgba(200,16,46,0.1)',
       chipInnerBg: colors.surface,
       chipText: colors.textPrimary,
-      avatarRingInner: '#FFFFFF',
       suggestionsLabel: colors.primary,
       disabledSend: ['rgba(226,232,240,0.95)', 'rgba(203,213,225,0.85)'],
       inputFocusGlow: ['rgba(200,16,46,0.32)', 'rgba(233,200,119,0.4)'],
@@ -2305,27 +2422,33 @@ export default function KhalidChatScreen({ navigation, route }) {
     }
   }, [isDark, colors])
 
-  const { generalLabels, activityLabels, foodLabels, preferences } = useUserPreferences();
+  const { generalLabels, preferences } = useUserPreferences();
   const { profile } = useAuth();
   const personaSummary = preferences?.profileSummary || '';
   const khalidViewerUType = useMemo(() => normalizeViewerUType(profile?.user?.u_type), [profile?.user?.u_type])
-  const khalidIntroText = useMemo(() => {
-    if (khalidViewerUType === 'tourist') {
-      return "Hi, I'm Khalid — your Bahrain guide. Ask for breakfast spots, practical tips for visitors, landmarks, neighborhood walks, or say “show me pics” and I'll load real venues.";
-    }
-    return "Hi, I'm Khalid — your shortcut to fresh weekend ideas, quieter corners, food worth the drive, and what's trending with locals. Say “show me pics” anytime.";
-  }, [khalidViewerUType]);
+  const buildKhalidIntroText = React.useCallback(
+    (withLocation = false) => buildKhalidIntroParts(withLocation, khalidViewerUType).greeting,
+    [khalidViewerUType],
+  );
+
+  const buildKhalidIntroFollowUpText = React.useCallback(
+    (withLocation = false) => buildKhalidIntroParts(withLocation, khalidViewerUType).followUp,
+    [khalidViewerUType],
+  );
+
+  const khalidIntroText = useMemo(() => buildKhalidIntroText(false), [buildKhalidIntroText]);
 
 
   const [profileClientId, setProfileClientId] = useState(null);
-  const [khalidMessages, setKhalidMessages] = useState([
-    {
-      id: 'intro',
-      role: 'assistant',
-      text:
-        "Hi, I'm Khalid — your Bahrain guide. Ask me for breakfast spots, things to do, or say “show me pics” and I’ll help you discover the best of Bahrain.",
-    },
-  ]);
+  const [khalidMessages, setKhalidMessages] = useState(() => {
+    const parts = buildKhalidIntroParts(false, 'local');
+    return [{ id: 'intro', role: 'assistant', text: parts.greeting }];
+  });
+  const [khalidFollowUpTyping, setKhalidFollowUpTyping] = useState(false);
+  const khalidPendingFollowUpRef = useRef(null);
+  const khalidFollowUpTimerRef = useRef(null);
+  const khalidFollowUpFallbackTimerRef = useRef(null);
+  const khalidIntroFollowUpQueuedRef = useRef(false);
 
   useEffect(() => {
     setKhalidMessages((prev) => {
@@ -2344,10 +2467,109 @@ export default function KhalidChatScreen({ navigation, route }) {
     khalidMessagesRef.current = khalidMessages;
   }, [khalidMessages]);
 
-  const handleKhalidTypewriterComplete = React.useCallback((id) => {
-    if (id) khalidTypewriterDoneIdsRef.current.add(id);
-    setKhalidTypewriterEpoch((n) => n + 1);
+  const clearKhalidFollowUpTimers = React.useCallback(() => {
+    if (khalidFollowUpTimerRef.current) {
+      clearTimeout(khalidFollowUpTimerRef.current);
+      khalidFollowUpTimerRef.current = null;
+    }
+    if (khalidFollowUpFallbackTimerRef.current) {
+      clearTimeout(khalidFollowUpFallbackTimerRef.current);
+      khalidFollowUpFallbackTimerRef.current = null;
+    }
   }, []);
+
+  const deliverKhalidFollowUpBubble = React.useCallback(() => {
+    const pending = khalidPendingFollowUpRef.current;
+    if (!pending?.text) return;
+    khalidPendingFollowUpRef.current = null;
+    clearKhalidFollowUpTimers();
+    setKhalidFollowUpTyping(true);
+    scrollKhalidToEnd();
+    const pauseMs = Math.max(700, Number(pending.pauseMs) || 1100);
+    khalidFollowUpTimerRef.current = setTimeout(() => {
+      khalidFollowUpTimerRef.current = null;
+      setKhalidFollowUpTyping(false);
+      LayoutAnimation.configureNext({
+        duration: 260,
+        create: { type: LayoutAnimation.Types.easeInEaseOut, property: LayoutAnimation.Properties.opacity },
+        update: { type: LayoutAnimation.Types.easeInEaseOut },
+      });
+      setKhalidMessages((prev) => [
+        ...prev,
+        {
+          id: `assistant-followup-${Date.now()}`,
+          role: 'assistant',
+          text: pending.text,
+        },
+      ]);
+      scrollKhalidToEnd();
+    }, pauseMs);
+  }, [clearKhalidFollowUpTimers]);
+
+  const scheduleKhalidFollowUpBubble = React.useCallback(
+    ({ afterMessageId, text, pauseMs = 1100, maxWaitMs = 14000 }) => {
+      const trimmed = String(text || '').trim();
+      if (!trimmed || !afterMessageId) return;
+      clearKhalidFollowUpTimers();
+      khalidPendingFollowUpRef.current = {
+        afterMessageId,
+        text: trimmed,
+        pauseMs,
+      };
+      if (khalidTypewriterDoneIdsRef.current.has(afterMessageId)) {
+        khalidFollowUpFallbackTimerRef.current = setTimeout(() => {
+          khalidFollowUpFallbackTimerRef.current = null;
+          if (khalidPendingFollowUpRef.current?.afterMessageId === afterMessageId) {
+            deliverKhalidFollowUpBubble();
+          }
+        }, 380);
+        return;
+      }
+      khalidFollowUpFallbackTimerRef.current = setTimeout(() => {
+        khalidFollowUpFallbackTimerRef.current = null;
+        if (khalidPendingFollowUpRef.current?.afterMessageId === afterMessageId) {
+          deliverKhalidFollowUpBubble();
+        }
+      }, maxWaitMs);
+    },
+    [clearKhalidFollowUpTimers, deliverKhalidFollowUpBubble],
+  );
+
+  const handleKhalidTypewriterComplete = React.useCallback(
+    (id) => {
+      if (id) khalidTypewriterDoneIdsRef.current.add(id);
+      setKhalidTypewriterEpoch((n) => n + 1);
+      const pending = khalidPendingFollowUpRef.current;
+      if (pending && pending.afterMessageId === id) {
+        deliverKhalidFollowUpBubble();
+      }
+    },
+    [deliverKhalidFollowUpBubble],
+  );
+
+  const queueKhalidIntroFollowUp = React.useCallback(
+    (withLocation = false) => {
+      const hasFollowUpAlready = (khalidMessagesRef.current || []).some(
+        (m) => m.role === 'assistant' && m.id !== 'intro',
+      );
+      if (hasFollowUpAlready) return;
+      if (khalidPendingFollowUpRef.current?.afterMessageId === 'intro') {
+        khalidPendingFollowUpRef.current = {
+          ...khalidPendingFollowUpRef.current,
+          text: buildKhalidIntroFollowUpText(withLocation),
+        };
+        return;
+      }
+      if (khalidIntroFollowUpQueuedRef.current) return;
+      khalidIntroFollowUpQueuedRef.current = true;
+      scheduleKhalidFollowUpBubble({
+        afterMessageId: 'intro',
+        text: buildKhalidIntroFollowUpText(withLocation),
+        pauseMs: 950,
+      });
+    },
+    [buildKhalidIntroFollowUpText, scheduleKhalidFollowUpBubble],
+  );
 
   const markKhalidAssistantTypewriterDoneForClose = React.useCallback(() => {
     const list = khalidMessagesRef.current || [];
@@ -2375,7 +2597,7 @@ export default function KhalidChatScreen({ navigation, route }) {
   const khalidLastFetchCoordsRef = useRef(null);
   const khalidLastProximityIntentRef = useRef(false);
   const khalidLastClientTypeRef = useRef('');
-  const khalidAutoNearbyKickoffDoneRef = useRef(false);
+  const khalidLocationPrimedRef = useRef(false);
   const khalidSessionContextRef = useRef({
     topic: '',
     area: '',
@@ -2403,31 +2625,132 @@ export default function KhalidChatScreen({ navigation, route }) {
     [markKhalidAssistantTypewriterDoneForClose],
   );
 
-  const resolveKhalidUserCoords = React.useCallback(async () => {
-    const now = Date.now();
-    const slot = khalidGeoCacheRef.current;
-    if (slot.coords != null && now - slot.at < KHALID_GEO_CACHE_TTL_MS) {
-      return slot.coords;
+  const resolveKhalidUserCoords = React.useCallback(async (options = {}) => {
+    const forceFresh = Boolean(options?.forceFresh)
+    const now = Date.now()
+    const slot = khalidGeoCacheRef.current
+    if (!forceFresh && slot.coords != null && now - slot.at < KHALID_GEO_CACHE_TTL_MS) {
+      return slot.coords
     }
     try {
-      let { status } = await Location.getForegroundPermissionsAsync();
+      let { status } = await Location.getForegroundPermissionsAsync()
       if (status !== 'granted') {
-        const req = await Location.requestForegroundPermissionsAsync();
-        status = req.status;
+        const req = await Location.requestForegroundPermissionsAsync()
+        status = req.status
       }
       if (status !== 'granted') {
-        khalidGeoCacheRef.current = { at: now, coords: null };
-        return null;
+        khalidGeoCacheRef.current = { at: now, coords: null }
+        return null
       }
-      const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-      const coords = { latitude: pos.coords.latitude, longitude: pos.coords.longitude };
-      khalidGeoCacheRef.current = { at: now, coords };
-      return coords;
+
+      let latitude = null
+      let longitude = null
+
+      if (!forceFresh) {
+        try {
+          const last = await Location.getLastKnownPositionAsync({
+            maxAge: 45 * 1000,
+            requiredAccuracy: 120,
+          })
+          if (last?.coords) {
+            latitude = last.coords.latitude
+            longitude = last.coords.longitude
+          }
+        } catch {
+          /* continue to fresh fix */
+        }
+      }
+
+      const pos = await Location.getCurrentPositionAsync({
+        accuracy: forceFresh ? Location.Accuracy.BestForNavigation : Location.Accuracy.High,
+      })
+      if (pos?.coords) {
+        latitude = pos.coords.latitude
+        longitude = pos.coords.longitude
+      }
+
+      if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
+        khalidGeoCacheRef.current = { at: now, coords: null }
+        return null
+      }
+
+      const coords = { latitude, longitude }
+      khalidGeoCacheRef.current = { at: now, coords }
+      return coords
     } catch {
-      khalidGeoCacheRef.current = { at: now, coords: null };
-      return null;
+      khalidGeoCacheRef.current = { at: now, coords: null }
+      return null
     }
   }, []);
+
+  const coordsForKhalidPrompt = (coordsResolved) => {
+    if (
+      coordsResolved &&
+      Number.isFinite(coordsResolved.latitude) &&
+      Number.isFinite(coordsResolved.longitude)
+    ) {
+      return {
+        lat: coordsResolved.latitude,
+        lng: coordsResolved.longitude,
+      }
+    }
+    return null
+  }
+
+  const coordsBucketForCache = (coordsPrompt) => {
+    if (!coordsPrompt) return 'noloc'
+    return `${Math.round(coordsPrompt.lat * 10000) / 10000},${Math.round(coordsPrompt.lng * 10000) / 10000}`
+  }
+
+  const primeKhalidSessionLocation = React.useCallback(async () => {
+    const coords = await resolveKhalidUserCoords({ forceFresh: true })
+    if (coords) {
+      khalidLastFetchCoordsRef.current = coords
+    }
+    const coordsPrompt = coordsForKhalidPrompt(coords)
+    const coordsPlausible =
+      coordsPrompt && isUserLocationInBahrain(coordsPrompt.lat, coordsPrompt.lng)
+    if (coordsPlausible) {
+      const seedQuery = `nearby places restaurants attractions ${(generalLabels || []).slice(0, 2).join(' ')}`.trim()
+      const retrievalQueryText = seedQuery.slice(0, 950)
+      const locBucket = coordsBucketForCache(coordsPrompt)
+      const cacheKey = `${buildPrefetchKey(seedQuery, retrievalQueryText)}|${locBucket}|prox|any`
+      if (khalidPrefetchRef.current.key !== cacheKey || !khalidPrefetchRef.current.context) {
+        const inflight = fetchPineconePlacesForChat(seedQuery, {
+          generalLabels,
+          personaSummary,
+          retrievalQueryText,
+          sortByProximity: true,
+          userLocation: coordsPlausible,
+        })
+          .then((ctx) => {
+            if (khalidPrefetchRef.current.key === cacheKey) {
+              khalidPrefetchRef.current = { key: cacheKey, context: ctx || '', inflight: null }
+            }
+            return ctx || ''
+          })
+          .catch(() => '')
+        khalidPrefetchRef.current = { key: cacheKey, context: '', inflight }
+      }
+    }
+    setKhalidMessages((prev) => {
+      const introOnly =
+        prev.length === 1 && prev[0]?.role === 'assistant' && prev[0]?.id === 'intro'
+      if (!introOnly) return prev
+      const nextText = buildKhalidIntroText(Boolean(coordsPlausible))
+      if (prev[0].text === nextText) return prev
+      return [{ ...prev[0], text: nextText }]
+    })
+    queueKhalidIntroFollowUp(Boolean(coordsPlausible))
+    return coords
+  }, [
+    buildKhalidIntroText,
+    generalLabels,
+    personaSummary,
+    queueKhalidIntroFollowUp,
+    resolveKhalidUserCoords,
+  ])
+
   const typingDot1 = useRef(new Animated.Value(0)).current;
   const typingDot2 = useRef(new Animated.Value(0)).current;
   const typingDot3 = useRef(new Animated.Value(0)).current;
@@ -2566,11 +2889,90 @@ export default function KhalidChatScreen({ navigation, route }) {
       }
       if (type === 'open_plan_builder') {
         try {
-          navigation.navigate('AI Plan', { openPlanModal: Date.now() });
-        } catch {
-          /* ignore */
+          navigation.navigate('AI Plan', { openPlanModal: Date.now() })
+        } catch { /* ignore */ }
+        return
+      }
+      if (type === 'generate_inline_plan') {
+        const planCardId = `plan-${Date.now()}`
+        const prefHints = String(action.prefHints || '').split(',').map((s) => s.trim()).filter(Boolean)
+        const foodHints = String(action.foodHints || '').split(',').map((s) => s.trim()).filter(Boolean)
+
+        const planMsg = {
+          id: planCardId,
+          role: 'assistant',
+          type: 'inline_plan',
+          loading: true,
+          plan: null,
+          error: null,
         }
-        return;
+        LayoutAnimation.configureNext({
+          duration: 280,
+          create: { type: LayoutAnimation.Types.easeInEaseOut, property: LayoutAnimation.Properties.opacity },
+          update: { type: LayoutAnimation.Types.easeInEaseOut },
+        })
+        setKhalidMessages((prev) => [...prev, planMsg])
+        setTimeout(scrollKhalidToEnd, 100)
+
+        const updatePlanCard = (update) => {
+          setKhalidMessages((prev) =>
+            prev.map((m) => (m.id === planCardId ? { ...m, ...update } : m)),
+          )
+          setTimeout(scrollKhalidToEnd, 80)
+        }
+
+        const runPlanGeneration = async () => {
+          try {
+            const retrievalOpts = {
+              profileNarrative: personaSummary || '',
+              profileAnswers: preferences?.profileAnswers || {},
+            }
+            const [places, restaurants, breakfastSpots, events] =
+              await resolvePlanRetrievalBuckets(prefHints, foodHints, retrievalOpts)
+
+            let coordsResolved = null
+            try {
+              coordsResolved = await resolveKhalidUserCoords({ forceFresh: false })
+            } catch { coordsResolved = null }
+            const originLat = coordsResolved?.latitude ?? null
+            const originLng = coordsResolved?.longitude ?? null
+
+            const plan = await generateDayPlan(places, restaurants, breakfastSpots, events, prefHints, foodHints, {
+              profileGeneral: generalLabels,
+              generalIds: preferences?.generalIds || [],
+              profileNarrative: personaSummary || '',
+              profileAnswers: preferences?.profileAnswers || {},
+              originLat,
+              originLng,
+              viewerUType: khalidViewerUType,
+            })
+
+            const allMatches = [...places, ...restaurants, ...breakfastSpots, ...events]
+            const nameToClientId = new Map()
+            for (const m of allMatches) {
+              const meta = m?.metadata || {}
+              const cid = meta.client_a_uuid || meta.id || m.id || null
+              const name = String(
+                meta.event_name || meta.business_name || meta.name || meta.place_name ||
+                meta.title || meta.display_name || meta.venue || meta.venue_name || ''
+              ).trim().toLowerCase()
+              if (cid && name) nameToClientId.set(name, cid)
+            }
+            const enrichedPlan = (plan || []).map((stop) => {
+              if (stop.clientId) return stop
+              const norm = String(stop.spot || '').trim().toLowerCase()
+              const cid = nameToClientId.get(norm) || null
+              return cid ? { ...stop, clientId: cid } : stop
+            })
+
+            updatePlanCard({ loading: false, plan: enrichedPlan, error: null })
+          } catch (e) {
+            console.warn('[Khalid] inline plan generation failed:', e?.message)
+            updatePlanCard({ loading: false, plan: null, error: e?.message || 'Plan generation failed' })
+          }
+        }
+        runPlanGeneration()
+        return
       }
       if (type === 'navigate_tab') {
         const tab = String(action.tab || '').trim();
@@ -2591,7 +2993,7 @@ export default function KhalidChatScreen({ navigation, route }) {
         }
       }
     },
-    [navigation, setColorScheme],
+    [navigation, setColorScheme, personaSummary, preferences, generalLabels, khalidViewerUType, resolveKhalidUserCoords, scrollKhalidToEnd],
   );
 
   const handleKhalidAction = (action) => {
@@ -2691,12 +3093,17 @@ export default function KhalidChatScreen({ navigation, route }) {
       console.log('[Khalid] Proximity sort:', sortByProx);
       console.log('[Khalid] ================================');
 
+      const strictForFetch =
+        strictQueryMatch ||
+        Boolean(strictClientName) ||
+        (query.length >= 2 && !isKhalidGenericBrowseQuery(query))
+
       fetchClientsByQuery(query, clientType, {
         userLat,
         userLng,
         sortByProximity: sortByProx,
         strictClientName,
-        strictQueryMatch,
+        strictQueryMatch: strictForFetch,
       })
         .then((clients) => {
           console.log('[Khalid] ======= FETCH COMPLETE =======');
@@ -2738,10 +3145,8 @@ export default function KhalidChatScreen({ navigation, route }) {
       ? String(retrievalQueryText).trim().toLowerCase().slice(0, 320)
       : String(displayText || '').trim().toLowerCase();
     const g = (generalLabels || []).join(',');
-    const a = (activityLabels || []).join(',');
-    const f = (foodLabels || []).join(',');
     const p = personaSummary ? personaSummary.slice(0, 80) : '';
-    return `${base}|${g}|${a}|${f}|${p}`;
+    return `${base}|${g}|${p}`;
   };
 
   const startKhalidPrefetch = (text) => {
@@ -2753,12 +3158,18 @@ export default function KhalidChatScreen({ navigation, route }) {
     const key = buildPrefetchKey(trimmed, retrievalQueryText);
     const cache = khalidPrefetchRef.current;
     if (cache.key === key && (cache.context !== '' || cache.inflight)) return;
+    const crd = khalidLastFetchCoordsRef.current
+    const prefetchCoords = coordsForKhalidPrompt(crd)
+    const prefetchProx =
+      prefetchCoords &&
+      isUserLocationInBahrain(prefetchCoords.lat, prefetchCoords.lng) &&
+      wantsKhalidProximityIntent(trimmed)
     const inflight = fetchPineconePlacesForChat(trimmed, {
       generalLabels,
-      activityLabels,
-      foodLabels,
       personaSummary,
       retrievalQueryText,
+      sortByProximity: Boolean(prefetchProx),
+      userLocation: prefetchProx ? prefetchCoords : null,
     })
       .then((ctx) => {
         if (khalidPrefetchRef.current.key === key) {
@@ -2804,6 +3215,10 @@ export default function KhalidChatScreen({ navigation, route }) {
     } catch {
       /* optional */
     }
+    khalidPendingFollowUpRef.current = null;
+    clearKhalidFollowUpTimers();
+    setKhalidFollowUpTyping(false);
+
     const nextMessages = [...khalidMessages, userMsg];
     LayoutAnimation.configureNext({
       duration: 220,
@@ -2821,20 +3236,15 @@ export default function KhalidChatScreen({ navigation, route }) {
       khalidLastProximityIntentRef.current = proximityIntent;
       let coordsResolved = null;
       try {
-        coordsResolved = await resolveKhalidUserCoords();
+        coordsResolved = await resolveKhalidUserCoords({ forceFresh: true });
       } catch {
         coordsResolved = null;
       }
       khalidLastFetchCoordsRef.current = coordsResolved;
-      const coordsForPrompt =
-        coordsResolved &&
-        Number.isFinite(coordsResolved.latitude) &&
-        Number.isFinite(coordsResolved.longitude)
-          ? {
-              lat: Math.round(coordsResolved.latitude * 1000) / 1000,
-              lng: Math.round(coordsResolved.longitude * 1000) / 1000,
-            }
-          : null;
+      const coordsForPrompt = coordsForKhalidPrompt(coordsResolved);
+      const coordsPlausibleForProximity =
+        coordsForPrompt &&
+        isUserLocationInBahrain(coordsForPrompt.lat, coordsForPrompt.lng);
 
       const historyForApi = khalidUiToApiHistory(nextMessages);
       let retrievalQueryText = buildKhalidPineconeQueryText(trimmed, historyForApi);
@@ -2861,21 +3271,32 @@ export default function KhalidChatScreen({ navigation, route }) {
         retrievalQueryText = merged.slice(0, 950)
       }
 
-      const cacheKey = buildPrefetchKey(trimmed, retrievalQueryText);
+      const explicitConstraintEarly = extractKhalidExplicitConstraint(trimmed)
+      const explicitClientTypeEarly = inferKhalidExplicitClientTypeFromUser(trimmed)
+      const proximityCategory =
+        proximityIntent && explicitClientTypeEarly
+          ? explicitClientTypeEarly
+          : proximityIntent
+            ? inferKhalidClientType(trimmed, khalidLastClientTypeRef.current)
+            : ''
+      const locBucket = coordsBucketForCache(coordsForPrompt)
+      const cacheKey = `${buildPrefetchKey(trimmed, retrievalQueryText)}|${locBucket}|${proximityIntent ? 'prox' : 'sem'}|${proximityCategory || 'any'}`;
       const cache = khalidPrefetchRef.current;
       let pineconePlacesContext = '';
+      const pineconeOpts = {
+        generalLabels,
+        personaSummary,
+        retrievalQueryText,
+        sortByProximity: Boolean(proximityIntent && coordsPlausibleForProximity),
+        userLocation: coordsPlausibleForProximity ? coordsForPrompt : null,
+        preferredClientType: proximityCategory || '',
+      }
       if (cache.key === cacheKey && cache.context) {
         pineconePlacesContext = cache.context;
       } else if (cache.key === cacheKey && cache.inflight) {
         pineconePlacesContext = (await cache.inflight) || '';
       } else {
-        pineconePlacesContext = await fetchPineconePlacesForChat(trimmed, {
-          generalLabels,
-          activityLabels,
-          foodLabels,
-          personaSummary,
-          retrievalQueryText,
-        });
+        pineconePlacesContext = await fetchPineconePlacesForChat(trimmed, pineconeOpts);
         khalidPrefetchRef.current = { key: cacheKey, context: pineconePlacesContext || '', inflight: null };
       }
       const orbitPinForPrompt = orbitVenueAskContextRef.current
@@ -2883,15 +3304,19 @@ export default function KhalidChatScreen({ navigation, route }) {
         pineconePlacesContext,
         {
           generalLabels,
-          activityLabels,
-          foodLabels,
           personaSummary,
           viewerUType: khalidViewerUType,
         },
         orbitPinForPrompt && orbitPinForPrompt.placeName ? orbitPinForPrompt : null,
         coordsForPrompt,
       );
-      const systemPrompt = `${systemPromptBase}${buildKhalidSessionContextLine(sessionCtx)}`
+      const proximityNoGpsNote =
+        proximityIntent && !coordsPlausibleForProximity
+          ? coordsForPrompt
+            ? '\n\nLOCATION NOTE: The user asked for nearby/nearest but GPS does not look like a Bahrain fix (simulator or stale location). Ask them to enable location on a real device in Bahrain; do not invent distances.\n'
+            : '\n\nLOCATION NOTE: The user asked for nearby/nearest but GPS is not available this session—tell them to enable location for the true closest pick; still name the best matches from ALLOWED PLACES without inventing distances.\n'
+          : ''
+      const systemPrompt = `${systemPromptBase}${proximityNoGpsNote}${buildKhalidSessionContextLine(sessionCtx)}`
 
       const res = await fetch(OPENAI_CHAT_URL, {
         method: 'POST',
@@ -2906,7 +3331,7 @@ export default function KhalidChatScreen({ navigation, route }) {
             ...historyForApi,
           ],
           temperature: 0.62,
-          max_tokens: 650,
+          max_tokens: 820,
           response_format: { type: 'json_object' },
         }),
       });
@@ -2922,12 +3347,15 @@ export default function KhalidChatScreen({ navigation, route }) {
       console.log('[Khalid] GPT raw response:', raw);
 
       let replyText = raw;
+      let followUpText = '';
       let actions = [];
       try {
         const parsed = JSON.parse(raw);
         console.log('[Khalid] Parsed JSON:', parsed);
         if (parsed && typeof parsed === 'object') {
           if (typeof parsed.reply === 'string') replyText = parsed.reply;
+          if (typeof parsed.followUp === 'string') followUpText = parsed.followUp;
+          else if (typeof parsed.followUpQuestion === 'string') followUpText = parsed.followUpQuestion;
           if (Array.isArray(parsed.actions)) actions = parsed.actions;
         }
       } catch (parseError) {
@@ -2935,7 +3363,10 @@ export default function KhalidChatScreen({ navigation, route }) {
         // fall back to raw text
       }
 
-      replyText = sanitizeKhalidAssistantReplyPlain(replyText)
+      const split = splitKhalidReplyAndFollowUp(replyText, followUpText);
+      const answerText = split.answer;
+      followUpText = split.followUp;
+      replyText = answerText;
 
       console.log('[Khalid] Extracted actions:', actions);
 
@@ -2943,86 +3374,16 @@ export default function KhalidChatScreen({ navigation, route }) {
         extractKhalidTopicHintFromPriorTurns(historyForApi) ||
         String(khalidSessionContextRef.current?.topic || '').trim();
       const explicitConstraint = extractKhalidExplicitConstraint(trimmed)
-      const isSmallTalkTurn = isKhalidSmallTalkOrCapabilitiesAsk(trimmed)
       const explicitClientTypeThisTurn = inferKhalidExplicitClientTypeFromUser(trimmed)
       const inferredClientTypeThisTurn =
         explicitConstraint.clientType ||
         explicitClientTypeThisTurn ||
         inferKhalidClientType(`${trimmed} ${replyText}`, khalidLastClientTypeRef.current)
-      const broadDiscoveryAsk = isKhalidBroadDiscoveryAsk(trimmed)
+      actions = stripKhalidListingCardActions(actions)
 
-      // Enhanced fallback: if reply mentions showing or recommending but no actions, auto-trigger go_show_clients.
-      // For specific named places, force a targeted go_show_clients action.
-      const replyLower = replyText.toLowerCase()
-      const userMsgLower = trimmed.toLowerCase()
-      
-      // Narrow "specific venue" vs broad browse (e.g. "tell me about restaurants" → still show listings)
-      const isBroadTellMeAsk =
-        /tell me (about|more)\s+(restaurants?|food|cuisine|cuisines|cafes?|coffee|tea|places|spots|options|things|attractions?|beaches|museums?|malls?|shopping|events?|breakfast|lunch|dinner|nightlife)/i.test(
-          userMsgLower,
-        ) || /tell me about good\b/i.test(userMsgLower)
-      const isAskingAboutSpecificPlace =
-        !isBroadTellMeAsk &&
-        /(tell me (about|more)\s+\S+|is\s+.+\s+good\b|what do you know about|information about|details about)/i.test(userMsgLower);
-      const specificPlaceName = isAskingAboutSpecificPlace ? extractKhalidSpecificPlaceName(trimmed) : ''
-      
-      const mentionsShowing = /\b(show|here|check|pull|display|look at|take a look|these|some|recommend|suggest|find|discover|explore)\b/i.test(replyLower);
-      const asksAboutPlaces = /(where|any|good|best|top|find|looking for)/i.test(userMsgLower);
-      
-      // Only auto-trigger if NOT asking about a specific place
-      if (!isSmallTalkTurn && !isAskingAboutSpecificPlace && (mentionsShowing || asksAboutPlaces || broadDiscoveryAsk) && (!actions || actions.length === 0)) {
-        console.log('[Khalid] Reply suggests showing results but no actions — auto-triggering go_show_clients');
-
-        const assist = explicitConstraint.isSpecific
-          ? { query: explicitConstraint.query, clientTypeHint: explicitConstraint.clientType || inferredClientTypeThisTurn }
-          : buildKhalidVarietyQuery({
-              userText: trimmed,
-              replyText,
-              topicHintFromPrior,
-              currentQuery: '',
-              currentClientType: inferredClientTypeThisTurn,
-              generalLabels,
-              activityLabels,
-              foodLabels,
-              personaSummary,
-            })
-        const assistQuery = assist.query
-        const clientTypeHint = assist.clientTypeHint
-
-        actions = [
-          {
-            type: 'go_show_clients',
-            query: assistQuery,
-            client_type: inferredClientTypeThisTurn || clientTypeHint,
-            strict_query_match: Boolean(explicitConstraint.isSpecific),
-          },
-        ];
-        console.log('[Khalid] Auto-generated action:', actions[0]);
-      } else if (isAskingAboutSpecificPlace) {
-        const placeName = specificPlaceName
-        const hasGoShowClientsAction = Array.isArray(actions) && actions.some((a) => a && a.type === 'go_show_clients')
-        if (placeName && !hasGoShowClientsAction) {
-          const inferredType = inferKhalidClientType(
-            `${trimmed} ${replyText} ${placeName}`,
-            khalidLastClientTypeRef.current,
-          )
-          actions = [
-            {
-              type: 'go_show_clients',
-              query: placeName,
-              client_type: inferredType || '',
-              strict_client_name: placeName,
-              strict_query_match: true,
-            },
-          ]
-          console.log('[Khalid] User asking about specific place - forcing targeted card action for:', placeName)
-        } else {
-          console.log('[Khalid] User asking about specific place but no valid place name parsed');
-        }
-      }
-
+      const assistantMsgId = `assistant-${Date.now()}`;
       const assistantMsg = {
-        id: `assistant-${Date.now()}`,
+        id: assistantMsgId,
         role: 'assistant',
         text: replyText,
       };
@@ -3034,77 +3395,34 @@ export default function KhalidChatScreen({ navigation, route }) {
       setKhalidMessages((prev) => [...prev, assistantMsg]);
       scrollKhalidToEnd();
 
-      if (actions && actions.length > 0) {
-        console.log('[Khalid] Processing actions:', actions);
-        const finalActions = Array.isArray(actions) ? actions : [];
-        const guardedActions = finalActions.map((a) => {
-          if (!a || a.type !== 'go_show_clients') return a
-          let actionQuery = String(a.query || '').trim()
-          const priorTopic = topicHintFromPrior || String(khalidSessionContextRef.current?.topic || '').trim()
-          const broadAskForGuard = isKhalidBroadDiscoveryAsk(trimmed)
-          const seeded = buildKhalidVarietyQuery({
-            userText: trimmed,
-            replyText,
-            topicHintFromPrior: priorTopic,
-            currentQuery: actionQuery,
-            currentClientType: String(a.client_type || '').trim() || inferredClientTypeThisTurn,
-            generalLabels,
-            activityLabels,
-            foodLabels,
-            personaSummary,
-          })
-          if (explicitConstraint.isSpecific) {
-            actionQuery = explicitConstraint.query
-          } else if (!actionQuery || (broadAskForGuard && isKhalidGenericBrowseQuery(actionQuery))) {
-            actionQuery = seeded.query
-          }
-          if (!actionQuery && isKhalidLikelyFollowUpTurn(trimmed)) {
-            actionQuery = String(khalidSessionContextRef.current?.lastQuery || '').trim()
-          }
-          const inferred = inferKhalidClientType(
-            `${trimmed} ${actionQuery} ${replyText}`,
-            khalidLastClientTypeRef.current,
-          )
-          const nextType =
-            explicitConstraint.clientType ||
-            explicitClientTypeThisTurn ||
-            inferred ||
-            (typeof a.client_type === 'string' ? a.client_type.trim() : '') ||
-            ''
-          const strictClientName = String(a.strict_client_name || '').trim()
-          return {
-            ...a,
-            query: actionQuery,
-            client_type: nextType,
-            strict_client_name: strictClientName || specificPlaceName,
-            strict_query_match: Boolean(explicitConstraint.isSpecific || strictClientName || specificPlaceName),
-          }
-        })
+      const appControlActions = (actions || []).filter(
+        (a) => a && KHALID_APP_CONTROL_ACTION_TYPES.has(a.type),
+      )
+      const fullReplyForContext = followUpText
+        ? `${replyText}\n\n${followUpText}`.trim()
+        : replyText;
 
-        const lastGoShow = [...guardedActions]
-          .reverse()
-          .find((a) => a && a.type === 'go_show_clients' && typeof a.client_type === 'string' && a.client_type.trim());
-        if (lastGoShow?.client_type) khalidLastClientTypeRef.current = lastGoShow.client_type;
-
+      if (appControlActions.length > 0) {
         khalidSessionContextRef.current = deriveKhalidSessionContextUpdate({
           userText: trimmed,
-          replyText,
-          actions: guardedActions,
+          replyText: fullReplyForContext,
+          actions: appControlActions,
           inferredClientType: inferredClientTypeThisTurn,
           priorContext: khalidSessionContextRef.current,
         })
 
-        guardedActions.forEach((a) => {
-          if (a && KHALID_APP_CONTROL_ACTION_TYPES.has(a.type)) {
-            handleKhalidAppControlAction(a);
-          } else {
-            handleKhalidAction(a);
-          }
-        });
+        appControlActions.forEach((a) => handleKhalidAppControlAction(a))
       } else {
+        if (followUpText) {
+          scheduleKhalidFollowUpBubble({
+            afterMessageId: assistantMsgId,
+            text: followUpText,
+            pauseMs: 1050,
+          });
+        }
         khalidSessionContextRef.current = deriveKhalidSessionContextUpdate({
           userText: trimmed,
-          replyText,
+          replyText: fullReplyForContext,
           actions: [],
           inferredClientType: inferredClientTypeThisTurn,
           priorContext: khalidSessionContextRef.current,
@@ -3121,93 +3439,6 @@ export default function KhalidChatScreen({ navigation, route }) {
   sendMessageWithTextRef.current = sendMessageWithText;
 
   useEffect(() => {
-    if (khalidAutoNearbyKickoffDoneRef.current) return
-    if (khalidLoading) return
-    if (khalidMessages.some((m) => m.role === 'user')) return
-    const introOnly =
-      khalidMessages.length === 1 &&
-      khalidMessages[0] &&
-      khalidMessages[0].role === 'assistant' &&
-      khalidMessages[0].id === 'intro'
-    if (!introOnly) return
-
-    let cancelled = false
-    khalidAutoNearbyKickoffDoneRef.current = true
-
-    ;(async () => {
-      try {
-        const coords = await resolveKhalidUserCoords()
-        if (cancelled || !coords) return
-        khalidLastFetchCoordsRef.current = coords
-        khalidLastProximityIntentRef.current = true
-
-        const placeFirst = await fetchClientsByQuery('', 'place', {
-          userLat: coords.latitude,
-          userLng: coords.longitude,
-          sortByProximity: true,
-        })
-        const restaurantFallback =
-          Array.isArray(placeFirst) && placeFirst.length > 0
-            ? []
-            : await fetchClientsByQuery('', 'restaurant', {
-                userLat: coords.latitude,
-                userLng: coords.longitude,
-                sortByProximity: true,
-              })
-        const list = Array.isArray(placeFirst) && placeFirst.length > 0 ? placeFirst : restaurantFallback
-        if (cancelled || !Array.isArray(list) || list.length === 0) return
-
-        const nearest = list[0]
-        const nearestName = String(nearest?.name || 'a spot nearby').trim()
-        const nearestDistance = String(nearest?.distanceLabel || '').trim()
-        const openerText = nearestDistance
-          ? `${nearestName} is nearby (${nearestDistance}) — you might want to try it. I can also pull a few more close options.`
-          : `${nearestName} looks nearby — you might want to try it. I can also pull a few more close options.`
-
-        const assistantMsg = {
-          id: `assistant-auto-nearby-${Date.now()}`,
-          role: 'assistant',
-          text: openerText,
-        }
-        setKhalidMessages((prev) => [...prev, assistantMsg])
-        setTimeout(scrollKhalidToEnd, 80)
-
-        const guessedType =
-          nearest && typeof nearest.clientType === 'string' && nearest.clientType.trim()
-            ? nearest.clientType.trim()
-            : 'place'
-        khalidLastClientTypeRef.current = guessedType
-        khalidSessionContextRef.current = deriveKhalidSessionContextUpdate({
-          userText: '',
-          replyText: openerText,
-          actions: [
-            {
-              type: 'go_show_clients',
-              query: nearestName,
-              client_type: guessedType,
-              strict_client_name: nearestName,
-            },
-          ],
-          inferredClientType: guessedType,
-          priorContext: khalidSessionContextRef.current,
-        })
-        handleKhalidAction({
-          type: 'go_show_clients',
-          query: nearestName,
-          client_type: guessedType,
-          strict_client_name: nearestName,
-        })
-      } catch (e) {
-        console.warn('[Khalid] auto-nearby kickoff skipped:', e?.message || e)
-      }
-    })()
-
-    return () => {
-      cancelled = true
-    }
-  }, [khalidLoading, khalidMessages, resolveKhalidUserCoords])
-
-  useEffect(() => {
     const orb = route.params?.orbitChat;
     if (!orb || orb.ts == null) return;
     const ts = Number(orb.ts);
@@ -3219,6 +3450,7 @@ export default function KhalidChatScreen({ navigation, route }) {
     orbitVenueAskContextRef.current = {
       placeName: placeLabel,
       curatedSummary,
+      clientId: String(orb.clientId || orb.client_id || '').trim() || undefined,
     };
     setKhalidError(null);
     setKhalidInput('');
@@ -3232,25 +3464,81 @@ export default function KhalidChatScreen({ navigation, route }) {
   const sendKhalidMessage = () => sendMessageWithText(khalidInput);
 
   const handleAskAboutPlace = (client) => {
-    const query = `Tell me more about ${client.name}`;
-    setKhalidInput(query);
-    sendMessageWithText(query);
-  };
-
-  const renderKhalidItem = ({ item }) => {
-    console.log('[Khalid] renderKhalidItem called with item:', { id: item.id, type: item.type, role: item.role, hasAction: !!item.action });
-    
-    if (item.type === 'card' && item.action) {
-      console.log('[Khalid] Rendering card with action:', item.action);
-      return (
-        <KhalidCardRow
-          item={item}
-          onViewProfile={dismissKhalidForClientProfile}
-          onAskAbout={handleAskAboutPlace}
-        />
-      );
+    const placeName = String(client?.name || '').trim()
+    if (!placeName) return
+    const curatedSummary = String(client?.ai_summary || client?.description || '').trim()
+    const clientId = String(client?.id || client?.client_a_uuid || '').trim()
+    orbitVenueAskContextRef.current = {
+      placeName,
+      curatedSummary,
+      ...(clientId ? { clientId } : {}),
     }
-    const isUser = item.role === 'user';
+    const query = `Tell me more about ${placeName}`
+    setKhalidInput(query)
+    sendMessageWithText(query)
+  }
+
+  const handleInlinePlanStopPress = useCallback((stop) => {
+    if (!stop) return
+    const cid = stop.clientId || stop.client_id
+    if (cid) {
+      dismissKhalidForClientProfile(cid)
+      return
+    }
+  }, [dismissKhalidForClientProfile])
+
+  const handleInlinePlanNavigateStop = useCallback((stop) => {
+    if (!stop || !Number.isFinite(stop.lat) || !Number.isFinite(stop.lng)) return
+    openGoogleMapsDirections(stop.lat, stop.lng)
+  }, [])
+
+  const handleInlinePlanOpenFullRoute = useCallback((planData) => {
+    if (!Array.isArray(planData) || planData.length === 0) return
+    const markers = planData
+      .filter((s) => s && Number.isFinite(s.lat) && Number.isFinite(s.lng))
+      .map((s) => ({ lat: s.lat, lng: s.lng }))
+    if (markers.length === 0) return
+    openGoogleMapsRouteForMarkers(markers)
+  }, [])
+
+  const renderKhalidItem = ({ item, index }) => {
+    const prevItem = index > 0 ? khalidMessages[index - 1] : null
+    const isConsecutiveAssistant = prevItem && prevItem.role === 'assistant' && item.role === 'assistant'
+
+    if (item.type === 'inline_plan') {
+      return (
+        <BubbleIn isUser={false}>
+          <View style={styles.khalidTurnAssistantOuter}>
+            {!isConsecutiveAssistant ? (
+              <View style={styles.khalidAssistantTurnHead}>
+                <View style={styles.khalidAssistantTurnAvatar}>
+                  <Image source={KHALID_AVATAR} style={styles.khalidAssistantTurnAvatarImg} resizeMode="cover" />
+                </View>
+                <Text style={[styles.khalidAssistantTurnName, { color: khalidSurface.headerTitle }]}>Khalid</Text>
+                <View style={[styles.khalidAssistantTurnPill, { borderColor: khalidSurface.assistantBubbleBorder }]}>
+                  <Text style={[styles.khalidAssistantTurnPillText, { color: khalidSurface.headerEyebrow }]}>Travel guide</Text>
+                </View>
+              </View>
+            ) : null}
+            <InlinePlanCard
+              plan={item.plan}
+              loading={item.loading}
+              error={item.error}
+              isDark={isDark}
+              colors={colors}
+              onStopPress={handleInlinePlanStopPress}
+              onNavigateStop={handleInlinePlanNavigateStop}
+              onOpenFullRoute={handleInlinePlanOpenFullRoute}
+            />
+          </View>
+        </BubbleIn>
+      )
+    }
+    
+    if (item.type === 'card') {
+      return null
+    }
+    const isUser = item.role === 'user'
     if (isUser) {
       return (
         <BubbleIn isUser>
@@ -3287,25 +3575,27 @@ export default function KhalidChatScreen({ navigation, route }) {
             </View>
           </View>
         </BubbleIn>
-      );
+      )
     }
 
     return (
       <BubbleIn isUser={false}>
         <View style={styles.khalidTurnAssistantOuter}>
-          <View style={styles.khalidAssistantTurnHead}>
-            <View style={styles.khalidAssistantTurnAvatar}>
-              <Image
-                source={KHALID_SIYAHA_LOGO}
-                style={styles.khalidAssistantTurnAvatarImg}
-                resizeMode="contain"
-              />
+          {!isConsecutiveAssistant ? (
+            <View style={styles.khalidAssistantTurnHead}>
+              <View style={styles.khalidAssistantTurnAvatar}>
+                <Image
+                  source={KHALID_AVATAR}
+                  style={styles.khalidAssistantTurnAvatarImg}
+                  resizeMode="cover"
+                />
+              </View>
+              <Text style={[styles.khalidAssistantTurnName, { color: khalidSurface.headerTitle }]}>Khalid</Text>
+              <View style={[styles.khalidAssistantTurnPill, { borderColor: khalidSurface.assistantBubbleBorder }]}>
+                <Text style={[styles.khalidAssistantTurnPillText, { color: khalidSurface.headerEyebrow }]}>Travel guide</Text>
+              </View>
             </View>
-            <Text style={[styles.khalidAssistantTurnName, { color: khalidSurface.headerTitle }]}>Khalid</Text>
-            <View style={[styles.khalidAssistantTurnPill, { borderColor: khalidSurface.assistantBubbleBorder }]}>
-              <Text style={[styles.khalidAssistantTurnPillText, { color: khalidSurface.headerEyebrow }]}>Travel guide</Text>
-            </View>
-          </View>
+          ) : null}
           <View
             style={[
               styles.khalidBubble,
@@ -3327,10 +3617,10 @@ export default function KhalidChatScreen({ navigation, route }) {
             <View style={[styles.khalidBubbleAccent, { backgroundColor: khalidSurface.accentLine }]} pointerEvents="none" />
             <AnimatedMessageText
               messageId={item.id}
-              skipTypewriter={!isUser && khalidTypewriterDoneIdsRef.current.has(item.id)}
+              isUser={false}
+              skipTypewriter={khalidTypewriterDoneIdsRef.current.has(item.id)}
               onTypewriterComplete={handleKhalidTypewriterComplete}
               text={item.text}
-              isUser={isUser}
               style={[
                 styles.khalidBubbleText,
                 styles.khalidBubbleTextAssistant,
@@ -3340,27 +3630,33 @@ export default function KhalidChatScreen({ navigation, route }) {
           </View>
         </View>
       </BubbleIn>
-    );
-  };
+    )
+  }
 
   const renderTypingIndicator = () => {
-    if (!khalidLoading) return null;
+    if (!khalidLoading && !khalidFollowUpTyping) return null
+    const lastMsg = khalidMessages[khalidMessages.length - 1]
+    const lastWasAssistant = lastMsg && lastMsg.role === 'assistant'
     return (
       <BubbleIn isUser={false}>
         <View style={styles.khalidTurnAssistantOuter}>
-          <View style={styles.khalidAssistantTurnHead}>
-            <View style={styles.khalidAssistantTurnAvatar}>
-              <Image
-                source={KHALID_SIYAHA_LOGO}
-                style={styles.khalidAssistantTurnAvatarImg}
-                resizeMode="contain"
-              />
+          {!lastWasAssistant ? (
+            <View style={styles.khalidAssistantTurnHead}>
+              <View style={styles.khalidAssistantTurnAvatar}>
+                <Image
+                  source={KHALID_AVATAR}
+                  style={styles.khalidAssistantTurnAvatarImg}
+                  resizeMode="cover"
+                />
+              </View>
+              <Text style={[styles.khalidAssistantTurnName, { color: khalidSurface.headerTitle }]}>Khalid</Text>
+              <View style={[styles.khalidAssistantTurnPill, { borderColor: khalidSurface.assistantBubbleBorder }]}>
+                <Text style={[styles.khalidAssistantTurnPillText, { color: khalidSurface.headerEyebrow }]}>
+                  {khalidFollowUpTyping ? 'Checking in…' : 'Crafting reply…'}
+                </Text>
+              </View>
             </View>
-            <Text style={[styles.khalidAssistantTurnName, { color: khalidSurface.headerTitle }]}>Khalid</Text>
-            <View style={[styles.khalidAssistantTurnPill, { borderColor: khalidSurface.assistantBubbleBorder }]}>
-              <Text style={[styles.khalidAssistantTurnPillText, { color: khalidSurface.headerEyebrow }]}>Crafting reply…</Text>
-            </View>
-          </View>
+          ) : null}
           <View
             style={[
               styles.khalidBubble,
@@ -3387,23 +3683,52 @@ export default function KhalidChatScreen({ navigation, route }) {
     );
   };
 
+  useEffect(() => {
+    const introOnly =
+      khalidMessages.length === 1 && khalidMessages[0]?.id === 'intro';
+    if (introOnly) {
+      queueKhalidIntroFollowUp(false);
+    }
+  }, [khalidMessages, queueKhalidIntroFollowUp]);
+
   useFocusEffect(
     useCallback(() => {
+      let cancelled = false
+      void resolveKhalidUserCoords({ forceFresh: true }).then((coords) => {
+        if (!cancelled && coords) khalidLastFetchCoordsRef.current = coords
+      })
+      if (!khalidLocationPrimedRef.current) {
+        khalidLocationPrimedRef.current = true
+        void primeKhalidSessionLocation().catch(() => {
+          khalidLocationPrimedRef.current = false
+        })
+      }
+
       const seedParts = [
         'best things to do in Bahrain today',
-        ...(activityLabels || []).slice(0, 2),
-        ...(foodLabels || []).slice(0, 2),
+        ...(generalLabels || []).slice(0, 2),
       ].filter(Boolean)
       const seedQuery = seedParts.join(', ')
       if (seedQuery) startKhalidPrefetch(seedQuery)
-    }, [activityLabels, foodLabels]),
+
+      return () => {
+        cancelled = true
+        clearKhalidFollowUpTimers()
+        khalidPendingFollowUpRef.current = null
+        setKhalidFollowUpTyping(false)
+      }
+    }, [clearKhalidFollowUpTimers, generalLabels, primeKhalidSessionLocation, resolveKhalidUserCoords]),
   )
 
   const starterSuggestions = useMemo(
-    () => getSmartSuggestions(generalLabels, activityLabels, foodLabels, khalidViewerUType),
-    [generalLabels, activityLabels, foodLabels, khalidViewerUType],
+    () => getSmartSuggestions(generalLabels, khalidViewerUType),
+    [generalLabels, khalidViewerUType],
   );
-  const showStarterPanel = !khalidLoading && !khalidMessages.some((m) => m.role === 'user')
+
+  const showStarterPanel =
+    !khalidLoading &&
+    !khalidFollowUpTyping &&
+    !khalidMessages.some((m) => m.role === 'user')
 
   const renderKhalidListFooter = () => (
     <>
@@ -3456,32 +3781,24 @@ export default function KhalidChatScreen({ navigation, route }) {
         <View
           style={[styles.khalidHeader, { borderBottomColor: khalidSurface.headerBorder }]}
           accessibilityRole="header"
-          accessibilityLabel="Khalid, SiyahaBH tourism guide"
+          accessibilityLabel="Khalid, travel guide"
         >
           <View style={styles.khalidHeaderInner}>
             <View style={styles.khalidHeaderCompactRow}>
-              <View style={[styles.khalidHeaderAvatarGlow, { borderColor: isDark ? 'rgba(233,200,119,0.2)' : 'rgba(200,16,46,0.12)' }]}>
-                <LinearGradient
-                  colors={
-                    isDark
-                      ? ['rgba(233,200,119,0.12)', 'rgba(14,165,233,0.05)', 'rgba(200,16,46,0.08)']
-                      : ['rgba(233,200,119,0.16)', 'rgba(255,255,255,0.35)', 'rgba(14,165,233,0.09)']
-                  }
-                  start={{ x: 0, y: 0 }}
-                  end={{ x: 1, y: 1 }}
-                  style={[StyleSheet.absoluteFillObject, styles.khalidHeaderAvatarGlowFill]}
-                  pointerEvents="none"
-                />
-                <View style={styles.khalidHeaderAvatarRingSlot}>
-                  <AvatarHaloRing size={34} active innerBackgroundColor={khalidSurface.avatarRingInner}>
-                    <Image source={KHALID_SIYAHA_LOGO} style={styles.khalidHeaderAvatarImage} resizeMode="contain" />
-                  </AvatarHaloRing>
-                </View>
-                <View style={styles.khalidHeaderOnlineDot} />
+              <View
+                style={[
+                  styles.khalidHeaderAvatarWrap,
+                  {
+                    borderColor: isDark ? 'rgba(233,200,119,0.28)' : 'rgba(200,16,46,0.22)',
+                    backgroundColor: isDark ? 'rgba(10,14,24,0.6)' : 'rgba(255,255,255,0.9)',
+                  },
+                ]}
+              >
+                <Image source={KHALID_AVATAR} style={styles.khalidHeaderAvatarImage} resizeMode="cover" />
               </View>
               <View style={styles.khalidHeaderTextStack}>
                 <Text style={[styles.khalidHeaderEyebrowCompact, { color: khalidSurface.headerEyebrow }]}>
-                  SiyahaBH · tourism
+                  Travel guide
                 </Text>
                 <View style={styles.khalidHeaderTitleRow}>
                   <Text style={[styles.khalidHeaderTitle, { color: khalidSurface.headerTitle }]}>Khalid</Text>
@@ -3522,7 +3839,12 @@ export default function KhalidChatScreen({ navigation, route }) {
         <FlatList
           ref={khalidListRef}
           data={khalidMessages}
-          extraData={{ e: khalidTypewriterEpoch, s: showStarterPanel, l: khalidLoading }}
+          extraData={{
+            e: khalidTypewriterEpoch,
+            s: showStarterPanel,
+            l: khalidLoading,
+            f: khalidFollowUpTyping,
+          }}
           keyExtractor={(item) => item.id}
           renderItem={renderKhalidItem}
           ItemSeparatorComponent={() => <View style={styles.khalidChatItemSeparator} />}
@@ -3589,6 +3911,10 @@ export default function KhalidChatScreen({ navigation, route }) {
                 value={khalidInput}
                 selectionColor={isDark ? 'rgba(233,200,119,0.35)' : 'rgba(200,16,46,0.22)'}
                 cursorColor={khalidSurface.accentLine}
+                autoCorrect={false}
+                autoComplete="off"
+                spellCheck={false}
+                autoCapitalize="sentences"
                 {...(Platform.OS === 'android'
                   ? { textAlignVertical: 'top', includeFontPadding: false }
                   : {})}
@@ -3748,51 +4074,17 @@ const styles = StyleSheet.create({
     opacity: 0.9,
     marginBottom: 1,
   },
-  khalidHeaderAvatarGlow: {
-    position: 'relative',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 3,
-    paddingHorizontal: 3,
-    borderRadius: 999,
-    borderWidth: 1,
+  khalidHeaderAvatarWrap: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
     overflow: 'hidden',
+    borderWidth: 1,
     flexShrink: 0,
-    ...Platform.select({
-      ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.08, shadowRadius: 8 },
-      android: { elevation: 2 },
-    }),
-  },
-  khalidHeaderAvatarGlowFill: {
-    zIndex: 0,
-    borderRadius: 999,
-  },
-  khalidHeaderAvatarRingSlot: {
-    zIndex: 2,
-    alignItems: 'center',
-    justifyContent: 'center',
   },
   khalidHeaderAvatarImage: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
-    padding: 1,
-  },
-  khalidHeaderOnlineDot: {
-    position: 'absolute',
-    bottom: 2,
-    right: 2,
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: '#4ADE80',
-    borderWidth: 2,
-    borderColor: 'rgba(10,18,34,0.95)',
-    zIndex: 4,
-    ...Platform.select({
-      ios: { shadowColor: '#4ADE80', shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.85, shadowRadius: 4 },
-      android: { elevation: 2 },
-    }),
+    width: '100%',
+    height: '100%',
   },
   khalidHeaderTitle: {
     fontFamily: FONT_POPPINS_BOLD,
@@ -3848,13 +4140,6 @@ const styles = StyleSheet.create({
   khalidSuggestionsBlock: {
     gap: 2,
   },
-  khalidSuggestionsScrollContent: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    paddingVertical: 4,
-    paddingRight: 4,
-  },
   khalidTurnUserOuter: {
     width: '100%',
     alignItems: 'flex-end',
@@ -3893,18 +4178,16 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
   },
   khalidAssistantTurnAvatar: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
     overflow: 'hidden',
-    borderWidth: 1,
-    borderColor: 'rgba(233,200,119,0.35)',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(148,163,184,0.45)',
   },
   khalidAssistantTurnAvatarImg: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    padding: 1,
+    width: '100%',
+    height: '100%',
   },
   khalidAssistantTurnName: {
     fontFamily: FONT_POPPINS_SEMIBOLD,
@@ -5276,7 +5559,12 @@ const styles = StyleSheet.create({
   khalidSuggestionsRow: {
     flexDirection: 'row',
     flexWrap: 'wrap',
+    alignItems: 'flex-start',
     gap: 8,
+    width: '100%',
+    paddingTop: 4,
+    paddingBottom: 4,
+    paddingHorizontal: 2,
   },
   khalidSuggestionChipWrap: {
     borderRadius: 22,

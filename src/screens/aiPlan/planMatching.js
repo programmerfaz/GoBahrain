@@ -1,5 +1,5 @@
 import { resolvePublicImageUrl } from '../../utils/imageUrl'
-import { parseCoordsFromPineconeMetadata, unswapLatLng } from './planGeoAndShare'
+import { parseCoordsFromPineconeMetadata, parsePlanItemCoords, unswapLatLng } from './planGeoAndShare'
 
 
 export function buildEventMetadataFromPineconeMeta(meta) {
@@ -221,6 +221,16 @@ export function pickPlanStopGalleryUris(item, loadedMarkers = []) {
     return one ? [one] : []
   }
   return urls
+}
+
+/** Lat/lng pairs for every plan stop that can be routed in Google Maps. */
+export function collectPlanRouteMarkers(plan, loadedClientMarkers) {
+  return (plan || [])
+    .map((item) => {
+      const fixed = parsePlanItemCoords(item) || resolveCoordsFromLoadedCache(item, loadedClientMarkers)
+      return fixed ? { lat: fixed.lat, lng: fixed.lng } : null
+    })
+    .filter(Boolean)
 }
 
 // Enrich plan items with client images from Supabase (Pinecone or direct client lookup)

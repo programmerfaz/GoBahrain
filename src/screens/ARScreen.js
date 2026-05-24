@@ -13,8 +13,9 @@ import {
   Animated,
   Easing,
   Pressable,
-  Share,
+  PanResponder,
   Vibration,
+  Image,
 } from 'react-native'
 import Slider from '@react-native-community/slider'
 import { CameraView, useCameraPermissions } from 'expo-camera'
@@ -28,12 +29,25 @@ import { Ionicons } from '@expo/vector-icons'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useRoute } from '@react-navigation/native'
 import { fetchNearbyPOIs, fetchEvents, fetchPineconeARRecommended } from '../services/aiPipeline'
+import {
+  buildARPreferenceContext,
+  buildARRetrievalQuery,
+  buildLockedPlaceBriefFromPoi,
+} from '../services/arKhalidGuide'
+import { useUserPreferences } from '../context/UserPreferencesContext'
+import { useAuth } from '../context/AuthContext'
+import { useARKhalidGuide } from '../hooks/useARKhalidGuide'
+import { useARKhalidInlineChat } from '../hooks/useARKhalidInlineChat'
+import { normalizeViewerUType } from '../services/aiPipeline'
+import ARKhalidGuidePanel, {
+  estimateKhalidStripHeight,
+  KHALID_PEEK_TAB_HEIGHT,
+} from '../components/ar/ARKhalidGuidePanel'
 import ClientProfileModal from '../components/ClientProfileModal'
-import { useSavedPlaces } from '../context/SavedPlacesContext'
 import { colors as themeColors } from '../theme/designTokens'
 import { LUXURY, luxuryElevated } from '../theme/luxuryPremium'
-import { useTheme } from '../context/ThemeContext'
 import { openGoogleMapsDirections } from '../utils/googleMapsDirections'
+import { resolvePublicImageUrl } from '../utils/imageUrl'
 import {
   FONT_POPPINS_BOLD,
   FONT_POPPINS_MEDIUM,
@@ -61,14 +75,12 @@ const C = {
 }
 
 const DOOR_W = Dimensions.get('window').width
-const DOOR_H = Dimensions.get('window').height
 
 const MODES = [
   { id: 'all', label: 'All', icon: 'globe-outline', color: C.accentLight },
   { id: 'places', label: 'Places', icon: 'business-outline', color: C.landmark },
   { id: 'restaurants', label: 'Food', icon: 'restaurant-outline', color: C.food },
   { id: 'events', label: 'Events', icon: 'calendar-outline', color: C.event },
-  { id: 'saved', label: 'Saved', icon: 'heart-outline', color: C.success },
 ]
 
 const LANDMARK_HERITAGE = {
@@ -95,6 +107,9 @@ const GROUND_PERSPECTIVE = 580
 const FLOOR_PITCH_COEFF = 0.52
 const ALIGN_ANGLE_THRESHOLD_DEG = 12
 const HOLO_BLEND = Platform.OS === 'ios' ? 'screen' : 'normal'
+/** Hold this long, then pull down to lock a place marker */
+const LOCK_HOLD_MS = 360
+const LOCK_PULL_PX = 52
 
 const hexToRgba = (hex, alpha) => {
   if (!hex || typeof hex !== 'string' || !hex.startsWith('#')) return `rgba(230,57,80,${alpha})`
@@ -250,81 +265,267 @@ const ls = StyleSheet.create({
   sub: { color: 'rgba(255,255,255,0.68)', fontSize: 13, fontFamily: FONT_POPPINS_REGULAR, marginTop: 7 },
 })
 
-/* ─── POI Marker ─── */
-function POIMarker({ poi, x, y, onPress, isNearest, index, isBusy, focused, dimmed, onMarkerLongPress }) {
+/* ─── POI Marker (hold, then pull ↓ to lock) ─── */
+function POIMarker({
+  poi,
+  x,
+  y,
+  onPress,
+  isNearest,
+  index,
+  locked,
+  dimmed,
+  onLockPoi,
+  liveDistKm,
+}) {
   const anim = useRef(new Animated.Value(0)).current
   const pulse = useRef(new Animated.Value(1)).current
+  const holdProgress = useRef(new Animated.Value(0)).current
+  const pullY = useRef(new Animated.Value(0)).current
+  const holdTimerRef = useRef(null)
+  const armedRef = useRef(false)
+  const didLockRef = useRef(false)
+  const gesturePhaseRef = useRef('idle')
+  const [gesturePhase, setGesturePhase] = useState('idle')
+  const setPhase = useCallback((phase) => {
+    if (gesturePhaseRef.current === phase) return
+    gesturePhaseRef.current = phase
+    setGesturePhase(phase)
+  }, [])
   const poiColor = getPoiColor(poi)
   const icon = getPoiIcon(poi)
+  const distKm = liveDistKm ?? poi.distanceKm
+  const canLock = Boolean(onLockPoi) && !locked
 
   useEffect(() => {
     Animated.spring(anim, { toValue: 1, damping: 14, stiffness: 120, delay: index * 40, useNativeDriver: true }).start()
   }, [anim, index])
 
   useEffect(() => {
-    if (!isNearest && !focused) return
+    if (!locked) return
     const p = Animated.loop(Animated.sequence([
-      Animated.timing(pulse, { toValue: 1.12, duration: 900, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
+      Animated.timing(pulse, { toValue: 1.1, duration: 900, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
       Animated.timing(pulse, { toValue: 1, duration: 900, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
     ]))
     p.start()
     return () => p.stop()
-  }, [isNearest, focused, pulse])
+  }, [locked, pulse])
 
-  const scale = anim.interpolate({ inputRange: [0, 1], outputRange: [0.5, 1] })
-  const scaleTransforms = [{ scale: isNearest || focused ? pulse : scale }]
-  const zIndexCol = focused ? 40 : dimmed ? 5 : isNearest ? 25 : 10
+  const resetGesture = useCallback(() => {
+    if (holdTimerRef.current) {
+      clearTimeout(holdTimerRef.current)
+      holdTimerRef.current = null
+    }
+    armedRef.current = false
+    setPhase('idle')
+    pullY.setValue(0)
+    Animated.timing(holdProgress, { toValue: 0, duration: 100, useNativeDriver: false }).start()
+  }, [holdProgress, pullY, setPhase])
 
-  const handleMarkerLongPress = () => {
-    if (!onMarkerLongPress) return
+  useEffect(() => () => {
+    if (holdTimerRef.current) clearTimeout(holdTimerRef.current)
+  }, [])
+
+  const commitLock = useCallback(() => {
+    if (!onLockPoi || locked || didLockRef.current) return
+    didLockRef.current = true
     if (Platform.OS !== 'web') {
       try {
-        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium)
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success)
       } catch { /* noop */ }
     }
-    onMarkerLongPress(poi)
-  }
+    onLockPoi(poi)
+    resetGesture()
+  }, [onLockPoi, locked, poi, resetGesture])
+
+  const panResponder = useMemo(
+    () =>
+      PanResponder.create({
+        onStartShouldSetPanResponder: () => canLock,
+        onMoveShouldSetPanResponder: (_, g) => canLock && (armedRef.current || Math.abs(g.dy) > 6),
+        onPanResponderTerminationRequest: () => !armedRef.current,
+        onPanResponderGrant: () => {
+          if (!canLock) return
+          setPhase('holding')
+          holdProgress.setValue(0)
+          Animated.timing(holdProgress, { toValue: 1, duration: LOCK_HOLD_MS, easing: Easing.linear, useNativeDriver: false }).start()
+          holdTimerRef.current = setTimeout(() => {
+            holdTimerRef.current = null
+            armedRef.current = true
+            setPhase('armed')
+            if (Platform.OS !== 'web') {
+              try {
+                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium)
+              } catch { /* noop */ }
+            }
+          }, LOCK_HOLD_MS)
+        },
+        onPanResponderMove: (_, g) => {
+          if (!armedRef.current || !canLock) return
+          const dy = Math.max(0, g.dy)
+          pullY.setValue(dy)
+          setPhase('pulling')
+          if (dy >= LOCK_PULL_PX) commitLock()
+        },
+        onPanResponderRelease: (_, g) => {
+          const quickTap = !armedRef.current && Math.abs(g.dy) < 10 && Math.abs(g.dx) < 10
+          resetGesture()
+          if (quickTap && !didLockRef.current) onPress?.(poi)
+          else didLockRef.current = false
+        },
+        onPanResponderTerminate: () => {
+          resetGesture()
+          didLockRef.current = false
+        },
+      }),
+    [canLock, commitLock, holdProgress, onPress, poi, pullY, resetGesture, setPhase],
+  )
+
+  const isGesturing = gesturePhase !== 'idle'
+  const scale = anim.interpolate({ inputRange: [0, 1], outputRange: [0.5, 1] })
+  const scaleTransforms = [{ scale: locked || isGesturing ? pulse : scale }]
+  const zIndexCol = locked ? 50 : isGesturing ? 90 : dimmed ? 2 : 14 + (index % 5)
+  const showPullHint = gesturePhase === 'armed' || gesturePhase === 'pulling'
+  const holdRingOpacity = holdProgress.interpolate({ inputRange: [0, 0.2, 1], outputRange: [0, 0.45, 1], extrapolate: 'clamp' })
+  const pullFillH = pullY.interpolate({ inputRange: [0, LOCK_PULL_PX], outputRange: [4, LOCK_PULL_PX], extrapolate: 'clamp' })
+  const pullIconY = pullY.interpolate({ inputRange: [0, LOCK_PULL_PX], outputRange: [0, LOCK_PULL_PX - 14], extrapolate: 'clamp' })
+
+  const handleCardPress = canLock ? undefined : () => onPress?.(poi)
 
   return (
-    <Animated.View style={[mk.wrap, dimmed && mk.wrapDimmed, { left: x, top: y, opacity: anim, transform: scaleTransforms, zIndex: zIndexCol }]}>
-      <View pointerEvents="none" style={[mk.pinHalo, { borderColor: hexToRgba(poiColor, 0.45) }]} />
-      {(isNearest || focused) && <View style={[mk.nearestGlow, { shadowColor: poiColor }]} />}
-      <TouchableOpacity
+    <Animated.View
+      style={[
+        mk.wrap,
+        dimmed && mk.wrapDimmed,
+        dimmed && mk.wrapNoTouch,
+        { left: x, top: y, opacity: anim, transform: scaleTransforms, zIndex: zIndexCol },
+      ]}
+      {...(canLock ? panResponder.panHandlers : {})}
+    >
+      {locked ? (
+        <View pointerEvents="none" style={mk.lockedRing}>
+          <View style={mk.lockedRingInner} />
+        </View>
+      ) : null}
+      <View pointerEvents="none" style={[mk.pinHalo, { borderColor: hexToRgba(poiColor, locked ? 0.72 : 0.45) }]} />
+      {(isNearest || locked || isGesturing) && (
+        <View style={[mk.nearestGlow, { shadowColor: locked || showPullHint ? C.success : poiColor }]} />
+      )}
+      <View
         style={[
           mk.card,
           { shadowColor: poiColor },
-          focused && { borderColor: `${C.success}aa`, borderWidth: 2 },
-          isNearest && !focused && { borderColor: `${poiColor}95` },
-          poi._pineconeRecommended && !isNearest && !focused && { borderColor: 'rgba(167,139,250,0.55)' },
+          locked && mk.cardLocked,
+          showPullHint && mk.cardArmed,
+          isNearest && !locked && !showPullHint && { borderColor: `${poiColor}95` },
+          poi._pineconeRecommended && !isNearest && !locked && !showPullHint && { borderColor: 'rgba(167,139,250,0.55)' },
         ]}
-        onPress={() => onPress?.(poi)}
-        onLongPress={onMarkerLongPress ? handleMarkerLongPress : undefined}
-        delayLongPress={380}
-        activeOpacity={0.85}
-        accessibilityHint={onMarkerLongPress ? 'Long press to focus on this place in AR' : undefined}
       >
-        <View style={[mk.iconBg, { backgroundColor: `${poiColor}38` }]}>
-          <Ionicons name={icon} size={15} color={poiColor} />
-        </View>
-        <View style={mk.textCol}>
-          <Text style={mk.name} numberOfLines={1}>{poi.name}</Text>
-          <Text style={mk.dist}>{getDistText(poi.distanceKm)}</Text>
-        </View>
-        {poi._pineconeRecommended && (
-          <View style={mk.aiBadge}>
-            <Ionicons name="sparkles" size={9} color="#A78BFA" />
+        <Pressable
+          style={mk.cardPressable}
+          onPress={handleCardPress}
+          disabled={canLock}
+          accessibilityRole="button"
+          accessibilityLabel={poi.name}
+          accessibilityHint={canLock ? 'Hold, then pull down to lock navigation to this place' : undefined}
+        >
+          {canLock ? (
+            <Animated.View
+              pointerEvents="none"
+              style={[mk.holdRing, { borderColor: hexToRgba(C.success, 0.9), opacity: holdRingOpacity }]}
+            />
+          ) : null}
+          <View style={[mk.iconBg, { backgroundColor: `${poiColor}38` }]}>
+            <Ionicons name={locked ? 'lock-closed' : showPullHint ? 'lock-closed-outline' : icon} size={15} color={locked || showPullHint ? C.success : poiColor} />
           </View>
-        )}
-      </TouchableOpacity>
-      <View style={[mk.stem, { backgroundColor: `${poiColor}90` }]} />
-      <View style={[mk.pinDot, { backgroundColor: poiColor, borderColor: 'rgba(255,255,255,0.85)' }]} />
+          <View style={mk.textCol}>
+            <Text style={mk.name} numberOfLines={1}>{poi.name}</Text>
+            <Text style={[mk.dist, (locked || showPullHint) && { color: C.success }]}>{getDistText(distKm)}</Text>
+          </View>
+          {locked ? (
+            <View style={mk.lockBadge}>
+              <Ionicons name="lock-closed" size={8} color={C.success} />
+              <Text style={mk.lockBadgeText}>LOCKED</Text>
+            </View>
+          ) : poi._pineconeRecommended ? (
+            <View style={mk.aiBadge}>
+              <Ionicons name="sparkles" size={9} color="#A78BFA" />
+            </View>
+          ) : null}
+        </Pressable>
+      </View>
+      {showPullHint ? (
+        <View style={mk.pullHintCol} pointerEvents="none">
+          <View style={mk.pullTrack}>
+            <Animated.View style={[mk.pullFill, { height: pullFillH }]} />
+          </View>
+          <Animated.View style={[mk.pullIconWrap, { transform: [{ translateY: pullIconY }] }]}>
+            <Ionicons name="chevron-down" size={14} color={C.success} />
+          </Animated.View>
+          <Text style={mk.pullHintText}>Pull down to lock</Text>
+        </View>
+      ) : null}
+      <View style={[mk.stem, { backgroundColor: locked || showPullHint ? `${C.success}90` : `${poiColor}90` }]} />
+      <View style={[mk.pinDot, { backgroundColor: locked || showPullHint ? C.success : poiColor, borderColor: 'rgba(255,255,255,0.85)' }]} />
     </Animated.View>
   )
 }
 
+/* ─── Locked navigation screen indication ─── */
+function LockedNavBeacon({ name, distText }) {
+  const pulse = useRef(new Animated.Value(0.4)).current
+  useEffect(() => {
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulse, { toValue: 1, duration: 900, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
+        Animated.timing(pulse, { toValue: 0.4, duration: 900, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
+      ]),
+    )
+    loop.start()
+    return () => loop.stop()
+  }, [pulse])
+  return (
+    <View style={lkb.beaconWrap} pointerEvents="none">
+      <Animated.View style={[lkb.beaconGlow, { opacity: pulse }]} />
+      <View style={lkb.beaconPill}>
+        <Ionicons name="navigate" size={14} color={C.success} />
+        <Text style={lkb.beaconText} numberOfLines={1}>Navigating to {name}</Text>
+        <Text style={lkb.beaconDist}>{distText}</Text>
+      </View>
+    </View>
+  )
+}
+
+const lkb = StyleSheet.create({
+  beaconWrap: { alignItems: 'center', paddingHorizontal: 16 },
+  beaconGlow: {
+    position: 'absolute',
+    top: 4,
+    left: 24,
+    right: 24,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: 'rgba(16,185,129,0.22)',
+  },
+  beaconPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    borderRadius: 20,
+    backgroundColor: 'rgba(8,14,24,0.88)',
+    borderWidth: 1.5,
+    borderColor: 'rgba(16,185,129,0.45)',
+  },
+  beaconText: { color: '#FFF', fontSize: 12, fontFamily: FONT_POPPINS_BOLD, flexShrink: 1 },
+  beaconDist: { color: C.success, fontSize: 11, fontFamily: FONT_POPPINS_BOLD },
+})
+
 const mk = StyleSheet.create({
   wrap: { position: 'absolute', alignItems: 'center' },
   wrapDimmed: { opacity: 0.32 },
+  wrapNoTouch: { pointerEvents: 'none' },
   pinHalo: {
     position: 'absolute',
     top: -8,
@@ -346,22 +547,78 @@ const mk = StyleSheet.create({
     }),
   },
   card: {
-    flexDirection: 'row', alignItems: 'center', gap: 8,
-    paddingVertical: 12, paddingHorizontal: 14,
     backgroundColor: 'rgba(9,12,22,0.88)',
     borderRadius: LUXURY.radiusMarkerPill + 2,
     borderWidth: 1.5,
     borderColor: 'rgba(255,255,255,0.18)',
+    overflow: 'hidden',
     ...luxuryElevated,
     ...Platform.select({
       ios: { shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.42, shadowRadius: 18 },
       android: { elevation: 12 },
     }),
   },
+  cardPressable: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+  },
+  cardLocked: { borderColor: `${C.success}cc`, borderWidth: 2.5 },
+  cardArmed: { borderColor: `${C.success}88`, borderWidth: 2 },
+  lockedRing: {
+    position: 'absolute',
+    top: -14,
+    left: -14,
+    right: -14,
+    bottom: 20,
+    borderRadius: LUXURY.radiusMarkerPill + 14,
+    borderWidth: 2,
+    borderColor: 'rgba(16,185,129,0.35)',
+    backgroundColor: 'rgba(16,185,129,0.06)',
+  },
+  lockedRingInner: {
+    ...StyleSheet.absoluteFillObject,
+    margin: 4,
+    borderRadius: LUXURY.radiusMarkerPill + 10,
+    borderWidth: 1,
+    borderColor: 'rgba(16,185,129,0.2)',
+  },
+  pullHintCol: { alignItems: 'center', marginTop: 4, minHeight: 58 },
+  pullTrack: {
+    width: 4,
+    height: LOCK_PULL_PX,
+    borderRadius: 2,
+    backgroundColor: 'rgba(255,255,255,0.12)',
+    overflow: 'hidden',
+    marginBottom: 2,
+  },
+  pullFill: { width: 4, borderRadius: 2, backgroundColor: C.success },
+  pullIconWrap: { marginTop: -LOCK_PULL_PX + 8, marginBottom: 2 },
+  pullHintText: { color: C.success, fontSize: 9, fontFamily: FONT_POPPINS_BOLD, letterSpacing: 0.3 },
   iconBg: { width: 30, height: 30, borderRadius: 12, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: 'rgba(255,255,255,0.16)' },
   textCol: { flexDirection: 'column', gap: 2 },
   name: { color: '#FFF', fontSize: 12, fontFamily: FONT_POPPINS_BOLD, maxWidth: 118, letterSpacing: 0.15 },
   dist: { color: 'rgba(255,255,255,0.78)', fontSize: 11, fontFamily: FONT_POPPINS_BOLD },
+  holdRing: {
+    ...StyleSheet.absoluteFillObject,
+    borderRadius: LUXURY.radiusMarkerPill + 2,
+    borderWidth: 2.5,
+    margin: -2,
+  },
+  lockBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    paddingHorizontal: 5,
+    paddingVertical: 2,
+    borderRadius: 5,
+    backgroundColor: 'rgba(16,185,129,0.22)',
+    borderWidth: 1,
+    borderColor: 'rgba(16,185,129,0.45)',
+  },
+  lockBadgeText: { color: C.success, fontSize: 7, fontFamily: FONT_POPPINS_BOLD, letterSpacing: 0.6 },
   aiBadge: {
     width: 18, height: 18, borderRadius: 6,
     backgroundColor: 'rgba(167,139,250,0.28)',
@@ -420,7 +677,7 @@ function HolographicVChevron({ baseColor, depthScale, animOpacity }) {
   )
 }
 
-function PathArrowIndicator({ target, heading, userLat, userLng, isNavigation, style, floorPitchDeg = 0, onDismissNavigation }) {
+function PathArrowIndicator({ target, heading, userLat, userLng, isNavigation, isLocked, compactHud, style, floorPitchDeg = 0, onDismissNavigation, onDismissLock }) {
   const chevAnim = useRef(new Animated.Value(0)).current
   const mountAnim = useRef(new Animated.Value(0)).current
 
@@ -437,6 +694,12 @@ function PathArrowIndicator({ target, heading, userLat, userLng, isNavigation, s
     return () => { chev.stop() }
   }, [target, chevAnim, mountAnim])
 
+  const chevronCount = compactHud ? 7 : PATH_CHEVRON_COUNT
+  const chevronOpacities = useMemo(
+    () => Array.from({ length: chevronCount }, (_, i) => makeChevronFlowOpacity(chevAnim, i, chevronCount)),
+    [chevAnim, chevronCount],
+  )
+
   if (!target || userLat == null || userLng == null) return null
 
   const nav = getNavTargeting(target, userLat, userLng, heading)
@@ -446,7 +709,15 @@ function PathArrowIndicator({ target, heading, userLat, userLng, isNavigation, s
   const distKm = nav.distKm
   const turnDeg = Math.round(relBearing > 180 ? 360 - relBearing : relBearing)
   const turnDir = relBearing > 180 ? 'left' : 'right'
-  const statusLine = nav.aligned
+  const statusLine = isLocked && nav.aligned
+    ? 'On course — keep walking'
+    : isLocked
+    ? nav.inView
+      ? 'Walk toward the chevrons'
+      : turnDeg < 20
+      ? `Slightly ${turnDir}`
+      : `Turn ${turnDeg}° ${turnDir}`
+    : nav.aligned
     ? 'Locked on bearing'
     : nav.inView
     ? 'Straight ahead'
@@ -454,22 +725,19 @@ function PathArrowIndicator({ target, heading, userLat, userLng, isNavigation, s
     ? `Slightly ${turnDir}`
     : `Turn ${turnDeg}° ${turnDir}`
 
-  const poiBase = isNavigation ? C.accent : getPoiColor(target)
+  const poiBase = isNavigation ? C.accent : isLocked ? C.success : getPoiColor(target)
   const poiColor = nav.aligned ? C.success : poiBase
 
   const floorTilt = GROUND_PLANE_BASE_DEG + Math.max(-16, Math.min(26, floorPitchDeg))
 
-  const chevronOpacities = useMemo(() => (
-    Array.from({ length: PATH_CHEVRON_COUNT }, (_, i) => makeChevronFlowOpacity(chevAnim, i, PATH_CHEVRON_COUNT))
-  ), [chevAnim])
-
   return (
     <Animated.View style={[pa.wrap, style, { transform: [{ scale: mountAnim }] }]}>
-      <View style={pa.groundAnchor} pointerEvents="none">
-        <View style={[pa.groundTint, { borderColor: hexToRgba(poiColor, 0.06) }]} pointerEvents="none" accessibilityElementsHidden />
+      <View style={[pa.groundAnchor, compactHud && pa.groundAnchorCompact]} pointerEvents="none">
+        <View style={[pa.groundTint, compactHud && pa.groundTintCompact, { borderColor: hexToRgba(poiColor, 0.06) }]} pointerEvents="none" accessibilityElementsHidden />
         <View
           style={[
             pa.groundPlane,
+            compactHud && pa.groundPlaneCompact,
             HOLO_BLEND !== 'normal' && Platform.OS === 'ios' ? { mixBlendMode: HOLO_BLEND } : null,
             {
               transform: [
@@ -481,12 +749,12 @@ function PathArrowIndicator({ target, heading, userLat, userLng, isNavigation, s
             },
           ]}
         >
-          <View style={[pa.pathBearing, { transform: [{ rotateZ: `${relBearing}deg` }] }]}>
-            <View style={pa.chevronStack}>
-              {Array.from({ length: PATH_CHEVRON_COUNT }, (_, j) => {
-                const i = PATH_CHEVRON_COUNT - 1 - j
+          <View style={[pa.pathBearing, compactHud && pa.pathBearingCompact, { transform: [{ rotateZ: `${relBearing}deg` }] }]}>
+            <View style={[pa.chevronStack, compactHud && pa.chevronStackCompact]}>
+              {Array.from({ length: chevronCount }, (_, j) => {
+                const i = chevronCount - 1 - j
                 const op = chevronOpacities[i]
-                const t = PATH_CHEVRON_COUNT <= 1 ? 1 : i / (PATH_CHEVRON_COUNT - 1)
+                const t = chevronCount <= 1 ? 1 : i / (chevronCount - 1)
                 const depthScale = 0.38 + 0.62 * t
                 return (
                   <HolographicVChevron
@@ -502,37 +770,39 @@ function PathArrowIndicator({ target, heading, userLat, userLng, isNavigation, s
         </View>
       </View>
 
-      <View style={pa.hud}>
-        <View style={[pa.navGlyph, { borderColor: hexToRgba(poiColor, 0.55), shadowColor: poiColor }]}>
-          <Ionicons name="navigate" size={26} color={poiColor} style={{ opacity: 0.96, transform: [{ rotate: `${relBearing}deg` }] }} />
-        </View>
-        <View style={pa.info}>
-          {target._pineconeRecommended && (
-            <View style={pa.aiBadge}>
-              <Ionicons name="sparkles" size={8} color="#A78BFA" />
-              <Text style={pa.aiText}>AI Pick</Text>
-            </View>
-          )}
-          <Text style={[pa.destName, { color: poiColor }]} numberOfLines={1}>{target.name}</Text>
-          <Text style={[pa.statusLine, nav.aligned && pa.statusAligned]}>{statusLine}</Text>
-          <View style={pa.distRow}>
-            <Text style={pa.distTxt}>{getDistText(distKm)}</Text>
-            <View style={pa.distDot} />
-            <Text style={pa.distTxt}>{getWalkingTime(distKm)}</Text>
+      {!compactHud ? (
+        <View style={pa.hud}>
+          <View style={[pa.navGlyph, { borderColor: hexToRgba(poiColor, 0.55), shadowColor: poiColor }]}>
+            <Ionicons name="navigate" size={26} color={poiColor} style={{ opacity: 0.96, transform: [{ rotate: `${relBearing}deg` }] }} />
           </View>
+          <View style={pa.info}>
+            {target._pineconeRecommended && (
+              <View style={pa.aiBadge}>
+                <Ionicons name="sparkles" size={8} color="#A78BFA" />
+                <Text style={pa.aiText}>AI Pick</Text>
+              </View>
+            )}
+            <Text style={[pa.destName, { color: poiColor }]} numberOfLines={1}>{target.name}</Text>
+            <Text style={[pa.statusLine, nav.aligned && pa.statusAligned]}>{statusLine}</Text>
+            <View style={pa.distRow}>
+              <Text style={pa.distTxt}>{getDistText(distKm)}</Text>
+              <View style={pa.distDot} />
+              <Text style={pa.distTxt}>{getWalkingTime(distKm)}</Text>
+            </View>
+          </View>
+          {(isNavigation && onDismissNavigation) || (isLocked && onDismissLock) ? (
+            <TouchableOpacity
+              style={pa.navDismiss}
+              onPress={isNavigation ? onDismissNavigation : onDismissLock}
+              hitSlop={14}
+              accessibilityRole="button"
+              accessibilityLabel={isNavigation ? 'Stop navigation' : 'Unlock destination'}
+            >
+              <Ionicons name={isLocked ? 'lock-open-outline' : 'close'} size={22} color="rgba(255,255,255,0.55)" />
+            </TouchableOpacity>
+          ) : null}
         </View>
-        {isNavigation && onDismissNavigation ? (
-          <TouchableOpacity
-            style={pa.navDismiss}
-            onPress={onDismissNavigation}
-            hitSlop={14}
-            accessibilityRole="button"
-            accessibilityLabel="Stop navigation"
-          >
-            <Ionicons name="close" size={22} color="rgba(255,255,255,0.55)" />
-          </TouchableOpacity>
-        ) : null}
-      </View>
+      ) : null}
     </Animated.View>
   )
 }
@@ -552,6 +822,7 @@ const pa = StyleSheet.create({
     justifyContent: 'flex-end',
     marginBottom: 4,
   },
+  groundAnchorCompact: { minHeight: 118, marginBottom: 0 },
   groundTint: {
     position: 'absolute',
     left: 0,
@@ -564,6 +835,7 @@ const pa = StyleSheet.create({
     backgroundColor: 'rgba(255,255,255,0.02)',
     opacity: 0.5,
   },
+  groundTintCompact: { height: '58%' },
   groundPlane: {
     width: '100%',
     alignItems: 'center',
@@ -571,12 +843,14 @@ const pa = StyleSheet.create({
     paddingBottom: 6,
     minHeight: 168,
   },
+  groundPlaneCompact: { minHeight: 100, paddingBottom: 2 },
   pathBearing: {
     alignItems: 'center',
     justifyContent: 'flex-end',
     width: 312,
     minHeight: 156,
   },
+  pathBearingCompact: { width: 260, minHeight: 96 },
   chevronStack: {
     flexDirection: 'column',
     alignItems: 'center',
@@ -584,6 +858,7 @@ const pa = StyleSheet.create({
     gap: 9,
     paddingBottom: 4,
   },
+  chevronStackCompact: { gap: 6, paddingBottom: 0 },
   chevUnit: {
     alignItems: 'center',
   },
@@ -634,7 +909,7 @@ const pa = StyleSheet.create({
 })
 
 /* ─── Radar Navigator ─── */
-function RadarNavigator({ heading, basePois, maxDistanceKm, onSelectPoi, topOffset, subdued }) {
+function RadarNavigator({ heading, basePois, maxDistanceKm, onSelectPoi, lockedPoiKey, topOffset, subdued }) {
   const sweepAnim = useRef(new Animated.Value(0)).current
   const centerPulse = useRef(new Animated.Value(1)).current
 
@@ -694,12 +969,18 @@ function RadarNavigator({ heading, basePois, maxDistanceKm, onSelectPoi, topOffs
           <LinearGradient colors={[`${C.accent}50`, 'transparent']} style={rd.sweepGrad} />
         </Animated.View>
 
-        {dots.map(({ poi, x, y, sz, color, key }) => (
-          <TouchableOpacity key={key} onPress={() => onSelectPoi?.(poi)} hitSlop={8}
-            style={[rd.dot, { left: x - sz / 2, top: y - sz / 2, width: sz, height: sz, borderRadius: sz / 2, backgroundColor: color, shadowColor: color }]}
-            accessibilityLabel={`Navigate to ${poi.name}`}
-          />
-        ))}
+        {dots.map(({ poi, x, y, sz, color, key }) => {
+          const isLockedDot = lockedPoiKey && poiKeyOf(poi) === lockedPoiKey
+          return (
+            <Pressable
+              key={key}
+              onPress={() => onSelectPoi?.(poi)}
+              hitSlop={8}
+              style={[rd.dot, isLockedDot && rd.dotLocked, { left: x - sz / 2, top: y - sz / 2, width: sz, height: sz, borderRadius: sz / 2, backgroundColor: isLockedDot ? C.success : color, shadowColor: isLockedDot ? C.success : color }]}
+              accessibilityLabel={poi.name}
+            />
+          )
+        })}
 
         <Animated.View style={[rd.centerGlow, { left: R - 7, top: R - 7, transform: [{ scale: centerPulse }] }]} />
         <View style={[rd.centerDot, { left: R - 3.5, top: R - 3.5 }]} />
@@ -735,6 +1016,7 @@ const rd = StyleSheet.create({
       android: { elevation: 3 },
     }),
   },
+  dotLocked: { borderColor: '#FFF', borderWidth: 2 },
   centerGlow: { position: 'absolute', width: 14, height: 14, borderRadius: 7, backgroundColor: `${C.accent}28` },
   centerDot: { position: 'absolute', width: 7, height: 7, borderRadius: 3.5, backgroundColor: C.accent, borderWidth: 1.5, borderColor: '#FFF' },
   northBadge: { position: 'absolute', width: 14, height: 14, borderRadius: 7, backgroundColor: `${C.accent}30`, alignItems: 'center', justifyContent: 'center' },
@@ -742,7 +1024,7 @@ const rd = StyleSheet.create({
 })
 
 /* ─── Edge POI Indicators ─── */
-function EdgePOIIndicators({ outOfViewPois, heading, width, height, onPress }) {
+function EdgePOIIndicators({ outOfViewPois, heading, safeTop, safeBottom, height, onPress, lockedPoiKey }) {
   if (!outOfViewPois || outOfViewPois.length === 0) return null
 
   const left = []
@@ -753,27 +1035,28 @@ function EdgePOIIndicators({ outOfViewPois, heading, width, height, onPress }) {
     else left.push({ poi, rel })
   })
 
-  const midY = height * 0.36
+  const safeH = Math.max(120, height - safeTop - safeBottom)
+  const midY = safeTop + safeH * 0.42
 
   const renderGroup = (items, side) =>
     items.slice(0, 3).map(({ poi, rel }, i) => {
       const color = getPoiColor(poi)
       const turnDeg = Math.round(side === 'right' ? rel : 360 - rel)
+      const isLockedPill = lockedPoiKey && poiKeyOf(poi) === lockedPoiKey
       return (
-        <TouchableOpacity
+        <Pressable
           key={`edge-${poi.name}-${i}`}
-          style={[ei.pill, side === 'left' ? ei.pillLeft : ei.pillRight, { borderColor: `${color}40`, marginBottom: 8 }]}
+          style={[ei.pill, side === 'left' ? ei.pillLeft : ei.pillRight, isLockedPill && ei.pillLocked, { borderColor: isLockedPill ? `${C.success}70` : `${color}40`, marginBottom: 8 }]}
           onPress={() => onPress?.(poi)}
-          activeOpacity={0.85}
           accessibilityLabel={`${poi.name} ${turnDeg}° to the ${side}`}
         >
-          {side === 'left' && <Ionicons name="chevron-back" size={10} color={color} />}
+          {side === 'left' && <Ionicons name="chevron-back" size={10} color={isLockedPill ? C.success : color} />}
           <View style={ei.pillContent}>
             <Text style={[ei.pillName, { color }]} numberOfLines={1}>{poi.name}</Text>
             <Text style={ei.pillDist}>{getDistText(poi.distanceKm)}</Text>
           </View>
-          {side === 'right' && <Ionicons name="chevron-forward" size={10} color={color} />}
-        </TouchableOpacity>
+          {side === 'right' && <Ionicons name="chevron-forward" size={10} color={isLockedPill ? C.success : color} />}
+        </Pressable>
       )
     })
 
@@ -814,26 +1097,83 @@ const ei = StyleSheet.create({
     borderTopLeftRadius: 10, borderBottomLeftRadius: 10,
     borderRightWidth: 0,
   },
+  pillLocked: { backgroundColor: 'rgba(16,185,129,0.12)' },
   pillContent: { flex: 1 },
   pillName: { fontSize: 9, fontFamily: FONT_POPPINS_BOLD },
   pillDist: { color: C.dimText, fontSize: 8, fontFamily: FONT_POPPINS_SEMIBOLD, marginTop: 1 },
 })
 
 /* ─── POI Detail Modal ─── */
-function POIDetailModal({ visible, poi, onClose, onRequestClose, insets, openDirections, onViewProfile, onToggleSave, isSaved, heritage }) {
-  if (!poi) return null
+const DetailStatTile = ({ icon, iconColor, iconBg, value, label }) => (
+  <View style={dm.statTile}>
+    <View style={[dm.statIconWrap, { backgroundColor: iconBg }]}>
+      <Ionicons name={icon} size={14} color={iconColor} />
+    </View>
+    <Text style={dm.statValue}>{value}</Text>
+    <Text style={dm.statLabel}>{label}</Text>
+  </View>
+)
+
+const DetailInfoRow = ({ icon, iconColor, iconBg, text }) => (
+  <View style={dm.infoRow}>
+    <View style={[dm.infoIconWrap, { backgroundColor: iconBg }]}>
+      <Ionicons name={icon} size={16} color={iconColor} />
+    </View>
+    <Text style={dm.infoText}>{text}</Text>
+  </View>
+)
+
+const DESC_PREVIEW_LINES = 3
+const DESC_READ_MORE_MIN = 100
+
+const DetailDescription = ({ text, title }) => {
+  const [expanded, setExpanded] = useState(false)
+  const canExpand = text.trim().length >= DESC_READ_MORE_MIN
+
+  useEffect(() => {
+    setExpanded(false)
+  }, [text])
+
+  if (!text?.trim()) return null
+
+  return (
+    <View style={dm.aboutBlock}>
+      {title ? <Text style={dm.sectionTitle}>{title}</Text> : null}
+      <Text style={dm.aboutBody} numberOfLines={expanded ? undefined : DESC_PREVIEW_LINES}>
+        {text.trim()}
+      </Text>
+      {canExpand ? (
+        <TouchableOpacity
+          onPress={() => setExpanded((v) => !v)}
+          hitSlop={8}
+          accessibilityRole="button"
+          accessibilityLabel={expanded ? 'Show less description' : 'Read more description'}
+        >
+          <Text style={dm.readMore}>{expanded ? 'Show less' : 'Read more…'}</Text>
+        </TouchableOpacity>
+      ) : null}
+    </View>
+  )
+}
+
+function POIDetailModal({ visible, poi, onClose, onRequestClose, insets, openDirections, onViewProfile, heritage }) {
   const dismiss = onRequestClose || onClose
+  const m = poi?.metadata || poi || {}
+  const imageUrl = useMemo(() => {
+    if (!poi) return ''
+    return resolvePublicImageUrl(poi.image || m?.image || m?.client_image || m?.cover_image || '')
+  }, [poi, m])
+
+  if (!poi) return null
+
   const clientId = poi.client_a_uuid || poi.id
   const hasProfile = Boolean(clientId)
-  const m = poi.metadata || poi
   const isLandmark = poi._isLandmark || poi._type === 'landmark' || poi.category
   const typeLabel = poi._type === 'event' ? 'Event' : poi._type === 'restaurant' ? 'Restaurant' : isLandmark ? (m.category || poi.category || 'Landmark') : 'Place'
   const typeIcon = getPoiIcon(poi)
   const poiColor = getPoiColor(poi)
-  const phone = m?.phone || poi?.phone || ''
-  const menuUrl = m?.menu_url || poi?.menu_url || m?.website || poi?.website || ''
   const heritageInfo = heritage || LANDMARK_HERITAGE[poi.name]
-  const distText = poi.distanceKm < 1 ? `${Math.round(poi.distanceKm * 1000)}m away` : `${poi.distanceKm.toFixed(1)} km away`
+  const distText = poi.distanceKm < 1 ? `${Math.round(poi.distanceKm * 1000)}m` : `${poi.distanceKm.toFixed(1)} km`
   const venue = m.venue || m.location || m.area || poi.location || ''
   const desc = m.description || poi.description || ''
   const cuisine = m.cuisine || m.cuisine_type || ''
@@ -842,107 +1182,118 @@ function POIDetailModal({ visible, poi, onClose, onRequestClose, insets, openDir
   const eventType = m.event_type || ''
   const time = [m.start_time, m.end_time].filter(Boolean).join(' – ')
   const date = m.start_date || m.end_date || ''
-
-  const handleShare = () => {
-    Share.share({ title: poi.name, message: `${poi.name} — ${distText}. Explore with SiyahaBH!`, url: `https://www.google.com/maps/search/?api=1&query=${poi.lat},${poi.lng}` }).catch(() => {})
-  }
-  const handleCall = () => {
-    const tel = phone.replace(/\D/g, '')
-    if (tel.length >= 8) Linking.openURL(`tel:${tel}`).catch(() => {})
-  }
+  const bottomPad = (insets?.bottom ?? 0) + 10
 
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={dismiss}>
       <View style={dm.overlay}>
-        <Pressable style={StyleSheet.absoluteFill} onPress={onClose} />
-        <View style={[dm.card, { paddingBottom: (insets?.bottom ?? 0) + 20 }]}>
-          <View style={dm.handle} />
-          <TouchableOpacity style={dm.closeBtn} onPress={dismiss} hitSlop={12} accessibilityLabel="Close">
-            <BlurView intensity={40} tint="dark" style={dm.closeBtnBlur}>
-              <Ionicons name="close" size={16} color="rgba(255,255,255,0.8)" />
-            </BlurView>
-          </TouchableOpacity>
+        <Pressable style={dm.backdrop} onPress={onClose} accessibilityLabel="Close place details" />
 
-          <ScrollView showsVerticalScrollIndicator={false} style={dm.scroll} bounces={false}>
-            <View style={dm.header}>
-              <LinearGradient colors={[`${poiColor}20`, 'transparent']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={dm.typeBadge}>
-                <Ionicons name={typeIcon} size={11} color={poiColor} />
+        <View style={[dm.sheet, { maxHeight: '68%', paddingBottom: bottomPad }]}>
+          <LinearGradient
+            pointerEvents="none"
+            colors={[`${poiColor}42`, `${poiColor}12`, 'transparent']}
+            locations={[0, 0.45, 1]}
+            style={dm.heroGlow}
+          />
+
+          <View style={dm.sheetTop}>
+            <View style={dm.handle} />
+            <TouchableOpacity style={dm.closeBtn} onPress={dismiss} hitSlop={12} accessibilityLabel="Close">
+              <Ionicons name="close" size={18} color="#FFF" />
+            </TouchableOpacity>
+          </View>
+
+          {imageUrl ? (
+            <View style={dm.heroImageWrap}>
+              <Image source={{ uri: imageUrl }} style={dm.heroImage} resizeMode="cover" />
+              <LinearGradient colors={['transparent', 'rgba(13,16,27,0.92)']} style={dm.heroImageScrim} />
+              <View style={[dm.typeChipFloat, { borderColor: `${poiColor}66`, backgroundColor: `${poiColor}28` }]}>
+                <Ionicons name={typeIcon} size={12} color={poiColor} />
                 <Text style={[dm.typeText, { color: poiColor }]}>{typeLabel}</Text>
-              </LinearGradient>
-              <Text style={dm.title}>{poi.name}</Text>
-              <View style={dm.metaRow}>
-                <View style={dm.metaPill}><Ionicons name="navigate" size={12} color={C.accent} /><Text style={dm.metaText}>{distText}</Text></View>
-                <View style={dm.metaPill}><Ionicons name="walk" size={12} color={C.dimText} /><Text style={dm.metaText}>{getWalkingTime(poi.distanceKm)}</Text></View>
-                {rating != null && rating > 0 && (
-                  <View style={dm.metaPill}>
-                    <Ionicons name="star" size={12} color="#FBBF24" />
-                    <Text style={[dm.metaText, { color: '#FBBF24' }]}>{rating.toFixed(1)}</Text>
-                  </View>
-                )}
               </View>
             </View>
+          ) : null}
 
-            {(venue || cuisine || priceRange || eventType || date || time) && (
-              <View style={dm.infoSection}>
-                {venue ? <View style={dm.infoRow}><Ionicons name="location" size={14} color={C.accent} /><Text style={dm.infoText}>{venue}</Text></View> : null}
-                {(cuisine || priceRange) ? <View style={dm.infoRow}><Ionicons name="restaurant" size={14} color={C.food} /><Text style={dm.infoText}>{[cuisine, priceRange].filter(Boolean).join(' · ')}</Text></View> : null}
-                {(eventType || date || time) ? <View style={dm.infoRow}><Ionicons name="calendar" size={14} color={C.event} /><Text style={dm.infoText}>{[eventType, date, time].filter(Boolean).join(' · ')}</Text></View> : null}
+          <ScrollView style={dm.scroll} contentContainerStyle={dm.scrollInner} showsVerticalScrollIndicator={false} bounces>
+            {!imageUrl ? (
+              <View style={[dm.typeChip, { borderColor: `${poiColor}55`, backgroundColor: `${poiColor}16` }]}>
+                <Ionicons name={typeIcon} size={12} color={poiColor} />
+                <Text style={[dm.typeText, { color: poiColor }]}>{typeLabel}</Text>
               </View>
-            )}
+            ) : null}
 
-            {heritageInfo?.didYouKnow && (
-              <View style={dm.heritageBox}>
-                <View style={dm.heritageHeader}><Ionicons name="sparkles" size={13} color="#FBBF24" /><Text style={dm.heritageTitle}>Did you know?</Text></View>
-                <Text style={dm.heritageText}>{heritageInfo.didYouKnow}</Text>
-              </View>
-            )}
+            <Text style={dm.title} numberOfLines={2}>{poi.name}</Text>
+
+            <View style={dm.statsRow}>
+              <DetailStatTile icon="navigate" iconColor={C.accent} iconBg={`${C.accent}22`} value={distText} label="Away" />
+              <DetailStatTile icon="walk" iconColor={C.quiet} iconBg={`${C.quiet}22`} value={getWalkingTime(poi.distanceKm)} label="Walk" />
+              {rating != null && rating > 0 ? (
+                <DetailStatTile icon="star" iconColor="#FBBF24" iconBg="rgba(251,191,36,0.18)" value={rating.toFixed(1)} label="Rating" />
+              ) : (
+                <DetailStatTile icon="compass" iconColor={poiColor} iconBg={`${poiColor}20`} value={typeLabel.split(' ')[0]} label="Type" />
+              )}
+            </View>
 
             {desc ? (
-              <View style={dm.descSection}>
-                <Text style={dm.descLabel}>{isLandmark ? 'Why visit' : 'About'}</Text>
-                <Text style={dm.descText}>{desc}</Text>
+              <DetailDescription text={desc} title={isLandmark ? 'Why visit' : 'About'} />
+            ) : null}
+
+            {(venue || cuisine || priceRange || eventType || date || time) ? (
+              <View style={dm.infoCard}>
+                <Text style={dm.sectionTitle}>Details</Text>
+                {venue ? <DetailInfoRow icon="location" iconColor={C.accent} iconBg={`${C.accent}18`} text={venue} /> : null}
+                {(cuisine || priceRange) ? (
+                  <DetailInfoRow icon="restaurant" iconColor={C.food} iconBg={`${C.food}18`} text={[cuisine, priceRange].filter(Boolean).join(' · ')} />
+                ) : null}
+                {(eventType || date || time) ? (
+                  <DetailInfoRow icon="calendar" iconColor={C.event} iconBg={`${C.event}18`} text={[eventType, date, time].filter(Boolean).join(' · ')} />
+                ) : null}
               </View>
+            ) : null}
+
+            {heritageInfo?.didYouKnow ? (
+              <LinearGradient colors={['rgba(251,191,36,0.14)', 'rgba(251,191,36,0.04)']} style={dm.heritageBox}>
+                <View style={dm.heritageHead}>
+                  <View style={dm.heritageIconWrap}>
+                    <Ionicons name="sparkles" size={12} color="#FBBF24" />
+                  </View>
+                  <Text style={dm.heritageTitle}>Did you know?</Text>
+                </View>
+                <Text style={dm.heritageBody} numberOfLines={2}>{heritageInfo.didYouKnow}</Text>
+              </LinearGradient>
             ) : null}
           </ScrollView>
 
-          <View style={dm.actions}>
-            <TouchableOpacity style={dm.primaryBtn} onPress={() => openDirections(poi)} activeOpacity={0.85} accessibilityLabel="Get directions">
-              <LinearGradient colors={[C.accent, '#9B0C23']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={dm.primaryBtnGrad}>
-                <Ionicons name="navigate" size={17} color="#FFF" />
-                <Text style={dm.primaryBtnText}>Get directions</Text>
-                <Text style={dm.primaryBtnSub}>{getWalkingTime(poi.distanceKm)}</Text>
-              </LinearGradient>
-            </TouchableOpacity>
-
-            <View style={dm.quickRow}>
-              {hasProfile && (
-                <TouchableOpacity style={dm.quickBtn} onPress={() => onViewProfile?.(clientId)} activeOpacity={0.8}>
+          <View style={dm.footer}>
+            <View style={dm.actionRow}>
+              {hasProfile ? (
+                <TouchableOpacity
+                  style={dm.profileBtn}
+                  onPress={() => onViewProfile?.(clientId)}
+                  activeOpacity={0.88}
+                  accessibilityLabel="View profile"
+                >
                   <Ionicons name="person-outline" size={18} color="#FFF" />
-                  <Text style={dm.quickLabel}>Profile</Text>
+                  <Text style={dm.profileBtnText}>Profile</Text>
                 </TouchableOpacity>
-              )}
-              {onToggleSave && (
-                <TouchableOpacity style={dm.quickBtn} onPress={() => onToggleSave(poi)} activeOpacity={0.8}>
-                  <Ionicons name={isSaved ? 'heart' : 'heart-outline'} size={18} color={isSaved ? C.accent : '#FFF'} />
-                  <Text style={[dm.quickLabel, isSaved && { color: C.accent }]}>{isSaved ? 'Saved' : 'Save'}</Text>
-                </TouchableOpacity>
-              )}
-              <TouchableOpacity style={dm.quickBtn} onPress={handleShare} activeOpacity={0.8}>
-                <Ionicons name="share-outline" size={18} color="#FFF" />
-                <Text style={dm.quickLabel}>Share</Text>
+              ) : null}
+              <TouchableOpacity
+                style={[dm.directionsBtn, !hasProfile && dm.directionsBtnSolo]}
+                onPress={() => openDirections(poi)}
+                activeOpacity={0.9}
+                accessibilityLabel="Get directions"
+              >
+                <LinearGradient
+                  colors={[C.accent, '#9B0C23', '#7A0A1C']}
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 1, y: 1 }}
+                  style={dm.directionsGrad}
+                >
+                  <Ionicons name="navigate" size={18} color="#FFF" />
+                  <Text style={dm.directionsText}>Directions</Text>
+                </LinearGradient>
               </TouchableOpacity>
-              {phone ? (
-                <TouchableOpacity style={dm.quickBtn} onPress={handleCall} activeOpacity={0.8}>
-                  <Ionicons name="call-outline" size={18} color="#FFF" />
-                  <Text style={dm.quickLabel}>Call</Text>
-                </TouchableOpacity>
-              ) : null}
-              {menuUrl ? (
-                <TouchableOpacity style={dm.quickBtn} onPress={() => Linking.openURL(menuUrl).catch(() => {})} activeOpacity={0.8}>
-                  <Ionicons name="reader-outline" size={18} color="#FFF" />
-                  <Text style={dm.quickLabel}>Menu</Text>
-                </TouchableOpacity>
-              ) : null}
             </View>
           </View>
         </View>
@@ -952,49 +1303,227 @@ function POIDetailModal({ visible, poi, onClose, onRequestClose, insets, openDir
 }
 
 const dm = StyleSheet.create({
-  overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
-  card: { backgroundColor: 'rgba(13,16,27,0.98)', borderTopLeftRadius: 30, borderTopRightRadius: 30, paddingHorizontal: 20, paddingTop: 12, maxHeight: '82%', borderWidth: 1, borderBottomWidth: 0, borderColor: 'rgba(255,255,255,0.12)' },
-  handle: { width: 42, height: 4, borderRadius: 2, backgroundColor: 'rgba(255,255,255,0.24)', alignSelf: 'center', marginBottom: 16 },
-  closeBtn: { position: 'absolute', top: 12, right: 16, zIndex: 1 },
-  closeBtnBlur: { width: 30, height: 30, borderRadius: 15, alignItems: 'center', justifyContent: 'center', overflow: 'hidden', borderWidth: 1, borderColor: C.glassBorder },
-  scroll: { marginBottom: 10 },
-  header: { marginBottom: 14 },
-  typeBadge: { flexDirection: 'row', alignItems: 'center', gap: 5, alignSelf: 'flex-start', paddingHorizontal: 10, paddingVertical: 5, borderRadius: 10, marginBottom: 10, borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)' },
+  overlay: { flex: 1, justifyContent: 'flex-end' },
+  backdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.58)' },
+  sheet: {
+    marginHorizontal: 10,
+    backgroundColor: '#0D1019',
+    borderTopLeftRadius: LUXURY.radiusCardSheet,
+    borderTopRightRadius: LUXURY.radiusCardSheet,
+    borderWidth: 1,
+    borderBottomWidth: 0,
+    borderColor: 'rgba(255,255,255,0.11)',
+    overflow: 'hidden',
+    ...luxuryElevated,
+  },
+  heroGlow: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    height: 100,
+  },
+  sheetTop: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingTop: 6,
+    paddingBottom: 2,
+    zIndex: 2,
+  },
+  handle: {
+    width: 42,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: 'rgba(255,255,255,0.32)',
+  },
+  closeBtn: {
+    position: 'absolute',
+    right: 14,
+    top: 2,
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.18)',
+  },
+  heroImageWrap: {
+    height: 96,
+    marginHorizontal: 12,
+    marginBottom: 2,
+    borderRadius: 14,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.12)',
+  },
+  heroImage: { width: '100%', height: '100%' },
+  heroImageScrim: { ...StyleSheet.absoluteFillObject },
+  typeChipFloat: {
+    position: 'absolute',
+    left: 12,
+    bottom: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 20,
+    borderWidth: 1,
+  },
+  scroll: { flexGrow: 0, flexShrink: 1 },
+  scrollInner: { paddingHorizontal: 14, paddingTop: 4, paddingBottom: 8 },
+  typeChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    gap: 5,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 20,
+    borderWidth: 1,
+    marginBottom: 6,
+  },
   typeText: { fontSize: 10, fontFamily: FONT_POPPINS_BOLD, letterSpacing: 0.4 },
-  title: { color: '#FFF', fontSize: 22, fontFamily: FONT_POPPINS_BOLD, lineHeight: 28, marginBottom: 10, letterSpacing: -0.3 },
-  metaRow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 8 },
-  metaPill: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: 'rgba(255,255,255,0.07)', paddingHorizontal: 10, paddingVertical: 5, borderRadius: 10, borderWidth: 1, borderColor: 'rgba(255,255,255,0.06)' },
-  metaText: { color: C.sub, fontSize: 12, fontFamily: FONT_POPPINS_SEMIBOLD },
-  infoSection: { backgroundColor: 'rgba(255,255,255,0.045)', borderRadius: 16, padding: 13, marginBottom: 12, gap: 10, borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)' },
-  infoRow: { flexDirection: 'row', alignItems: 'center', gap: 9 },
-  infoText: { color: C.sub, fontSize: 13, fontFamily: FONT_POPPINS_REGULAR, flex: 1, lineHeight: 19 },
-  heritageBox: { backgroundColor: 'rgba(251,191,36,0.06)', borderRadius: 14, padding: 12, marginBottom: 12, borderWidth: 1, borderColor: 'rgba(251,191,36,0.12)' },
-  heritageHeader: { flexDirection: 'row', alignItems: 'center', gap: 5, marginBottom: 5 },
+  title: {
+    color: '#FFF',
+    fontSize: 19,
+    fontFamily: FONT_POPPINS_BOLD,
+    lineHeight: 24,
+    letterSpacing: -0.3,
+    marginBottom: 8,
+  },
+  statsRow: { flexDirection: 'row', gap: 6, marginBottom: 8 },
+  statTile: {
+    flex: 1,
+    alignItems: 'center',
+    paddingVertical: 8,
+    paddingHorizontal: 4,
+    borderRadius: 12,
+    backgroundColor: 'rgba(255,255,255,0.05)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.09)',
+  },
+  statIconWrap: {
+    width: 28,
+    height: 28,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 4,
+  },
+  statValue: { color: '#FFF', fontSize: 12, fontFamily: FONT_POPPINS_BOLD },
+  statLabel: { color: C.dimText, fontSize: 8, fontFamily: FONT_POPPINS_SEMIBOLD, marginTop: 1, textTransform: 'uppercase', letterSpacing: 0.35 },
+  infoCard: {
+    backgroundColor: 'rgba(255,255,255,0.04)',
+    borderRadius: 14,
+    padding: 10,
+    marginBottom: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
+    gap: 10,
+  },
+  sectionTitle: {
+    color: C.dimText,
+    fontSize: 10,
+    fontFamily: FONT_POPPINS_BOLD,
+    letterSpacing: 0.55,
+    textTransform: 'uppercase',
+    marginBottom: 2,
+  },
+  infoRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 8 },
+  infoIconWrap: {
+    width: 28,
+    height: 28,
+    borderRadius: 9,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  infoText: { flex: 1, color: C.sub, fontSize: 13, fontFamily: FONT_POPPINS_REGULAR, lineHeight: 18, paddingTop: 4 },
+  heritageBox: {
+    borderRadius: 14,
+    padding: 10,
+    marginBottom: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(251,191,36,0.22)',
+  },
+  heritageHead: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 4 },
+  heritageIconWrap: {
+    width: 24,
+    height: 24,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(251,191,36,0.2)',
+  },
   heritageTitle: { color: '#FBBF24', fontSize: 11, fontFamily: FONT_POPPINS_BOLD },
-  heritageText: { color: C.sub, fontSize: 13, fontFamily: FONT_POPPINS_REGULAR, lineHeight: 20 },
-  descSection: { marginBottom: 12 },
-  descLabel: { color: C.dimText, fontSize: 10, fontFamily: FONT_POPPINS_BOLD, letterSpacing: 0.4, marginBottom: 5, textTransform: 'uppercase' },
-  descText: { color: C.sub, fontSize: 13, fontFamily: FONT_POPPINS_REGULAR, lineHeight: 20 },
-  actions: { gap: 10, borderTopWidth: 1, borderTopColor: C.glassBorder, paddingTop: 12 },
-  primaryBtn: { borderRadius: 14, overflow: 'hidden', ...Platform.select({ ios: { shadowColor: C.accent, shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.3, shadowRadius: 8 }, android: { elevation: 5 } }) },
-  primaryBtnGrad: { flexDirection: 'row', alignItems: 'center', gap: 9, paddingVertical: 14, paddingHorizontal: 18, borderRadius: 14 },
-  primaryBtnText: { color: '#FFF', fontSize: 15, fontFamily: FONT_POPPINS_BOLD, flex: 1 },
-  primaryBtnSub: { color: 'rgba(255,255,255,0.7)', fontSize: 12, fontFamily: FONT_POPPINS_REGULAR },
-  quickRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  quickBtn: { alignItems: 'center', justifyContent: 'center', paddingVertical: 10, paddingHorizontal: 13, backgroundColor: 'rgba(255,255,255,0.065)', borderRadius: 14, minWidth: 62, borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)' },
-  quickLabel: { color: C.dimText, fontSize: 10, fontFamily: FONT_POPPINS_SEMIBOLD, marginTop: 3 },
+  heritageBody: { color: C.sub, fontSize: 13, fontFamily: FONT_POPPINS_REGULAR, lineHeight: 18 },
+  aboutBlock: { marginBottom: 8 },
+  aboutBody: { color: C.sub, fontSize: 13, fontFamily: FONT_POPPINS_REGULAR, lineHeight: 19 },
+  readMore: {
+    color: C.accent,
+    fontSize: 12,
+    fontFamily: FONT_POPPINS_SEMIBOLD,
+    marginTop: 4,
+  },
+  footer: {
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: 'rgba(255,255,255,0.1)',
+    paddingTop: 10,
+    paddingHorizontal: 14,
+    backgroundColor: 'rgba(8,10,16,0.65)',
+  },
+  actionRow: {
+    flexDirection: 'row',
+    alignItems: 'stretch',
+    gap: 8,
+  },
+  profileBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingVertical: 12,
+    borderRadius: 14,
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.14)',
+  },
+  profileBtnText: { color: '#FFF', fontSize: 14, fontFamily: FONT_POPPINS_SEMIBOLD },
+  directionsBtn: {
+    flex: 1,
+    borderRadius: 14,
+    overflow: 'hidden',
+    ...Platform.select({
+      ios: { shadowColor: C.accent, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.35, shadowRadius: 10 },
+      android: { elevation: 6 },
+    }),
+  },
+  directionsBtnSolo: { flex: 1 },
+  directionsGrad: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+  },
+  directionsText: { color: '#FFF', fontSize: 14, fontFamily: FONT_POPPINS_BOLD },
 })
 
 /* ─── Main Screen ─── */
 export default function ARScreen({ navigation }) {
-  const { colors } = useTheme()
   const route = useRoute()
-  const fromExplore = route.params?.fromExplore === true
+  const { preferences, generalLabels } = useUserPreferences()
+  const { profile } = useAuth()
+  const viewerUType = normalizeViewerUType(profile?.user?.u_type)
   const [navigateToDest, setNavigateToDest] = useState(route.params?.navigateTo ?? null)
   useEffect(() => { if (route.params?.navigateTo) setNavigateToDest(route.params.navigateTo) }, [route.params?.navigateTo])
   const { width, height } = useWindowDimensions()
   const insets = useSafeAreaInsets()
-  const { savedIds, toggle: toggleSave, isSaved } = useSavedPlaces()
   const [permission, requestPermission] = useCameraPermissions()
   const [location, setLocation] = useState(null)
   const [heading, setHeading] = useState(0)
@@ -1004,22 +1533,35 @@ export default function ARScreen({ navigation }) {
   const [selectedPoi, setSelectedPoi] = useState(null)
   const [profileClientId, setProfileClientId] = useState(null)
   const [mode, setMode] = useState('all')
-  const [maxDistanceKm, setMaxDistanceKm] = useState(fromExplore ? 50 : 10)
-  const [showSlider, setShowSlider] = useState(false)
+  const [maxDistanceKm, setMaxDistanceKm] = useState(3)
+  const [showFilters, setShowFilters] = useState(false)
   const [pineconeRecs, setPineconeRecs] = useState([])
   const headingSub = useRef(null)
-  /** Long-press a marker to isolate it; path + HUD target that POI until cleared */
-  const [focusedPoi, setFocusedPoi] = useState(null)
+  /** Press-and-hold a marker to lock AR navigation onto that place */
+  const [lockedPoi, setLockedPoi] = useState(null)
   const pitchLpfRef = useRef(0)
   const [floorPitchDeg, setFloorPitchDeg] = useState(0)
+  const [khalidHidden, setKhalidHidden] = useState(false)
+  const [khalidPanelH, setKhalidPanelH] = useState(96)
 
-  const [doorVisible, setDoorVisible] = useState(fromExplore)
-  const doorLeft = useRef(new Animated.Value(0)).current
-  const doorRight = useRef(new Animated.Value(0)).current
-  const doorIconScale = useRef(new Animated.Value(1)).current
-  const doorIconOpacity = useRef(new Animated.Value(1)).current
-  const doorFade = useRef(new Animated.Value(1)).current
-  const doorOpenedRef = useRef(false)
+  const guidePreferenceContext = useMemo(
+    () =>
+      buildARPreferenceContext({
+        profileSummary: preferences?.profileSummary || '',
+        generalLabels,
+        maxDistanceKm,
+      }),
+    [preferences?.profileSummary, generalLabels, maxDistanceKm],
+  )
+
+  const guideRetrievalOptions = useMemo(
+    () => ({
+      queryText: buildARRetrievalQuery(guidePreferenceContext),
+      personaSummary: guidePreferenceContext.personaSummary,
+      generalLabels: guidePreferenceContext.generalLabels,
+    }),
+    [guidePreferenceContext],
+  )
 
   const modePois = useMemo(() => {
     const merged = mode === 'all' || mode === 'places'
@@ -1029,9 +1571,8 @@ export default function ARScreen({ navigation }) {
     if (mode === 'places') return merged.filter((p) => p._type === 'place' || p._type === 'landmark' || p._isLandmark)
     if (mode === 'restaurants') return pois.filter((p) => p._type === 'restaurant')
     if (mode === 'events') return pois.filter((p) => p._type === 'event')
-    if (mode === 'saved') return pois.filter((p) => { const id = p.client_a_uuid || p.id || `${p.name}-${p.lat}-${p.lng}`; return savedIds.has(id) })
     return pois
-  }, [pois, pineconeRecs, mode, savedIds])
+  }, [pois, pineconeRecs, mode])
 
   let basePois = modePois
   if (navigateToDest && location) {
@@ -1054,19 +1595,17 @@ export default function ARScreen({ navigation }) {
 
   const nearestInView = filteredPois.length > 0 ? filteredPois.reduce((a, b) => a.distanceKm <= b.distanceKm ? a : b) : null
   const inViewIds = new Set(filteredPois.map((p) => p.name + p.lat))
-  const nearestOutOfView = basePois.filter((p) => p.distanceKm <= maxDistanceKm && !inViewIds.has(p.name + p.lat)).sort((a, b) => a.distanceKm - b.distanceKm)[0] || null
 
   const clearNavigateTo = useCallback(() => setNavigateToDest(null), [])
-  const centerX = width / 2
-  const centerY = height / 2 - 40
-  const viewRadius = Math.min(width, height) * 0.35
+
+  const isLockedMode = Boolean(lockedPoi && !navigateToDest)
 
   const loadNearby = useCallback(async (lat, lng) => {
     try {
       const [clientData, eventData, pineconeData] = await Promise.all([
         fetchNearbyPOIs(lat, lng, 'all', { allPlaces: true }),
         fetchEvents([]).catch(() => []),
-        fetchPineconeARRecommended(lat, lng, 50).catch(() => []),
+        fetchPineconeARRecommended(lat, lng, 50, guideRetrievalOptions).catch(() => []),
       ])
       const eventPois = eventData
         .map((ev) => {
@@ -1100,7 +1639,7 @@ export default function ARScreen({ navigation }) {
       console.warn('[AR] fetchNearbyPOIs failed:', e?.message)
       setPois([])
     }
-  }, [])
+  }, [guideRetrievalOptions])
 
   useEffect(() => {
     let mounted = true;
@@ -1125,6 +1664,11 @@ export default function ARScreen({ navigation }) {
   }, [permission?.granted, requestPermission, loadNearby])
 
   useEffect(() => {
+    if (!location?.latitude || !location?.longitude || loading) return
+    loadNearby(location.latitude, location.longitude)
+  }, [guideRetrievalOptions])
+
+  useEffect(() => {
     if (!location) return
     let cleaned = false
     Location.watchHeadingAsync((h) => setHeading(h.trueHeading >= 0 ? h.trueHeading : h.magHeading))
@@ -1133,7 +1677,7 @@ export default function ARScreen({ navigation }) {
   }, [location])
 
   useEffect(() => {
-    if (navigateToDest) setFocusedPoi(null)
+    if (navigateToDest) setLockedPoi(null)
   }, [navigateToDest])
 
   useEffect(() => {
@@ -1162,27 +1706,6 @@ export default function ARScreen({ navigation }) {
     }
   }, [loading, permission?.granted])
 
-  useEffect(() => {
-    if (!fromExplore || doorOpenedRef.current) return
-    if (loading) return
-    doorOpenedRef.current = true
-    const delay = setTimeout(() => {
-      Animated.sequence([
-        Animated.delay(200),
-        Animated.parallel([
-          Animated.timing(doorIconOpacity, { toValue: 0, duration: 250, useNativeDriver: true }),
-          Animated.timing(doorIconScale, { toValue: 0.5, duration: 250, useNativeDriver: true }),
-        ]),
-        Animated.parallel([
-          Animated.timing(doorLeft, { toValue: -DOOR_W / 2, duration: 480, easing: Easing.bezier(0.4, 0, 0.2, 1), useNativeDriver: true }),
-          Animated.timing(doorRight, { toValue: DOOR_W / 2, duration: 480, easing: Easing.bezier(0.4, 0, 0.2, 1), useNativeDriver: true }),
-        ]),
-        Animated.timing(doorFade, { toValue: 0, duration: 150, useNativeDriver: true }),
-      ]).start(() => setDoorVisible(false))
-    }, 100)
-    return () => clearTimeout(delay)
-  }, [fromExplore, loading])
-
   const openDirections = useCallback((poi) => {
     openGoogleMapsDirections(poi.lat, poi.lng)
   }, [])
@@ -1196,68 +1719,136 @@ export default function ARScreen({ navigation }) {
     setTimeout(() => { modalJustOpenedRef.current = false }, 400)
   }, [])
   const poiKeysMatch = useCallback((a, b) => poiKeyOf(a) !== '' && poiKeyOf(a) === poiKeyOf(b), [])
-  const handleMarkerLongPressFocus = useCallback((poi) => {
-    setFocusedPoi((prev) => (poiKeysMatch(prev, poi) ? null : poi))
-  }, [poiKeysMatch])
+  const handleLockPoi = useCallback((poi) => {
+    if (!poi || poi.lat == null || poi.lng == null) return
+    setSelectedPoi(null)
+    setKhalidHidden(false)
+    setLockedPoi({
+      ...poi,
+      name: poi.name,
+      lat: poi.lat,
+      lng: poi.lng,
+    })
+    if (Platform.OS !== 'web') Vibration.vibrate([0, 40, 60, 40])
+  }, [])
   const handleViewProfile = useCallback((clientId) => { setSelectedPoi(null); setProfileClientId(clientId) }, [])
+
+  const lockedPoiKey = lockedPoi ? poiKeyOf(lockedPoi) : ''
+  const lockedPoiLive = useMemo(() => {
+    if (!lockedPoi) return null
+    if (!location) return lockedPoi
+    return enrichPoiBearingsFromUser(lockedPoi, location.latitude, location.longitude)
+  }, [lockedPoi, location])
+
+  const visiblePoiNames = useMemo(
+    () => filteredPois.map((p) => p.name).filter(Boolean).slice(0, 8),
+    [filteredPois],
+  )
+
+  const khalidGuide = useARKhalidGuide({
+    lockedPoi,
+    lockedPoiLive,
+    isLockedMode,
+    navigateToDest,
+    maxDistanceKm,
+    profileSummary: preferences?.profileSummary || '',
+    generalLabels,
+    visiblePoiNames,
+  })
+
+  const arChatContext = useMemo(() => {
+    const lockedSpot = isLockedMode ? lockedPoiLive || lockedPoi : null
+    return {
+      isLocked: isLockedMode,
+      lockedPlaceName: lockedSpot?.name || '',
+      lockedPlaceFacts: lockedSpot ? buildLockedPlaceBriefFromPoi(lockedSpot) : '',
+      lockedNarration: isLockedMode ? khalidGuide.displayLine : '',
+      visiblePoiNames,
+      coords:
+        location?.latitude != null && location?.longitude != null
+          ? {
+              lat: Math.round(location.latitude * 1000) / 1000,
+              lng: Math.round(location.longitude * 1000) / 1000,
+            }
+          : null,
+    }
+  }, [
+    isLockedMode,
+    lockedPoiLive,
+    lockedPoi,
+    khalidGuide.displayLine,
+    visiblePoiNames,
+    location?.latitude,
+    location?.longitude,
+  ])
+
+  const khalidInlineChat = useARKhalidInlineChat({
+    generalLabels,
+    personaSummary: preferences?.profileSummary || '',
+    viewerUType,
+    arContext: arChatContext,
+  })
+
+  const clearLockedPoi = useCallback(() => {
+    setLockedPoi(null)
+    khalidInlineChat.clearChat()
+  }, [khalidInlineChat.clearChat])
+
+  const showFilterHint = filteredPois.length === 0 && !loading && !isLockedMode && !navigateToDest
+  const headerBarH = insets.top + 62 + (isLockedMode ? 12 : 0)
+  const filtersChromeH = showFilters
+    ? 44 + 16 + 50 + (showFilterHint ? 26 : 0)
+    : 0
+  const topChromeH = headerBarH + filtersChromeH + (showFilters ? 6 : 0)
+  const khalidReserveH =
+    !loading && !error && !navigateToDest
+      ? khalidHidden
+        ? KHALID_PEEK_TAB_HEIGHT + 8
+        : Math.max(khalidPanelH, estimateKhalidStripHeight({ isLocked: isLockedMode })) + 10
+      : 0
+  const bottomChromeH = insets.bottom + 8 + khalidReserveH
+  const khalidAnchorBottom = insets.bottom + 8 + 6
+  const hasPathGuidance = Boolean(navigateToDest || isLockedMode)
+  const pathStackH = hasPathGuidance ? (isLockedMode ? 168 : 200) : 0
+  const pathBottomOffset = bottomChromeH + 12
+  const centerX = width / 2
+  const safeAvailH = Math.max(160, height - topChromeH - bottomChromeH - pathStackH)
+  const centerY = topChromeH + safeAvailH * 0.46
+  const viewRadius = Math.min(width * 0.34, safeAvailH * 0.28)
+
+  const markersToRender = useMemo(() => {
+    if (!lockedPoi || navigateToDest) return filteredPois
+    const alreadyShown = filteredPois.some((p) => poiKeysMatch(p, lockedPoi))
+    if (alreadyShown) return filteredPois
+    const lockedMatch =
+      basePois.find((p) => poiKeysMatch(p, lockedPoi)) ??
+      pois.find((p) => poiKeysMatch(p, lockedPoi))
+    if (!lockedMatch) return filteredPois
+    return [...filteredPois, lockedMatch]
+  }, [filteredPois, lockedPoi, navigateToDest, basePois, pois, poiKeysMatch])
 
   const getMarkerPosition = (poi) => {
     const relBearing = ((poi.bearing - heading + 360) % 360) * (Math.PI / 180)
     const xPos = centerX + Math.sin(relBearing) * viewRadius - 78
     const yPos = centerY - Math.cos(relBearing) * viewRadius - 42
-    return { x: Math.max(8, Math.min(width - 170, xPos)), y: Math.max(8, Math.min(height - 145, yPos)) }
+    const minY = topChromeH + 10
+    const maxY = height - bottomChromeH - pathStackH - 72
+    return {
+      x: Math.max(10, Math.min(width - 172, xPos)),
+      y: Math.max(minY, Math.min(maxY, yPos)),
+    }
   }
 
-  const renderDoorOverlay = () => {
-    if (!doorVisible) return null
-    const TOOTH_COUNT = 5
-    const toothH = DOOR_H / TOOTH_COUNT
-    const toothW = DOOR_W * 0.12
-    return (
-      <Animated.View style={[s.doorOverlay, { opacity: doorFade }]} pointerEvents="box-none">
-        <Animated.View style={[s.doorHalf, s.doorL, { transform: [{ translateX: doorLeft }] }]}>
-          <View style={[StyleSheet.absoluteFill, { backgroundColor: '#FFFFFF' }]} />
-        </Animated.View>
-        <Animated.View style={[s.doorHalf, s.doorR, { transform: [{ translateX: doorRight }] }]}>
-          <View style={[StyleSheet.absoluteFill, { backgroundColor: '#CE1126' }]} />
-        </Animated.View>
-        <Animated.View style={[s.doorZigzag, { transform: [{ translateX: doorLeft }] }]}>
-          {Array.from({ length: TOOTH_COUNT }, (_, i) => (
-            <View key={i} style={{
-              width: 0, height: 0,
-              borderTopWidth: toothH / 2, borderBottomWidth: toothH / 2, borderLeftWidth: toothW,
-              borderTopColor: 'transparent', borderBottomColor: 'transparent', borderLeftColor: '#FFFFFF',
-            }} />
-          ))}
-        </Animated.View>
-        <Animated.View style={[s.doorCenter, { transform: [{ scale: doorIconScale }], opacity: doorIconOpacity }]}>
-          <View style={s.doorIconRing}>
-            <LinearGradient colors={['#CE1126', '#9B0C23']} style={s.doorIconGrad}>
-              <Ionicons name="scan" size={44} color="#FFF" />
-            </LinearGradient>
-          </View>
-          <Text style={s.doorLabel}>AR EXPLORER</Text>
-          <Text style={s.doorSubLabel}>Bahrain</Text>
-        </Animated.View>
-      </Animated.View>
-    )
-  }
-
-  const emptyHint = mode === 'saved' ? 'Save places to see them here'
-    : mode === 'events' ? 'No events in this direction'
+  const emptyHint = mode === 'events' ? 'No events in this direction'
     : mode === 'restaurants' ? 'No restaurants in this direction'
     : mode === 'places' ? 'No places in this direction'
     : 'Point your camera around'
 
   const arrowTarget = useMemo(() => {
     if (navigateToDest) return { ...navigateToDest, _type: navigateToDest._type ?? 'place' }
-    if (!focusedPoi || !location) return nearestOutOfView || null
-    const match =
-      basePois.find((p) => poiKeysMatch(p, focusedPoi)) ??
-      pois.find((p) => poiKeysMatch(p, focusedPoi))
-    if (match) return match
-    return enrichPoiBearingsFromUser(focusedPoi, location.latitude, location.longitude)
-  }, [navigateToDest, focusedPoi, nearestOutOfView, basePois, pois, location, poiKeysMatch])
+    if (isLockedMode && lockedPoiLive) return lockedPoiLive
+    return null
+  }, [navigateToDest, isLockedMode, lockedPoiLive])
 
   /* ─── Error / Permission States ─── */
   if (error) {
@@ -1275,7 +1866,6 @@ export default function ARScreen({ navigation }) {
             </LinearGradient>
           </TouchableOpacity>
         </View>
-        {renderDoorOverlay()}
       </View>
     )
   }
@@ -1295,7 +1885,6 @@ export default function ARScreen({ navigation }) {
             </LinearGradient>
           </TouchableOpacity>
         </View>
-        {renderDoorOverlay()}
       </View>
     )
   }
@@ -1312,37 +1901,50 @@ export default function ARScreen({ navigation }) {
 
       {loading ? <ScanningLoader /> : (
         <>
-          {focusedPoi && !navigateToDest ? (
+          {lockedPoi && !navigateToDest ? (
             <View style={fm.dim} pointerEvents="none" accessibilityElementsHidden />
           ) : null}
-          {filteredPois.map((poi, i) => {
+          {[...markersToRender].sort((a, b) => b.distanceKm - a.distanceKm).map((poi, i) => {
             const { x, y } = getMarkerPosition(poi)
-            const spotFocused = poiKeysMatch(focusedPoi, poi)
-            const fadeOthers = Boolean(focusedPoi && !navigateToDest && !spotFocused)
+            const poiKey = poiKeyOf(poi)
+            const spotLocked = poiKeysMatch(lockedPoi, poi)
+            const fadeOthers = Boolean(lockedPoi && !navigateToDest && !spotLocked)
+            const liveDist = spotLocked && lockedPoiLive ? lockedPoiLive.distanceKm : poi.distanceKm
             return (
               <POIMarker
-                key={`${poi.name}-${poi.lat}-${i}`}
+                key={poiKey || `${poi.name}-${i}`}
                 poi={poi}
                 x={x}
                 y={y}
                 onPress={handleOpenPOI}
-                isNearest={nearestInView && nearestInView.name === poi.name && nearestInView.lat === poi.lat}
+                isNearest={
+                  !isLockedMode &&
+                  !navigateToDest &&
+                  nearestInView &&
+                  nearestInView.name === poi.name &&
+                  nearestInView.lat === poi.lat
+                }
                 index={i}
-                isBusy={getIsBusy(poi)}
-                focused={spotFocused}
+                locked={spotLocked}
                 dimmed={fadeOthers}
-                onMarkerLongPress={handleMarkerLongPressFocus}
+                onLockPoi={navigateToDest ? undefined : handleLockPoi}
+                liveDistKm={liveDist}
               />
             )
           })}
 
-          {!navigateToDest && !focusedPoi && (
+          {!navigateToDest && (
             <EdgePOIIndicators
-              outOfViewPois={basePois.filter((p) => p.distanceKm <= maxDistanceKm && !inViewIds.has(p.name + p.lat)).slice(0, 6)}
+              outOfViewPois={basePois
+                .filter((p) => p.distanceKm <= maxDistanceKm && !inViewIds.has(p.name + p.lat))
+                .filter((p) => !lockedPoi || !poiKeysMatch(p, lockedPoi))
+                .slice(0, 6)}
               heading={heading}
-              width={width}
+              safeTop={topChromeH}
+              safeBottom={bottomChromeH + pathStackH}
               height={height}
               onPress={handleOpenPOI}
+              lockedPoiKey={lockedPoiKey}
             />
           )}
 
@@ -1353,9 +1955,12 @@ export default function ARScreen({ navigation }) {
               userLat={location.latitude}
               userLng={location.longitude}
               isNavigation={!!navigateToDest}
+              isLocked={isLockedMode}
+              compactHud={isLockedMode}
               floorPitchDeg={floorPitchDeg}
               onDismissNavigation={navigateToDest ? clearNavigateTo : undefined}
-              style={{ bottom: insets.bottom + 92 }}
+              onDismissLock={isLockedMode ? clearLockedPoi : undefined}
+              style={{ bottom: pathBottomOffset }}
             />
           )}
 
@@ -1364,8 +1969,9 @@ export default function ARScreen({ navigation }) {
             basePois={basePois}
             maxDistanceKm={maxDistanceKm}
             onSelectPoi={handleOpenPOI}
-            topOffset={insets.top + 56}
-            subdued={Boolean(focusedPoi && !navigateToDest)}
+            lockedPoiKey={lockedPoiKey}
+            topOffset={topChromeH + 10}
+            subdued={isLockedMode}
           />
         </>
       )}
@@ -1379,65 +1985,75 @@ export default function ARScreen({ navigation }) {
           </TouchableOpacity>
           <View style={s.headerCenter}>
             <Text style={s.headerTitle}>AR Explorer</Text>
-            {focusedPoi && !navigateToDest ? (
-              <Text style={s.headerFocusHint} numberOfLines={1}>Focus · {focusedPoi.name}</Text>
-            ) : null}
+            {isLockedMode ? (
+              <Text style={s.headerFocusHint} numberOfLines={1}>Khalid is guiding you</Text>
+            ) : (
+              <Text style={s.headerSubHint} numberOfLines={1}>with Khalid · local guide</Text>
+            )}
           </View>
           <TouchableOpacity
             style={s.headerBtn}
             onPress={() => {
-              if (focusedPoi && !navigateToDest) {
-                setFocusedPoi(null)
+              if (lockedPoi && !navigateToDest) {
+                clearLockedPoi()
                 return
               }
-              setShowSlider((v) => !v)
+              setShowFilters((v) => !v)
             }}
             activeOpacity={0.8}
-            accessibilityLabel={focusedPoi && !navigateToDest ? 'Exit focus mode' : 'Toggle range slider'}
+            accessibilityLabel={lockedPoi && !navigateToDest ? 'Unlock destination' : showFilters ? 'Close filters' : 'Open filters'}
+            accessibilityState={{ expanded: showFilters }}
           >
             <Ionicons
-              name={focusedPoi && !navigateToDest ? 'eye-off-outline' : showSlider ? 'radio' : 'radio-outline'}
+              name={lockedPoi && !navigateToDest ? 'lock-open-outline' : showFilters ? 'options' : 'options-outline'}
               size={20}
-              color={focusedPoi && !navigateToDest ? C.success : showSlider ? C.accent : '#FFF'}
+              color={lockedPoi && !navigateToDest ? C.success : showFilters ? C.accent : '#FFF'}
             />
           </TouchableOpacity>
         </View>
       </BlurView>
 
-      {/* ─── Bottom Panel ─── */}
-      <View style={[s.bottom, { paddingBottom: insets.bottom + 8 }]}>
-        <BlurView intensity={Platform.OS === 'ios' ? 55 : 0} tint="dark" style={s.bottomBlur}>
-          <View style={s.bottomBg} />
+      {showFilters ? (
+        <View style={[s.topFilters, { top: headerBarH + 6 }]}>
+          <BlurView intensity={Platform.OS === 'ios' ? 55 : 0} tint="dark" style={s.topFiltersBlur}>
+            <View style={s.topFiltersBg} />
 
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.filterRow}>
-            {MODES.map((m2) => {
-              const active = mode === m2.id
-              return (
-                <TouchableOpacity
-                  key={m2.id}
-                  style={[s.filterChip, active && { backgroundColor: `${m2.color}15`, borderColor: `${m2.color}50` }]}
-                  onPress={() => setMode(m2.id)}
-                  activeOpacity={0.8}
-                  accessibilityLabel={`Filter: ${m2.label}`}
-                  accessibilityState={{ selected: active }}
-                >
-                  <Ionicons name={active ? m2.icon.replace('-outline', '') : m2.icon} size={13} color={active ? m2.color : C.dimText} />
-                  <Text style={[s.filterText, active && { color: m2.color }]}>{m2.label}</Text>
-                </TouchableOpacity>
-              )
-            })}
-          </ScrollView>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={[s.filterRow, isLockedMode && s.filterRowTight]}
+            >
+              {MODES.map((m2) => {
+                const active = mode === m2.id
+                return (
+                  <TouchableOpacity
+                    key={m2.id}
+                    style={[s.filterChip, active && { backgroundColor: `${m2.color}15`, borderColor: `${m2.color}50` }]}
+                    onPress={() => setMode(m2.id)}
+                    activeOpacity={0.8}
+                    accessibilityLabel={`Filter: ${m2.label}`}
+                    accessibilityState={{ selected: active }}
+                  >
+                    <Ionicons name={active ? m2.icon.replace('-outline', '') : m2.icon} size={13} color={active ? m2.color : C.dimText} />
+                    <Text style={[s.filterText, active && { color: m2.color }]}>{m2.label}</Text>
+                  </TouchableOpacity>
+                )
+              })}
+            </ScrollView>
 
-          {showSlider && (
             <View style={s.sliderWrap}>
               <View style={s.sliderHeader}>
                 <Text style={s.sliderLabel}>Discovery range</Text>
-                <View style={s.sliderPill}><Text style={s.sliderValue}>{maxDistanceKm < 1 ? `${Math.round(maxDistanceKm * 1000)}m` : `${maxDistanceKm}km`}</Text></View>
+                <View style={s.sliderPill}>
+                  <Text style={s.sliderValue}>
+                    {maxDistanceKm < 1 ? `${Math.round(maxDistanceKm * 1000)}m` : `${maxDistanceKm}km`}
+                  </Text>
+                </View>
               </View>
               <Slider
                 style={s.slider}
                 minimumValue={0.5}
-                maximumValue={25}
+                maximumValue={10}
                 step={0.5}
                 value={maxDistanceKm}
                 onValueChange={setMaxDistanceKm}
@@ -1446,31 +2062,58 @@ export default function ARScreen({ navigation }) {
                 thumbTintColor={C.accent}
               />
             </View>
-          )}
 
-          {filteredPois.length === 0 && !loading && (
-            <Text style={s.hint}>
-              {navigateToDest ? 'Turn toward your destination'
-                : focusedPoi ? `Focused on ${focusedPoi.name} — tap eye icon to exit or long-press a marker`
-                : nearestOutOfView ? `Turn to find ${nearestOutOfView.name}`
-                : pois.length > 0 ? emptyHint
-                : 'Scan your surroundings'}
-            </Text>
-          )}
-        </BlurView>
-      </View>
+            {showFilterHint ? (
+              <Text style={s.hint}>
+                {navigateToDest ? 'Turn toward your destination' : emptyHint}
+              </Text>
+            ) : null}
+          </BlurView>
+        </View>
+      ) : null}
+
+      {!loading && !error && !navigateToDest ? (
+        <ARKhalidGuidePanel
+          bottomOffset={khalidAnchorBottom}
+          hidden={khalidHidden}
+          onHiddenChange={setKhalidHidden}
+          onHeightChange={setKhalidPanelH}
+          guideLine={khalidGuide.displayLine}
+          isSpeaking={khalidGuide.isSpeaking}
+          narrationLoading={khalidGuide.narrationLoading}
+          isLockedMode={isLockedMode}
+          lockedPlaceName={lockedPoiLive?.name || lockedPoi?.name || ''}
+          lockedMeta={
+            isLockedMode && lockedPoiLive
+              ? `${getDistText(lockedPoiLive.distanceKm)} · ${getWalkingTime(lockedPoiLive.distanceKm)} walk`
+              : ''
+          }
+          latestAnswer={khalidInlineChat.latestAnswer}
+          chatLoading={khalidInlineChat.chatLoading}
+          chatError={khalidInlineChat.chatError}
+          onSendMessage={khalidInlineChat.sendMessage}
+          onOpenDirections={
+            isLockedMode && lockedPoiLive
+              ? () => openDirections(lockedPoiLive)
+              : undefined
+          }
+          onUnlock={isLockedMode ? clearLockedPoi : undefined}
+        />
+      ) : null}
 
       <POIDetailModal
-        visible={!!selectedPoi} poi={selectedPoi} onClose={closeModal} onRequestClose={() => setSelectedPoi(null)}
-        insets={insets} openDirections={openDirections}
-        onViewProfile={handleViewProfile} onToggleSave={toggleSave} isSaved={selectedPoi ? isSaved(selectedPoi) : false}
+        visible={!!selectedPoi}
+        poi={selectedPoi}
+        onClose={closeModal}
+        onRequestClose={() => setSelectedPoi(null)}
+        insets={insets}
+        openDirections={openDirections}
+        onViewProfile={handleViewProfile}
       />
       <ClientProfileModal
         visible={!!profileClientId} clientId={profileClientId} onClose={() => setProfileClientId(null)}
         insets={insets} onOpenARNavigate={(dest) => { setProfileClientId(null); setNavigateToDest(dest) }}
       />
-
-      {renderDoorOverlay()}
     </View>
   )
 }
@@ -1497,12 +2140,56 @@ const s = StyleSheet.create({
   headerCenter: { flex: 1, alignItems: 'center' },
   headerTitle: { color: '#FFF', fontSize: 16, fontFamily: FONT_POPPINS_BOLD, letterSpacing: 0.2 },
   headerFocusHint: { color: C.success, fontSize: 10, fontFamily: FONT_POPPINS_BOLD, marginTop: 2, maxWidth: Math.min(200, DOOR_W * 0.48), textAlign: 'center' },
+  headerSubHint: { color: 'rgba(233,200,119,0.85)', fontSize: 10, fontFamily: FONT_POPPINS_MEDIUM, marginTop: 2, maxWidth: Math.min(200, DOOR_W * 0.48), textAlign: 'center' },
 
-  bottom: { position: 'absolute', left: 10, right: 10, bottom: 0, zIndex: 20 },
-  bottomBlur: { overflow: 'hidden', borderWidth: StyleSheet.hairlineWidth, borderColor: 'rgba(255,255,255,0.12)', borderRadius: 26 },
-  bottomBg: { ...StyleSheet.absoluteFillObject, backgroundColor: Platform.OS === 'android' ? 'rgba(13,16,27,0.88)' : 'rgba(13,16,27,0.38)' },
-
+  topFilters: { position: 'absolute', left: 10, right: 10, zIndex: 20 },
+  topFiltersBlur: { overflow: 'hidden', borderWidth: StyleSheet.hairlineWidth, borderColor: 'rgba(255,255,255,0.12)', borderRadius: 22 },
+  topFiltersBg: { ...StyleSheet.absoluteFillObject, backgroundColor: Platform.OS === 'android' ? 'rgba(13,16,27,0.88)' : 'rgba(13,16,27,0.38)' },
+  lockedRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginHorizontal: 10,
+    marginTop: 10,
+    marginBottom: 2,
+    paddingVertical: 9,
+    paddingHorizontal: 10,
+    borderRadius: 14,
+    backgroundColor: 'rgba(16,185,129,0.10)',
+    borderWidth: 1,
+    borderColor: 'rgba(16,185,129,0.28)',
+  },
+  lockedIconWrap: {
+    width: 32,
+    height: 32,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(16,185,129,0.14)',
+  },
+  lockedTextCol: { flex: 1, minWidth: 0 },
+  lockedName: { color: '#FFF', fontSize: 13, fontFamily: FONT_POPPINS_BOLD },
+  lockedMeta: { color: C.dimText, fontSize: 10, fontFamily: FONT_POPPINS_SEMIBOLD, marginTop: 1 },
+  lockedDirBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 11,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: C.accent,
+  },
+  lockedUnlockBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 11,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(16,185,129,0.12)',
+    borderWidth: 1,
+    borderColor: 'rgba(16,185,129,0.28)',
+  },
   filterRow: { paddingHorizontal: 12, paddingTop: 10, paddingBottom: 6, gap: 7 },
+  filterRowTight: { paddingTop: 4 },
   filterChip: { flexDirection: 'row', alignItems: 'center', gap: 5, paddingVertical: 8, paddingHorizontal: 12, borderRadius: 18, backgroundColor: 'rgba(255,255,255,0.055)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)' },
   filterText: { color: C.dimText, fontSize: 11, fontFamily: FONT_POPPINS_SEMIBOLD },
 
@@ -1514,21 +2201,31 @@ const s = StyleSheet.create({
   slider: { width: '100%', height: 24 },
 
   hint: { color: 'rgba(255,255,255,0.62)', fontSize: 11, fontFamily: FONT_POPPINS_MEDIUM, textAlign: 'center', paddingTop: 6, paddingBottom: 9, paddingHorizontal: 12 },
-
-  doorOverlay: { ...StyleSheet.absoluteFillObject, zIndex: 9999, elevation: 9999 },
-  doorHalf: { position: 'absolute', top: 0, bottom: 0, width: DOOR_W / 2, overflow: 'hidden' },
-  doorL: { left: 0 },
-  doorR: { right: 0 },
-  doorZigzag: { position: 'absolute', top: 0, left: DOOR_W / 2, bottom: 0, zIndex: 2 },
-  doorCenter: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, alignItems: 'center', justifyContent: 'center', zIndex: 10000 },
-  doorIconRing: {
-    width: 110, height: 110, borderRadius: 55, borderWidth: 4, borderColor: '#FFF', overflow: 'hidden',
+  lockCoachWrap: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    alignItems: 'center',
+    zIndex: 6,
+    paddingHorizontal: 24,
+  },
+  lockCoach: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 7,
+    paddingVertical: 9,
+    paddingHorizontal: 16,
+    borderRadius: 22,
+    backgroundColor: 'rgba(8,12,22,0.82)',
+    borderWidth: 1,
+    borderColor: 'rgba(16,185,129,0.32)',
+    maxWidth: 320,
     ...Platform.select({
-      ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.4, shadowRadius: 16 },
-      android: { elevation: 14 },
+      ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.35, shadowRadius: 10 },
+      android: { elevation: 6 },
     }),
   },
-  doorIconGrad: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-  doorLabel: { marginTop: 14, fontSize: 18, fontFamily: FONT_POPPINS_BOLD, color: '#FFF', letterSpacing: 3, textShadowColor: 'rgba(0,0,0,0.4)', textShadowOffset: { width: 0, height: 2 }, textShadowRadius: 6 },
-  doorSubLabel: { marginTop: 4, fontSize: 13, fontFamily: FONT_POPPINS_BOLD, color: 'rgba(255,255,255,0.7)', letterSpacing: 2, textTransform: 'uppercase' },
+  lockCoachText: { color: 'rgba(255,255,255,0.9)', fontSize: 12, fontFamily: FONT_POPPINS_SEMIBOLD, textAlign: 'center' },
+  lockBeaconSlot: { position: 'absolute', left: 0, right: 0, zIndex: 7, alignItems: 'center' },
 })

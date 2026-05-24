@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react'
+import React, { memo, useEffect } from 'react'
 import {
   StyleSheet,
   Text,
@@ -22,10 +22,11 @@ import * as Haptics from 'expo-haptics'
 import Reanimated, {
   FadeIn,
   FadeOut,
-  FadeInDown,
+  FadeInUp,
   FadeOutUp,
   ZoomInEasyDown,
   ZoomOutEasyDown,
+  Easing as ReEasing,
 } from 'react-native-reanimated'
 import { GestureDetector } from 'react-native-gesture-handler'
 import { BlurView } from 'expo-blur'
@@ -40,7 +41,6 @@ import ClientProfileModal from '../../components/ClientProfileModal'
 import {
   PLAN_MAP_CLIENT_TYPE_FILTERS,
   QUICK_FIND_KIND_OPTIONS,
-  QUICK_FIND_SUBLABELS_BY_KIND,
   BAHRAIN_REGION,
   SCREEN_HEIGHT,
   SCREEN_WIDTH,
@@ -80,6 +80,70 @@ const PLAN_SEARCH_FILTER_OPTIONS = [
   { id: 'events', label: 'Events' },
 ]
 
+const SHARE_PERMISSION_OPTIONS = [
+  {
+    value: 'view',
+    label: 'View only',
+    hint: 'They can open and read your plan, but cannot change stops or order.',
+  },
+  {
+    value: 'edit',
+    label: 'Can edit',
+    hint: 'They can reorder stops and add places — changes sync to your shared plan.',
+  },
+]
+
+const SharePlanPermissionOptions = memo(function SharePlanPermissionOptions({
+  variant,
+  selected,
+  onSelect,
+  disabled,
+}) {
+  const isDark = variant === 'dark'
+  return (
+    <View style={isDark ? styles.sharePlanPermOptionsCard : styles.sharePlanPermOptionsCardLight}>
+      {SHARE_PERMISSION_OPTIONS.map((opt) => {
+        const isSelected = selected === opt.value
+        return (
+          <Pressable
+            key={opt.value}
+            style={[
+              isDark ? styles.sharePlanPermOptionRow : styles.sharePlanPermOptionRowLight,
+              isSelected && (isDark ? styles.sharePlanPermOptionRowActive : styles.sharePlanPermOptionRowLightActive),
+              disabled && { opacity: 0.5 },
+            ]}
+            onPress={() => {
+              if (disabled) return
+              onSelect(opt.value)
+            }}
+            disabled={disabled}
+            accessibilityRole="checkbox"
+            accessibilityState={{ checked: isSelected, disabled: !!disabled }}
+            accessibilityLabel={`${opt.label}. ${opt.hint}`}
+          >
+            <View
+              style={[
+                isDark ? styles.sharePlanPermCheckbox : styles.sharePlanPermCheckboxLight,
+                isSelected && (isDark ? styles.sharePlanPermCheckboxChecked : styles.sharePlanPermCheckboxLightChecked),
+              ]}
+            >
+              {isSelected ? <Ionicons name="checkmark" size={14} color="#FFFFFF" /> : null}
+            </View>
+            <View style={styles.sharePlanPermOptionTextCol}>
+              <Text style={isDark ? styles.sharePlanPermOptionLabel : styles.sharePlanPermOptionLabelLight}>
+                {opt.label}
+              </Text>
+              <Text style={isDark ? styles.sharePlanPermOptionHint : styles.sharePlanPermOptionHintLight}>
+                {opt.hint}
+              </Text>
+            </View>
+          </Pressable>
+        )
+      })}
+    </View>
+  )
+})
+
 export function AIPlanScreenViewDialogsB({ screen }) {
   const blurTint = screen.isDark ? 'dark' : 'light'
   const placeholderColor = screen.isDark ? '#64748B' : '#94A3B8'
@@ -97,11 +161,11 @@ export function AIPlanScreenViewDialogsB({ screen }) {
   useEffect(() => {
     if (!screen.showShareActionPickerModal) return undefined
     const sub = BackHandler.addEventListener('hardwareBackPress', () => {
-      screen.setShowShareActionPickerModal(false)
+      screen.handleCloseShareActionPickerModal()
       return true
     })
     return () => sub.remove()
-  }, [screen.showShareActionPickerModal, screen.setShowShareActionPickerModal])
+  }, [screen.showShareActionPickerModal, screen.handleCloseShareActionPickerModal])
 
   return (
 <>
@@ -142,7 +206,7 @@ export function AIPlanScreenViewDialogsB({ screen }) {
                   <Text style={styles.buildModeStandaloneTitle}>Build your day</Text>
                   <Text style={styles.buildModeStandaloneHint}>Choose how you want to build your Bahrain day.</Text>
                   <View style={styles.buildModeStandaloneButtonRow}>
-                    <Reanimated.View entering={FadeInDown.delay(40).duration(360)} style={styles.buildModeStandaloneOptionSlot}>
+                    <Reanimated.View entering={FadeInUp.delay(40).duration(380).easing(ReEasing.out(ReEasing.cubic))} style={styles.buildModeStandaloneOptionSlot}>
                       <TouchableOpacity
                         style={styles.buildModeStandaloneButton}
                         activeOpacity={0.9}
@@ -161,7 +225,7 @@ export function AIPlanScreenViewDialogsB({ screen }) {
                         </LinearGradient>
                       </TouchableOpacity>
                     </Reanimated.View>
-                    <Reanimated.View entering={FadeInDown.delay(110).duration(360)} style={styles.buildModeStandaloneOptionSlot}>
+                    <Reanimated.View entering={FadeInUp.delay(110).duration(380).easing(ReEasing.out(ReEasing.cubic))} style={styles.buildModeStandaloneOptionSlot}>
                       <TouchableOpacity
                         style={styles.buildModeStandaloneButton}
                         activeOpacity={0.9}
@@ -175,7 +239,7 @@ export function AIPlanScreenViewDialogsB({ screen }) {
                         </View>
                       </TouchableOpacity>
                     </Reanimated.View>
-                    <Reanimated.View entering={FadeInDown.delay(180).duration(360)} style={styles.buildModeStandaloneOptionSlot}>
+                    <Reanimated.View entering={FadeInUp.delay(180).duration(380).easing(ReEasing.out(ReEasing.cubic))} style={styles.buildModeStandaloneOptionSlot}>
                       <TouchableOpacity
                         style={styles.buildModeStandaloneButton}
                         activeOpacity={0.9}
@@ -195,7 +259,10 @@ export function AIPlanScreenViewDialogsB({ screen }) {
                 <>
                   <Text style={styles.buildModeStandaloneTitle}>Enter code</Text>
                   <Text style={styles.buildModeStandaloneHint}>Paste a shared plan code to open it instantly.</Text>
-                  <View style={styles.buildModeJoinCard}>
+                  <Reanimated.View
+                    entering={FadeInUp.delay(50).duration(400).easing(ReEasing.out(ReEasing.cubic))}
+                    style={styles.buildModeJoinCard}
+                  >
                     <TextInput
                       style={styles.buildModeJoinInput}
                       value={screen.joinCodeInput}
@@ -225,25 +292,27 @@ export function AIPlanScreenViewDialogsB({ screen }) {
                         <Text style={styles.buildModeJoinOpenBtnText}>Open</Text>
                       )}
                     </TouchableOpacity>
-                  </View>
+                  </Reanimated.View>
                 </>
-              ) : screen.buildDayModalPhase === 'quickKind' ? (
+              ) : screen.buildDayModalPhase === 'quickKind' || screen.buildDayModalPhase === 'quickSub' ? (
                 <>
                   <Text style={styles.buildModeStandaloneTitle}>Quick AI search</Text>
-                  <Text style={styles.buildModeStandaloneHint}>Eat, places, or events — then pick a vibe for one curated match.</Text>
+                  <Text style={styles.buildModeStandaloneHint}>
+                    Restaurants, places, or events — we match the nearest spot to your profile.
+                  </Text>
                   <View style={styles.buildModeStandaloneButtonRow}>
                     {QUICK_FIND_KIND_OPTIONS.map((opt, i) => (
                       <Reanimated.View
                         key={opt.id}
-                        entering={FadeInDown.delay(40 + i * 70).duration(360)}
+                        entering={FadeInUp.delay(40 + i * 70).duration(380).easing(ReEasing.out(ReEasing.cubic))}
                         style={styles.buildModeStandaloneOptionSlot}
                       >
                         <TouchableOpacity
                           style={styles.buildModeStandaloneButton}
                           activeOpacity={0.9}
-                          onPress={() => screen.handleBuildDayQuickFindSelectKind(opt.id)}
+                          onPress={() => void screen.handleBuildDayQuickFindSelectKind(opt.id)}
                           accessibilityRole="button"
-                          accessibilityLabel={`Quick search category ${opt.label}`}
+                          accessibilityLabel={`Quick search ${opt.label}`}
                         >
                           <View style={styles.buildModeStandaloneButtonOutline}>
                             <Ionicons name={opt.icon} size={22} color="#F7DFA0" />
@@ -261,36 +330,7 @@ export function AIPlanScreenViewDialogsB({ screen }) {
                     ))}
                   </View>
                 </>
-              ) : (
-                <>
-                  <Text style={styles.buildModeStandaloneTitle}>
-                    {(() => {
-                      const k = QUICK_FIND_KIND_OPTIONS.find((o) => o.id === screen.quickFindKind)
-                      return k ? `${k.label} vibes` : 'Pick a vibe'
-                    })()}
-                  </Text>
-                  <Text style={styles.buildModeStandaloneHint}>Tap a tag — we will place one pin on your map.</Text>
-                  <ScrollView
-                    style={styles.buildModeQuickSubScroll}
-                    contentContainerStyle={styles.buildModeQuickSubContent}
-                    showsVerticalScrollIndicator={false}
-                    keyboardShouldPersistTaps="handled"
-                  >
-                    {(QUICK_FIND_SUBLABELS_BY_KIND[screen.quickFindKind] || []).map((label) => (
-                      <TouchableOpacity
-                        key={label}
-                        style={styles.buildModeQuickChip}
-                        activeOpacity={0.88}
-                        onPress={() => void screen.handleQuickFindPickSubCategory(label)}
-                        accessibilityRole="button"
-                        accessibilityLabel={`Quick search ${label}`}
-                      >
-                        <Text style={styles.buildModeQuickChipText}>{label}</Text>
-                      </TouchableOpacity>
-                    ))}
-                  </ScrollView>
-                </>
-              )}
+              ) : null}
                 <View style={styles.buildModeFooterRow}>
                   <TouchableOpacity
                     style={styles.buildModeGlassCloseBtn}
@@ -311,13 +351,13 @@ export function AIPlanScreenViewDialogsB({ screen }) {
         visible={!!screen.showShareActionPickerModal}
         transparent
         statusBarTranslucent
-        animationType="none"
-        onRequestClose={() => screen.setShowShareActionPickerModal(false)}
+        animationType="fade"
+        onRequestClose={screen.handleCloseShareActionPickerModal}
       >
         <View style={styles.buildModeLayer}>
           <Pressable
             style={styles.buildModeBackdrop}
-            onPress={() => screen.setShowShareActionPickerModal(false)}
+            onPress={screen.handleCloseShareActionPickerModal}
             accessibilityLabel="Dismiss"
             accessibilityRole="button"
           />
@@ -330,61 +370,73 @@ export function AIPlanScreenViewDialogsB({ screen }) {
             style={[styles.buildModeCenterWrap, { paddingBottom: screen.insets.bottom + 16 }]}
             pointerEvents="box-none"
           >
-            <Reanimated.View entering={ZoomInEasyDown.duration(340)} style={styles.buildModeStandaloneWrap}>
-              <Text style={styles.buildModeStandaloneTitle}>Sharing settings</Text>
+            <View style={styles.buildModeStandaloneWrap}>
+              <Text style={styles.buildModeStandaloneTitle}>Share plan</Text>
               <Text style={styles.buildModeStandaloneHint}>
-                Pick permission, then share. Link and code are copied automatically.
+                {screen.sharePickerPreparing
+                  ? 'Preparing your plan…'
+                  : 'Choose permissions, copy the code, or share the link.'}
               </Text>
-              <View style={styles.sharePlanModalPermRow}>
-                <TouchableOpacity
-                  style={[
-                    styles.sharePlanModalPermChip,
-                    screen.sharePermissionDraft === 'view' && styles.sharePlanModalPermChipActive,
-                  ]}
-                  onPress={() => screen.setSharePermissionDraft('view')}
-                  accessibilityRole="button"
-                  accessibilityLabel="View only"
-                >
-                  <Text style={styles.sharePlanModalPermChipText}>View only</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={[
-                    styles.sharePlanModalPermChip,
-                    screen.sharePermissionDraft === 'edit' && styles.sharePlanModalPermChipActive,
-                  ]}
-                  onPress={() => screen.setSharePermissionDraft('edit')}
-                  accessibilityRole="button"
-                  accessibilityLabel="Can edit"
-                >
-                  <Text style={styles.sharePlanModalPermChipText}>Can edit</Text>
-                </TouchableOpacity>
-              </View>
+              {screen.sharePickerCode ? (
+                <>
+                  <Pressable
+                    style={styles.sharePlanModalCodeBoxDark}
+                    onPress={screen.handleCopySharePickerCode}
+                    disabled={screen.sharePickerPreparing || screen.sharePickerSharing}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Copy share code ${screen.sharePickerCode}`}
+                    accessibilityHint="Copies the share code to your clipboard"
+                  >
+                    <Text style={styles.sharePlanModalCodeDark} selectable>
+                      {screen.sharePickerCode}
+                    </Text>
+                    <Ionicons name="copy-outline" size={22} color="#F7DFA0" />
+                  </Pressable>
+                  {screen.sharePickerCopyHint ? (
+                    <Text style={styles.sharePlanModalCodeCopyHint}>Copied to clipboard</Text>
+                  ) : (
+                    <Text style={[styles.buildModeStandaloneHint, { marginTop: -6, marginBottom: 14 }]}>
+                      Tap the code to copy
+                    </Text>
+                  )}
+                </>
+              ) : null}
+              <SharePlanPermissionOptions
+                variant="dark"
+                selected={screen.sharePickerPermission}
+                onSelect={screen.handleSharePickerPermissionSelect}
+                disabled={screen.sharePickerPreparing || screen.sharePickerSharing}
+              />
               <View style={styles.sharePlanModalActions}>
                 <TouchableOpacity
-                  style={styles.sharePlanModalBtn}
+                  style={[
+                    styles.sharePlanModalBtn,
+                    (screen.sharePickerPreparing || screen.sharePickerSharing) && { opacity: 0.55 },
+                  ]}
                   onPress={screen.handleShareActionEnableAndBack}
-                  disabled={screen.shareModalBusy}
+                  disabled={screen.sharePickerPreparing || screen.sharePickerSharing}
+                  accessibilityRole="button"
+                  accessibilityLabel="Share plan with selected permission"
                 >
-                  <Text style={styles.sharePlanModalBtnText}>
-                    {screen.shareModalBusy ? '…' : 'Share plan'}
-                  </Text>
+                  {screen.sharePickerSharing ? (
+                    <ActivityIndicator color="#FFFFFF" size="small" />
+                  ) : (
+                    <Text style={styles.sharePlanModalBtnText}>Share plan</Text>
+                  )}
                 </TouchableOpacity>
               </View>
               <View style={styles.buildModeFooterRow}>
                 <TouchableOpacity
                   style={styles.buildModeGlassCloseBtn}
                   activeOpacity={0.7}
-                  onPress={() => {
-                    screen.setShareActionModalPhase('settings')
-                    screen.setShowShareActionPickerModal(false)
-                  }}
+                  onPress={screen.handleCloseShareActionPickerModal}
                   accessibilityLabel="Close"
                   accessibilityRole="button"
                 >
                   <Ionicons name="close" size={22} color={screen.isDark ? 'rgba(226,232,240,0.72)' : 'rgba(15,23,42,0.72)'} />
                 </TouchableOpacity>
               </View>
-            </Reanimated.View>
+            </View>
           </View>
         </View>
       </Modal>
@@ -397,6 +449,10 @@ export function AIPlanScreenViewDialogsB({ screen }) {
         statusBarTranslucent={Platform.OS === 'android'}
         onRequestClose={() => {
           if (screen.addingPlanStop) return
+          if (screen.customPlanDraftActive && !(screen.dayPlan?.length > 0)) {
+            screen.dismissCustomPlanDraft()
+            return
+          }
           screen.setShowSearchModal(false)
         }}
       >
@@ -424,6 +480,10 @@ export function AIPlanScreenViewDialogsB({ screen }) {
                   activeOpacity={0.65}
                   onPress={() => {
                     if (screen.addingPlanStop) return
+                    if (screen.customPlanDraftActive && !(screen.dayPlan?.length > 0)) {
+                      screen.dismissCustomPlanDraft()
+                      return
+                    }
                     void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {})
                     screen.setShowSearchModal(false)
                   }}
@@ -646,24 +706,27 @@ export function AIPlanScreenViewDialogsB({ screen }) {
                             showsHorizontalScrollIndicator={false}
                             contentContainerStyle={styles.searchModalHorizontalContent}
                           >
-                            {items.map((client) => {
+                            {items.map((client, cardIdx) => {
                               const imageUrl = resolvePublicImageUrl(client.client_image)
                               return (
-                                <TouchableOpacity
+                                <Reanimated.View
                                   key={client.client_a_uuid || client.clientId}
-                                  style={[styles.searchModalClientCard, screen.isDark && styles.searchModalClientCardDark]}
-                                  activeOpacity={0.72}
-                                  disabled={screen.addingPlanStop}
-                                  accessibilityRole="button"
-                                  accessibilityLabel={`${sectionLabel}: ${client.name || client.business_name || 'Spot'}`}
-                                  onPress={() => {
-                                    if (screen.addToPlanMode) {
-                                      screen.handleAddClientToPlan(client)
-                                      return
-                                    }
-                                    screen.handleFocusClientFromSearch(client)
-                                  }}
+                                  entering={FadeInUp.delay(Math.min(cardIdx, 12) * 44).duration(380).easing(ReEasing.out(ReEasing.cubic))}
                                 >
+                                  <TouchableOpacity
+                                    style={[styles.searchModalClientCard, screen.isDark && styles.searchModalClientCardDark]}
+                                    activeOpacity={0.72}
+                                    disabled={screen.addingPlanStop}
+                                    accessibilityRole="button"
+                                    accessibilityLabel={`${sectionLabel}: ${client.name || client.business_name || 'Spot'}`}
+                                    onPress={() => {
+                                      if (screen.addToPlanMode) {
+                                        screen.handleAddClientToPlan(client)
+                                        return
+                                      }
+                                      screen.handleFocusClientFromSearch(client)
+                                    }}
+                                  >
                                   <View style={[styles.searchModalClientCircle, { borderColor: accent }]}>
                                     {imageUrl ? (
                                       <CachedImage
@@ -692,6 +755,7 @@ export function AIPlanScreenViewDialogsB({ screen }) {
                                     {client.name || client.business_name || 'Spot'}
                                   </Text>
                                 </TouchableOpacity>
+                                </Reanimated.View>
                               )
                             })}
                           </ScrollView>
@@ -773,7 +837,11 @@ export function AIPlanScreenViewDialogsB({ screen }) {
             accessibilityLabel="Dismiss share dialog"
             accessibilityRole="button"
           />
-          <View style={styles.sharePlanModalCard} pointerEvents="box-none">
+          <Reanimated.View
+            entering={FadeInUp.duration(400).easing(ReEasing.out(ReEasing.cubic))}
+            style={styles.sharePlanModalCard}
+            pointerEvents="box-none"
+          >
             <Text style={styles.sharePlanModalTitle}>Share plan</Text>
             <Text style={styles.sharePlanModalSub}>
               Friends open this in SiyahaBH using your link or code. Choose view-only, or let them edit the same plan.
@@ -785,30 +853,11 @@ export function AIPlanScreenViewDialogsB({ screen }) {
             ) : (
               <Text style={[styles.sharePlanModalSub, { marginBottom: 12 }]}>Enable sharing to create a code.</Text>
             )}
-            <View style={styles.sharePlanModalPermRow}>
-              <TouchableOpacity
-                style={[
-                  styles.sharePlanModalPermChip,
-                  screen.sharePermissionDraft === 'view' && styles.sharePlanModalPermChipActive,
-                ]}
-                onPress={() => screen.setSharePermissionDraft('view')}
-                accessibilityRole="button"
-                accessibilityLabel="View only"
-              >
-                <Text style={styles.sharePlanModalPermChipText}>View only</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[
-                  styles.sharePlanModalPermChip,
-                  screen.sharePermissionDraft === 'edit' && styles.sharePlanModalPermChipActive,
-                ]}
-                onPress={() => screen.setSharePermissionDraft('edit')}
-                accessibilityRole="button"
-                accessibilityLabel="Can edit"
-              >
-                <Text style={styles.sharePlanModalPermChipText}>Can edit</Text>
-              </TouchableOpacity>
-            </View>
+            <SharePlanPermissionOptions
+              variant="light"
+              selected={screen.sharePermissionDraft}
+              onSelect={screen.setSharePermissionDraft}
+            />
             <View style={styles.sharePlanModalActions}>
               <TouchableOpacity
                 style={[styles.sharePlanModalBtn, styles.sharePlanModalBtnSecondary]}
@@ -844,7 +893,7 @@ export function AIPlanScreenViewDialogsB({ screen }) {
             >
               <Text style={{ fontSize: 15, fontFamily: FONT_POPPINS_BOLD, color: tertiaryTextColor }}>Close</Text>
             </TouchableOpacity>
-          </View>
+          </Reanimated.View>
         </View>
       </Modal>
 

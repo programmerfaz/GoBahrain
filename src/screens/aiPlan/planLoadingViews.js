@@ -3,6 +3,7 @@ import {
   StyleSheet,
   Text,
   View,
+  Image,
   Animated,
   Easing,
   Platform,
@@ -34,16 +35,37 @@ const GREEN_DEEP = '#059669'
 const INK = '#07060A'
 const INK_GLASS = 'rgba(7,6,10,0.68)'
 
-const STATUS_LINES = [
-  { title: 'Scouting hidden gems', sub: 'Listening to the locals around you' },
-  { title: 'Curating the table', sub: 'Pairing flavours to your mood' },
-  { title: 'Stitching your journey', sub: 'Drawing the perfect route' },
-]
+const KHALID_AVATAR = require('../../../assets/khalid.png')
+const KHALID_BADGE_ACTIVE = 'KHALID · PREPARING YOUR DAY'
+const KHALID_BADGE_READY = 'KHALID · READY'
 
 const STEP_LABELS = [
   { key: 'places', label: 'Places', icon: 'compass-outline' },
   { key: 'dining', label: 'Dining', icon: 'restaurant-outline' },
   { key: 'route', label: 'Route', icon: 'git-branch-outline' },
+]
+
+const pickSpotLabel = (item) => {
+  const raw = item?.name || item?.title || item?.spot || item?.client_name || ''
+  return String(raw || '').trim()
+}
+
+/** Rotating “Khalid is…” lines per phase — one visible at a time. */
+const KHALID_WORKING_LINES = [
+  [
+    'Khalid is finding where you are…',
+    'Khalid is mapping your starting point…',
+  ],
+  [
+    'Khalid is finding the best spots…',
+    'Khalid is reading what locals love…',
+    'Khalid is shortlisting gems for you…',
+  ],
+  [
+    'Khalid is matching food to your taste…',
+    'Khalid is building your perfect route…',
+    'Khalid is putting your day together…',
+  ],
 ]
 
 /* ────────────────────────────────────────────────────────────────────────────
@@ -204,7 +226,301 @@ function ViewfinderCorners({ compact }) {
   )
 }
 
-/* Live‑indicator badge — pulsing red dot with "LIVE CURATION" label. */
+/* Khalid agent row — avatar, name, and a soft “thinking” pulse while the plan loads. */
+function KhalidTypingDots({ compact }) {
+  const d0 = useRef(new Animated.Value(0.35)).current
+  const d1 = useRef(new Animated.Value(0.35)).current
+  const d2 = useRef(new Animated.Value(0.35)).current
+
+  useEffect(() => {
+    const dot = (anim, delay) =>
+      Animated.loop(
+        Animated.sequence([
+          Animated.delay(delay),
+          Animated.timing(anim, { toValue: 1, duration: 320, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
+          Animated.timing(anim, { toValue: 0.35, duration: 320, easing: Easing.in(Easing.cubic), useNativeDriver: true }),
+        ]),
+      )
+    const loops = [dot(d0, 0), dot(d1, 140), dot(d2, 280)]
+    loops.forEach((l) => l.start())
+    return () => loops.forEach((l) => l.stop())
+  }, [d0, d1, d2])
+
+  const size = compact ? 4 : 5
+  const gap = compact ? 3 : 4
+  return (
+    <View style={[cn.khalidDots, { gap }]}>
+      {[d0, d1, d2].map((op, i) => (
+        <Animated.View
+          key={i}
+          style={[
+            cn.khalidDot,
+            { width: size, height: size, borderRadius: size / 2, opacity: op },
+          ]}
+        />
+      ))}
+    </View>
+  )
+}
+
+function KhalidOrbitRing({ compact, ready, avatarSize }) {
+  const spin = useRef(new Animated.Value(0)).current
+  useEffect(() => {
+    if (ready) return undefined
+    const loop = Animated.loop(
+      Animated.timing(spin, { toValue: 1, duration: compact ? 4200 : 5200, easing: Easing.linear, useNativeDriver: true }),
+    )
+    loop.start()
+    return () => loop.stop()
+  }, [spin, ready, compact])
+
+  if (ready) return null
+  const size = avatarSize || (compact ? 52 : 64)
+  const wrapSize = size + (compact ? 24 : 30)
+  const orbitSize = size + (compact ? 16 : 20)
+  const orbitInset = (wrapSize - orbitSize) / 2
+  const rotate = spin.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '360deg'] })
+
+  return (
+    <Animated.View
+      pointerEvents="none"
+      style={[
+        cn.khalidOrbit,
+        {
+          top: orbitInset,
+          left: orbitInset,
+          width: orbitSize,
+          height: orbitSize,
+          borderRadius: orbitSize / 2,
+          transform: [{ rotate }],
+        },
+      ]}
+    />
+  )
+}
+
+function ProgressHeader({ progress, ready, compact }) {
+  const pct = Math.min(100, Math.max(ready ? 100 : 5, Math.floor(progress * 100)))
+  return (
+    <View style={cn.progressHeader}>
+      <Text style={[cn.progressHeaderLabel, compact && cn.progressHeaderLabelCompact]}>
+        {ready ? 'Complete' : 'Your plan'}
+      </Text>
+      <View style={[cn.progressPctPill, ready && cn.progressPctPillReady]}>
+        <Text style={[cn.progressPctText, compact && cn.progressPctTextCompact]}>{pct}%</Text>
+      </View>
+    </View>
+  )
+}
+
+/** Centered Khalid avatar — single identity block, no status copy here. */
+function PlanLoadingHero({ compact, ready }) {
+  const breathe = useRef(new Animated.Value(0)).current
+  useEffect(() => {
+    if (ready) return undefined
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(breathe, { toValue: 1, duration: 1400, easing: Easing.inOut(Easing.sin), useNativeDriver: true }),
+        Animated.timing(breathe, { toValue: 0, duration: 1400, easing: Easing.inOut(Easing.sin), useNativeDriver: true }),
+      ]),
+    )
+    loop.start()
+    return () => loop.stop()
+  }, [breathe, ready])
+
+  const ringScale = breathe.interpolate({ inputRange: [0, 1], outputRange: [1, 1.06] })
+  const ringOp = breathe.interpolate({ inputRange: [0, 1], outputRange: [0.35, 0.75] })
+  const avatarSize = compact ? 52 : 64
+  const wrapSize = avatarSize + (compact ? 24 : 30)
+
+  return (
+    <View style={[cn.heroCenter, compact && cn.heroCenterCompact]}>
+      <View style={[cn.khalidAvatarOuter, { width: wrapSize, height: wrapSize }]}>
+        <KhalidOrbitRing compact={compact} ready={ready} avatarSize={avatarSize} />
+        {!ready ? (
+          <Animated.View
+            pointerEvents="none"
+            style={[
+              cn.khalidAvatarRing,
+              {
+                position: 'absolute',
+                top: (wrapSize - avatarSize - 10) / 2,
+                left: (wrapSize - avatarSize - 10) / 2,
+                width: avatarSize + 10,
+                height: avatarSize + 10,
+                borderRadius: (avatarSize + 10) / 2,
+                opacity: ringOp,
+                transform: [{ scale: ringScale }],
+              },
+            ]}
+          />
+        ) : null}
+        <Image
+          source={KHALID_AVATAR}
+          style={[cn.khalidAvatar, { width: avatarSize, height: avatarSize, borderRadius: avatarSize / 2 }]}
+          resizeMode="cover"
+          accessibilityLabel="Khalid, your AI tourist guide"
+        />
+      </View>
+      <Text style={[cn.heroName, compact && cn.heroNameCompact]}>Khalid</Text>
+      {!ready ? <KhalidTypingDots compact={compact} /> : null}
+      <Text style={[cn.heroRole, compact && cn.heroRoleCompact]}>Your AI guide · Bahrain</Text>
+    </View>
+  )
+}
+
+/** Single rotating status — “Khalid is finding the best…” with a working pulse bar. */
+function KhalidWorkingStatus({ step, ready, compact, spotPreviews }) {
+  const fade = useRef(new Animated.Value(1)).current
+  const ty = useRef(new Animated.Value(0)).current
+  const scan = useRef(new Animated.Value(0)).current
+  const dotPulse = useRef(new Animated.Value(0)).current
+  const [mountedStep, setMountedStep] = useState(step)
+  const [lineIdx, setLineIdx] = useState(0)
+
+  const spotNames = useMemo(
+    () => [...new Set((spotPreviews || []).map(pickSpotLabel).filter((n) => n.length > 1))].slice(0, 10),
+    [spotPreviews],
+  )
+
+  const lines = useMemo(() => {
+    const base = KHALID_WORKING_LINES[Math.min(mountedStep, KHALID_WORKING_LINES.length - 1)] || KHALID_WORKING_LINES[0]
+    if (mountedStep === 1 && spotNames.length > 0) {
+      const pick = spotNames[lineIdx % spotNames.length]
+      return [...base, `Khalid is weighing ${pick}…`]
+    }
+    return base
+  }, [mountedStep, spotNames, lineIdx])
+
+  const currentLine = lines[lineIdx % lines.length] || lines[0]
+
+  useEffect(() => {
+    setLineIdx(0)
+    Animated.parallel([
+      Animated.timing(fade, { toValue: 0, duration: 180, useNativeDriver: true }),
+      Animated.timing(ty, { toValue: 6, duration: 180, useNativeDriver: true }),
+    ]).start(({ finished }) => {
+      if (!finished) return
+      setMountedStep(step)
+      ty.setValue(-6)
+      Animated.parallel([
+        Animated.timing(fade, { toValue: 1, duration: 320, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
+        Animated.timing(ty, { toValue: 0, duration: 360, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
+      ]).start()
+    })
+  }, [step, fade, ty])
+
+  useEffect(() => {
+    if (ready) return undefined
+    const id = setInterval(() => {
+      Animated.timing(fade, { toValue: 0, duration: 200, useNativeDriver: true }).start(({ finished }) => {
+        if (!finished) return
+        setLineIdx((i) => (i + 1) % lines.length)
+        requestAnimationFrame(() => {
+          Animated.timing(fade, { toValue: 1, duration: 340, easing: Easing.out(Easing.cubic), useNativeDriver: true }).start()
+        })
+      })
+    }, compact ? 2600 : 3000)
+    return () => clearInterval(id)
+  }, [ready, fade, lines.length, compact])
+
+  useEffect(() => {
+    if (ready) return undefined
+    const scanLoop = Animated.loop(
+      Animated.timing(scan, { toValue: 1, duration: 1400, easing: Easing.linear, useNativeDriver: true }),
+    )
+    const dotLoop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(dotPulse, { toValue: 1, duration: 700, easing: Easing.inOut(Easing.sin), useNativeDriver: true }),
+        Animated.timing(dotPulse, { toValue: 0, duration: 700, easing: Easing.inOut(Easing.sin), useNativeDriver: true }),
+      ]),
+    )
+    scanLoop.start()
+    dotLoop.start()
+    return () => {
+      scanLoop.stop()
+      dotLoop.stop()
+    }
+  }, [ready, scan, dotPulse])
+
+  const scanX = scan.interpolate({ inputRange: [0, 1], outputRange: [-120, 120] })
+  const dotOp = dotPulse.interpolate({ inputRange: [0, 1], outputRange: [0.5, 1] })
+  const dotScale = dotPulse.interpolate({ inputRange: [0, 1], outputRange: [0.9, 1.15] })
+
+  if (ready) {
+    return (
+      <View style={cn.phaseCenter}>
+        <Text style={[cn.khalidWorkingDone, compact && cn.khalidWorkingDoneCompact]}>Khalid lined up your day</Text>
+        <Text style={[cn.title, compact && cn.titleCompact]}>Your day is ready</Text>
+        <Text style={[cn.subtitle, compact && cn.subtitleCompact]}>Swipe up to begin</Text>
+      </View>
+    )
+  }
+
+  return (
+    <View style={[cn.khalidWorkingWrap, compact && cn.khalidWorkingWrapCompact]}>
+      <View style={[cn.khalidWorkingPill, compact && cn.khalidWorkingPillCompact]}>
+        <Animated.View
+          style={[
+            cn.khalidWorkingDot,
+            { opacity: dotOp, transform: [{ scale: dotScale }] },
+          ]}
+        />
+        <Text style={[cn.khalidWorkingPillText, compact && cn.khalidWorkingPillTextCompact]}>Khalid is working</Text>
+      </View>
+
+      <Animated.Text
+        style={[
+          cn.khalidWorkingLine,
+          compact && cn.khalidWorkingLineCompact,
+          { opacity: fade, transform: [{ translateY: ty }] },
+        ]}
+        numberOfLines={2}
+        adjustsFontSizeToFit
+        minimumFontScale={0.88}
+      >
+        {currentLine}
+      </Animated.Text>
+
+      <View style={[cn.khalidWorkingBar, compact && cn.khalidWorkingBarCompact]}>
+        <Animated.View style={[cn.khalidWorkingBarScan, { transform: [{ translateX: scanX }] }]}>
+          <LinearGradient
+            colors={['transparent', 'rgba(233,200,119,0.15)', GOLD_SOFT, 'rgba(233,200,119,0.15)', 'transparent']}
+            start={{ x: 0, y: 0.5 }}
+            end={{ x: 1, y: 0.5 }}
+            style={StyleSheet.absoluteFill}
+          />
+        </Animated.View>
+      </View>
+    </View>
+  )
+}
+
+function PlanLoadingReady({ compact }) {
+  return (
+    <View style={cn.readyCenter}>
+      <ReadyMedallion visible compact={compact} />
+    </View>
+  )
+}
+
+function PlanLoadingProgressBlock({ progress, ready, completed, activeIdx, compact }) {
+  return (
+    <View style={[cn.progressBlock, compact && cn.progressBlockCompact]}>
+      <ProgressHeader progress={progress} ready={ready} compact={compact} />
+      <ProgressBar progress={progress} ready={ready} compact={compact} />
+      <StepRow
+        completed={completed}
+        activeIndex={activeIdx}
+        ready={ready}
+        compact={compact}
+        visualProgress={progress}
+      />
+    </View>
+  )
+}
+
+/* Live‑indicator badge — pulsing dot with Khalid-at-work label. */
 function LiveBadge({ compact, ready }) {
   const pulse = useRef(new Animated.Value(0)).current
   const readyPop = useRef(new Animated.Value(0)).current
@@ -246,52 +562,13 @@ function LiveBadge({ compact, ready }) {
       {ready ? (
         <>
           <View style={[cn.liveDot, { backgroundColor: '#FFFFFF' }]} />
-          <Text style={[cn.liveText, { color: '#FFFFFF' }]}>READY</Text>
+          <Text style={[cn.liveText, { color: '#FFFFFF' }]}>{KHALID_BADGE_READY}</Text>
         </>
       ) : (
         <>
           <Animated.View style={[cn.liveDot, { transform: [{ scale }], opacity: op }]} />
-          <Text style={cn.liveText}>LIVE CURATION</Text>
+          <Text style={cn.liveText}>{KHALID_BADGE_ACTIVE}</Text>
         </>
-      )}
-    </Animated.View>
-  )
-}
-
-/* Morphing cinematic title — cross‑fade + Y slide on step change. */
-function MorphingTitle({ step, showSuccess, compact }) {
-  const fade = useRef(new Animated.Value(1)).current
-  const ty = useRef(new Animated.Value(0)).current
-  const [mounted, setMounted] = useState({ step, showSuccess })
-
-  useEffect(() => {
-    Animated.parallel([
-      Animated.timing(fade, { toValue: 0, duration: 220, useNativeDriver: true }),
-      Animated.timing(ty, { toValue: -10, duration: 220, useNativeDriver: true }),
-    ]).start(({ finished }) => {
-      if (!finished) return
-      setMounted({ step, showSuccess })
-      ty.setValue(12)
-      Animated.parallel([
-        Animated.timing(fade, { toValue: 1, duration: 380, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
-        Animated.timing(ty, { toValue: 0, duration: 440, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
-      ]).start()
-    })
-  }, [step, showSuccess, fade, ty])
-
-  const active = mounted.showSuccess
-    ? { title: 'Your plan is ready', sub: 'Swipe up to begin your journey' }
-    : STATUS_LINES[Math.min(mounted.step, STATUS_LINES.length - 1)]
-
-  return (
-    <Animated.View style={{ opacity: fade, transform: [{ translateY: ty }], alignItems: 'center', gap: 4 }}>
-      <Text style={[cn.title, compact && cn.titleCompact, { textAlign: 'center' }]} numberOfLines={compact ? 1 : 2}>
-        {active.title}
-      </Text>
-      {!compact && (
-        <Text style={[cn.subtitle, { textAlign: 'center' }]} numberOfLines={1}>
-          {active.sub}
-        </Text>
       )}
     </Animated.View>
   )
@@ -467,97 +744,106 @@ function ProgressBar({ progress, compact, ready }) {
   )
 }
 
-/* Step chips — glass when pending, gold-lit with a shimmer when active, and
- * snap to a vibrant green with a spring + check icon the moment they are done. */
-function StepChip({ step, index, isDone, isActive, compact }) {
-  const lit = useRef(new Animated.Value(0)).current
-  const popped = useRef(new Animated.Value(0)).current
-  const shimmer = useRef(new Animated.Value(0)).current
+/** Compact step node — icon circle + label, fits equal thirds inside the card. */
+function StepNode({ step, isDone, isActive, compact }) {
+  const pop = useRef(new Animated.Value(1)).current
+  const pulse = useRef(new Animated.Value(0)).current
   const prevDone = useRef(false)
+  const circleSize = compact ? 34 : 40
 
   useEffect(() => {
-    Animated.timing(lit, {
-      toValue: isDone ? 1 : isActive ? 0.6 : 0,
-      duration: 320,
-      easing: Easing.out(Easing.cubic),
-      useNativeDriver: false,
-    }).start()
     if (isDone && !prevDone.current) {
       prevDone.current = true
-      popped.setValue(0)
-      Animated.sequence([
-        Animated.spring(popped, { toValue: 1, tension: 220, friction: 7, useNativeDriver: true }),
-      ]).start()
+      pop.setValue(0.82)
+      Animated.spring(pop, { toValue: 1, tension: 200, friction: 7, useNativeDriver: true }).start()
     }
     if (!isDone) prevDone.current = false
-  }, [isDone, isActive, lit, popped])
+  }, [isDone, pop])
 
   useEffect(() => {
-    if (!isActive) return undefined
+    if (!isActive || isDone) return undefined
     const loop = Animated.loop(
-      Animated.timing(shimmer, { toValue: 1, duration: 1500, easing: Easing.linear, useNativeDriver: true })
+      Animated.sequence([
+        Animated.timing(pulse, { toValue: 1, duration: 900, easing: Easing.inOut(Easing.sin), useNativeDriver: true }),
+        Animated.timing(pulse, { toValue: 0, duration: 900, easing: Easing.inOut(Easing.sin), useNativeDriver: true }),
+      ]),
     )
     loop.start()
     return () => loop.stop()
-  }, [isActive, shimmer])
+  }, [isActive, isDone, pulse])
 
-  const popScale = popped.interpolate({ inputRange: [0, 1], outputRange: [0.88, 1] })
-  const iconScale = popped.interpolate({ inputRange: [0, 0.5, 1], outputRange: [0.4, 1.35, 1] })
-  const shimmerX = shimmer.interpolate({ inputRange: [0, 1], outputRange: [-80, 160] })
+  const ringScale = pulse.interpolate({ inputRange: [0, 1], outputRange: [1, 1.08] })
+  const ringOp = pulse.interpolate({ inputRange: [0, 1], outputRange: [0.4, 0.9] })
 
   return (
-    <Animated.View
-      style={[
-        cn.stepChip,
-        compact && cn.stepChipCompact,
-        isActive && cn.stepChipActive,
-        isDone && cn.stepChipDone,
-        { transform: [{ scale: popScale }] },
-      ]}
-    >
-      {isActive && !isDone && (
-        <Animated.View
-          pointerEvents="none"
-          style={[cn.stepChipShimmer, { transform: [{ translateX: shimmerX }] }]}
-        />
-      )}
-      <Animated.View style={{ transform: [{ scale: isDone ? iconScale : 1 }] }}>
-        <Ionicons
-          name={isDone ? 'checkmark-sharp' : step.icon}
-          size={compact ? 12 : 15}
-          color={isDone ? '#FFFFFF' : isActive ? GOLD_SOFT : 'rgba(255,255,255,0.55)'}
-        />
+    <View style={cn.stepNodeWrap}>
+      <Animated.View style={{ transform: [{ scale: pop }] }}>
+        <View style={[cn.stepNodeCircleWrap, { width: circleSize + 12, height: circleSize + 12 }]}>
+          {isActive && !isDone ? (
+            <Animated.View
+              pointerEvents="none"
+              style={[
+                cn.stepNodeRing,
+                {
+                  width: circleSize + 10,
+                  height: circleSize + 10,
+                  borderRadius: (circleSize + 10) / 2,
+                  top: 1,
+                  left: 1,
+                  opacity: ringOp,
+                  transform: [{ scale: ringScale }],
+                },
+              ]}
+            />
+          ) : null}
+          <View
+            style={[
+              cn.stepNodeCircle,
+              { width: circleSize, height: circleSize, borderRadius: circleSize / 2 },
+              isActive && !isDone && cn.stepNodeCircleActive,
+              isDone && cn.stepNodeCircleDone,
+            ]}
+          >
+          <Ionicons
+            name={isDone ? 'checkmark-sharp' : step.icon}
+            size={compact ? 15 : 17}
+            color={isDone ? '#FFFFFF' : isActive ? GOLD_SOFT : 'rgba(255,255,255,0.5)'}
+          />
+          </View>
+        </View>
       </Animated.View>
       <Text
         style={[
-          cn.stepLabel,
-          compact && cn.stepLabelCompact,
-          isActive && { color: GOLD_SOFT },
-          isDone && { color: '#FFFFFF' },
+          cn.stepNodeLabel,
+          compact && cn.stepNodeLabelCompact,
+          isActive && !isDone && cn.stepNodeLabelActive,
+          isDone && cn.stepNodeLabelDone,
         ]}
         numberOfLines={1}
+        adjustsFontSizeToFit
+        minimumFontScale={0.85}
       >
         {step.label}
       </Text>
-    </Animated.View>
+    </View>
   )
 }
 
-function StepRow({ completed, activeIndex, compact, ready }) {
+function StepRow({ completed, activeIndex, compact, ready, visualProgress = 0 }) {
+  const lineProgress = ready ? 1 : Math.min(1, Math.max(0.06, visualProgress))
+
   return (
-    <View style={[cn.stepRow, compact && { gap: 6 }]}>
+    <View style={[cn.stepTrack, compact && cn.stepTrackCompact]}>
+      <View style={[cn.stepTrackLineBg, compact && cn.stepTrackLineBgCompact]} pointerEvents="none">
+        <View style={[cn.stepTrackLineFill, { width: `${lineProgress * 100}%` }]} />
+      </View>
       {STEP_LABELS.map((s, i) => {
         const isDone = ready || i < completed
         const isActive = !ready && i === activeIndex
         return (
-          <StepChip
-            key={s.key}
-            step={s}
-            index={i}
-            isDone={isDone}
-            isActive={isActive}
-            compact={compact}
-          />
+          <View key={s.key} style={cn.stepTrackSlot}>
+            <StepNode step={s} isDone={isDone} isActive={isActive} compact={compact} />
+          </View>
         )
       })}
     </View>
@@ -671,11 +957,13 @@ function ReadyMedallion({ visible, compact }) {
   }, [visible, scale, op, check, breathe, ring1, ring2, ring3])
 
   if (!visible) return null
-  const size = compact ? 62 : 84
+  const size = compact ? 56 : 76
+  const halo = size * 2.15
   const checkScale = check.interpolate({ inputRange: [0, 0.6, 1], outputRange: [0.2, 1.3, 1] })
   const checkOp = check.interpolate({ inputRange: [0, 0.3, 1], outputRange: [0, 1, 1] })
   const glowOp = breathe.interpolate({ inputRange: [0, 1], outputRange: [0.35, 0.85] })
   const glowScale = breathe.interpolate({ inputRange: [0, 1], outputRange: [1, 1.12] })
+  const ringOrigin = (halo - size) / 2
 
   const makeRing = (v, key) => {
     const rScale = v.interpolate({ inputRange: [0, 1], outputRange: [0.95, 2.1] })
@@ -687,6 +975,8 @@ function ReadyMedallion({ visible, compact }) {
         style={[
           cn.medallionRing,
           {
+            top: ringOrigin,
+            left: ringOrigin,
             width: size,
             height: size,
             borderRadius: size / 2,
@@ -699,7 +989,12 @@ function ReadyMedallion({ visible, compact }) {
   }
 
   return (
-    <Animated.View style={[cn.medallionWrap, { opacity: op, transform: [{ scale }] }]}>
+    <Animated.View
+      style={[
+        cn.medallionSlot,
+        { width: halo, height: halo, opacity: op, transform: [{ scale }] },
+      ]}
+    >
       {makeRing(ring1, 'r1')}
       {makeRing(ring2, 'r2')}
       {makeRing(ring3, 'r3')}
@@ -708,6 +1003,8 @@ function ReadyMedallion({ visible, compact }) {
         style={[
           cn.medallionGlow,
           {
+            top: (halo - size * 1.6) / 2,
+            left: (halo - size * 1.6) / 2,
             width: size * 1.6,
             height: size * 1.6,
             borderRadius: size,
@@ -716,16 +1013,30 @@ function ReadyMedallion({ visible, compact }) {
           },
         ]}
       />
-      <SparkBurst visible={visible} compact={compact} />
-      <View style={[cn.medallion, { width: size, height: size, borderRadius: size / 2 }]}>
+      <View style={StyleSheet.absoluteFill} pointerEvents="none">
+        <SparkBurst visible={visible} compact={compact} />
+      </View>
+      <View
+        style={[
+          cn.medallion,
+          {
+            position: 'absolute',
+            top: ringOrigin,
+            left: ringOrigin,
+            width: size,
+            height: size,
+            borderRadius: size / 2,
+          },
+        ]}
+      >
         <LinearGradient
           colors={[GREEN_SOFT, GREEN, GREEN_DEEP]}
           start={{ x: 0.25, y: 0.1 }}
           end={{ x: 0.8, y: 1 }}
           style={[StyleSheet.absoluteFill, { borderRadius: size / 2 }]}
         />
-        <Animated.View style={{ opacity: checkOp, transform: [{ scale: checkScale }] }}>
-          <Ionicons name="checkmark-sharp" size={size * 0.56} color="#FFF" />
+        <Animated.View style={[cn.medallionCheck, { opacity: checkOp, transform: [{ scale: checkScale }] }]}>
+          <Ionicons name="checkmark-sharp" size={size * 0.5} color="#FFF" />
         </Animated.View>
       </View>
     </Animated.View>
@@ -752,14 +1063,28 @@ export function PlanLoadingFactStrip({ compact }) {
 
   const fact = BAHRAIN_FACTS[index]
   return (
-    <View style={[cn.fact, compact && cn.factCompact]}>
-      <Ionicons name="sparkles" size={compact ? 12 : 14} color={GOLD} />
-      <Animated.Text
-        numberOfLines={compact ? 2 : 3}
-        style={[cn.factText, compact && cn.factTextCompact, { opacity: fade }]}
+    <View style={[cn.factSection, compact && cn.factSectionCompact]}>
+      <Text
+        style={[cn.factSectionTitle, compact && cn.factSectionTitleCompact]}
+        accessibilityRole="header"
       >
-        {fact}
-      </Animated.Text>
+        While Khalid works
+      </Text>
+      <View style={[cn.fact, compact && cn.factCompact]}>
+        <Image
+          source={KHALID_AVATAR}
+          style={[cn.factAvatar, compact && cn.factAvatarCompact]}
+          resizeMode="cover"
+          accessibilityElementsHidden
+          importantForAccessibility="no-hide-descendants"
+        />
+        <Animated.Text
+          numberOfLines={compact ? 3 : 4}
+          style={[cn.factText, compact && cn.factTextCompact, { opacity: fade }]}
+        >
+          {fact}
+        </Animated.Text>
+      </View>
     </View>
   )
 }
@@ -775,12 +1100,65 @@ export function LoadingStepCard() {
  * ──────────────────────────────────────────────────────────────────────────── */
 const MIN_STEP_MS = 2000
 
+/** Smooth 0–1 progress — creeps between phase floors/ceilings so % never stalls (e.g. at 67%). */
+function useSmoothPlanProgress({ completed, ready }) {
+  const [progress, setProgress] = useState(0.06)
+
+  useEffect(() => {
+    if (!ready) return
+    setProgress(1)
+  }, [ready])
+
+  useEffect(() => {
+    if (ready) return
+    const floors = [0.06, 0.34, 0.56]
+    const floor = floors[Math.min(completed, 2)] ?? 0.06
+    setProgress((p) => (p < floor ? floor : p))
+  }, [completed, ready])
+
+  useEffect(() => {
+    if (ready) return undefined
+    const tickMs = 160
+    const id = setInterval(() => {
+      setProgress((p) => {
+        const phase = Math.min(completed, 2)
+        const ceiling = phase === 0 ? 0.34 : phase === 1 ? 0.56 : 0.94
+        const creep = phase === 2 ? 0.0038 : phase === 1 ? 0.0085 : 0.012
+        const bumped = p + creep
+        if (bumped >= ceiling) return ceiling
+        return bumped
+      })
+    }, tickMs)
+    return () => clearInterval(id)
+  }, [completed, ready])
+
+  return ready ? 1 : progress
+}
+
 function useDerivedStepProgress({ loadingStatus, showSuccess }) {
   const rawCompleted = useMemo(() => {
     if (showSuccess) return 3
     const s = (loadingStatus || '').toLowerCase()
-    if (s.includes('crafting') || s.includes('building') || s.includes('stitch')) return 2
-    if (s.includes('shortlisting') || s.includes('restaurant') || s.includes('food') || s.includes('breakfast') || s.includes('event') || s.includes('café')) return 1
+    if (
+      s.includes('crafting') ||
+      s.includes('building') ||
+      s.includes('stitch') ||
+      s.includes('sequencing') ||
+      s.includes('perfect day') ||
+      s.includes('putting your day') ||
+      s.includes('route')
+    ) return 2
+    if (
+      s.includes('shortlisting') ||
+      s.includes('scouting') ||
+      s.includes('restaurant') ||
+      s.includes('food') ||
+      s.includes('breakfast') ||
+      s.includes('event') ||
+      s.includes('café') ||
+      s.includes('venues') ||
+      s.includes('live posts')
+    ) return 1
     return 0
   }, [loadingStatus, showSuccess])
 
@@ -813,7 +1191,7 @@ function useDerivedStepProgress({ loadingStatus, showSuccess }) {
  *   • top LIVE badge pill (customizable label; becomes green when `ready`)
  * Children render in the foreground with a dark, cinema-legible canvas below.
  * ──────────────────────────────────────────────────────────────────────────── */
-export function PlanCinematicShell({ photos, label = 'LIVE CURATION', ready = false, compact = false, children, style }) {
+export function PlanCinematicShell({ photos, label = KHALID_BADGE_ACTIVE, ready = false, compact = false, children, style }) {
   return (
     <View style={[cn.stageOuter, style]}>
       <View style={cn.stage}>
@@ -866,7 +1244,7 @@ function CinematicBadge({ ready, label, compact }) {
       {ready ? (
         <>
           <View style={[cn.liveDot, { backgroundColor: '#FFFFFF' }]} />
-          <Text style={[cn.liveText, { color: '#FFFFFF' }]}>READY</Text>
+          <Text style={[cn.liveText, { color: '#FFFFFF' }]}>{KHALID_BADGE_READY}</Text>
         </>
       ) : (
         <>
@@ -878,31 +1256,62 @@ function CinematicBadge({ ready, label, compact }) {
   )
 }
 
+function PlanLoadingBody({
+  compact,
+  ready,
+  spotPreviews,
+  completed,
+  activeIdx,
+  enterAnim,
+}) {
+  const enterY = enterAnim?.interpolate?.({ inputRange: [0, 1], outputRange: [20, 0] }) ?? 0
+  const visualProgress = useSmoothPlanProgress({ completed, ready })
+
+  const inner = (
+    <View style={[cn.loadingCard, compact && cn.loadingCardCompact]}>
+      {ready ? (
+        <PlanLoadingReady compact={compact} />
+      ) : (
+        <>
+          <PlanLoadingHero compact={compact} ready={false} />
+          <LiveThumbStrip photos={spotPreviews} ready={false} compact={compact} />
+        </>
+      )}
+
+      <KhalidWorkingStatus step={activeIdx} ready={ready} compact={compact} spotPreviews={spotPreviews} />
+
+      <PlanLoadingProgressBlock
+        progress={visualProgress}
+        ready={ready}
+        completed={completed}
+        activeIdx={activeIdx}
+        compact={compact}
+      />
+
+      {!ready ? <PlanLoadingFactStrip compact={compact} /> : null}
+    </View>
+  )
+
+  if (enterAnim) {
+    return (
+      <Animated.View style={{ opacity: enterAnim, transform: [{ translateY: enterY }], width: '100%', alignItems: 'center' }}>
+        {inner}
+      </Animated.View>
+    )
+  }
+
+  return inner
+}
+
 export function PlanModalLoadingView({ loadingStatus, showSuccess, spotPreviews }) {
   const completed = useDerivedStepProgress({ loadingStatus, showSuccess })
   const enter = useRef(new Animated.Value(0)).current
-  const cardPulse = useRef(new Animated.Value(0)).current
   const ready = showSuccess && completed >= 3
   const activeIdx = Math.min(completed, 2)
 
   useEffect(() => {
     Animated.timing(enter, { toValue: 1, duration: 520, easing: Easing.out(Easing.cubic), useNativeDriver: true }).start()
   }, [enter])
-
-  useEffect(() => {
-    const loop = Animated.loop(
-      Animated.sequence([
-        Animated.timing(cardPulse, { toValue: 1, duration: 1500, easing: Easing.inOut(Easing.sin), useNativeDriver: true }),
-        Animated.timing(cardPulse, { toValue: 0, duration: 1500, easing: Easing.inOut(Easing.sin), useNativeDriver: true }),
-      ])
-    )
-    loop.start()
-    return () => loop.stop()
-  }, [cardPulse])
-
-  const progress = ready ? 1 : Math.max(0.06, completed / 3)
-  const cardScale = cardPulse.interpolate({ inputRange: [0, 1], outputRange: [1, 1.02] })
-  const cardFloat = cardPulse.interpolate({ inputRange: [0, 1], outputRange: [0, -6] })
 
   return (
     <View style={cn.stageOuter}>
@@ -914,38 +1323,14 @@ export function PlanModalLoadingView({ loadingStatus, showSuccess, spotPreviews 
           <LiveBadge ready={ready} />
         </View>
 
-        <View style={cn.centerLayer} pointerEvents="none">
-          <Animated.View
-            style={[
-              cn.bottomBlock,
-              {
-                opacity: enter,
-                transform: [
-                  {
-                    translateY: enter.interpolate({ inputRange: [0, 1], outputRange: [26, 0] }),
-                  },
-                  { translateY: cardFloat },
-                  { scale: cardScale },
-                ],
-              },
-            ]}
-          >
-            {!ready && (
-              <LiveThumbStrip photos={spotPreviews} ready={ready} />
-            )}
-
-            <View style={cn.bottomCopy}>
-              <View style={{ flex: 1, minWidth: 0 }}>
-                <MorphingTitle step={activeIdx} showSuccess={ready} />
-              </View>
-              {ready && <ReadyMedallion visible={ready} />}
-            </View>
-
-            <ProgressBar progress={progress} ready={ready} />
-            <StepRow completed={completed} activeIndex={activeIdx} ready={ready} />
-
-            <PlanLoadingFactStrip compact />
-          </Animated.View>
+        <View style={cn.centerLayer} pointerEvents="box-none">
+          <PlanLoadingBody
+            ready={ready}
+            spotPreviews={spotPreviews}
+            completed={completed}
+            activeIdx={activeIdx}
+            enterAnim={enter}
+          />
         </View>
       </View>
     </View>
@@ -959,8 +1344,6 @@ export function PlanDrawerLoadingPanel({ loading, loadingStatus, spotPreviews })
   const completed = useDerivedStepProgress({ loadingStatus, showSuccess: !loading })
   const ready = !loading && completed >= 3
   const activeIdx = Math.min(completed, 2)
-  const progress = ready ? 1 : Math.max(0.06, completed / 3)
-
   return (
     <View style={cn.sheetOuter}>
       <CinematicPhotoStage photos={spotPreviews} compact />
@@ -970,16 +1353,14 @@ export function PlanDrawerLoadingPanel({ loading, loadingStatus, spotPreviews })
         <LiveBadge ready={ready} compact />
       </View>
 
-      <View style={cn.sheetBottom}>
-        {!ready && <LiveThumbStrip photos={spotPreviews} compact ready={ready} />}
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-          <View style={{ flex: 1, minWidth: 0 }}>
-            <MorphingTitle step={activeIdx} showSuccess={ready} compact />
-          </View>
-          {ready && <ReadyMedallion visible={ready} compact />}
-        </View>
-        <ProgressBar progress={progress} ready={ready} compact />
-        <StepRow completed={completed} activeIndex={activeIdx} ready={ready} compact />
+      <View style={cn.sheetCenter}>
+        <PlanLoadingBody
+          compact
+          ready={ready}
+          spotPreviews={spotPreviews}
+          completed={completed}
+          activeIdx={activeIdx}
+        />
       </View>
     </View>
   )
@@ -1013,14 +1394,24 @@ const cn = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
-  bottomBlock: {
+  centerLayer: {
+    ...StyleSheet.absoluteFillObject,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+    paddingVertical: 24,
+  },
+  loadingCard: {
     width: '100%',
-    maxWidth: 520,
-    borderRadius: 20,
-    paddingHorizontal: 22,
-    paddingVertical: 20,
+    maxWidth: 380,
+    alignItems: 'center',
+    alignSelf: 'center',
+    paddingHorizontal: 20,
+    paddingVertical: 22,
     gap: 16,
-    backgroundColor: 'rgba(7,6,10,0.56)',
+    borderRadius: 22,
+    overflow: 'hidden',
+    backgroundColor: 'rgba(7,6,10,0.72)',
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.16)',
     ...Platform.select({
@@ -1028,25 +1419,170 @@ const cn = StyleSheet.create({
       android: { elevation: 10 },
     }),
   },
-  centerLayer: {
+  loadingCardCompact: {
+    maxWidth: '100%',
+    paddingHorizontal: 14,
+    paddingVertical: 16,
+    gap: 12,
+    borderRadius: 18,
+  },
+  heroCenter: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    width: '100%',
+  },
+  heroCenterCompact: {
+    gap: 6,
+  },
+  heroName: {
+    fontSize: 20,
+    fontFamily: FONT_POPPINS_BOLD,
+    color: '#FFFFFF',
+    letterSpacing: -0.3,
+    textAlign: 'center',
+  },
+  heroNameCompact: {
+    fontSize: 17,
+  },
+  heroRole: {
+    fontSize: 12,
+    fontFamily: FONT_POPPINS_MEDIUM,
+    color: 'rgba(255,255,255,0.65)',
+    textAlign: 'center',
+  },
+  heroRoleCompact: {
+    fontSize: 11,
+  },
+  phaseCenter: {
+    alignItems: 'center',
+    gap: 6,
+    width: '100%',
+  },
+  khalidWorkingWrap: {
+    alignSelf: 'stretch',
+    width: '100%',
+    alignItems: 'center',
+    gap: 10,
+    paddingHorizontal: 4,
+  },
+  khalidWorkingWrapCompact: {
+    gap: 8,
+  },
+  khalidWorkingPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 7,
+    paddingVertical: 5,
+    paddingHorizontal: 12,
+    borderRadius: 999,
+    backgroundColor: 'rgba(233,200,119,0.12)',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(233,200,119,0.4)',
+  },
+  khalidWorkingPillCompact: {
+    paddingVertical: 4,
+    paddingHorizontal: 10,
+    gap: 5,
+  },
+  khalidWorkingDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 4,
+    backgroundColor: '#FF5C6A',
+  },
+  khalidWorkingPillText: {
+    fontSize: 11,
+    fontFamily: FONT_POPPINS_BOLD,
+    letterSpacing: 1.4,
+    color: GOLD_SOFT,
+    textTransform: 'uppercase',
+  },
+  khalidWorkingPillTextCompact: {
+    fontSize: 10,
+    letterSpacing: 1.1,
+  },
+  khalidWorkingLine: {
+    fontSize: 15,
+    lineHeight: 21,
+    fontFamily: FONT_POPPINS_MEDIUM,
+    color: '#FFFFFF',
+    textAlign: 'center',
+    alignSelf: 'stretch',
+    paddingHorizontal: 6,
+  },
+  khalidWorkingLineCompact: {
+    fontSize: 13,
+    lineHeight: 18,
+  },
+  khalidWorkingBar: {
+    alignSelf: 'stretch',
+    height: 3,
+    borderRadius: 2,
+    backgroundColor: 'rgba(255,255,255,0.1)',
+    overflow: 'hidden',
+  },
+  khalidWorkingBarCompact: {
+    height: 2,
+  },
+  khalidWorkingBarScan: {
+    position: 'absolute',
+    top: 0,
+    bottom: 0,
+    width: 100,
+    left: '50%',
+    marginLeft: -50,
+  },
+  khalidWorkingDone: {
+    fontSize: 13,
+    fontFamily: FONT_POPPINS_BOLD,
+    color: GREEN_SOFT,
+    textAlign: 'center',
+    letterSpacing: 0.3,
+  },
+  khalidWorkingDoneCompact: {
+    fontSize: 12,
+  },
+  readyCenter: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '100%',
+    paddingVertical: 4,
+  },
+  progressBlock: {
+    alignSelf: 'stretch',
+    width: '100%',
+    gap: 10,
+  },
+  progressBlockCompact: {
+    gap: 8,
+  },
+  sheetCenter: {
     ...StyleSheet.absoluteFillObject,
     justifyContent: 'center',
     alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingTop: 44,
-    paddingBottom: 16,
+    paddingHorizontal: 12,
+    paddingTop: 36,
+    paddingBottom: 12,
+    zIndex: 2,
   },
-  bottomCopy: {
-    flexDirection: 'row',
+  medallionSlot: {
     alignItems: 'center',
-    gap: 12,
+    justifyContent: 'center',
+    overflow: 'visible',
+  },
+  medallionCheck: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    ...StyleSheet.absoluteFillObject,
   },
   title: {
-    fontSize: 30,
+    fontSize: 22,
     fontFamily: FONT_POPPINS_BOLD,
     color: '#FFFFFF',
-    letterSpacing: -0.6,
-    lineHeight: 34,
+    letterSpacing: -0.4,
+    lineHeight: 28,
+    textAlign: 'center',
     textShadowColor: 'rgba(0,0,0,0.6)',
     textShadowOffset: { width: 0, height: 2 },
     textShadowRadius: 10,
@@ -1062,9 +1598,81 @@ const cn = StyleSheet.create({
     color: 'rgba(255,255,255,0.78)',
     letterSpacing: 0.2,
     marginTop: 2,
+    textAlign: 'center',
     textShadowColor: 'rgba(0,0,0,0.55)',
     textShadowOffset: { width: 0, height: 1 },
     textShadowRadius: 6,
+  },
+  subtitleCompact: {
+    fontSize: 11,
+    lineHeight: 15,
+    marginTop: 1,
+  },
+  khalidAvatarOuter: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'relative',
+  },
+  khalidOrbit: {
+    position: 'absolute',
+    borderWidth: 1.5,
+    borderStyle: 'dashed',
+    borderColor: 'rgba(233,200,119,0.42)',
+  },
+  progressHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+    marginTop: 4,
+  },
+  progressHeaderLabel: {
+    flex: 1,
+    fontSize: 12,
+    fontFamily: FONT_POPPINS_BOLD,
+    letterSpacing: 0.4,
+    color: 'rgba(255,255,255,0.72)',
+  },
+  progressHeaderLabelCompact: {
+    fontSize: 10,
+  },
+  progressPctPill: {
+    paddingVertical: 4,
+    paddingHorizontal: 10,
+    borderRadius: 999,
+    backgroundColor: 'rgba(233,200,119,0.16)',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(233,200,119,0.45)',
+  },
+  progressPctPillReady: {
+    backgroundColor: 'rgba(52,211,153,0.2)',
+    borderColor: 'rgba(167,243,208,0.55)',
+  },
+  progressPctText: {
+    fontSize: 13,
+    fontFamily: FONT_POPPINS_BOLD,
+    color: GOLD_SOFT,
+    fontVariant: ['tabular-nums'],
+  },
+  progressPctTextCompact: {
+    fontSize: 11,
+  },
+  khalidAvatarRing: {
+    position: 'absolute',
+    borderWidth: 1.5,
+    borderColor: GOLD_SOFT,
+  },
+  khalidAvatar: {
+    borderWidth: 2,
+    borderColor: 'rgba(255,255,255,0.35)',
+    backgroundColor: INK,
+  },
+  khalidDots: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  khalidDot: {
+    backgroundColor: GOLD_SOFT,
   },
   liveBadge: {
     flexDirection: 'row',
@@ -1171,67 +1779,101 @@ const cn = StyleSheet.create({
     width: 48,
     backgroundColor: 'rgba(255,255,255,0.65)',
   },
-  stepRow: {
+  stepTrack: {
+    width: '100%',
     flexDirection: 'row',
-    gap: 8,
-    flexWrap: 'wrap',
-    justifyContent: 'center',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    position: 'relative',
+    paddingTop: 6,
+    paddingBottom: 2,
   },
-  stepChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    paddingVertical: 8,
-    paddingHorizontal: 14,
-    borderRadius: 999,
-    backgroundColor: 'rgba(255,255,255,0.07)',
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: 'rgba(255,255,255,0.18)',
+  stepTrackCompact: {
+    paddingTop: 4,
+  },
+  stepTrackLineBg: {
+    position: 'absolute',
+    left: '16.66%',
+    right: '16.66%',
+    top: 26,
+    height: 3,
+    borderRadius: 2,
+    backgroundColor: 'rgba(255,255,255,0.12)',
     overflow: 'hidden',
+  },
+  stepTrackLineBgCompact: {
+    top: 23,
+    height: 2,
+  },
+  stepTrackLineFill: {
+    height: '100%',
+    borderRadius: 2,
+    backgroundColor: GREEN,
+  },
+  stepTrackSlot: {
+    flex: 1,
+    minWidth: 0,
+    maxWidth: '33.33%',
+    alignItems: 'center',
+    zIndex: 1,
+  },
+  stepNodeWrap: {
+    alignItems: 'center',
+    justifyContent: 'flex-start',
+    width: '100%',
+    gap: 6,
+  },
+  stepNodeCircleWrap: {
+    alignItems: 'center',
+    justifyContent: 'center',
     position: 'relative',
   },
-  stepChipCompact: {
-    paddingVertical: 5,
-    paddingHorizontal: 8,
-    gap: 4,
+  stepNodeRing: {
+    position: 'absolute',
+    borderWidth: 1.5,
+    borderColor: GOLD_SOFT,
   },
-  stepChipActive: {
-    backgroundColor: 'rgba(233,200,119,0.18)',
-    borderColor: 'rgba(233,200,119,0.65)',
+  stepNodeCircle: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    borderWidth: 1.5,
+    borderColor: 'rgba(255,255,255,0.2)',
+  },
+  stepNodeCircleActive: {
+    backgroundColor: 'rgba(233,200,119,0.2)',
+    borderColor: GOLD,
     ...Platform.select({
-      ios: { shadowColor: GOLD, shadowOpacity: 0.55, shadowRadius: 8, shadowOffset: { width: 0, height: 0 } },
-      android: { elevation: 3 },
+      ios: { shadowColor: GOLD, shadowOpacity: 0.5, shadowRadius: 8, shadowOffset: { width: 0, height: 0 } },
+      android: { elevation: 4 },
     }),
   },
-  stepChipDone: {
+  stepNodeCircleDone: {
     backgroundColor: GREEN,
     borderColor: GREEN_SOFT,
     ...Platform.select({
-      ios: { shadowColor: GREEN, shadowOpacity: 0.75, shadowRadius: 10, shadowOffset: { width: 0, height: 0 } },
-      android: { elevation: 5 },
+      ios: { shadowColor: GREEN, shadowOpacity: 0.65, shadowRadius: 8, shadowOffset: { width: 0, height: 0 } },
+      android: { elevation: 4 },
     }),
   },
-  stepChipShimmer: {
-    position: 'absolute',
-    top: 0,
-    bottom: 0,
-    width: 40,
-    backgroundColor: 'rgba(255,255,255,0.28)',
-  },
-  stepLabel: {
-    fontSize: 13,
+  stepNodeLabel: {
+    width: '100%',
+    fontSize: 11,
     fontFamily: FONT_POPPINS_BOLD,
-    letterSpacing: 0.6,
-    color: 'rgba(255,255,255,0.7)',
+    letterSpacing: 0.3,
+    color: 'rgba(255,255,255,0.55)',
+    textAlign: 'center',
+    paddingHorizontal: 2,
   },
-  stepLabelCompact: {
+  stepNodeLabelCompact: {
     fontSize: 10,
-    letterSpacing: 0.4,
+    letterSpacing: 0.2,
   },
-  medallionWrap: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    position: 'relative',
+  stepNodeLabelActive: {
+    color: GOLD_SOFT,
+  },
+  stepNodeLabelDone: {
+    color: GREEN_SOFT,
   },
   medallion: {
     alignItems: 'center',
@@ -1255,17 +1897,55 @@ const cn = StyleSheet.create({
     position: 'absolute',
     borderWidth: 2,
     borderColor: GREEN,
+    alignSelf: 'center',
+  },
+  factSection: {
+    alignSelf: 'stretch',
+    width: '100%',
+    gap: 8,
+    alignItems: 'center',
+  },
+  factSectionCompact: {
+    gap: 6,
+  },
+  factSectionTitle: {
+    alignSelf: 'stretch',
+    fontSize: 14,
+    lineHeight: 20,
+    fontFamily: FONT_POPPINS_BOLD,
+    color: '#FFFFFF',
+    letterSpacing: 0.2,
+    textAlign: 'center',
+    textShadowColor: 'rgba(0,0,0,0.9)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 6,
+  },
+  factSectionTitleCompact: {
+    fontSize: 13,
+    lineHeight: 18,
   },
   fact: {
     flexDirection: 'row',
     alignItems: 'flex-start',
-    gap: 8,
+    gap: 10,
     paddingVertical: 10,
     paddingHorizontal: 12,
     borderRadius: 12,
-    backgroundColor: 'rgba(255,255,255,0.07)',
+    backgroundColor: 'rgba(7,6,10,0.88)',
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: 'rgba(255,255,255,0.16)',
+    borderColor: 'rgba(233,200,119,0.28)',
+  },
+  factAvatar: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.25)',
+  },
+  factAvatarCompact: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
   },
   factCompact: {
     paddingVertical: 8,
@@ -1274,10 +1954,14 @@ const cn = StyleSheet.create({
   },
   factText: {
     flex: 1,
+    minWidth: 0,
     fontSize: 12,
     lineHeight: 17,
-    color: 'rgba(255,255,255,0.8)',
+    color: 'rgba(255,255,255,0.92)',
     fontFamily: FONT_POPPINS_MEDIUM,
+    textShadowColor: 'rgba(0,0,0,0.75)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 5,
   },
   factTextCompact: {
     fontSize: 11,
@@ -1299,14 +1983,6 @@ const cn = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    zIndex: 2,
-  },
-  sheetBottom: {
-    position: 'absolute',
-    left: 12,
-    right: 12,
-    bottom: 12,
-    gap: 8,
     zIndex: 2,
   },
 })

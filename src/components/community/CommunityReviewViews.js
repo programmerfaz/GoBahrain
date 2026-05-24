@@ -30,6 +30,7 @@ import {
   FONT_POPPINS_REGULAR,
   FONT_POPPINS_SEMIBOLD,
 } from '../../constants/brandFont'
+import { CommunityUserTypeBadge } from './CommunityUserTypeBadge'
 
 export function getCommunityPalette(isDark) {
   const tc = isDark ? themeColorsDark : themeColors
@@ -144,7 +145,7 @@ export function buildCommunityFeedStyles(C, isDark = false) {
       flexDirection: 'row',
       alignItems: 'center',
       gap: 5,
-      flexWrap: 'nowrap',
+      flexWrap: 'wrap',
     },
     cardUserName: {
       fontSize: 14,
@@ -163,18 +164,23 @@ export function buildCommunityFeedStyles(C, isDark = false) {
       fontFamily: FONT_POPPINS_REGULAR,
       flexShrink: 0,
     },
-    cardPlaceRow: {
+    cardPlaceBtn: {
       flexDirection: 'row',
       alignItems: 'center',
-      gap: 4,
-      marginTop: 2,
-      flexWrap: 'wrap',
+      gap: 3,
+      paddingVertical: 4,
+      paddingHorizontal: 4,
+      marginHorizontal: -4,
+      borderRadius: 6,
+      flexShrink: 1,
+      maxWidth: '100%',
     },
     cardPlaceText: {
-      fontSize: 12,
+      fontSize: 13,
       fontFamily: FONT_POPPINS_SEMIBOLD,
       color: C.red,
       flexShrink: 1,
+      textDecorationLine: 'underline',
     },
     cardRatingInline: {
       flexDirection: 'row',
@@ -452,7 +458,14 @@ export function buildCommunityFeedStyles(C, isDark = false) {
     },
     popHeaderAvPlaceholder: { alignItems: 'center', justifyContent: 'center', backgroundColor: C.redSoft },
     popHeaderName: { fontSize: 16, fontFamily: FONT_POPPINS_BOLD, color: C.text, letterSpacing: -0.3 },
-    popHeaderSub: { fontSize: 12, color: C.sub, fontFamily: FONT_POPPINS_MEDIUM, marginTop: 2 },
+    popHeaderSub: { fontSize: 12, color: C.sub, fontFamily: FONT_POPPINS_MEDIUM, flexShrink: 1 },
+    popHeaderSubRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 6,
+      marginTop: 2,
+      flexWrap: 'wrap',
+    },
     popHeaderSubAccent: { fontFamily: FONT_POPPINS_REGULAR, color: C.muted },
     popPlaceRatingRow: {
       flexDirection: 'row',
@@ -606,7 +619,7 @@ export function CommunityReviewCard({
   const layoutW = layoutContentWidth(winW)
   const cardWidth = useGlass ? layoutW - 48 : layoutW - 32
   const imgW = Math.round(cardWidth)
-  const imgH = Math.round(imgW * 0.5)
+  const imgH = Math.round(imgW * 0.75)
   const [imageIndex, setImageIndex] = useState(0)
   const hasUpvoted = item.upvoted ?? false
   const count = item.upvotes ?? 0
@@ -668,12 +681,18 @@ export function CommunityReviewCard({
   }
 
   const handleClientPress = () => {
-    if (!item?.client_a_uuid || !onTaggedClientPress) return
+    if (!onTaggedClientPress) return
+    const clientId = item?.client_a_uuid || item?.clientId || null
+    if (!clientId) return
     onTaggedClientPress({
-      clientId: item.client_a_uuid,
+      clientId,
       businessName: item.place || null,
     })
   }
+
+  const canOpenClientProfile = Boolean(
+    onTaggedClientPress && (item?.client_a_uuid || item?.clientId),
+  )
 
   const avatarSource = getDefaultAvatarSource(`${item.author || item.user_a_uuid || 'user'}-${item.id || ''}`)
 
@@ -697,58 +716,54 @@ export function CommunityReviewCard({
     </>
   )
 
-  const inner = (
-    <>
-      {/* User-focused header */}
-      <View style={st.cardUserRow}>
-        <View style={st.userAv}>
-          <Image source={avatarSource} style={st.userAvImage} resizeMode="cover" />
-        </View>
-        <View style={st.cardUserMeta}>
-          <View style={st.cardUserNameRow}>
-            <Text style={st.cardUserName} numberOfLines={1}>{item.author || 'Explorer'}</Text>
-            {item.time ? (
-              <>
-                <Text style={st.cardDot}>·</Text>
-                <Text style={st.cardTimeText}>{item.time}</Text>
-              </>
-            ) : null}
-          </View>
+  const cardHeader = (
+    <View style={st.cardUserRow} pointerEvents="box-none">
+      <View style={st.userAv}>
+        <Image source={avatarSource} style={st.userAvImage} resizeMode="cover" />
+      </View>
+      <View style={st.cardUserMeta}>
+        <View style={st.cardUserNameRow}>
+          <Text style={st.cardUserName} numberOfLines={1}>{item.author || 'Explorer'}</Text>
+          <CommunityUserTypeBadge uType={item.uType} compact />
           {item.place ? (
-            <View style={st.cardPlaceRow}>
-              {item.client_a_uuid && onTaggedClientPress ? (
+            <>
+              <Text style={st.cardDot}>·</Text>
+              {canOpenClientProfile ? (
                 <TouchableOpacity
-                  style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}
-                  activeOpacity={0.75}
+                  style={st.cardPlaceBtn}
                   onPress={handleClientPress}
+                  activeOpacity={0.6}
+                  hitSlop={{ top: 10, bottom: 10, left: 6, right: 6 }}
                   accessibilityRole="button"
-                  accessibilityLabel={`Open posts for ${item.place}`}
+                  accessibilityLabel={`Open profile for ${item.place}`}
                 >
                   <Ionicons name="location-sharp" size={11} color={C.red} />
                   <Text style={st.cardPlaceText} numberOfLines={1}>{item.place}</Text>
                 </TouchableOpacity>
               ) : (
-                <>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 3, flexShrink: 1 }}>
                   <Ionicons name="location-sharp" size={11} color={C.red} />
-                  <Text style={st.cardPlaceText} numberOfLines={1}>{item.place}</Text>
-                </>
-              )}
-              {item.rating != null && item.rating > 0 && (
-                <View style={st.cardRatingInline}>
-                  <Text style={{ fontSize: 10, color: C.muted }}>·</Text>
-                  <CommunityReviewRatingStars rating={item.rating} size={10} color="#F59E0B" mutedColor={C.muted} />
-                  <Text style={st.cardRatingNum}>{Number(item.rating).toFixed(1)}</Text>
+                  <Text style={[st.cardPlaceText, { textDecorationLine: 'none' }]} numberOfLines={1}>{item.place}</Text>
                 </View>
               )}
+            </>
+          ) : null}
+          {item.rating != null && item.rating > 0 ? (
+            <View style={st.cardRatingInline}>
+              <Text style={st.cardDot}>·</Text>
+              <CommunityReviewRatingStars rating={item.rating} size={10} color="#F59E0B" mutedColor={C.muted} />
+              <Text style={st.cardRatingNum}>{Number(item.rating).toFixed(1)}</Text>
             </View>
           ) : null}
         </View>
       </View>
+    </View>
+  )
 
-      {/* Review body */}
+  const cardMain = (
+    <>
       <Text style={st.bodyText} numberOfLines={expandBody ? undefined : 3}>{item.body}</Text>
 
-      {/* Images — 16:9-ish aspect ratio, compact */}
       {images.length > 0 && (
         <View style={[st.cardImgWrap, { width: imgW, height: imgH, marginBottom: 8 }]}>
           {images.length === 1 ? (
@@ -756,7 +771,7 @@ export function CommunityReviewCard({
               <PinchZoomPostImage
                 uri={images[0]}
                 style={[st.cardImg, { width: imgW, height: imgH }]}
-                resizeMode="cover"
+                resizeMode="contain"
                 pinchEnabled
                 onImageDoubleTap={handleImageDoubleTap}
               />
@@ -797,7 +812,7 @@ export function CommunityReviewCard({
                     <PinchZoomPostImage
                       uri={uri}
                       style={{ width: imgW, height: imgH }}
-                      resizeMode="cover"
+                      resizeMode="contain"
                       pinchEnabled={false}
                       onImageDoubleTap={handleImageDoubleTap}
                     />
@@ -835,8 +850,10 @@ export function CommunityReviewCard({
           )}
         </View>
       )}
+    </>
+  )
 
-      {/* Flat action bar */}
+  const cardActions = (
       <View style={st.actions}>
         {(() => {
           const upvoteBtn = (
@@ -889,54 +906,41 @@ export function CommunityReviewCard({
           <Ionicons name="paper-plane-outline" size={17} color={C.sub} />
         </TouchableOpacity>
       </View>
+  )
+
+  const cardBody = (
+    <>
+      {cardHeader}
+      {onPress ? (
+        <Pressable
+          onPress={() => onPress(item)}
+          style={({ pressed }) => [pressed && { opacity: 0.94 }]}
+          accessibilityRole="button"
+          accessibilityLabel={`Open post: ${item.place || 'Community review'}`}
+        >
+          {cardMain}
+        </Pressable>
+      ) : (
+        cardMain
+      )}
+      {cardActions}
     </>
   )
 
   if (useGlass) {
-    if (onPress) {
-      return (
-        <Pressable
-          style={({ pressed }) => [
-            st.cardGlassOuter,
-            pressed && { opacity: 0.94 },
-          ]}
-          onPress={() => onPress(item)}
-          accessibilityRole="button"
-          accessibilityLabel={`Open post: ${item.place || 'Community review'}`}
-        >
-          {glassLayers}
-          <View style={st.cardGlassContent}>
-            <View style={st.cardInner}>{inner}</View>
-          </View>
-        </Pressable>
-      )
-    }
     return (
       <View style={st.cardGlassOuter}>
         {glassLayers}
         <View style={st.cardGlassContent}>
-          <View style={st.cardInner}>{inner}</View>
+          <View style={st.cardInner}>{cardBody}</View>
         </View>
       </View>
     )
   }
 
-  if (onPress) {
-    return (
-      <Pressable
-        style={({ pressed }) => [cardShellStyle, pressed && { opacity: 0.94 }]}
-        onPress={() => onPress(item)}
-        accessibilityRole="button"
-        accessibilityLabel={`Open post: ${item.place || 'Community review'}`}
-      >
-        <View style={st.cardInner}>{inner}</View>
-      </Pressable>
-    )
-  }
-
   return (
     <View style={cardShellStyle}>
-      <View style={st.cardInner}>{inner}</View>
+      <View style={st.cardInner}>{cardBody}</View>
     </View>
   )
 }
@@ -950,6 +954,7 @@ export function CommunityReviewDetailModal({
   upvoteScaleAnim,
   focusReplyWhenOpen = false,
   onClearFocusReply,
+  onTaggedClientPress,
 }) {
   const insets = useSafeAreaInsets()
   const { width: winW = 375, height = 667 } = useWindowDimensions()
@@ -1067,11 +1072,27 @@ export function CommunityReviewDetailModal({
                   </View>
                 )}
                 <View style={{ flex: 1, minWidth: 0 }}>
-                  <Text style={st.popHeaderName} numberOfLines={1}>{post.place || 'A place in Bahrain'}</Text>
-                  <Text style={st.popHeaderSub} numberOfLines={1}>
-                    by {post.author}
-                    {post.time ? <Text style={st.popHeaderSubAccent}>{' · '}{post.time}</Text> : null}
-                  </Text>
+                  {post.place && post.client_a_uuid && onTaggedClientPress ? (
+                    <TouchableOpacity
+                      onPress={() => onTaggedClientPress({
+                        clientId: post.client_a_uuid,
+                        businessName: post.place,
+                      })}
+                      activeOpacity={0.75}
+                      accessibilityRole="button"
+                      accessibilityLabel={`Open profile for ${post.place}`}
+                    >
+                      <Text style={st.popHeaderName} numberOfLines={1}>{post.place}</Text>
+                    </TouchableOpacity>
+                  ) : (
+                    <Text style={st.popHeaderName} numberOfLines={1}>{post.place || 'A place in Bahrain'}</Text>
+                  )}
+                  <View style={st.popHeaderSubRow}>
+                    <Text style={st.popHeaderSub} numberOfLines={1}>
+                      by {post.author}
+                    </Text>
+                    <CommunityUserTypeBadge uType={post.uType} compact />
+                  </View>
                 </View>
               </View>
               <TouchableOpacity onPress={onClose} hitSlop={14} activeOpacity={0.7}>
@@ -1096,7 +1117,7 @@ export function CommunityReviewDetailModal({
                       <PinchZoomPostImage
                         uri={images[0]}
                         style={{ width: imgW, height: imgH }}
-                        resizeMode="cover"
+                        resizeMode="contain"
                         pinchEnabled
                         onImageDoubleTap={handleImageDoubleTap}
                       />
@@ -1136,7 +1157,7 @@ export function CommunityReviewDetailModal({
                             <PinchZoomPostImage
                               uri={uri}
                               style={{ width: imgW, height: imgH }}
-                              resizeMode="cover"
+                              resizeMode="contain"
                               pinchEnabled={false}
                               onImageDoubleTap={handleImageDoubleTap}
                             />
@@ -1179,10 +1200,26 @@ export function CommunityReviewDetailModal({
               <View style={st.popBody}>
                 <View style={st.popPlaceRatingRow}>
                   {post.place ? (
-                    <View style={st.popPlaceWrap}>
-                      <Ionicons name="location-sharp" size={13} color={C.red} />
-                      <Text style={st.popPlaceText} numberOfLines={1}>{post.place}</Text>
-                    </View>
+                    post.client_a_uuid && onTaggedClientPress ? (
+                      <TouchableOpacity
+                        style={st.popPlaceWrap}
+                        onPress={() => onTaggedClientPress({
+                          clientId: post.client_a_uuid,
+                          businessName: post.place,
+                        })}
+                        activeOpacity={0.75}
+                        accessibilityRole="button"
+                        accessibilityLabel={`Open profile for ${post.place}`}
+                      >
+                        <Ionicons name="location-sharp" size={13} color={C.red} />
+                        <Text style={st.popPlaceText} numberOfLines={1}>{post.place}</Text>
+                      </TouchableOpacity>
+                    ) : (
+                      <View style={st.popPlaceWrap}>
+                        <Ionicons name="location-sharp" size={13} color={C.red} />
+                        <Text style={st.popPlaceText} numberOfLines={1}>{post.place}</Text>
+                      </View>
+                    )
                   ) : null}
                   {post.rating != null && post.rating > 0 && (
                     <View style={st.popRatingWrap}>

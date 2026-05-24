@@ -169,16 +169,12 @@ export default function ProfileScreen() {
     preferences,
     setPreferences,
     GENERAL_PREFERENCES,
-    PREFERENCES,
-    FOOD_CATEGORIES,
   } = useUserPreferences()
   const { profile, user: authUser, signOut } = useAuth()
   const [preferencesModalVisible, setPreferencesModalVisible] = useState(false)
   const [isSavingPreferences, setIsSavingPreferences] = useState(false)
   const [appearanceModalVisible, setAppearanceModalVisible] = useState(false)
   const [editGeneralIds, setEditGeneralIds] = useState([])
-  const [editActivityIds, setEditActivityIds] = useState([])
-  const [editFoodIds, setEditFoodIds] = useState([])
   const [editIdealDay, setEditIdealDay] = useState('')
   const [editAvoidList, setEditAvoidList] = useState('')
   const [myReviewCount, setMyReviewCount] = useState(0)
@@ -245,16 +241,12 @@ export default function ProfileScreen() {
   useEffect(() => {
     if (preferencesModalVisible) {
       setEditGeneralIds(Array.isArray(preferences?.generalIds) ? preferences.generalIds : [])
-      setEditActivityIds(Array.isArray(preferences?.activityIds) ? preferences.activityIds : [])
-      setEditFoodIds(Array.isArray(preferences?.foodIds) ? preferences.foodIds : [])
       setEditIdealDay(String(preferences?.profileAnswers?.idealDay || ''))
       setEditAvoidList(String(preferences?.profileAnswers?.avoidList || ''))
     }
-  }, [preferencesModalVisible, preferences?.generalIds, preferences?.activityIds, preferences?.foodIds, preferences?.profileAnswers?.idealDay, preferences?.profileAnswers?.avoidList])
+  }, [preferencesModalVisible, preferences?.generalIds, preferences?.profileAnswers?.idealDay, preferences?.profileAnswers?.avoidList])
 
   const toggleGeneral = (id) => setEditGeneralIds((prev) => prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id])
-  const toggleActivity = (id) => setEditActivityIds((prev) => prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id])
-  const toggleFood = (id) => setEditFoodIds((prev) => prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id])
 
   const handleSavePreferences = async () => {
     if (isSavingPreferences) return
@@ -268,15 +260,15 @@ export default function ProfileScreen() {
         String(profile?.user?.u_type || '').toLowerCase() === 'tourist' ? 'tourist' : 'local'
       const profileSummary = await buildAndPersistUserPersona({
         generalIds: editGeneralIds,
-        activityIds: editActivityIds,
-        foodIds: editFoodIds,
+        activityIds: [],
+        foodIds: [],
         profileAnswers,
         viewerUType,
       })
       await setPreferences({
         generalIds: editGeneralIds,
-        activityIds: editActivityIds,
-        foodIds: editFoodIds,
+        activityIds: [],
+        foodIds: [],
         profileAnswers,
         profileSummary,
       })
@@ -301,10 +293,7 @@ export default function ProfileScreen() {
     profile?.account_type ?? profile?.account?.account_type ?? authUser?.user_metadata?.account_type
   const isClientAccount = String(accountTypeResolved || '').toLowerCase() === 'client'
 
-  const prefCount =
-    (preferences?.generalIds?.length || 0)
-    + (preferences?.activityIds?.length || 0)
-    + (preferences?.foodIds?.length || 0)
+  const prefCount = preferences?.generalIds?.length || 0
 
   /** Home feed cards: marginHorizontal 12 + inner padding 14 each side */
   const feedCardContentW = Math.max(1, winW - 24 - 28)
@@ -762,60 +751,6 @@ export default function ProfileScreen() {
                 </View>
               )
             })}
-            <Text style={[s.modalSectionLabel, { marginTop: 20, color: C.textPrimary }]}>What experiences should your plan focus on?</Text>
-            <View style={s.prefChipGrid}>
-              {PREFERENCES.map((p) => {
-                const selected = editActivityIds.includes(p.id)
-                return (
-                  <AnimatedPressable
-                    key={p.id}
-                    style={[
-                      s.prefChipCell,
-                      {
-                        width: prefChipW,
-                        borderWidth: 2,
-                        borderColor: selected ? p.color : `${p.color}55`,
-                        backgroundColor: selected ? p.color + '22' : C.cardBgAlt,
-                      },
-                    ]}
-                    onPress={() => toggleActivity(p.id)}
-                    scaleDown={0.95}
-                  >
-                    <Ionicons name={p.icon} size={20} color={selected ? p.color : C.textMuted} />
-                    <Text style={[s.prefChipLabel, { color: C.textSecondary }, selected && { color: p.color, fontFamily: FONT_POPPINS_BOLD }]} numberOfLines={2}>
-                      {p.label}
-                    </Text>
-                  </AnimatedPressable>
-                )
-              })}
-            </View>
-            <Text style={[s.modalSectionLabel, { marginTop: 16, color: C.textPrimary }]}>What food styles should we prioritize?</Text>
-            <View style={s.prefChipGrid}>
-              {FOOD_CATEGORIES.map((p) => {
-                const selected = editFoodIds.includes(p.id)
-                return (
-                  <AnimatedPressable
-                    key={p.id}
-                    style={[
-                      s.prefChipCell,
-                      {
-                        width: prefChipW,
-                        borderWidth: 2,
-                        borderColor: selected ? p.color : `${p.color}55`,
-                        backgroundColor: selected ? p.color + '22' : C.cardBgAlt,
-                      },
-                    ]}
-                    onPress={() => toggleFood(p.id)}
-                    scaleDown={0.95}
-                  >
-                    <Ionicons name={p.icon} size={20} color={selected ? p.color : C.textMuted} />
-                    <Text style={[s.prefChipLabel, { color: C.textSecondary }, selected && { color: p.color, fontFamily: FONT_POPPINS_BOLD }]} numberOfLines={2}>
-                      {p.label}
-                    </Text>
-                  </AnimatedPressable>
-                )
-              })}
-            </View>
             <Text style={[s.modalSectionLabel, { marginTop: 20, color: C.textPrimary }]}>Your perfect Bahrain day (typed)</Text>
             <TextInput
               value={editIdealDay}
@@ -837,7 +772,7 @@ export default function ProfileScreen() {
               style={[s.profileTextInput, { color: C.textPrimary, backgroundColor: C.cardBgAlt, borderColor: C.border }]}
             />
             <Text style={[s.modalHint, { color: C.textMuted }]}>
-              Your travel profile personalizes the app experience. Activity and food answers shape itinerary suggestions so each plan fits you better.
+              Your travel profile personalizes Khalid, Explore, and community feeds. Experience types and cuisines are chosen when you build a day plan.
             </Text>
           </ScrollView>
             <View style={[s.modalFooter, { borderTopColor: C.border, backgroundColor: C.screenBg }]}>

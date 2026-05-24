@@ -193,6 +193,52 @@ export const fetchSharedPlanByCode = async (rawCode) => {
   return data
 }
 
+/**
+ * Fetch spot names from the user's most recent saved plans to drive diversity.
+ * Returns { strictAvoidSpots, recentVisitedSpots } where:
+ * - strictAvoidSpots: spots from the single most-recent plan (hard avoid)
+ * - recentVisitedSpots: spots from up to the last 5 plans (soft deprioritize)
+ */
+export const fetchRecentPlanHistorySpots = async (maxPlans = 5) => {
+  try {
+    const { data: auth } = await supabase.auth.getUser()
+    const uid = auth?.user?.id
+    if (!uid) return { strictAvoidSpots: [], recentVisitedSpots: [] }
+
+    const { data, error } = await supabase
+      .from('saved_plans')
+      .select('plan_data')
+      .order('updated_at', { ascending: false })
+      .limit(maxPlans)
+    if (error || !Array.isArray(data) || data.length === 0) {
+      return { strictAvoidSpots: [], recentVisitedSpots: [] }
+    }
+
+    const extractSpots = (planData) => {
+      const stops = Array.isArray(planData) ? planData : []
+      return stops
+        .map((s) => String(s?.spot || '').trim())
+        .filter(Boolean)
+    }
+
+    const latestPlanSpots = extractSpots(data[0]?.plan_data)
+    const allRecentSpots = []
+    for (const row of data) {
+      for (const name of extractSpots(row?.plan_data)) {
+        allRecentSpots.push(name)
+      }
+    }
+
+    return {
+      strictAvoidSpots: latestPlanSpots,
+      recentVisitedSpots: allRecentSpots,
+    }
+  } catch (e) {
+    console.warn('[savedPlans] fetchRecentPlanHistorySpots:', e?.message)
+    return { strictAvoidSpots: [], recentVisitedSpots: [] }
+  }
+}
+
 export const pushSharedPlanUpdate = async (rawCode, planData) => {
   const code = normalizeShareCode(rawCode)
   const { data, error } = await supabase.rpc('update_shared_plan', {

@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { supabase } from '../config/supabase';
+import { supabase, isSupabaseConfigured } from '../config/supabase';
 
 const REMEMBER_ME_EMAIL_KEY = '@gobahrain_remember_email';
 const REMEMBER_ME_PASSWORD_KEY = '@gobahrain_remember_password';
@@ -37,8 +37,9 @@ export function AuthProvider({ children }) {
   useEffect(() => {
     let timeoutId = null
     /**
-     * INITIAL_SESSION fires only after GoTrue initializePromise settles (recover + refresh), same gate as getSession().
-     * Do NOT use a short timer to clear loading — it lets Tabs mount while auth init still holds locks and first Supabase reads fail cold.
+     * INITIAL_SESSION fires after GoTrue initializePromise settles (recover + refresh).
+     * Keep the callback synchronous — awaiting Supabase RPC/auth here blocks init and causes 20s deadlocks.
+     * Profile hydration runs on the next tick after bootstrap ends.
      */
     const AUTH_DEADLOCK_MS = 20000
     let bootstrapEnded = false
@@ -57,6 +58,45 @@ export function AuthProvider({ children }) {
       setAuthLoading(false)
     }
 
+    const syncProfileForSession = (s) => {
+      if (!s?.user?.id) {
+        setProfile(null)
+        return
+      }
+      void (async () => {
+        const existingProfile = await fetchProfile()
+        if (!existingProfile && s.user.user_metadata?.account_type) {
+          const meta = s.user.user_metadata
+          const accountType = meta.account_type || 'user'
+          try {
+            if (accountType === 'user') {
+              await supabase.rpc('ensure_user_profile', {
+                p_user_name: meta.user_name ?? '',
+                p_phone: meta.phone ?? null,
+                p_u_type: meta.u_type ?? 'local',
+              })
+            } else if (accountType === 'client') {
+              await supabase.rpc('ensure_client_profile', {
+                p_user_name: meta.user_name ?? '',
+                p_phone: meta.phone ?? null,
+                p_business_name: meta.business_name ?? '',
+                p_description: meta.description ?? null,
+                p_client_type: meta.client_type ?? 'place',
+              })
+            }
+            await fetchProfile()
+          } catch (err) {
+            console.warn('[Auth] ensure profile from metadata failed', err?.message)
+          }
+        }
+      })()
+    }
+
+    if (!isSupabaseConfigured) {
+      maybeFinishBootstrap()
+      return clearBootstrapTimer
+    }
+
     timeoutId = setTimeout(() => {
       if (bootstrapEnded) return
       console.warn(
@@ -67,58 +107,23 @@ export function AuthProvider({ children }) {
       maybeFinishBootstrap()
     }, AUTH_DEADLOCK_MS)
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      async (event, s) => {
-        setSession(s);
-        if (event === 'INITIAL_SESSION') {
-          maybeFinishBootstrap()
-        }
-        if (s?.user?.id) {
-          const existingProfile = await fetchProfile();
-          if (!existingProfile && s.user.user_metadata?.account_type) {
-            const meta = s.user.user_metadata;
-            const accountType = meta.account_type || 'user';
-            try {
-              if (accountType === 'user') {
-                await supabase.rpc('ensure_user_profile', {
-                  p_user_name: meta.user_name ?? '',
-                  p_phone: meta.phone ?? null,
-                  p_u_type: meta.u_type ?? 'local',
-                });
-              } else if (accountType === 'client') {
-                await supabase.rpc('ensure_client_profile', {
-                  p_user_name: meta.user_name ?? '',
-                  p_phone: meta.phone ?? null,
-                  p_business_name: meta.business_name ?? '',
-                  p_description: meta.description ?? null,
-                  p_client_type: meta.client_type ?? 'place',
-                });
-              }
-              await fetchProfile();
-            } catch (err) {
-              console.warn('[Auth] ensure profile from metadata failed', err?.message);
-            }
-          }
-        } else {
-          setProfile(null);
-        }
-        if (event === 'SIGNED_OUT') setProfile(null);
-      }
-    );
-
-    supabase.auth
-      .getSession()
-      .then(({ data: { session: s } }) => {
-        setSession(s)
-        if (s?.user?.id) fetchProfile()
-      })
-      .catch((e) => {
-        console.warn('[Auth] getSession failed', e?.message)
-        setSession(null)
-      })
-      .finally(() => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, s) => {
+      setSession(s)
+      if (event === 'INITIAL_SESSION') {
         maybeFinishBootstrap()
-      })
+        setTimeout(() => syncProfileForSession(s), 0)
+        return
+      }
+      if (event === 'SIGNED_OUT') {
+        setProfile(null)
+        return
+      }
+      if (s?.user?.id) {
+        setTimeout(() => syncProfileForSession(s), 0)
+      } else {
+        setProfile(null)
+      }
+    })
 
     return () => {
       clearBootstrapTimer()

@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import {
   StyleSheet,
   View,
@@ -33,6 +33,7 @@ import {
   FONT_POPPINS_REGULAR,
   FONT_POPPINS_SEMIBOLD,
 } from '../constants/brandFont';
+import * as Haptics from 'expo-haptics';
 import { openGoogleMapsDirections } from '../utils/googleMapsDirections';
 
 const PROFILE_TAB_POSTS = 'posts';

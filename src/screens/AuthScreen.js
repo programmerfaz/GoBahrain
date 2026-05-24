@@ -182,7 +182,7 @@ const MorphingInput = ({ value, onChangeText, placeholder, secureTextEntry, keyb
 export default function AuthScreen() {
   const { colors, isDark } = useTheme()
   const { signIn, signUp, ensureProfileAfterSignUp } = useAuth()
-  const { isOnboardingComplete } = useUserPreferences()
+  const { isOnboardingComplete, resetOnboarding } = useUserPreferences()
   const { width = 375, height = 812 } = useWindowDimensions()
 
   const contentOpacity = useRef(new Animated.Value(1)).current
@@ -372,6 +372,7 @@ export default function AuthScreen() {
         uType,
       })
       if (newSession) {
+        await resetOnboarding()
         await ensureProfileAfterSignUp({
           accountType,
           userName: userName.trim(),
@@ -381,9 +382,6 @@ export default function AuthScreen() {
           description: null,
           clientType: 'place',
         })
-        if (isOnboardingComplete) {
-          await yieldTwoFrames()
-        }
       } else {
         setSignUpSuccessMessage('Check your email to confirm your account, then sign in.')
       }

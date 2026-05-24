@@ -335,20 +335,20 @@ export function useAIPlanScreenMiddlePartA(inner) {
   const autoSavePlanSilently = useCallback(
     async (planOverride) => {
       const sourcePlan = Array.isArray(planOverride) ? planOverride : inner.dayPlan
-      if (!Array.isArray(sourcePlan) || sourcePlan.length === 0) return
-      if (inner.planReadOnly) return
+      if (!Array.isArray(sourcePlan) || sourcePlan.length === 0) return null
+      if (inner.planReadOnly) return null
 
       const payload = serializePlanForStorage(sourcePlan)
-      if (!Array.isArray(payload) || payload.length === 0) return
+      if (!Array.isArray(payload) || payload.length === 0) return null
 
       if (inner.sharedCollaboration?.role === 'editor' && inner.sharedCollaboration.code) {
         await pushSharedPlanUpdate(inner.sharedCollaboration.code, payload)
-        return
+        return inner.activeSavedPlanId || null
       }
 
       if (inner.activeSavedPlanId) {
         await updateSavedPlan(inner.activeSavedPlanId, { planData: payload })
-        return
+        return inner.activeSavedPlanId
       }
 
       const aiTitle = await generatePlanTitleFromAI(sourcePlan, {
@@ -358,6 +358,7 @@ export function useAIPlanScreenMiddlePartA(inner) {
       const id = await createSavedPlan({ title: aiTitle, planData: payload })
       if (id) inner.setActiveSavedPlanId(id)
       await inner.refreshSavedPlans()
+      return id || null
     },
     [
       inner.dayPlan,
@@ -412,15 +413,42 @@ export function useAIPlanScreenMiddlePartA(inner) {
     }
   }, [inner.dayPlan, inner.activeSavedPlanId, inner.refreshSavedPlans, inner.planReadOnly, inner.preferences?.profileSummary, inner.viewerUType]);
 
+  const prepareSharePicker = useCallback(async () => {
+    if (!inner.dayPlan?.length) {
+      throw new Error('Nothing to share')
+    }
+    if (inner.planReadOnly) {
+      throw new Error('View only')
+    }
+    const planId = await autoSavePlanSilently()
+    if (!planId) {
+      throw new Error('Could not save plan for sharing')
+    }
+    const rows = await listSavedPlans()
+    const row = rows.find((r) => r.id === planId)
+    const permission = row?.share_permission === 'edit' ? 'edit' : 'view'
+    let code = row?.share_code || null
+    if (!code) {
+      code = await enableSharingForPlan(planId, permission)
+    }
+    inner.setSharePermissionDraft(permission)
+    inner.setShareModalCode(code)
+    return { permission, code, planId }
+  }, [inner.dayPlan, inner.planReadOnly, inner.activeSavedPlanId, autoSavePlanSilently])
+
   const handleConfirmShareSettings = useCallback(async (options = {}) => {
     const skipClipboard = options?.skipClipboard === true
     const skipSuccessAlert = options?.skipSuccessAlert === true
-    if (!inner.activeSavedPlanId) return;
-    inner.setShareModalBusy(true);
+    const skipBusy = options?.skipBusy === true
+    const permission = options?.permission === 'edit' ? 'edit' : 'view'
+    const planId = options?.planId ?? inner.activeSavedPlanId
+    if (!planId) return null
+    if (!skipBusy) inner.setShareModalBusy(true)
     try {
-      const code = await enableSharingForPlan(inner.activeSavedPlanId, inner.sharePermissionDraft);
-      inner.setShareModalCode(code);
-      await inner.refreshSavedPlans();
+      const code = await enableSharingForPlan(planId, permission)
+      inner.setShareModalCode(code)
+      inner.setSharePermissionDraft(permission)
+      await inner.refreshSavedPlans()
       if (!skipClipboard) {
         const link = ExpoLinking.createURL(`plan/${code}`);
         await Clipboard.setStringAsync(`${link}\nCode: ${code}`);
@@ -429,14 +457,14 @@ export function useAIPlanScreenMiddlePartA(inner) {
       if (!skipSuccessAlert) {
         Alert.alert('Copied', 'Link and code are on your clipboard.');
       }
-      return code;
+      return code
     } catch (e) {
-      Alert.alert('Sharing failed', e?.message ?? 'Try again.');
-      return null;
+      Alert.alert('Sharing failed', e?.message ?? 'Try again.')
+      return null
     } finally {
-      inner.setShareModalBusy(false);
+      if (!skipBusy) inner.setShareModalBusy(false)
     }
-  }, [inner.activeSavedPlanId, inner.sharePermissionDraft, inner.refreshSavedPlans]);
+  }, [inner.activeSavedPlanId, inner.refreshSavedPlans])
 
   const handleCopyShareLinkOnly = useCallback(async () => {
     if (!inner.shareModalCode) return;
@@ -510,20 +538,20 @@ export function useAIPlanScreenMiddlePartA(inner) {
     return () => clearTimeout(t)
   }, [inner.dayPlan, inner.planCollaboratorEdit, inner.sharedCollaboration])
 
-  const togglePreference = (id) => {
+  const togglePreference = useCallback((id) => {
     inner.setSelectedPreferences((prev) => {
       if (prev.includes(id)) return prev.filter((p) => p !== id)
       return [...prev, id]
-    });
-  };
+    })
+  }, [inner.setSelectedPreferences])
 
-  const toggleFoodCategory = (id) => {
+  const toggleFoodCategory = useCallback((id) => {
     inner.setSelectedFoodCategories((prev) => {
       if (prev.includes(id)) return prev.filter((f) => f !== id)
       if (prev.length >= PLAN_MODAL_MAX_FOOD_CATEGORIES) return prev
       return [...prev, id]
-    });
-  };
+    })
+  }, [inner.setSelectedFoodCategories])
 
   const startBackgroundPrefetch = (prefLabels) => {
     const key = (prefLabels || []).join('|');
@@ -532,7 +560,6 @@ export function useAIPlanScreenMiddlePartA(inner) {
     const retrievalOpts = {
       profileNarrative: inner.preferences?.profileSummary || '',
       profileAnswers: inner.preferences?.profileAnswers || {},
-      profileActivity: inner.activityLabels,
     }
     const cached = inner.prefetchRef.current;
     const hasValidPrefetch =
@@ -573,5 +600,5 @@ export function useAIPlanScreenMiddlePartA(inner) {
       }
     })();
   };
-  return { ...inner, appliedLinkCodeRef, handleRequestDeleteSavedPlan, fitMapToPlan, applyShareCodeFromString, handleOpenSavedPlanRow, handleSavePlanToCloud, autoSavePlanSilently, handleOpenShareModal, handleConfirmShareSettings, handleCopyShareLinkOnly, handleDisableSharing, formatSavedPlanDate, togglePreference, toggleFoodCategory, startBackgroundPrefetch }
+  return { ...inner, appliedLinkCodeRef, handleRequestDeleteSavedPlan, fitMapToPlan, applyShareCodeFromString, handleOpenSavedPlanRow, handleSavePlanToCloud, autoSavePlanSilently, prepareSharePicker, handleOpenShareModal, handleConfirmShareSettings, handleCopyShareLinkOnly, handleDisableSharing, formatSavedPlanDate, togglePreference, toggleFoodCategory, startBackgroundPrefetch }
 }

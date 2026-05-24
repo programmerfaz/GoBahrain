@@ -18,124 +18,12 @@ import { Ionicons } from '@expo/vector-icons'
 import { LinearGradient } from 'expo-linear-gradient'
 import { BlurView } from 'expo-blur'
 import { useTheme } from '../context/ThemeContext'
-
-/** Subtle geometric tech-forward overlay drawn with Views */
-const GeometricOverlay = ({ accent }) => (
-  <View style={StyleSheet.absoluteFill} pointerEvents="none">
-    {/* Large circle 1 */}
-    <View style={[go.circle, {
-      width: 340, height: 340, borderRadius: 170,
-      borderColor: `${accent}28`,
-      top: -120, right: -80,
-    }]} />
-    {/* Large circle 2 */}
-    <View style={[go.circle, {
-      width: 220, height: 220, borderRadius: 110,
-      borderColor: `${accent}18`,
-      bottom: -60, left: -50,
-    }]} />
-    {/* Diagonal band */}
-    <View style={[go.band, {
-      backgroundColor: `${accent}0D`,
-      transform: [{ rotate: '-22deg' }],
-      top: '20%', left: '-10%', width: '130%', height: 60,
-    }]} />
-    {/* Second diagonal */}
-    <View style={[go.band, {
-      backgroundColor: `${accent}08`,
-      transform: [{ rotate: '-22deg' }],
-      top: '30%', left: '-10%', width: '130%', height: 30,
-    }]} />
-    {/* Small accent dot cluster */}
-    <View style={[go.dot, { backgroundColor: `${accent}55`, top: '18%', left: '15%' }]} />
-    <View style={[go.dot, { backgroundColor: `${accent}40`, top: '23%', left: '22%', width: 5, height: 5, borderRadius: 2.5 }]} />
-    <View style={[go.dot, { backgroundColor: `${accent}35`, top: '16%', left: '28%', width: 3, height: 3, borderRadius: 1.5 }]} />
-    {/* Hexagonal ring (rotated square) */}
-    <View style={[go.hexRing, {
-      borderColor: `${accent}22`,
-      width: 100, height: 100, borderRadius: 8,
-      transform: [{ rotate: '45deg' }],
-      bottom: '28%', right: '-18%',
-    }]} />
-    <View style={[go.hexRing, {
-      borderColor: `${accent}14`,
-      width: 140, height: 140, borderRadius: 12,
-      transform: [{ rotate: '45deg' }],
-      bottom: '24%', right: '-28%',
-    }]} />
-    {/* Wave line strip */}
-    <View style={[go.waveLine, { backgroundColor: `${accent}12`, top: '60%', left: 0, width: '100%' }]} />
-    <View style={[go.waveLine, { backgroundColor: `${accent}08`, top: '63%', left: '8%', width: '85%' }]} />
-  </View>
-)
-
-const go = StyleSheet.create({
-  circle: { position: 'absolute', borderWidth: 1.5 },
-  band: { position: 'absolute' },
-  dot: { position: 'absolute', width: 7, height: 7, borderRadius: 3.5 },
-  hexRing: { position: 'absolute', borderWidth: 1.5 },
-  waveLine: { position: 'absolute', height: 1.5 },
-})
-
-/** Single glassmorphism activity card */
-const GlassActivityCard = ({ activity, accent, index, isDark }) => {
-  const slideIn = useRef(new Animated.Value(36)).current
-  const opacity = useRef(new Animated.Value(0)).current
-
-  useEffect(() => {
-    const delay = 200 + index * 80
-    Animated.parallel([
-      Animated.timing(opacity, { toValue: 1, duration: 480, delay, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
-      Animated.timing(slideIn, { toValue: 0, duration: 480, delay, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
-    ]).start()
-  }, [opacity, slideIn, index])
-
-  return (
-    <Animated.View style={[gds.glassCard, { opacity, transform: [{ translateY: slideIn }] }]}>
-      {/* Glassmorphism backdrop */}
-      {Platform.OS === 'ios' ? (
-        <BlurView
-          intensity={isDark ? 55 : 65}
-          tint={isDark ? 'dark' : 'light'}
-          style={[StyleSheet.absoluteFill, { borderRadius: 20 }]}
-        />
-      ) : (
-        <View style={[StyleSheet.absoluteFill, gds.androidFrost, {
-          backgroundColor: isDark ? 'rgba(10,10,20,0.82)' : 'rgba(255,255,255,0.88)',
-          borderRadius: 20,
-        }]} />
-      )}
-      <View style={[gds.glassBorder, {
-        borderColor: isDark ? `${accent}35` : `${accent}55`,
-      }]} />
-
-      <View style={gds.cardInner}>
-        {/* Icon circle */}
-        <View style={[gds.iconCircle, { backgroundColor: `${accent}22`, borderColor: `${accent}55` }]}>
-          <Ionicons name={activity.icon || 'location-outline'} size={22} color={accent} />
-        </View>
-
-        {/* Text */}
-        <View style={gds.cardText}>
-          <Text style={[gds.cardTitle, { color: isDark ? '#FFFFFF' : '#0F172A' }]} numberOfLines={2}>
-            {activity.title}
-          </Text>
-          <Text style={[gds.cardSubtitle, { color: isDark ? 'rgba(255,255,255,0.65)' : 'rgba(15,23,42,0.62)' }]} numberOfLines={2}>
-            {activity.subtitle}
-          </Text>
-        </View>
-
-        {/* Tag */}
-        <View style={[gds.tagBadge, { backgroundColor: `${accent}22`, borderColor: `${accent}45` }]}>
-          <Text style={[gds.tagText, { color: accent }]}>{activity.tag || 'VISIT'}</Text>
-        </View>
-      </View>
-
-      {/* Subtle shimmer line at top */}
-      <View style={[gds.shimmerTop, { backgroundColor: `${accent}35` }]} />
-    </Animated.View>
-  )
-}
+import {
+  FONT_POPPINS_BOLD,
+  FONT_POPPINS_SEMIBOLD,
+  FONT_POPPINS_MEDIUM,
+  FONT_POPPINS_REGULAR,
+} from '../constants/brandFont'
 
 const DEFAULT_TIPS = [
   'Start early in the morning to avoid the midday heat.',
@@ -143,152 +31,300 @@ const DEFAULT_TIPS = [
   'Respect local customs and dress modestly at heritage sites.',
 ]
 
+const CONTENT_EYEBROW_BY_SECTION = {
+  ESSENTIALS: 'WHAT YOU NEED TO KNOW',
+  CULTURE: 'LOCAL CUSTOMS & TRADITIONS',
+  EXPLORE: 'HIGHLIGHTS & ACTIVITIES',
+  LIFESTYLE: 'WHERE TO GO',
+  PRACTICAL: 'EMERGENCY ESSENTIALS',
+}
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * Quick-fact stat tile
+ * ────────────────────────────────────────────────────────────────────────── */
+
+const QuickFactTile = ({ fact, accent, colors, isDark, index }) => {
+  const fade = useRef(new Animated.Value(0)).current
+  const lift = useRef(new Animated.Value(12)).current
+
+  useEffect(() => {
+    const delay = 100 + index * 60
+    Animated.parallel([
+      Animated.timing(fade, { toValue: 1, duration: 360, delay, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
+      Animated.timing(lift, { toValue: 0, duration: 360, delay, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
+    ]).start()
+  }, [fade, lift, index])
+
+  return (
+    <Animated.View
+      style={[
+        s.factTile,
+        {
+          backgroundColor: isDark ? 'rgba(255,255,255,0.05)' : colors.surface,
+          borderColor: isDark ? 'rgba(255,255,255,0.1)' : colors.border,
+          opacity: fade,
+          transform: [{ translateY: lift }],
+        },
+      ]}
+    >
+      <View style={[s.factIconWrap, { backgroundColor: `${accent}1A` }]}>
+        <Ionicons name={fact.icon || 'sparkles-outline'} size={15} color={accent} />
+      </View>
+      <Text
+        style={[s.factValue, { color: colors.textPrimary }]}
+        numberOfLines={1}
+        adjustsFontSizeToFit
+      >
+        {fact.value}
+      </Text>
+      <Text style={[s.factLabel, { color: colors.textMuted }]} numberOfLines={2}>
+        {fact.label}
+      </Text>
+    </Animated.View>
+  )
+}
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * Activity card
+ * ────────────────────────────────────────────────────────────────────────── */
+
+const ActivityCard = ({ activity, accent, index, colors, isDark }) => {
+  const slideIn = useRef(new Animated.Value(24)).current
+  const opacity = useRef(new Animated.Value(0)).current
+
+  useEffect(() => {
+    const delay = 180 + index * 70
+    Animated.parallel([
+      Animated.timing(opacity, { toValue: 1, duration: 420, delay, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
+      Animated.timing(slideIn, { toValue: 0, duration: 420, delay, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
+    ]).start()
+  }, [opacity, slideIn, index])
+
+  const numberLabel = String(index + 1).padStart(2, '0')
+  const panelBg = isDark ? 'rgba(255,255,255,0.05)' : colors.surface
+  const panelBorder = isDark ? 'rgba(255,255,255,0.1)' : colors.border
+
+  return (
+    <Animated.View
+      style={[
+        s.activityCard,
+        {
+          backgroundColor: panelBg,
+          borderColor: panelBorder,
+          opacity,
+          transform: [{ translateY: slideIn }],
+        },
+      ]}
+    >
+      <View style={s.activityRow}>
+        {/* Image column */}
+        <View style={s.activityVisual}>
+          {activity.image ? (
+            <Image source={{ uri: activity.image }} style={s.activityImage} resizeMode="cover" />
+          ) : (
+            <View style={[s.activityImage, { backgroundColor: `${accent}18` }]}>
+              <Ionicons name={activity.icon || 'location-outline'} size={28} color={accent} />
+            </View>
+          )}
+          <View style={[s.numberBadge, { backgroundColor: accent }]}>
+            <Text style={s.numberBadgeText}>{numberLabel}</Text>
+          </View>
+        </View>
+
+        {/* Text column */}
+        <View style={s.activityTextCol}>
+          <View style={[s.activityTag, { backgroundColor: `${accent}14` }]}>
+            <Text style={[s.activityTagText, { color: accent }]} numberOfLines={1}>
+              {activity.tag || 'VISIT'}
+            </Text>
+          </View>
+          <Text style={[s.activityTitle, { color: colors.textPrimary }]} numberOfLines={2}>
+            {activity.title}
+          </Text>
+          <Text style={[s.activitySubtitle, { color: colors.textSecondary }]} numberOfLines={3}>
+            {activity.subtitle}
+          </Text>
+        </View>
+      </View>
+    </Animated.View>
+  )
+}
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * Screen
+ * ────────────────────────────────────────────────────────────────────────── */
+
 export default function BahrainGuideDetailScreen() {
   const navigation = useNavigation()
   const route = useRoute()
   const { category } = route.params || {}
-  const { isDark } = useTheme()
+  const { isDark, colors } = useTheme()
   const insets = useSafeAreaInsets()
-  const { width: winW, height: winH } = useWindowDimensions()
+  const { height: winH } = useWindowDimensions()
 
-  const heroHeight = Math.round(Math.min(winH * 0.44, 380))
+  const heroHeight = Math.round(Math.min(winH * 0.42, 360))
   const accent = category?.accent || '#CE1126'
   const gradientColors = category?.gradientColors || ['#1a0005', '#5a000e', '#CE1126']
   const bgImage = category?.bgImage || null
   const activities = Array.isArray(category?.activities) ? category.activities : []
   const tips = Array.isArray(category?.tips) ? category.tips : DEFAULT_TIPS
+  const quickFacts = Array.isArray(category?.quickFacts) ? category.quickFacts : []
+  const didYouKnow = category?.didYouKnow || ''
+  const contentEyebrow = CONTENT_EYEBROW_BY_SECTION[category?.section] || 'HIGHLIGHTS & ACTIVITIES'
 
-  const headerFade = useRef(new Animated.Value(0)).current
-  const headerSlide = useRef(new Animated.Value(28)).current
+  const fade = useRef(new Animated.Value(0)).current
+  const slide = useRef(new Animated.Value(20)).current
 
   useEffect(() => {
     Animated.parallel([
-      Animated.timing(headerFade, { toValue: 1, duration: 700, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
-      Animated.timing(headerSlide, { toValue: 0, duration: 700, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
+      Animated.timing(fade, { toValue: 1, duration: 520, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
+      Animated.timing(slide, { toValue: 0, duration: 520, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
     ]).start()
-  }, [headerFade, headerSlide])
+  }, [fade, slide])
 
   const handleBack = useCallback(() => navigation.goBack(), [navigation])
 
+  const surface = isDark ? colors.background : colors.background
+  const heroScrim = isDark
+    ? ['rgba(0,0,0,0.05)', 'rgba(0,0,0,0.35)', 'rgba(0,0,0,0.92)']
+    : ['rgba(0,0,0,0.02)', 'rgba(0,0,0,0.22)', 'rgba(0,0,0,0.82)']
+
   return (
-    <View style={gds.root}>
+    <View style={[s.root, { backgroundColor: surface }]}>
       <StatusBar barStyle="light-content" translucent backgroundColor="transparent" />
 
-      {/* ── HERO (top ~44%) ── */}
-      <View style={[gds.hero, { height: heroHeight }]}>
-        {/* Background */}
-        {bgImage ? (
-          <Image source={{ uri: bgImage }} style={StyleSheet.absoluteFill} resizeMode="cover" />
-        ) : (
+      <ScrollView
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={{ paddingBottom: Math.max(insets.bottom + 28, 44) }}
+      >
+        {/* ── HERO ── */}
+        <View style={[s.hero, { height: heroHeight }]}>
           <LinearGradient colors={gradientColors} style={StyleSheet.absoluteFill} />
-        )}
+          {bgImage ? (
+            <Image source={{ uri: bgImage }} style={StyleSheet.absoluteFill} resizeMode="cover" />
+          ) : null}
+          <LinearGradient
+            colors={heroScrim}
+            locations={[0, 0.5, 1]}
+            style={StyleSheet.absoluteFill}
+            pointerEvents="none"
+          />
 
-        {/* Geometric tech-forward overlay */}
-        <GeometricOverlay accent={accent} />
+          {/* Back button */}
+          <TouchableOpacity
+            style={[s.backBtn, { top: insets.top + 10 }]}
+            onPress={handleBack}
+            activeOpacity={0.82}
+            accessibilityRole="button"
+            accessibilityLabel="Go back"
+          >
+            {Platform.OS === 'ios' ? (
+              <BlurView intensity={60} tint="dark" style={[StyleSheet.absoluteFill, { borderRadius: 22 }]} />
+            ) : (
+              <View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(0,0,0,0.45)', borderRadius: 22 }]} />
+            )}
+            <Ionicons name="arrow-back" size={20} color="#FFFFFF" />
+          </TouchableOpacity>
 
-        {/* Bottom scrim — keeps bottom 2/3 darker for text legibility */}
-        <LinearGradient
-          colors={['rgba(0,0,0,0.05)', 'rgba(0,0,0,0.18)', 'rgba(0,0,0,0.72)', 'rgba(0,0,0,0.94)']}
-          locations={[0, 0.25, 0.7, 1]}
-          style={StyleSheet.absoluteFill}
-          pointerEvents="none"
-        />
+          {/* Hero text */}
+          <Animated.View style={[s.heroContent, { opacity: fade, transform: [{ translateY: slide }] }]}>
+            <Text style={s.heroEyebrow}>
+              BAHRAIN GUIDE{category?.section ? ` · ${category.section}` : ''}
+            </Text>
+            <View style={[s.heroPill, { backgroundColor: `${accent}CC` }]}>
+              <Text style={s.heroPillText}>{category?.label || 'ESSENTIAL'}</Text>
+            </View>
+            <Text style={s.heroTitle} numberOfLines={2}>{category?.title || 'Bahrain Guide'}</Text>
+            <Text style={s.heroSubtitle} numberOfLines={2}>{category?.subtitle || ''}</Text>
+          </Animated.View>
+        </View>
 
-        {/* Back button */}
-        <TouchableOpacity
-          style={[gds.backBtn, { top: insets.top + 10 }]}
-          onPress={handleBack}
-          activeOpacity={0.82}
-          accessibilityRole="button"
-          accessibilityLabel="Go back"
-          accessibilityHint="Returns to explore screen"
-        >
-          {Platform.OS === 'ios' ? (
-            <BlurView intensity={70} tint="dark" style={[StyleSheet.absoluteFill, { borderRadius: 24 }]} />
-          ) : (
-            <View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(0,0,0,0.55)', borderRadius: 24 }]} />
-          )}
-          <Ionicons name="arrow-back" size={20} color="#FFFFFF" />
-        </TouchableOpacity>
+        {/* ── CONTENT — fills rest of page ── */}
+        <View style={[s.contentWrap, { backgroundColor: surface }]}>
+          {/* Quick facts */}
+          {quickFacts.length > 0 ? (
+            <View style={s.factsRow}>
+              {quickFacts.slice(0, 3).map((f, i) => (
+                <QuickFactTile key={`qf-${i}`} fact={f} accent={accent} colors={colors} isDark={isDark} index={i} />
+              ))}
+            </View>
+          ) : null}
 
-        {/* Hero content — lives in bottom third of hero */}
-        <Animated.View style={[gds.heroContent, { opacity: headerFade, transform: [{ translateY: headerSlide }] }]}>
-          <View style={[gds.categoryBadge, { backgroundColor: `${accent}DD` }]}>
-            <Text style={gds.categoryBadgeText}>PERSONALIZED FOR YOU</Text>
-          </View>
-          <Text style={gds.heroTitle} numberOfLines={2}>{category?.title || 'Bahrain Guide'}</Text>
-          <Text style={gds.heroSubtitle} numberOfLines={2}>{category?.subtitle || ''}</Text>
-        </Animated.View>
-      </View>
-
-      {/* ── CONTENT (bottom) ── */}
-      <View style={[gds.contentWrapper, { backgroundColor: isDark ? '#080C14' : '#F0F4FA' }]}>
-        {/* Curved top connector */}
-        <View style={[gds.curveConnector, { backgroundColor: isDark ? '#080C14' : '#F0F4FA' }]} />
-
-        <ScrollView
-          style={gds.contentScroll}
-          contentContainerStyle={[gds.contentPad, { paddingBottom: Math.max(40, insets.bottom + 24) }]}
-          showsVerticalScrollIndicator={false}
-        >
           {/* Section eyebrow */}
-          <View style={gds.eyebrowRow}>
-            <View style={[gds.eyebrowLine, { backgroundColor: accent }]} />
-            <Text style={[gds.eyebrowText, { color: accent }]}>HIGHLIGHTS & ACTIVITIES</Text>
-            <View style={[gds.eyebrowLine, { backgroundColor: accent, flex: 1 }]} />
+          <View style={s.sectionEyebrowRow}>
+            <View style={[s.sectionLine, { backgroundColor: accent }]} />
+            <Text style={[s.sectionEyebrowText, { color: accent }]}>{contentEyebrow}</Text>
+            <View style={[s.sectionLine, { backgroundColor: accent, flex: 1 }]} />
           </View>
 
           {/* Activity cards */}
           {activities.map((activity, index) => (
-            <GlassActivityCard
+            <ActivityCard
               key={activity.id || `act-${index}`}
               activity={activity}
               accent={accent}
               index={index}
+              colors={colors}
               isDark={isDark}
             />
           ))}
 
-          {/* Tips glassmorphism card */}
-          <View style={[gds.tipsCard, { borderColor: `${accent}35`, marginTop: 24 }]}>
-            {Platform.OS === 'ios' ? (
-              <BlurView
-                intensity={isDark ? 50 : 60}
-                tint={isDark ? 'dark' : 'light'}
-                style={[StyleSheet.absoluteFill, { borderRadius: 20 }]}
-              />
-            ) : (
-              <View style={[StyleSheet.absoluteFill, {
-                backgroundColor: isDark ? 'rgba(10,10,20,0.85)' : 'rgba(255,255,255,0.92)',
-                borderRadius: 20,
-              }]} />
-            )}
-            <View style={[gds.tipsInner]}>
-              <View style={gds.tipsHeaderRow}>
-                <View style={[gds.tipsIconBg, { backgroundColor: `${accent}20` }]}>
-                  <Ionicons name="bulb-outline" size={18} color={accent} />
+          {/* Did You Know */}
+          {didYouKnow ? (
+            <View
+              style={[
+                s.dykCard,
+                {
+                  backgroundColor: isDark ? 'rgba(255,255,255,0.05)' : colors.surface,
+                  borderColor: isDark ? `${accent}40` : `${accent}30`,
+                },
+              ]}
+            >
+              <View style={s.dykHeader}>
+                <View style={[s.dykIconWrap, { backgroundColor: `${accent}1A` }]}>
+                  <Ionicons name="sparkles" size={16} color={accent} />
                 </View>
-                <Text style={[gds.tipsTitle, { color: accent }]}>Local Tips</Text>
+                <Text style={[s.dykLabel, { color: accent }]}>DID YOU KNOW?</Text>
               </View>
-              {tips.map((tip, i) => (
-                <View key={`tip-${i}`} style={gds.tipRow}>
-                  <Ionicons name="checkmark-circle" size={15} color={accent} style={{ marginTop: 1 }} />
-                  <Text style={[gds.tipText, { color: isDark ? 'rgba(255,255,255,0.72)' : 'rgba(15,23,42,0.7)' }]}>
-                    {tip}
-                  </Text>
-                </View>
-              ))}
+              <Text style={[s.dykText, { color: colors.textSecondary }]}>{didYouKnow}</Text>
             </View>
-            <View style={[gds.shimmerTop, { backgroundColor: `${accent}40` }]} />
+          ) : null}
+
+          {/* Local Tips */}
+          <View
+            style={[
+              s.tipsCard,
+              {
+                backgroundColor: isDark ? 'rgba(255,255,255,0.05)' : colors.surface,
+                borderColor: isDark ? 'rgba(255,255,255,0.1)' : colors.border,
+              },
+            ]}
+          >
+            <View style={s.tipsHeader}>
+              <View style={[s.tipsIconWrap, { backgroundColor: `${accent}1A` }]}>
+                <Ionicons name="bulb-outline" size={16} color={accent} />
+              </View>
+              <Text style={[s.tipsTitle, { color: colors.textPrimary }]}>Local Tips</Text>
+            </View>
+            {tips.map((tip, i) => (
+              <View key={`tip-${i}`} style={s.tipRow}>
+                <Ionicons name="checkmark-circle" size={15} color={accent} style={{ marginTop: 2 }} />
+                <Text style={[s.tipText, { color: colors.textSecondary }]}>{tip}</Text>
+              </View>
+            ))}
           </View>
-        </ScrollView>
-      </View>
+        </View>
+      </ScrollView>
     </View>
   )
 }
 
-const gds = StyleSheet.create({
-  root: { flex: 1, backgroundColor: '#000' },
+/* ────────────────────────────────────────────────────────────────────────────
+ * Styles
+ * ────────────────────────────────────────────────────────────────────────── */
+
+const s = StyleSheet.create({
+  root: { flex: 1 },
 
   /* Hero */
   hero: { position: 'relative', overflow: 'hidden', width: '100%' },
@@ -302,7 +338,7 @@ const gds = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.28)',
+    borderColor: 'rgba(255,255,255,0.24)',
     zIndex: 10,
   },
   heroContent: {
@@ -310,126 +346,255 @@ const gds = StyleSheet.create({
     bottom: 0,
     left: 0,
     right: 0,
-    paddingHorizontal: 24,
-    paddingBottom: 28,
+    paddingHorizontal: 20,
+    paddingBottom: 24,
   },
-  categoryBadge: {
+  heroEyebrow: {
+    fontSize: 10,
+    fontFamily: FONT_POPPINS_SEMIBOLD,
+    color: 'rgba(255,255,255,0.7)',
+    letterSpacing: 1.4,
+    marginBottom: 8,
+  },
+  heroPill: {
     alignSelf: 'flex-start',
-    paddingHorizontal: 11,
-    paddingVertical: 5,
-    borderRadius: 20,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 14,
     marginBottom: 10,
   },
-  categoryBadgeText: {
-    fontSize: 10,
-    fontWeight: '800',
+  heroPillText: {
+    fontSize: 9,
+    fontFamily: FONT_POPPINS_BOLD,
     color: '#FFFFFF',
     letterSpacing: 0.8,
   },
   heroTitle: {
-    fontSize: 34,
-    fontWeight: '900',
+    fontSize: 30,
+    fontFamily: FONT_POPPINS_BOLD,
     color: '#FFFFFF',
-    letterSpacing: -0.8,
-    lineHeight: 38,
-    marginBottom: 8,
+    letterSpacing: -0.6,
+    lineHeight: 34,
+    marginBottom: 6,
   },
   heroSubtitle: {
-    fontSize: 14,
+    fontSize: 13,
+    fontFamily: FONT_POPPINS_REGULAR,
     color: 'rgba(255,255,255,0.78)',
-    lineHeight: 19,
+    lineHeight: 18,
+    maxWidth: 460,
   },
 
   /* Content */
-  contentWrapper: { flex: 1, position: 'relative' },
-  curveConnector: {
-    position: 'absolute',
-    top: -22,
-    left: 0,
-    right: 0,
-    height: 28,
-    borderTopLeftRadius: 26,
-    borderTopRightRadius: 26,
+  contentWrap: {
+    paddingHorizontal: 16,
+    paddingTop: 20,
   },
-  contentScroll: { flex: 1 },
-  contentPad: { paddingHorizontal: 20, paddingTop: 14 },
 
-  /* Eyebrow */
-  eyebrowRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 18 },
-  eyebrowLine: { height: 1.5, width: 24, borderRadius: 1 },
-  eyebrowText: { fontSize: 11, fontWeight: '800', letterSpacing: 1 },
-
-  /* Glass activity card */
-  glassCard: {
-    borderRadius: 20,
-    overflow: 'hidden',
-    marginBottom: 12,
-    position: 'relative',
+  /* Quick facts */
+  factsRow: {
+    flexDirection: 'row',
+    gap: 10,
+    marginBottom: 20,
+  },
+  factTile: {
+    flex: 1,
+    borderRadius: 14,
+    borderWidth: 1,
+    paddingHorizontal: 10,
+    paddingVertical: 12,
     ...Platform.select({
-      ios: {
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 4 },
-        shadowOpacity: 0.14,
-        shadowRadius: 10,
-      },
-      android: { elevation: 4 },
+      ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.05, shadowRadius: 4 },
+      android: { elevation: 2 },
     }),
   },
-  androidFrost: {},
-  glassBorder: {
-    ...StyleSheet.absoluteFillObject,
-    borderWidth: 1,
-    borderRadius: 20,
-  },
-  cardInner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 16,
-    gap: 14,
-  },
-  iconCircle: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
+  factIconWrap: {
+    width: 26,
+    height: 26,
+    borderRadius: 8,
     alignItems: 'center',
     justifyContent: 'center',
-    borderWidth: 1.5,
-    flexShrink: 0,
+    marginBottom: 8,
   },
-  cardText: { flex: 1, minWidth: 0 },
-  cardTitle: { fontSize: 15, fontWeight: '700', letterSpacing: -0.2, marginBottom: 4 },
-  cardSubtitle: { fontSize: 12, lineHeight: 16 },
-  tagBadge: {
-    paddingHorizontal: 9,
-    paddingVertical: 4,
-    borderRadius: 10,
-    borderWidth: 1,
-    alignSelf: 'flex-start',
-    flexShrink: 0,
+  factValue: {
+    fontSize: 16,
+    fontFamily: FONT_POPPINS_BOLD,
+    letterSpacing: -0.3,
+    marginBottom: 1,
   },
-  tagText: { fontSize: 9, fontWeight: '800', letterSpacing: 0.5 },
-  shimmerTop: { position: 'absolute', top: 0, left: 16, right: 16, height: 1 },
+  factLabel: {
+    fontSize: 10,
+    fontFamily: FONT_POPPINS_REGULAR,
+    lineHeight: 13,
+  },
 
-  /* Tips */
-  tipsCard: {
-    borderRadius: 20,
-    overflow: 'hidden',
+  /* Section eyebrow */
+  sectionEyebrowRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginBottom: 14,
+  },
+  sectionLine: { height: 1, width: 20, borderRadius: 1 },
+  sectionEyebrowText: {
+    fontSize: 11,
+    fontFamily: FONT_POPPINS_BOLD,
+    letterSpacing: 1,
+  },
+
+  /* Activity card */
+  activityCard: {
+    borderRadius: 16,
     borderWidth: 1,
+    overflow: 'hidden',
+    marginBottom: 12,
     ...Platform.select({
-      ios: {
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 4 },
-        shadowOpacity: 0.12,
-        shadowRadius: 10,
-      },
-      android: { elevation: 4 },
+      ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.06, shadowRadius: 8 },
+      android: { elevation: 3 },
     }),
   },
-  tipsInner: { padding: 18 },
-  tipsHeaderRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 14 },
-  tipsIconBg: { width: 32, height: 32, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
-  tipsTitle: { fontSize: 15, fontWeight: '800', letterSpacing: -0.2 },
-  tipRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 10, marginBottom: 10 },
-  tipText: { flex: 1, fontSize: 13, lineHeight: 18 },
+  activityRow: {
+    flexDirection: 'row',
+    padding: 10,
+    gap: 12,
+  },
+  activityVisual: {
+    width: 88,
+    height: 100,
+    borderRadius: 12,
+    overflow: 'hidden',
+    position: 'relative',
+    flexShrink: 0,
+  },
+  activityImage: {
+    ...StyleSheet.absoluteFillObject,
+    width: '100%',
+    height: '100%',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  numberBadge: {
+    position: 'absolute',
+    top: 6,
+    left: 6,
+    paddingHorizontal: 5,
+    paddingVertical: 2,
+    borderRadius: 6,
+    minWidth: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  numberBadgeText: {
+    color: '#FFFFFF',
+    fontSize: 9,
+    fontFamily: FONT_POPPINS_BOLD,
+    letterSpacing: 0.3,
+  },
+  activityTextCol: {
+    flex: 1,
+    minWidth: 0,
+    paddingTop: 2,
+  },
+  activityTag: {
+    alignSelf: 'flex-start',
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    borderRadius: 6,
+    marginBottom: 6,
+  },
+  activityTagText: {
+    fontSize: 9,
+    fontFamily: FONT_POPPINS_BOLD,
+    letterSpacing: 0.6,
+  },
+  activityTitle: {
+    fontSize: 15,
+    fontFamily: FONT_POPPINS_SEMIBOLD,
+    letterSpacing: -0.2,
+    marginBottom: 3,
+    lineHeight: 19,
+  },
+  activitySubtitle: {
+    fontSize: 12,
+    fontFamily: FONT_POPPINS_REGULAR,
+    lineHeight: 16,
+  },
+
+  /* Did You Know */
+  dykCard: {
+    borderRadius: 16,
+    borderWidth: 1,
+    padding: 16,
+    marginTop: 8,
+    marginBottom: 12,
+    ...Platform.select({
+      ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.06, shadowRadius: 8 },
+      android: { elevation: 3 },
+    }),
+  },
+  dykHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 10,
+  },
+  dykIconWrap: {
+    width: 28,
+    height: 28,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  dykLabel: {
+    fontSize: 11,
+    fontFamily: FONT_POPPINS_BOLD,
+    letterSpacing: 1.2,
+  },
+  dykText: {
+    fontSize: 13,
+    fontFamily: FONT_POPPINS_REGULAR,
+    lineHeight: 20,
+  },
+
+  /* Local Tips */
+  tipsCard: {
+    borderRadius: 16,
+    borderWidth: 1,
+    padding: 16,
+    marginBottom: 8,
+    ...Platform.select({
+      ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.06, shadowRadius: 8 },
+      android: { elevation: 3 },
+    }),
+  },
+  tipsHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 12,
+  },
+  tipsIconWrap: {
+    width: 28,
+    height: 28,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  tipsTitle: {
+    fontSize: 15,
+    fontFamily: FONT_POPPINS_SEMIBOLD,
+    letterSpacing: -0.2,
+  },
+  tipRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+    marginBottom: 10,
+  },
+  tipText: {
+    flex: 1,
+    fontSize: 13,
+    fontFamily: FONT_POPPINS_REGULAR,
+    lineHeight: 18,
+  },
 })
