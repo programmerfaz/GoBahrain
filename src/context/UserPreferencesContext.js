@@ -12,6 +12,7 @@ import { useAuth } from './AuthContext';
 
 const ONBOARDING_KEY = '@gobahrain_onboarding_complete';
 const PREFERENCES_KEY = '@gobahrain_user_preferences';
+const FORCE_ONBOARDING_KEY = '@gobahrain_force_onboarding';
 
 const defaultPreferences = {
   generalIds: [],
@@ -31,11 +32,16 @@ export function UserPreferencesProvider({ children }) {
 
   const loadStored = useCallback(async () => {
     try {
-      const [onboardingRaw, prefsRaw] = await Promise.all([
+      const [onboardingRaw, prefsRaw, forceRaw] = await Promise.all([
         AsyncStorage.getItem(ONBOARDING_KEY),
         AsyncStorage.getItem(PREFERENCES_KEY),
+        AsyncStorage.getItem(FORCE_ONBOARDING_KEY),
       ]);
-      setIsOnboardingComplete(onboardingRaw === 'true');
+      if (forceRaw === 'true') {
+        setIsOnboardingComplete(false);
+      } else {
+        setIsOnboardingComplete(onboardingRaw === 'true');
+      }
       if (prefsRaw) {
         try {
           const parsed = JSON.parse(prefsRaw);
@@ -64,6 +70,11 @@ export function UserPreferencesProvider({ children }) {
 
   const hydrateFromSupabase = useCallback(async () => {
     try {
+      const forceRaw = await AsyncStorage.getItem(FORCE_ONBOARDING_KEY);
+      if (forceRaw === 'true') {
+        setIsOnboardingComplete(false);
+        return;
+      }
       const remote = await fetchUserPersonalization();
       if (!remote) return;
       const hasRemoteData =
@@ -149,6 +160,7 @@ export function UserPreferencesProvider({ children }) {
   const completeOnboarding = useCallback(async (prefs) => {
     if (prefs) await setPreferences(prefs);
     try {
+      await AsyncStorage.multiRemove([FORCE_ONBOARDING_KEY]);
       await AsyncStorage.setItem(ONBOARDING_KEY, 'true');
       setIsOnboardingComplete(true);
     } catch (e) {
@@ -159,8 +171,9 @@ export function UserPreferencesProvider({ children }) {
   const resetOnboarding = useCallback(async () => {
     try {
       await AsyncStorage.multiRemove([ONBOARDING_KEY, PREFERENCES_KEY]);
-      setIsOnboardingComplete(false);
+      await AsyncStorage.setItem(FORCE_ONBOARDING_KEY, 'true');
       setPreferencesState(defaultPreferences);
+      setIsOnboardingComplete(false);
     } catch (e) {
       console.warn('[UserPreferences] onboarding reset failed', e?.message);
     }

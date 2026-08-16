@@ -20,7 +20,6 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useNavigation, useFocusEffect } from '@react-navigation/native'
 import { Ionicons } from '@expo/vector-icons'
 import { LinearGradient } from 'expo-linear-gradient'
-import AsyncStorage from '@react-native-async-storage/async-storage'
 import ScreenContainer from '../components/ScreenContainer'
 import { useTheme } from '../context/ThemeContext'
 import { useUserPreferences } from '../context/UserPreferencesContext'
@@ -168,6 +167,7 @@ export default function ProfileScreen() {
   const {
     preferences,
     setPreferences,
+    resetOnboarding,
     GENERAL_PREFERENCES,
   } = useUserPreferences()
   const { profile, user: authUser, signOut } = useAuth()
@@ -311,7 +311,7 @@ export default function ProfileScreen() {
   const handleResetOnboarding = useCallback(() => {
       Alert.alert(
         'Reset Onboarding',
-        'This will clear your onboarding status and show the onboarding screen again. Continue?',
+        'This will show the onboarding questions again the next time you open the app or sign in. Continue?',
         [
           { text: 'Cancel', style: 'cancel' },
           {
@@ -319,8 +319,7 @@ export default function ProfileScreen() {
             style: 'destructive',
             onPress: async () => {
               try {
-                await AsyncStorage.removeItem('@gobahrain_onboarding_complete')
-                Alert.alert('Success', 'Onboarding reset! Close and reopen the app to see the onboarding screen.')
+                await resetOnboarding()
               } catch (e) {
                 Alert.alert('Error', `Failed to reset onboarding: ${e.message}`)
               }
@@ -328,7 +327,7 @@ export default function ProfileScreen() {
           },
         ]
       )
-  }, [colors.warning])
+  }, [resetOnboarding])
 
   const handleOpenSiyahaWebsite = useCallback(async () => {
     const url = 'https://www.siyahabh.com'

@@ -107,9 +107,46 @@ const GROUND_PERSPECTIVE = 580
 const FLOOR_PITCH_COEFF = 0.52
 const ALIGN_ANGLE_THRESHOLD_DEG = 12
 const HOLO_BLEND = Platform.OS === 'ios' ? 'screen' : 'normal'
-/** Hold this long, then pull down to lock a place marker */
+/** Hold this long, then pull down to lock a place marker (iOS only — Android uses long-press) */
 const LOCK_HOLD_MS = 360
 const LOCK_PULL_PX = 52
+const HEADING_LPF = Platform.OS === 'android' ? 0.96 : 0.78
+const HEADING_DEADZONE_DEG = Platform.OS === 'android' ? 2.2 : 0.45
+const HEADING_MAX_STEP_DEG = Platform.OS === 'android' ? 1.25 : 6
+const PITCH_DEADZONE_DEG = Platform.OS === 'android' ? 1.1 : 0.35
+const SENSOR_EMIT_MS = Platform.OS === 'android' ? 120 : 40
+const AR_DISPLAY_TICK_MS = Platform.OS === 'android' ? 33 : 16
+const AR_DISPLAY_LERP = Platform.OS === 'android' ? 0.1 : 0.28
+const AR_VIEW_RADIUS_SCALE = Platform.OS === 'android' ? 0.78 : 1
+const AR_FOV_SHOW_PAD_DEG = Platform.OS === 'android' ? 14 : 0
+const AR_FOV_HIDE_PAD_DEG = Platform.OS === 'android' ? 24 : 0
+const AR_MARKER_SPRING = Platform.OS === 'android'
+  ? { damping: 30, stiffness: 46, mass: 1.05, useNativeDriver: true }
+  : { damping: 18, stiffness: 118, mass: 0.85, useNativeDriver: true }
+
+const smoothHeadingStep = (prev, raw) => {
+  let delta = raw - prev
+  if (delta > 180) delta -= 360
+  if (delta < -180) delta += 360
+  if (Math.abs(delta) > HEADING_MAX_STEP_DEG) {
+    delta = Math.sign(delta) * HEADING_MAX_STEP_DEG
+  }
+  const next = prev + delta * (1 - HEADING_LPF)
+  return ((next % 360) + 360) % 360
+}
+
+const lerpHeading = (current, target, t) => {
+  let delta = target - current
+  if (delta > 180) delta -= 360
+  if (delta < -180) delta += 360
+  const next = current + delta * t
+  return ((next % 360) + 360) % 360
+}
+
+const headingDeltaDeg = (a, b) => {
+  const d = Math.abs(a - b)
+  return Math.min(d, 360 - d)
+}
 
 const hexToRgba = (hex, alpha) => {
   if (!hex || typeof hex !== 'string' || !hex.startsWith('#')) return `rgba(230,57,80,${alpha})`
@@ -277,9 +314,14 @@ function POIMarker({
   dimmed,
   onLockPoi,
   liveDistKm,
+  onInteractionStart,
+  onInteractionEnd,
 }) {
   const anim = useRef(new Animated.Value(0)).current
   const pulse = useRef(new Animated.Value(1)).current
+  const posX = useRef(new Animated.Value(x)).current
+  const posY = useRef(new Animated.Value(y)).current
+  const didMountPosRef = useRef(false)
   const holdProgress = useRef(new Animated.Value(0)).current
   const pullY = useRef(new Animated.Value(0)).current
   const holdTimerRef = useRef(null)
@@ -295,7 +337,21 @@ function POIMarker({
   const poiColor = getPoiColor(poi)
   const icon = getPoiIcon(poi)
   const distKm = liveDistKm ?? poi.distanceKm
-  const canLock = Boolean(onLockPoi) && !locked
+  /** iOS: hold + pull lock. Android: simple tap + long-press (PanResponder is unreliable on Android). */
+  const useHoldPullLock = Boolean(onLockPoi) && !locked && Platform.OS === 'ios'
+
+  useEffect(() => {
+    if (!didMountPosRef.current) {
+      didMountPosRef.current = true
+      posX.setValue(x)
+      posY.setValue(y)
+      return
+    }
+    Animated.parallel([
+      Animated.spring(posX, { toValue: x, ...AR_MARKER_SPRING }),
+      Animated.spring(posY, { toValue: y, ...AR_MARKER_SPRING }),
+    ]).start()
+  }, [x, y, posX, posY])
 
   useEffect(() => {
     Animated.spring(anim, { toValue: 1, damping: 14, stiffness: 120, delay: index * 40, useNativeDriver: true }).start()
@@ -338,14 +394,36 @@ function POIMarker({
     resetGesture()
   }, [onLockPoi, locked, poi, resetGesture])
 
+  const handleCardPress = useCallback(() => {
+    onPress?.(poi)
+  }, [onPress, poi])
+
+  const handlePressIn = useCallback(() => {
+    onInteractionStart?.()
+  }, [onInteractionStart])
+
+  const handlePressOut = useCallback(() => {
+    onInteractionEnd?.()
+  }, [onInteractionEnd])
+
+  const handleLongPressLock = useCallback(() => {
+    if (!onLockPoi || locked) return
+    if (Platform.OS !== 'web') {
+      try {
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success)
+      } catch { /* noop */ }
+    }
+    onLockPoi(poi)
+  }, [onLockPoi, locked, poi])
+
   const panResponder = useMemo(
     () =>
       PanResponder.create({
-        onStartShouldSetPanResponder: () => canLock,
-        onMoveShouldSetPanResponder: (_, g) => canLock && (armedRef.current || Math.abs(g.dy) > 6),
+        onStartShouldSetPanResponder: () => useHoldPullLock,
+        onMoveShouldSetPanResponder: (_, g) => useHoldPullLock && (armedRef.current || Math.abs(g.dy) > 6),
         onPanResponderTerminationRequest: () => !armedRef.current,
         onPanResponderGrant: () => {
-          if (!canLock) return
+          if (!useHoldPullLock) return
           setPhase('holding')
           holdProgress.setValue(0)
           Animated.timing(holdProgress, { toValue: 1, duration: LOCK_HOLD_MS, easing: Easing.linear, useNativeDriver: false }).start()
@@ -361,7 +439,7 @@ function POIMarker({
           }, LOCK_HOLD_MS)
         },
         onPanResponderMove: (_, g) => {
-          if (!armedRef.current || !canLock) return
+          if (!armedRef.current || !useHoldPullLock) return
           const dy = Math.max(0, g.dy)
           pullY.setValue(dy)
           setPhase('pulling')
@@ -378,19 +456,17 @@ function POIMarker({
           didLockRef.current = false
         },
       }),
-    [canLock, commitLock, holdProgress, onPress, poi, pullY, resetGesture, setPhase],
+    [useHoldPullLock, commitLock, holdProgress, onPress, poi, pullY, resetGesture, setPhase],
   )
 
-  const isGesturing = gesturePhase !== 'idle'
+  const isGesturing = useHoldPullLock && gesturePhase !== 'idle'
   const scale = anim.interpolate({ inputRange: [0, 1], outputRange: [0.5, 1] })
-  const scaleTransforms = [{ scale: locked || isGesturing ? pulse : scale }]
+  const scaleAnim = locked || isGesturing ? pulse : scale
   const zIndexCol = locked ? 50 : isGesturing ? 90 : dimmed ? 2 : 14 + (index % 5)
-  const showPullHint = gesturePhase === 'armed' || gesturePhase === 'pulling'
+  const showPullHint = useHoldPullLock && (gesturePhase === 'armed' || gesturePhase === 'pulling')
   const holdRingOpacity = holdProgress.interpolate({ inputRange: [0, 0.2, 1], outputRange: [0, 0.45, 1], extrapolate: 'clamp' })
   const pullFillH = pullY.interpolate({ inputRange: [0, LOCK_PULL_PX], outputRange: [4, LOCK_PULL_PX], extrapolate: 'clamp' })
   const pullIconY = pullY.interpolate({ inputRange: [0, LOCK_PULL_PX], outputRange: [0, LOCK_PULL_PX - 14], extrapolate: 'clamp' })
-
-  const handleCardPress = canLock ? undefined : () => onPress?.(poi)
 
   return (
     <Animated.View
@@ -398,9 +474,22 @@ function POIMarker({
         mk.wrap,
         dimmed && mk.wrapDimmed,
         dimmed && mk.wrapNoTouch,
-        { left: x, top: y, opacity: anim, transform: scaleTransforms, zIndex: zIndexCol },
+        {
+          opacity: anim,
+          transform: [
+            { translateX: posX },
+            { translateY: posY },
+            { scale: scaleAnim },
+          ],
+          zIndex: zIndexCol,
+          ...Platform.select({
+            android: { elevation: locked ? 50 : isGesturing ? 90 : dimmed ? 2 : 14 + (index % 5) },
+            default: {},
+          }),
+        },
       ]}
-      {...(canLock ? panResponder.panHandlers : {})}
+      collapsable={false}
+      {...(useHoldPullLock ? panResponder.panHandlers : {})}
     >
       {locked ? (
         <View pointerEvents="none" style={mk.lockedRing}>
@@ -424,12 +513,24 @@ function POIMarker({
         <Pressable
           style={mk.cardPressable}
           onPress={handleCardPress}
-          disabled={canLock}
+          onPressIn={handlePressIn}
+          onPressOut={handlePressOut}
+          onLongPress={onLockPoi && !locked && !useHoldPullLock ? handleLongPressLock : undefined}
+          delayLongPress={480}
+          disabled={useHoldPullLock}
+          hitSlop={Platform.OS === 'android' ? 10 : 4}
+          android_ripple={{ color: 'rgba(255,255,255,0.12)', borderless: false }}
           accessibilityRole="button"
           accessibilityLabel={poi.name}
-          accessibilityHint={canLock ? 'Hold, then pull down to lock navigation to this place' : undefined}
+          accessibilityHint={
+            useHoldPullLock
+              ? 'Hold, then pull down to lock navigation to this place'
+              : onLockPoi && !locked
+                ? 'Tap for details. Long press to lock navigation.'
+                : undefined
+          }
         >
-          {canLock ? (
+          {useHoldPullLock ? (
             <Animated.View
               pointerEvents="none"
               style={[mk.holdRing, { borderColor: hexToRgba(C.success, 0.9), opacity: holdRingOpacity }]}
@@ -731,7 +832,7 @@ function PathArrowIndicator({ target, heading, userLat, userLng, isNavigation, i
   const floorTilt = GROUND_PLANE_BASE_DEG + Math.max(-16, Math.min(26, floorPitchDeg))
 
   return (
-    <Animated.View style={[pa.wrap, style, { transform: [{ scale: mountAnim }] }]}>
+    <Animated.View pointerEvents="box-none" style={[pa.wrap, style, { transform: [{ scale: mountAnim }] }]}>
       <View style={[pa.groundAnchor, compactHud && pa.groundAnchorCompact]} pointerEvents="none">
         <View style={[pa.groundTint, compactHud && pa.groundTintCompact, { borderColor: hexToRgba(poiColor, 0.06) }]} pointerEvents="none" accessibilityElementsHidden />
         <View
@@ -1185,7 +1286,14 @@ function POIDetailModal({ visible, poi, onClose, onRequestClose, insets, openDir
   const bottomPad = (insets?.bottom ?? 0) + 10
 
   return (
-    <Modal visible={visible} transparent animationType="slide" onRequestClose={dismiss}>
+    <Modal
+      visible={visible}
+      transparent
+      animationType="slide"
+      onRequestClose={dismiss}
+      statusBarTranslucent
+      hardwareAccelerated={Platform.OS === 'android'}
+    >
       <View style={dm.overlay}>
         <Pressable style={dm.backdrop} onPress={onClose} accessibilityLabel="Close place details" />
 
@@ -1268,15 +1376,17 @@ function POIDetailModal({ visible, poi, onClose, onRequestClose, insets, openDir
           <View style={dm.footer}>
             <View style={dm.actionRow}>
               {hasProfile ? (
-                <TouchableOpacity
-                  style={dm.profileBtn}
+                <Pressable
+                  style={({ pressed }) => [dm.profileBtn, pressed && dm.profileBtnPressed]}
                   onPress={() => onViewProfile?.(clientId)}
-                  activeOpacity={0.88}
+                  hitSlop={8}
+                  android_ripple={{ color: 'rgba(255,255,255,0.14)', borderless: false }}
+                  accessibilityRole="button"
                   accessibilityLabel="View profile"
                 >
                   <Ionicons name="person-outline" size={18} color="#FFF" />
                   <Text style={dm.profileBtnText}>Profile</Text>
-                </TouchableOpacity>
+                </Pressable>
               ) : null}
               <TouchableOpacity
                 style={[dm.directionsBtn, !hasProfile && dm.directionsBtnSolo]}
@@ -1473,6 +1583,11 @@ const dm = StyleSheet.create({
     paddingTop: 10,
     paddingHorizontal: 14,
     backgroundColor: 'rgba(8,10,16,0.65)',
+    zIndex: 4,
+    ...Platform.select({
+      android: { elevation: 12 },
+      default: {},
+    }),
   },
   actionRow: {
     flexDirection: 'row',
@@ -1492,6 +1607,7 @@ const dm = StyleSheet.create({
     borderColor: 'rgba(255,255,255,0.14)',
   },
   profileBtnText: { color: '#FFF', fontSize: 14, fontFamily: FONT_POPPINS_SEMIBOLD },
+  profileBtnPressed: { opacity: 0.86, backgroundColor: 'rgba(255,255,255,0.12)' },
   directionsBtn: {
     flex: 1,
     borderRadius: 14,
@@ -1527,6 +1643,7 @@ export default function ARScreen({ navigation }) {
   const [permission, requestPermission] = useCameraPermissions()
   const [location, setLocation] = useState(null)
   const [heading, setHeading] = useState(0)
+  const [displayHeading, setDisplayHeading] = useState(0)
   const [pois, setPois] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
@@ -1537,6 +1654,15 @@ export default function ARScreen({ navigation }) {
   const [showFilters, setShowFilters] = useState(false)
   const [pineconeRecs, setPineconeRecs] = useState([])
   const headingSub = useRef(null)
+  const headingTargetRef = useRef(0)
+  const headingSmoothedRef = useRef(0)
+  const headingDisplayedRef = useRef(0)
+  const lastHeadingEmitRef = useRef(0)
+  const headingFrozenRef = useRef(false)
+  const headingFreezeTimerRef = useRef(null)
+  const stickyVisibleRef = useRef(new Set())
+  const floorPitchDisplayedRef = useRef(0)
+  const lastPitchEmitRef = useRef(0)
   /** Press-and-hold a marker to lock AR navigation onto that place */
   const [lockedPoi, setLockedPoi] = useState(null)
   const pitchLpfRef = useRef(0)
@@ -1587,11 +1713,44 @@ export default function ARScreen({ navigation }) {
     })
   }
 
-  const filteredPois = basePois.filter((p) => {
-    if (p.distanceKm > maxDistanceKm) return false
-    const relBearing = (p.bearing - heading + 360) % 360
-    return Math.min(relBearing, 360 - relBearing) <= CAMERA_FOV_DEG / 2
-  })
+  const filteredPois = useMemo(() => {
+    const arHeading = Platform.OS === 'android' ? displayHeading : heading
+    const inDistance = (p) => p.distanceKm <= maxDistanceKm
+
+    if (Platform.OS !== 'android') {
+      return basePois.filter((p) => {
+        if (!inDistance(p)) return false
+        const relBearing = (p.bearing - arHeading + 360) % 360
+        return Math.min(relBearing, 360 - relBearing) <= CAMERA_FOV_DEG / 2
+      })
+    }
+
+    const showFov = CAMERA_FOV_DEG / 2 + AR_FOV_SHOW_PAD_DEG
+    const hideFov = CAMERA_FOV_DEG / 2 + AR_FOV_HIDE_PAD_DEG
+    const nextSticky = new Set(stickyVisibleRef.current)
+
+    basePois.forEach((p) => {
+      const key = poiKeyOf(p)
+      if (!key || !inDistance(p)) {
+        if (key) nextSticky.delete(key)
+        return
+      }
+      const relBearing = (p.bearing - arHeading + 360) % 360
+      const angleOff = Math.min(relBearing, 360 - relBearing)
+      if (angleOff <= showFov) nextSticky.add(key)
+      else if (angleOff > hideFov) nextSticky.delete(key)
+    })
+
+    stickyVisibleRef.current = nextSticky
+
+    return basePois.filter((p) => {
+      if (!inDistance(p)) return false
+      const key = poiKeyOf(p)
+      return key ? nextSticky.has(key) : false
+    })
+  }, [basePois, maxDistanceKm, heading, displayHeading])
+
+  const arHeading = Platform.OS === 'android' ? displayHeading : heading
 
   const nearestInView = filteredPois.length > 0 ? filteredPois.reduce((a, b) => a.distanceKm <= b.distanceKm ? a : b) : null
   const inViewIds = new Set(filteredPois.map((p) => p.name + p.lat))
@@ -1671,14 +1830,70 @@ export default function ARScreen({ navigation }) {
   useEffect(() => {
     if (!location) return
     let cleaned = false
-    Location.watchHeadingAsync((h) => setHeading(h.trueHeading >= 0 ? h.trueHeading : h.magHeading))
+    headingSmoothedRef.current = headingDisplayedRef.current
+    headingTargetRef.current = headingDisplayedRef.current
+
+    Location.watchHeadingAsync((h) => {
+      const raw = h.trueHeading >= 0 ? h.trueHeading : h.magHeading
+      const smoothed = smoothHeadingStep(
+        Platform.OS === 'android' ? headingTargetRef.current : headingSmoothedRef.current,
+        raw,
+      )
+
+      if (Platform.OS === 'android') {
+        const isFirstReading = headingDisplayedRef.current === 0 && headingTargetRef.current === 0
+        headingTargetRef.current = smoothed
+        if (isFirstReading) {
+          headingDisplayedRef.current = smoothed
+          setDisplayHeading(smoothed)
+        }
+        return
+      }
+
+      headingSmoothedRef.current = smoothed
+      const now = Date.now()
+      if (now - lastHeadingEmitRef.current < SENSOR_EMIT_MS) return
+      if (headingDeltaDeg(smoothed, headingDisplayedRef.current) < HEADING_DEADZONE_DEG) return
+
+      lastHeadingEmitRef.current = now
+      headingDisplayedRef.current = smoothed
+      setHeading(smoothed)
+    })
       .then((s) => { if (cleaned) s.remove(); else headingSub.current = s })
     return () => { cleaned = true; headingSub.current?.remove?.(); headingSub.current = null }
   }, [location])
 
   useEffect(() => {
+    if (Platform.OS !== 'android' || !location) return undefined
+
+    const tick = () => {
+      if (!headingFrozenRef.current) {
+        const target = headingTargetRef.current
+        const current = headingDisplayedRef.current
+        const next = lerpHeading(current, target, AR_DISPLAY_LERP)
+        if (headingDeltaDeg(next, current) >= 0.06) {
+          headingDisplayedRef.current = next
+          setDisplayHeading(next)
+        }
+      }
+    }
+
+    tick()
+    const id = setInterval(tick, AR_DISPLAY_TICK_MS)
+    return () => clearInterval(id)
+  }, [location])
+
+  useEffect(() => () => {
+    if (headingFreezeTimerRef.current) clearTimeout(headingFreezeTimerRef.current)
+  }, [])
+
+  useEffect(() => {
     if (navigateToDest) setLockedPoi(null)
   }, [navigateToDest])
+
+  useEffect(() => {
+    headingFrozenRef.current = Boolean(selectedPoi)
+  }, [selectedPoi])
 
   useEffect(() => {
     if (loading || Platform.OS === 'web' || !permission?.granted) return undefined
@@ -1688,12 +1903,19 @@ export default function ARScreen({ navigation }) {
       try {
         const avail = await Accelerometer.isAvailableAsync()
         if (!alive || !avail) return
-        Accelerometer.setUpdateInterval(48)
+        Accelerometer.setUpdateInterval(Platform.OS === 'android' ? 100 : 48)
         subscription = Accelerometer.addListener(({ x, y, z }) => {
           const rad = Math.atan2(-x, Math.sqrt(y * y + z * z))
           const rawDeg = Math.max(-55, Math.min(55, (rad * 180) / Math.PI))
           pitchLpfRef.current = pitchLpfRef.current * 0.82 + rawDeg * 0.18
           const add = Math.max(-16, Math.min(26, pitchLpfRef.current * FLOOR_PITCH_COEFF))
+
+          const now = Date.now()
+          if (now - lastPitchEmitRef.current < SENSOR_EMIT_MS) return
+          if (Math.abs(add - floorPitchDisplayedRef.current) < PITCH_DEADZONE_DEG) return
+
+          lastPitchEmitRef.current = now
+          floorPitchDisplayedRef.current = add
           setFloorPitchDeg(add)
         })
       } catch {
@@ -1705,6 +1927,18 @@ export default function ARScreen({ navigation }) {
       subscription?.remove?.()
     }
   }, [loading, permission?.granted])
+
+  const handleMarkerInteractionStart = useCallback(() => {
+    headingFrozenRef.current = true
+    if (headingFreezeTimerRef.current) clearTimeout(headingFreezeTimerRef.current)
+  }, [])
+
+  const handleMarkerInteractionEnd = useCallback(() => {
+    if (headingFreezeTimerRef.current) clearTimeout(headingFreezeTimerRef.current)
+    headingFreezeTimerRef.current = setTimeout(() => {
+      headingFrozenRef.current = false
+    }, 420)
+  }, [])
 
   const openDirections = useCallback((poi) => {
     openGoogleMapsDirections(poi.lat, poi.lng)
@@ -1814,7 +2048,19 @@ export default function ARScreen({ navigation }) {
   const centerX = width / 2
   const safeAvailH = Math.max(160, height - topChromeH - bottomChromeH - pathStackH)
   const centerY = topChromeH + safeAvailH * 0.46
-  const viewRadius = Math.min(width * 0.34, safeAvailH * 0.28)
+  const viewRadius = Math.min(width * 0.34, safeAvailH * 0.28) * AR_VIEW_RADIUS_SCALE
+
+  const getMarkerPosition = useCallback((poi) => {
+    const relBearing = ((poi.bearing - arHeading + 360) % 360) * (Math.PI / 180)
+    const xPos = centerX + Math.sin(relBearing) * viewRadius - 78
+    const yPos = centerY - Math.cos(relBearing) * viewRadius - 42
+    const minY = topChromeH + 10
+    const maxY = height - bottomChromeH - pathStackH - 72
+    const x = Math.max(10, Math.min(width - 172, xPos))
+    const y = Math.max(minY, Math.min(maxY, yPos))
+    if (Platform.OS !== 'android') return { x, y }
+    return { x: Math.round(x), y: Math.round(y) }
+  }, [arHeading, centerX, centerY, viewRadius, topChromeH, height, bottomChromeH, pathStackH, width])
 
   const markersToRender = useMemo(() => {
     if (!lockedPoi || navigateToDest) return filteredPois
@@ -1826,18 +2072,6 @@ export default function ARScreen({ navigation }) {
     if (!lockedMatch) return filteredPois
     return [...filteredPois, lockedMatch]
   }, [filteredPois, lockedPoi, navigateToDest, basePois, pois, poiKeysMatch])
-
-  const getMarkerPosition = (poi) => {
-    const relBearing = ((poi.bearing - heading + 360) % 360) * (Math.PI / 180)
-    const xPos = centerX + Math.sin(relBearing) * viewRadius - 78
-    const yPos = centerY - Math.cos(relBearing) * viewRadius - 42
-    const minY = topChromeH + 10
-    const maxY = height - bottomChromeH - pathStackH - 72
-    return {
-      x: Math.max(10, Math.min(width - 172, xPos)),
-      y: Math.max(minY, Math.min(maxY, yPos)),
-    }
-  }
 
   const emptyHint = mode === 'events' ? 'No events in this direction'
     : mode === 'restaurants' ? 'No restaurants in this direction'
@@ -1900,7 +2134,7 @@ export default function ARScreen({ navigation }) {
       />
 
       {loading ? <ScanningLoader /> : (
-        <>
+        <View style={s.arOverlayLayer} pointerEvents="box-none">
           {lockedPoi && !navigateToDest ? (
             <View style={fm.dim} pointerEvents="none" accessibilityElementsHidden />
           ) : null}
@@ -1929,6 +2163,8 @@ export default function ARScreen({ navigation }) {
                 dimmed={fadeOthers}
                 onLockPoi={navigateToDest ? undefined : handleLockPoi}
                 liveDistKm={liveDist}
+                onInteractionStart={handleMarkerInteractionStart}
+                onInteractionEnd={handleMarkerInteractionEnd}
               />
             )
           })}
@@ -1939,7 +2175,7 @@ export default function ARScreen({ navigation }) {
                 .filter((p) => p.distanceKm <= maxDistanceKm && !inViewIds.has(p.name + p.lat))
                 .filter((p) => !lockedPoi || !poiKeysMatch(p, lockedPoi))
                 .slice(0, 6)}
-              heading={heading}
+              heading={arHeading}
               safeTop={topChromeH}
               safeBottom={bottomChromeH + pathStackH}
               height={height}
@@ -1951,7 +2187,7 @@ export default function ARScreen({ navigation }) {
           {location && arrowTarget && (
             <PathArrowIndicator
               target={arrowTarget}
-              heading={heading}
+              heading={arHeading}
               userLat={location.latitude}
               userLng={location.longitude}
               isNavigation={!!navigateToDest}
@@ -1965,7 +2201,7 @@ export default function ARScreen({ navigation }) {
           )}
 
           <RadarNavigator
-            heading={heading}
+            heading={arHeading}
             basePois={basePois}
             maxDistanceKm={maxDistanceKm}
             onSelectPoi={handleOpenPOI}
@@ -1973,7 +2209,7 @@ export default function ARScreen({ navigation }) {
             topOffset={topChromeH + 10}
             subdued={isLockedMode}
           />
-        </>
+        </View>
       )}
 
       {/* ─── Header ─── */}
@@ -2111,8 +2347,13 @@ export default function ARScreen({ navigation }) {
         onViewProfile={handleViewProfile}
       />
       <ClientProfileModal
-        visible={!!profileClientId} clientId={profileClientId} onClose={() => setProfileClientId(null)}
-        insets={insets} onOpenARNavigate={(dest) => { setProfileClientId(null); setNavigateToDest(dest) }}
+        visible={!!profileClientId}
+        clientId={profileClientId}
+        animationFrom="bottom"
+        presentation="sheet"
+        onClose={() => setProfileClientId(null)}
+        insets={insets}
+        onOpenARNavigate={(dest) => { setProfileClientId(null); setNavigateToDest(dest) }}
       />
     </View>
   )
@@ -2125,6 +2366,7 @@ const fm = StyleSheet.create({
 const s = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#000' },
   cameraVignette: { ...StyleSheet.absoluteFillObject, zIndex: 1 },
+  arOverlayLayer: { ...StyleSheet.absoluteFillObject, zIndex: 3 },
 
   errorWrap: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 32 },
   errorIcon: { width: 80, height: 80, borderRadius: 40, backgroundColor: `${C.accent}12`, alignItems: 'center', justifyContent: 'center', marginBottom: 20, borderWidth: 1, borderColor: `${C.accent}18` },

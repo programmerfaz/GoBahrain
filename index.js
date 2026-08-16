@@ -1,3 +1,4 @@
+import 'react-native-url-polyfill/auto'
 import 'react-native-reanimated';
 import 'react-native-gesture-handler';
 import * as SplashScreen from 'expo-splash-screen';

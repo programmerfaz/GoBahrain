@@ -137,11 +137,11 @@ const ChipItem = ({ item, selected, onPress, isDark, isGrid }) => {
   const tint = item.color
   const iconBgUnselected = isDark ? 'rgba(148,163,184,0.14)' : 'rgba(100,116,139,0.08)'
   const iconBgSelected = isDark ? `${tint}2E` : `${tint}1F`
-  const borderUnselected = isDark ? 'rgba(148,163,184,0.22)' : 'rgba(148,163,184,0.28)'
-  const surfaceUnselected = isDark ? 'rgba(0,0,0,0.42)' : 'rgba(255,255,255,0.96)'
-  const surfaceSelected = isDark ? `${tint}1A` : `${tint}12`
+  const borderUnselected = isDark ? 'rgba(226,232,240,0.28)' : 'rgba(15,23,42,0.16)'
+  const surfaceUnselected = isDark ? 'rgba(30,41,59,0.92)' : '#FFFFFF'
+  const surfaceSelected = isDark ? `${tint}33` : `${tint}18`
   const labelBase = isDark ? '#F8FAFC' : '#0F172A'
-  const iconColorUnselected = isDark ? '#C7C7CC' : '#475569'
+  const iconColorUnselected = isDark ? '#E2E8F0' : '#334155'
   const checkBorderUnselected = isDark ? 'rgba(148,163,184,0.38)' : 'rgba(100,116,139,0.32)'
 
   useEffect(() => {
@@ -1333,7 +1333,7 @@ const cs = StyleSheet.create({
   },
   chipLabel: {
     flex: 1,
-    fontWeight: '600',
+    fontWeight: '700',
     letterSpacing: -0.2,
   },
   chipLabelSelected: {

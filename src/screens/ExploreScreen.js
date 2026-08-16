@@ -3186,11 +3186,31 @@ export default function ExploreScreen({ navigation }) {
     setProgressTrackW(e.nativeEvent.layout.width)
   }, [])
 
-  const openAR = () => {
+  const navigateToAR = useCallback(() => {
+    let nav = navigation
+    while (nav) {
+      const routeNames = nav.getState?.()?.routeNames
+      if (Array.isArray(routeNames) && routeNames.includes('AR')) {
+        nav.navigate('AR', { fromExplore: true })
+        return
+      }
+      nav = nav.getParent?.() ?? null
+    }
+  }, [navigation])
+
+  const openAR = useCallback(() => {
     if (Platform.OS !== 'web') Vibration.vibrate(40)
 
-    doorLeft.setValue(-layoutW / 2)
-    doorRight.setValue(layoutW / 2)
+    let didNavigate = false
+    const finishOpenAR = () => {
+      if (didNavigate) return
+      didNavigate = true
+      navigateToAR()
+      setTimeout(() => setDoorVisible(false), 500)
+    }
+
+    doorLeft.setValue(-winW / 2)
+    doorRight.setValue(winW / 2)
     doorIconScale.setValue(0)
     doorIconOpacity.setValue(0)
     doorFade.setValue(1)
@@ -3206,12 +3226,14 @@ export default function ExploreScreen({ navigation }) {
         Animated.timing(doorLeft, { toValue: 0, duration: 380, easing: Easing.bezier(0.4, 0, 0.2, 1), useNativeDriver: true }),
         Animated.timing(doorRight, { toValue: 0, duration: 380, easing: Easing.bezier(0.4, 0, 0.2, 1), useNativeDriver: true }),
       ]),
-    ]).start(() => {
-      const nav = navigation?.getParent?.() ?? navigation
-      nav?.navigate?.('AR', { fromExplore: true })
-      setTimeout(() => setDoorVisible(false), 500)
+    ]).start(({ finished }) => {
+      if (finished !== false) finishOpenAR()
     })
-  }
+
+    if (Platform.OS === 'android') {
+      setTimeout(finishOpenAR, 900)
+    }
+  }, [doorLeft, doorRight, doorIconScale, doorIconOpacity, doorFade, navigateToAR, winW])
 
   const eventAccent = colors.event
   const handleSearchToggle = useCallback(() => {
@@ -3787,23 +3809,28 @@ export default function ExploreScreen({ navigation }) {
         isDark={isDark}
       />
 
-      <AnimatedPressable
-        onPress={openAR}
-        scaleDown={0.9}
+      <View
         style={[s.arFloatingBtnWrap, { bottom: Math.max(insets.bottom + 74, 88) }]}
-        accessibilityRole="button"
-        accessibilityLabel="Open AR view"
+        pointerEvents="box-none"
+        collapsable={false}
       >
-        <LinearGradient
-          colors={[colors.primary, isDark ? '#C8102E' : '#9B0C23']}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 1 }}
-          style={s.arFloatingBtn}
+        <AnimatedPressable
+          onPress={openAR}
+          scaleDown={0.9}
+          accessibilityRole="button"
+          accessibilityLabel="Open AR view"
         >
-          <ArScanIcon name="scan" size={22} color="#FFF" />
-          <Text style={s.arFloatingBtnText}>AR View</Text>
-        </LinearGradient>
-      </AnimatedPressable>
+          <LinearGradient
+            colors={[colors.primary, isDark ? '#C8102E' : '#9B0C23']}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={s.arFloatingBtn}
+          >
+            <ArScanIcon name="scan" size={22} color="#FFF" />
+            <Text style={s.arFloatingBtnText}>AR View</Text>
+          </LinearGradient>
+        </AnimatedPressable>
+      </View>
 
       {doorVisible && (() => {
         const TOOTH_COUNT = 5
@@ -3925,6 +3952,10 @@ const s = StyleSheet.create({
     position: 'absolute',
     right: 18,
     zIndex: 40,
+    ...Platform.select({
+      android: { elevation: 40 },
+      default: {},
+    }),
   },
   arFloatingBtn: {
     flexDirection: 'row',

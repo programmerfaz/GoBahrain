@@ -576,8 +576,8 @@ export default function AuthScreen() {
             >
               {personaOptions.map((t) => {
                 const sel = uType === t.id
-                const borderColor = sel ? C.primary : C.border
-                const baseBg = isDark ? 'rgba(30,41,59,0.55)' : C.inputBg
+                const borderColor = sel ? C.primary : isDark ? 'rgba(226,232,240,0.28)' : 'rgba(15,23,42,0.16)'
+                const baseBg = isDark ? 'rgba(30,41,59,0.96)' : '#FFFFFF'
                 return (
                   <AnimatedPressable
                     key={t.id}
@@ -623,7 +623,7 @@ export default function AuthScreen() {
                         </View>
                         <View style={s.personaTextCol}>
                           <Text style={[s.personaCardTitle, { color: C.text }]}>{t.label}</Text>
-                          <Text style={[s.personaCardSubtitle, { color: C.textMuted }]}>{t.subtitle}</Text>
+                          <Text style={[s.personaCardSubtitle, { color: isDark ? '#CBD5E1' : '#475569' }]}>{t.subtitle}</Text>
                         </View>
                         <View
                           style={[
